@@ -699,17 +699,62 @@ class CatalogueTest(unittest.TestCase):
                 i18n.validate_target(target_path, i18n.validate_source(source_path))
 
     def test_target_language_exceptions_are_exact_and_key_scoped(self):
-        zoom = {
-            "text": "Zoom (%)", "placeholders": [], "frozen": ["%"],
-        }
-        i18n.validate_target_language("settings.dashboard_zoom.label", "Zoom (%)", "fr", zoom)
-        for key, locale, text in (
-            ("settings.other.label", "fr", "Zoom (%)"),
-            ("settings.dashboard_zoom.label", "es", "Zoom (%)"),
-            ("settings.dashboard_zoom.label", "fr", "zoom (%)"),
-        ):
-            with self.subTest(key=key, locale=locale, text=text), self.assertRaises(i18n.CatalogueError):
-                i18n.validate_target_language(key, text, locale, zoom)
+        latin_locales = ("de", "es", "fr", "it")
+        catalogue_dir = SCRIPT.parents[1] / "app/src/main/assets/i18n"
+        source = i18n.validate_source(catalogue_dir / "en.json")
+        for (locale, key), text in i18n.UNCHANGED_TARGET_EXCEPTIONS.items():
+            target = i18n.validate_target(
+                catalogue_dir / f"{locale}.json",
+                source,
+                expected_locale=locale,
+            )
+            self.assertEqual(text, target["strings"][key]["text"])
+            source_record = source["strings"][key]
+            protected_positions = {
+                index
+                for match in i18n.PLACEHOLDER_RE.finditer(text)
+                for index in range(*match.span())
+            }
+            for token in source_record["frozen"]:
+                start = 0
+                while (offset := text.find(token, start)) >= 0:
+                    protected_positions.update(range(offset, offset + len(token)))
+                    start = offset + len(token)
+            case_mutated = text
+            for index, character in enumerate(text):
+                if character.isalpha() and index not in protected_positions:
+                    replacement = character.lower() if character.isupper() else character.upper()
+                    case_mutated = f"{text[:index]}{replacement}{text[index + 1:]}"
+                    break
+            with self.subTest(locale=locale, key=key, mutation="none"):
+                i18n.validate_target_language(key, text, locale, source_record)
+
+            other_locale = next(
+                candidate
+                for candidate in latin_locales
+                if i18n.UNCHANGED_TARGET_EXCEPTIONS.get((candidate, key)) != text
+            )
+            for mutated_key, mutated_locale, mutated_text in (
+                (f"{key}.other", locale, text),
+                (key, other_locale, text),
+                (key, locale, case_mutated),
+            ):
+                with (
+                    self.subTest(
+                        locale=locale,
+                        key=key,
+                        mutated_key=mutated_key,
+                        mutated_locale=mutated_locale,
+                        mutated_text=mutated_text,
+                    ),
+                    self.assertRaises(i18n.CatalogueError),
+                ):
+                    i18n.validate_target_language(
+                        mutated_key,
+                        mutated_text,
+                        mutated_locale,
+                        source_record,
+                    )
 
         voice = {
             "text": "Send recognised speech to Home Assistant Assist.",

@@ -13,6 +13,7 @@ class HtmlUiCatalogueContractTest {
     private val assets = File("src/main/assets")
     private val server = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt")
     private val catalogue = JSONObject(File(assets, "i18n/en.json").readText()).getJSONObject("strings")
+    private val releaseTargetLocales = AppLocale.RELEASE_LOCALES.filterNot { it == AppLocale.ENGLISH }
 
     @Test fun `shell dashboard and Configure literal keys are present and owned by their source surface`() {
         val usages = linkedMapOf(
@@ -38,22 +39,34 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
-    @Test fun `Simplified Chinese HTML UI slice is current and promoted`() {
+    @Test fun `release target HTML UI slices are complete current and promoted`() {
         val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
-        val target = TargetCatalogue.parse(File(assets, "i18n/zh-Hans.json").readText(), source)
         val prefixes = listOf("shell.", "dashboard.", "configure.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
         assertEquals("the complete source catalogue is a reviewed release contract", 966, source.strings.size)
         assertEquals("the declared HTML UI preview scope must not shrink silently", 793, expected.size)
-        expected.forEach { (key, sourceString) ->
-            val translated = checkNotNull(target.strings[key]) { "zh-Hans is missing $key" }
-            assertEquals("zh-Hans has stale source text for $key", sourceString.sourceHash, translated.sourceHash)
-            assertTrue(
-                "zh-Hans must promote $key beyond draft before the collaborator preview",
-                translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                    translated.state == TranslationState.COMMUNITY_CORRECTED,
+        releaseTargetLocales.forEach { locale ->
+            val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
+            assertEquals(
+                "$locale must contain the complete 966-key release catalogue",
+                966,
+                target.strings.size,
             )
+            assertEquals(
+                "$locale target keys must exactly match the reviewed English source catalogue",
+                source.strings.keys,
+                target.strings.keys,
+            )
+            expected.forEach { (key, sourceString) ->
+                val translated = checkNotNull(target.strings[key]) { "$locale HTML UI slice is missing $key" }
+                assertEquals("$locale has stale source text for $key", sourceString.sourceHash, translated.sourceHash)
+                assertTrue(
+                    "$locale must promote HTML UI key $key beyond draft before release",
+                    translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                )
+            }
         }
     }
 

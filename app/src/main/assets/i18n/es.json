@@ -3,215 +3,3870 @@
   "schema": 1,
   "sourceRevision": "202ddad7446b21486121b27d82b2df1e2ec45115",
   "strings": {
+    "configure.action.failed": {
+      "sourceHash": "4acca2deec62ac51cb2dd452216e9edf6e7b8b46625982f24c6c9395c1e57443",
+      "state": "machine-cross-checked",
+      "text": "La acción falló ({error})."
+    },
+    "configure.action.save": {
+      "sourceHash": "dd0ae7a5cbcf233968657563dce34639e681861e2df6d3f845c08d49981c0999",
+      "state": "machine-cross-checked",
+      "text": "Guardar cambios"
+    },
+    "configure.action.updated": {
+      "sourceHash": "c890307de9b706a96bb48a12cd6cf33fd333765a1c02fd950011a914b53935f0",
+      "state": "machine-cross-checked",
+      "text": "Actualizado."
+    },
+    "configure.action.working": {
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked",
+      "text": "Procesando…"
+    },
+    "configure.approval.retry": {
+      "sourceHash": "be7545a353d7b786a59ce8893679e105d9fe23794cee284b5127c4037408f353",
+      "state": "machine-cross-checked",
+      "text": "Aprueba esta solicitud en el panel y vuelve a intentarlo."
+    },
+    "configure.area.local_override": {
+      "sourceHash": "9a7ffc02c628cb1131cb591e18beae7601a0eca441b7e652e351084edf9f4605",
+      "state": "machine-cross-checked",
+      "text": "Solo anulación local"
+    },
+    "configure.area.local_override_ha": {
+      "sourceHash": "3b64903d562754e0b19f624a9da8cb2209f3585b97b6f77314d162d267d53a1e",
+      "state": "machine-cross-checked",
+      "text": "Solo anulación local — Home Assistant tiene «{area}»"
+    },
+    "configure.area.none": {
+      "sourceHash": "3fd59f11b54e96933a2b02aa304ac4702497072e362651bddfe49cffc8ba393d",
+      "state": "machine-cross-checked",
+      "text": "Sin área"
+    },
+    "configure.auto_sleep.activity": {
+      "sourceHash": "2881db2f92f7c139d4f0856ff75de63b3784b62c7b8c629a23de3943f1b77111",
+      "state": "machine-cross-checked",
+      "text": "Actividad de suspensión automática"
+    },
+    "configure.auto_sleep.activity_source": {
+      "sourceHash": "98622bfd20cff9642d8f76a3410d5327c873a5d33c072ec5b8d7ed87ddc081a2",
+      "state": "machine-cross-checked",
+      "text": "Fuente de actividad"
+    },
+    "configure.auto_sleep.activity_source_separator": {
+      "sourceHash": "9f5f0b8bbd937743f3150d3db62ac320283e94e33f6aa8440582cb718e5ccb1e",
+      "state": "machine-cross-checked",
+      "text": " fuente de actividad, "
+    },
+    "configure.auto_sleep.allow_sleep": {
+      "sourceHash": "20659d4d8e3241f889398572867a3c7d9bad55306b734589d10f8167e50c516b",
+      "state": "machine-cross-checked",
+      "text": "Permitir suspensión"
+    },
+    "configure.auto_sleep.allow_sleep_lower": {
+      "sourceHash": "19c5e0e409f08787e23b1e941e94f32debe56378743b63dfadb5d729b7c2d8ba",
+      "state": "machine-cross-checked",
+      "text": "permitir suspensión"
+    },
+    "configure.auto_sleep.area": {
+      "sourceHash": "76850c88ad8d53557f8e9ad10f4ada48dc749cfaf894a52bd6a2e64b473f582a",
+      "state": "machine-cross-checked",
+      "text": "Área de Home Assistant: {area}"
+    },
+    "configure.auto_sleep.area_check_failed": {
+      "sourceHash": "be69ffdff660dfd52e999025c0f26a340af7f967539482671fcba90848ccde35",
+      "state": "machine-cross-checked",
+      "text": "No se pudo comprobar el área de Home Assistant de este panel. Comprueba la conexión con Home Assistant."
+    },
+    "configure.auto_sleep.area_checking": {
+      "sourceHash": "9bc464eac5f6f3930514030210d900555c8c0fe883fa5096071cee9f5083d21a",
+      "state": "machine-cross-checked",
+      "text": "Comprobando el área de Home Assistant de este panel…"
+    },
+    "configure.auto_sleep.assign_area_first": {
+      "sourceHash": "342775e1e3b7adb8d31beda3b9f7a3dbb61d6b0d579c090aaa1e10d744ccb47a",
+      "state": "machine-cross-checked",
+      "text": "Asigna este panel a un área de Home Assistant antes de habilitar la suspensión automática."
+    },
+    "configure.auto_sleep.assigned": {
+      "sourceHash": "8191888dd97cae12497400274f0ceaa806cc83e10a2a9ecd94e996fd15d38cc8",
+      "state": "machine-cross-checked",
+      "text": "Asignado"
+    },
+    "configure.auto_sleep.auth_failed": {
+      "sourceHash": "746451f8bf3962b1115f1de750f26e6429c352f9f14d26555fcc55c3ffab69fc",
+      "state": "machine-cross-checked",
+      "text": "Falló la autenticación de Home Assistant. Vuelve a conectar Home Assistant para calcular el historial de actividad."
+    },
+    "configure.auto_sleep.calculated": {
+      "sourceHash": "07678593eb0c5e2c55f432c4915054f61a3813bd52c113669d445cf8711625e5",
+      "state": "machine-cross-checked",
+      "text": "calculada"
+    },
+    "configure.auto_sleep.calculated_label": {
+      "sourceHash": "4e919f2b5d40923075154273f3945e1ec070d911faa2ae450fdc2d925fec8bec",
+      "state": "machine-cross-checked",
+      "text": "Suspensión automática calculada"
+    },
+    "configure.auto_sleep.calculated_summary": {
+      "sourceHash": "67a577299abe6083e8e087e7fd70e777a25f82c49c471640e3f32ad59b19440a",
+      "state": "machine-cross-checked",
+      "text": "Suspensión automática calculada: mantener activo {awake}, permitir suspensión {sleep}, inhibida {inhibited}."
+    },
+    "configure.auto_sleep.clear": {
+      "sourceHash": "83b12c2216efb4fdc924e1deb5182e905e4926ed0c1c324d467107f46d5a26a9",
+      "state": "machine-cross-checked",
+      "text": "Sin detección"
+    },
+    "configure.auto_sleep.clear_lower": {
+      "sourceHash": "913a4cb91be20332f3559f8070255d7ac3e6228bb423f4441551d3f783e7d4f4",
+      "state": "machine-cross-checked",
+      "text": "sin detección"
+    },
+    "configure.auto_sleep.clear_sleep": {
+      "sourceHash": "4728051aef17473f3d71fc1a5275829c4d54ee568764bf4eda95c869348a9bff",
+      "state": "machine-cross-checked",
+      "text": "Sin detección / Suspensión"
+    },
+    "configure.auto_sleep.click_include": {
+      "sourceHash": "afda9086cc8f8ecc46dec5524fcd612e4361d26b54e2d25292ab2d2aac65be0b",
+      "state": "machine-cross-checked",
+      "text": "Pulsa para incluir esta fuente"
+    },
+    "configure.auto_sleep.click_suppress": {
+      "sourceHash": "e5a224eb62bd80882d63054d0856259c73d05eefb977f647c1ba6662a787a866",
+      "state": "machine-cross-checked",
+      "text": "Pulsa para suprimir esta fuente"
+    },
+    "configure.auto_sleep.delay_sources": {
+      "sourceHash": "06a133492c219f08226ca11a8e430fb8beb55a478c5ce681d9ca211a5fd5277d",
+      "state": "machine-cross-checked",
+      "text": "Retraso: {delay} · Fuentes: {count}"
+    },
+    "configure.auto_sleep.detected": {
+      "sourceHash": "756a8ba97dce249a0f1d377b9756d370aee12fc9e43a6750109fd12dc880bd8e",
+      "state": "machine-cross-checked",
+      "text": "Detectado"
+    },
+    "configure.auto_sleep.detected_awake": {
+      "sourceHash": "43ede620f73061dfed27dcf04fb9bdf3e6c33b14f48874401603e1e89a209a14",
+      "state": "machine-cross-checked",
+      "text": "Detectado / Activo"
+    },
+    "configure.auto_sleep.detected_lower": {
+      "sourceHash": "b96da48a63e7d238d22803d6477619c126aba149d6a8056798b1ae967f8b2dcb",
+      "state": "machine-cross-checked",
+      "text": "detectado"
+    },
+    "configure.auto_sleep.discovery_failed": {
+      "sourceHash": "9066469a0ddc43c8cdc410748859602153c4579f0e155dc085e733b9444ded5c",
+      "state": "machine-cross-checked",
+      "text": "Falló la detección de fuentes para la suspensión automática. Comprueba la conexión con Home Assistant."
+    },
+    "configure.auto_sleep.ha_history_retrying": {
+      "sourceHash": "f8670fc64b08cd7dc979e51f559409b04d5fc8e643ba2ca11b0facb20196ae7e",
+      "state": "machine-cross-checked",
+      "text": "El historial de Home Assistant no está disponible temporalmente. Reintentando automáticamente…"
+    },
+    "configure.auto_sleep.history_period": {
+      "sourceHash": "959be4371855c31cfa2d6396e8dce00f2049c01c7ebec8a281a57017e9b5406b",
+      "state": "machine-cross-checked",
+      "text": "Periodo del historial de actividad"
+    },
+    "configure.auto_sleep.history_preparing": {
+      "sourceHash": "03135310f9c8aab11cf0d89691c8d1a3824c218d075ded132d61c52007921aa4",
+      "state": "machine-cross-checked",
+      "text": "Preparando el historial de actividad…"
+    },
+    "configure.auto_sleep.history_refreshing": {
+      "sourceHash": "2fb381028706cc27b4a68657556ed96902948fbcdc5cadacdb06a904bc06f5e1",
+      "state": "machine-cross-checked",
+      "text": "Actualizando el historial de actividad…"
+    },
+    "configure.auto_sleep.history_rejected": {
+      "sourceHash": "b2a3fcb3faeecce1fc30bddb99ffd46031898b6b709515235d9eb234f8f98d14",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant rechazó la solicitud del historial. Vuelve a conectar Home Assistant."
+    },
+    "configure.auto_sleep.history_replaying": {
+      "sourceHash": "2d2d6372ef82d8981d1159fc1792832a22d303d5d6d67154c373e1f4c12e0eea",
+      "state": "machine-cross-checked",
+      "text": "Reproduciendo el historial de actividad."
+    },
+    "configure.auto_sleep.history_request_failed": {
+      "sourceHash": "77117c80b224f003219d4e592f4e03764d450b347dcde20f7bd0f619a902b136",
+      "state": "machine-cross-checked",
+      "text": "Falló la solicitud del historial (HTTP {status})."
+    },
+    "configure.auto_sleep.history_requires_area": {
+      "sourceHash": "2646ef9893147b68d18075d2b4ee801bfebb93c0356136e948471539d47a6874",
+      "state": "machine-cross-checked",
+      "text": "Asigna este panel a un área de Home Assistant para calcular el historial de actividad."
+    },
+    "configure.auto_sleep.history_retrying": {
+      "sourceHash": "db309a78b9e2b5a65c68851007e65fe631e3c2770c1750b493658b0c653c14c6",
+      "state": "machine-cross-checked",
+      "text": "El historial de actividad no está disponible temporalmente. Reintentando automáticamente…"
+    },
+    "configure.auto_sleep.history_rows_exceeded": {
+      "sourceHash": "1ca1e5dfde46cf77dcfe4f4aec2407ac0d46ddfa1c097cfcf35095aba81653a2",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant devolvió más filas del historial de actividad de las permitidas por el límite de seguridad de reproducción."
+    },
+    "configure.auto_sleep.history_too_large": {
+      "sourceHash": "a34c37d4b69ae35d68ab0051068561235c74d3e23080b9d37a5da8c7bbc7c4a1",
+      "state": "machine-cross-checked",
+      "text": "El historial de actividad de Home Assistant es demasiado grande para procesarlo de forma segura."
+    },
+    "configure.auto_sleep.history_unavailable": {
+      "sourceHash": "5aaf10839ba6548520e231457a3d610731375f0c03eb5fb668a82656ff0949de",
+      "state": "machine-cross-checked",
+      "text": "El historial de actividad de suspensión automática no está disponible."
+    },
+    "configure.auto_sleep.history_unreadable": {
+      "sourceHash": "db5e16b3ed5b2267f932e70e20a893501ec73d599bd03b113911ca199a4991ac",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant devolvió un historial de actividad que esta compilación no pudo leer."
+    },
+    "configure.auto_sleep.hold_awake": {
+      "sourceHash": "04cbc0342884f9af84405fec6a3b28ea3606a0e5e12ab6b1083a0fb893ccbd24",
+      "state": "machine-cross-checked",
+      "text": "Mantener activo"
+    },
+    "configure.auto_sleep.hold_awake_lower": {
+      "sourceHash": "70765e7e3c842116793e61f30d887bc1fd8aa2ad833d2cb9f91e27b4d565c6b5",
+      "state": "machine-cross-checked",
+      "text": "mantener activo"
+    },
+    "configure.auto_sleep.included": {
+      "sourceHash": "7f0f70e643bcb02dfc5f7e678cc06d692e53875ee9ead594e50bae7d3354b305",
+      "state": "machine-cross-checked",
+      "text": "incluida"
+    },
+    "configure.auto_sleep.inhibited": {
+      "sourceHash": "7fda244b5fe5991d1efa95ba2dbbcc8f2c7633074061bd7620c420aedbdec927",
+      "state": "machine-cross-checked",
+      "text": "Inhibida"
+    },
+    "configure.auto_sleep.inhibited_lower": {
+      "sourceHash": "0e7f1acff19835681c748f83671c0bd5b07c642ee690e18aaff20a89d501af56",
+      "state": "machine-cross-checked",
+      "text": "inhibida"
+    },
+    "configure.auto_sleep.interval_count": {
+      "sourceHash": "3d9afeb488077abafe5bdeecbeeda344c0badb0b23a0fd251198cd1833c3c762",
+      "state": "machine-cross-checked",
+      "text": "{state} {count} intervalo(s)"
+    },
+    "configure.auto_sleep.lane_label": {
+      "sourceHash": "4d8fa2ee7835714feea3cc80f75f7b012694800508fd59de772e5d8d57e4b289",
+      "state": "machine-cross-checked",
+      "text": "{label}{kind}{state}, durante {hours} horas: {detail}"
+    },
+    "configure.auto_sleep.manual_override": {
+      "sourceHash": "4bc8faafa960b63173114d6ddc443e477303a41f4e648438e74c819aec55edb1",
+      "state": "machine-cross-checked",
+      "text": "Anulación manual: {state}"
+    },
+    "configure.auto_sleep.no_credible_sources": {
+      "sourceHash": "1fafdf61adcae38c76552e518a2883c4dc158891ef5ac59ef17f4d51af719158",
+      "state": "machine-cross-checked",
+      "text": "No hay ninguna fuente de actividad fiable basada en dispositivos en esta área."
+    },
+    "configure.auto_sleep.no_intervals": {
+      "sourceHash": "2f57e3d83d316f3c580192ca596e9347e1a88d447e61cc2cc4a07db1ac69ca2d",
+      "state": "machine-cross-checked",
+      "text": "sin intervalos"
+    },
+    "configure.auto_sleep.no_replay_data": {
+      "sourceHash": "625bea612c8b37ce135e18d5456f9ed605093b0321a80bb73cbe4ce311ff4dd5",
+      "state": "machine-cross-checked",
+      "text": "Sin datos de reproducción"
+    },
+    "configure.auto_sleep.not_learned": {
+      "sourceHash": "99a78a5ae37fb889fc91bffd2877ac8c3cd3781288354cb278f4619a05c9ea4a",
+      "state": "machine-cross-checked",
+      "text": "no aprendido"
+    },
+    "configure.auto_sleep.panel_reconnecting": {
+      "sourceHash": "ea27e92ae4067d4f065ca5a4cc381d869d9a955c6f2fdbf658491cb79c5bed3a",
+      "state": "machine-cross-checked",
+      "text": "Ha cambiado la conexión del panel. Reconectando el historial de actividad…"
+    },
+    "configure.auto_sleep.phase": {
+      "sourceHash": "f369627c960bce7a3ca2e521cc0283fe777e141a358664722ed9188764e8fa11",
+      "state": "machine-cross-checked",
+      "text": "Fase: {phase}"
+    },
+    "configure.auto_sleep.reason": {
+      "sourceHash": "ae08e67fc5e93752cda6ba0b53ae40a6097e3136dc5bb48a4c330eaa13df28fb",
+      "state": "machine-cross-checked",
+      "text": "Motivo: {reason}"
+    },
+    "configure.auto_sleep.reconnect_first": {
+      "sourceHash": "ae2afccde997f6236408650fdb5a6a6d8d29ac1950b16ffcf2626be94e819353",
+      "state": "machine-cross-checked",
+      "text": "Vuelve a conectar Home Assistant antes de habilitar la suspensión automática."
+    },
+    "configure.auto_sleep.response_unreadable": {
+      "sourceHash": "8029f2a27f8fc34805040e8f609dfd1bf119a57c6d21226b722fe2e80b47c306",
+      "state": "machine-cross-checked",
+      "text": "No se pudo leer la respuesta del historial de actividad."
+    },
+    "configure.auto_sleep.result_separator": {
+      "sourceHash": "176f8e7ed6a899a9a73dccadf9898621bcf24caf9c0243b83fb3cea9d8f0b4c6",
+      "state": "machine-cross-checked",
+      "text": " resultado, "
+    },
+    "configure.auto_sleep.source_lanes_shown": {
+      "sourceHash": "68dd73e2ab2d2451b1e558679a30fb58facf18849797d8cf6188f0f7cf7ea52f",
+      "state": "machine-cross-checked",
+      "text": "Se muestran {count} carriles de fuentes."
+    },
+    "configure.auto_sleep.source_update_failed": {
+      "sourceHash": "20f147602e00214857ab0183b98da66b0977d11a22395d2052ac093f796c6050",
+      "state": "machine-cross-checked",
+      "text": "No se pudo actualizar esta fuente de actividad."
+    },
+    "configure.auto_sleep.source_update_failed_http": {
+      "sourceHash": "87894782371124039cce663036e1b44b83600b868ef273e6ef61cd2bc1918fd7",
+      "state": "machine-cross-checked",
+      "text": "No se pudo actualizar esta fuente de actividad (HTTP {status})."
+    },
+    "configure.auto_sleep.sources_changed": {
+      "sourceHash": "97fd9da37ab57733286cbf1cfc4e60408260d9a1990de2765a46816b7405796d",
+      "state": "machine-cross-checked",
+      "text": "Las fuentes de actividad han cambiado. Actualizando el historial…"
+    },
+    "configure.auto_sleep.status_failed": {
+      "sourceHash": "8a9ff905ec7f7ef37e8dc061324da0890e5a41dbec04a19f2a360953f8e5de1f",
+      "state": "machine-cross-checked",
+      "text": "Falló la solicitud del estado de suspensión automática (HTTP {status})."
+    },
+    "configure.auto_sleep.status_waiting": {
+      "sourceHash": "b0fc4aab0e7a1a410f404d8e1f9af4cf6b67e839e4dee2a0d816966a7b9e1250",
+      "state": "machine-cross-checked",
+      "text": "Esperando el estado de suspensión automática…"
+    },
+    "configure.auto_sleep.summary_accessible": {
+      "sourceHash": "f1dcfd36e4d02143027d8dcafd61b6aa90e72aaed405edabe9fbee6599149de6",
+      "state": "machine-cross-checked",
+      "text": "Área de Home Assistant: {area} · Fase: {phase} · Motivo: {reason} · Retraso aprendido: {delay} · Fuentes: {count} · Anulación manual de pantalla: {state}"
+    },
+    "configure.auto_sleep.suppressed_lower": {
+      "sourceHash": "f63d5b6b4de4fca716f2be8a179211b92682dc2e030b7063aea1d4a210f40033",
+      "state": "machine-cross-checked",
+      "text": "suprimida"
+    },
+    "configure.auto_sleep.suppressed_suffix": {
+      "sourceHash": "aef22950fc7f0def0168ad339d096caa458d6c00e7651196b2b21674ca758b80",
+      "state": "machine-cross-checked",
+      "text": " · Suprimida"
+    },
+    "configure.auto_sleep.timestamps_unreadable": {
+      "sourceHash": "e92b03d3c12c9ff62897a7e3b1bff6466f8c0a2b9ac1fd0a6e1dce3133a1b080",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant devolvió marcas de tiempo de actividad que este panel no pudo leer."
+    },
+    "configure.auto_sleep.updating_suffix": {
+      "sourceHash": "5ac098cc7b210a28113275f3ae9ec978381c0c13ed46232ade356a32e4c9a277",
+      "state": "machine-cross-checked",
+      "text": " · Actualizando…"
+    },
+    "configure.auto_sleep.value.all_sources_unavailable": {
+      "sourceHash": "7a138f856e5faa0bd526cf4ca81162c680dfea49010eaee4961fa273cd7c8adb",
+      "state": "machine-cross-checked",
+      "text": "Ninguna fuente disponible"
+    },
+    "configure.auto_sleep.value.auth_failed": {
+      "sourceHash": "93821eb7ce8c659285207dd34f7e29a79088e218a1d7bb373b54fbeddbbef6fd",
+      "state": "machine-cross-checked",
+      "text": "Autenticación fallida"
+    },
+    "configure.auto_sleep.value.authenticating": {
+      "sourceHash": "a6d57aab29cb8c3cfaa2d10eb41788a9539025d89b9cbf38279881b6ec5ac6aa",
+      "state": "machine-cross-checked",
+      "text": "Autenticando"
+    },
+    "configure.auto_sleep.value.connecting": {
+      "sourceHash": "d403c686f6a1048014bdd230f59963271b0123ea48245754fc9f264b962a2182",
+      "state": "machine-cross-checked",
+      "text": "Conectando"
+    },
+    "configure.auto_sleep.value.disabled": {
+      "sourceHash": "75081b593d15cf6e631971bc6768723f593b88b172477e40ae7d363e4829816d",
+      "state": "machine-cross-checked",
+      "text": "Deshabilitada"
+    },
+    "configure.auto_sleep.value.discovering": {
+      "sourceHash": "4fc48cfcb124c2853a41563f456e6cea9eff6bdf6c0eaec492de45af85da1d85",
+      "state": "machine-cross-checked",
+      "text": "Detectando"
+    },
+    "configure.auto_sleep.value.discovery_failed": {
+      "sourceHash": "a95eb4511f7e574a2484be17992e4f0d31f03465689a9a9168c05b7ad460c486",
+      "state": "machine-cross-checked",
+      "text": "Error de detección"
+    },
+    "configure.auto_sleep.value.learning": {
+      "sourceHash": "8b45bb20e0775c30641210abeddb520ac385ae05e90bd6cbdcd8304a39f04623",
+      "state": "machine-cross-checked",
+      "text": "Aprendiendo"
+    },
+    "configure.auto_sleep.value.lease_expired": {
+      "sourceHash": "5cb259acb0d490eee8a52312868848492ced856e24a4d26b07f238aed5d5d9a4",
+      "state": "machine-cross-checked",
+      "text": "Concesión caducada"
+    },
+    "configure.auto_sleep.value.live": {
+      "sourceHash": "b64ac05f17e64d037db81a98f51e2688216e292ae9748f979f04dfbac49fd7fc",
+      "state": "machine-cross-checked",
+      "text": "Activo"
+    },
+    "configure.auto_sleep.value.no_area": {
+      "sourceHash": "3fd59f11b54e96933a2b02aa304ac4702497072e362651bddfe49cffc8ba393d",
+      "state": "machine-cross-checked",
+      "text": "Sin área"
+    },
+    "configure.auto_sleep.value.no_credible_sources": {
+      "sourceHash": "93826084be6f5fb9f4f2c341a3fd3d072198deee2f2bda2caee4ddbea3ffffc0",
+      "state": "machine-cross-checked",
+      "text": "Sin fuentes fiables"
+    },
+    "configure.auto_sleep.value.no_included_sources": {
+      "sourceHash": "2dc9996436b4b55a2c4aa0cd1cf32ce84464416b4acfab7b371eb0ce15b7ee4e",
+      "state": "machine-cross-checked",
+      "text": "Sin fuentes incluidas"
+    },
+    "configure.auto_sleep.value.no_sources_configured": {
+      "sourceHash": "0f29c40e82e4e01996a6130815e3f16e7b7a81c5cdbed46e53fffbc1ccdc097b",
+      "state": "machine-cross-checked",
+      "text": "Sin fuentes configuradas"
+    },
+    "configure.auto_sleep.value.partial_source_loss": {
+      "sourceHash": "4cb807a5f92adb45a1af71ae848b02696649df0cbc7d08f89119a57754a08e12",
+      "state": "machine-cross-checked",
+      "text": "Pérdida parcial de fuentes"
+    },
+    "configure.auto_sleep.value.proximity_activity": {
+      "sourceHash": "f1eb01dc45a91a070c294b266a8e2273fa85290bd349051b7b2886ce93c52b03",
+      "state": "machine-cross-checked",
+      "text": "Actividad de proximidad"
+    },
+    "configure.auto_sleep.value.reconnecting": {
+      "sourceHash": "afb118fcb16c3727d83bb343ea009c7367ed3c0e6de14a5dcdb3fff5bab6edf5",
+      "state": "machine-cross-checked",
+      "text": "Reconectando"
+    },
+    "configure.auto_sleep.value.source_active": {
+      "sourceHash": "3cf692cffb7214057f5c017549507d3e467026f6860f1a03925d962290fcb899",
+      "state": "machine-cross-checked",
+      "text": "Fuente activa"
+    },
+    "configure.auto_sleep.value.source_activity_lease": {
+      "sourceHash": "93f2b55eedc32def17bde4d6e631e57bd3406c63aec017be0327130d7fd57cc6",
+      "state": "machine-cross-checked",
+      "text": "Concesión de actividad de la fuente"
+    },
+    "configure.auto_sleep.value.stopped": {
+      "sourceHash": "1a4f630ac1b69fd00728fa8a672ded71d0eae8516cb23e78f94529113399b79b",
+      "state": "machine-cross-checked",
+      "text": "Detenido"
+    },
+    "configure.auto_sleep.value.synchronizing": {
+      "sourceHash": "bde65ecb693decb13e16a1836ee1c50e4099576d981ca07428b00ba704c7a2a6",
+      "state": "machine-cross-checked",
+      "text": "Sincronizando"
+    },
+    "configure.auto_sleep.value.touch_activity": {
+      "sourceHash": "2021e9e69b91a0fde92240dae2ebfdce639c9988929625a92edf8e2d3cd419c0",
+      "state": "machine-cross-checked",
+      "text": "Actividad táctil"
+    },
+    "configure.auto_sleep.value.unknown": {
+      "sourceHash": "b764cdc0eab7137467211272fa539f1260d1bf2e71bcf6ff3bdc960f5c16aa14",
+      "state": "machine-cross-checked",
+      "text": "Desconocido"
+    },
+    "configure.badge.experimental": {
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-cross-checked",
+      "text": "En pruebas"
+    },
+    "configure.badge.skunk_works": {
+      "sourceHash": "a8f2afd0e3e85d2b17b647f2dd1471a8df0c450ce5eeb25c858a7068088d060d",
+      "state": "machine-cross-checked",
+      "text": "proyecto secreto"
+    },
+    "configure.brightness.chart_label": {
+      "sourceHash": "de769cd44d5e548e3985585296f2a48b20eba114b6696b24fb84400fbb5b2579",
+      "state": "machine-cross-checked",
+      "text": "Patrón de luz ambiental de 24 horas: los tres días más recientes se muestran por separado y el resto de la semana como un intervalo sombreado entre el mínimo y el máximo"
+    },
+    "configure.brightness.daily_learning": {
+      "sourceHash": "d9f73b481b834be66de36755506fda88fe16fc0c1956a00e8194cc37a121655d",
+      "state": "machine-cross-checked",
+      "text": "Aprendizaje diario de luz ambiental"
+    },
+    "configure.brightness.days_drawn": {
+      "sourceHash": "22510ad6fa1c6865498fbbf6eb06cfe92bd5e3527e6849e62426a16e934cb1bf",
+      "state": "machine-cross-checked",
+      "text": "{count} día(s) mostrado(s) por separado"
+    },
+    "configure.brightness.earlier_weekly_range": {
+      "sourceHash": "ffe18e02d3f72a037a299602b0beb5cc9ae458db16fafd0939da887072028ca3",
+      "state": "machine-cross-checked",
+      "text": " · historial anterior como intervalo semanal"
+    },
+    "configure.brightness.first_sample_waiting": {
+      "sourceHash": "81c711aa33fcf89527035511182841cb0cf323a417931949e11e843932dfd437",
+      "state": "machine-cross-checked",
+      "text": "Esperando la primera muestra de la fuente seleccionada…"
+    },
+    "configure.brightness.focus_to_load": {
+      "sourceHash": "17f6cb65300b343bdaa7f8133b90fdd44aef0e76d730956404f4e85255bdfab5",
+      "state": "machine-cross-checked",
+      "text": "Sitúa el foco aquí para cargar los sensores de iluminancia de Home Assistant."
+    },
+    "configure.brightness.history_none": {
+      "sourceHash": "f9b4b91dfd8e0c7c28521809000f4e2c168b76565864ea842aeda33484dfa8f8",
+      "state": "machine-cross-checked",
+      "text": "Aún no hay historial de luz ambiental"
+    },
+    "configure.brightness.history_preparing": {
+      "sourceHash": "a084c7243ced72eb99a0f05ec1540020c9768ac6e8994af87f34bf82a2a71382",
+      "state": "machine-cross-checked",
+      "text": "El historial de la fuente seleccionada aún se está preparando; se reintentará durante la actualización habitual."
+    },
+    "configure.brightness.learned_baseline": {
+      "sourceHash": "0af595a4eea352c7e44619d7d570e099922b492b8099a21203838f2a01b9e41a",
+      "state": "machine-cross-checked",
+      "text": "Línea base aprendida"
+    },
+    "configure.brightness.load_failed": {
+      "sourceHash": "b1e87568fb548ca650b2b0550fa00a27d487b3a44d4588f51fb8b9cc01b6eacd",
+      "state": "machine-cross-checked",
+      "text": "No se pudo cargar el brillo adaptativo."
+    },
+    "configure.brightness.loading": {
+      "sourceHash": "25f84afe1a36e24f9b33a889ef21d633ec0b4dfab84ee58f1eddbcaaaa0160b4",
+      "state": "machine-cross-checked",
+      "text": "Cargando el brillo adaptativo…"
+    },
+    "configure.brightness.minute_buckets": {
+      "sourceHash": "3a2141eeca1428c7b0e373581cb4b6974273cf866f16904b1f17c73e65e3977b",
+      "state": "machine-cross-checked",
+      "text": " · {count} intervalos de un minuto"
+    },
+    "configure.brightness.new_history_loading": {
+      "sourceHash": "f7b80f7520a1d24d417104888dff804ba685028d6e55c64d5d9d1b6c4e13f9ab",
+      "state": "machine-cross-checked",
+      "text": "Cargando el historial de la nueva fuente…"
+    },
+    "configure.brightness.observed": {
+      "sourceHash": "64fa8a14a90feef5d86951352195391dfead1194f932aaed0755021c504e2a15",
+      "state": "machine-cross-checked",
+      "text": "Observado"
+    },
+    "configure.brightness.panel_sensor": {
+      "sourceHash": "7bf3567a008e052f63193e261725236bd46fb630aad990e7e90b129650e2ce7b",
+      "state": "machine-cross-checked",
+      "text": "Sensor de luz ambiental del panel"
+    },
+    "configure.brightness.panel_sensor_short": {
+      "sourceHash": "b483e587d95b2dffc280ac1cb3ac7f1bdc07ea031c474a8d8e2fe6cccaf1c894",
+      "state": "machine-cross-checked",
+      "text": "sensor del panel"
+    },
+    "configure.brightness.proposed_level": {
+      "sourceHash": "7f6422aa4a32c030a35bcfe1a4af5d42ad9be0f887117279af1d683e4428f64c",
+      "state": "machine-cross-checked",
+      "text": "Nivel propuesto"
+    },
+    "configure.brightness.reset_confirm": {
+      "sourceHash": "11d44cad9fa4477eac43068a01928799cbdc4fbc707a91bf099d4317843b0607",
+      "state": "machine-cross-checked",
+      "text": "¿Eliminar el historial de luz ambiental de siete días y reiniciar el aprendizaje?"
+    },
+    "configure.brightness.reset_history": {
+      "sourceHash": "633c89e2d12efaaa3feae5773f231463e00df4c1736fd7d5dacffa560564e9e1",
+      "state": "machine-cross-checked",
+      "text": "Restablecer historial aprendido"
+    },
+    "configure.brightness.resume_auto": {
+      "sourceHash": "c83cd37928e25326389e1a1bb82ca363d3436de99b1722833c08c6965ca735fa",
+      "state": "machine-cross-checked",
+      "text": "Reanudar modo totalmente automático"
+    },
+    "configure.brightness.runtime_unavailable": {
+      "sourceHash": "ff261271c47217afa1f2616da075c1c72d5551b8750ffbd17ce8acdaabf041d5",
+      "state": "machine-cross-checked",
+      "text": "El motor de brillo adaptativo no está disponible."
+    },
+    "configure.brightness.samples_none": {
+      "sourceHash": "3771959669bb52d1dd55f1dc14102813fa85814c46dcab364376cece7def061e",
+      "state": "machine-cross-checked",
+      "text": "Aún no hay muestras"
+    },
+    "configure.brightness.select_ha_sensor": {
+      "sourceHash": "b8b9edb6a77b0a423856ce4e977a3707815f9e4d2041a43553fab906dc063a8b",
+      "state": "machine-cross-checked",
+      "text": "Selecciona un sensor de iluminancia de Home Assistant"
+    },
+    "configure.brightness.select_source_first": {
+      "sourceHash": "15f69000aa49c052c92c4b0d9f54b6df9e658504fe4c30bfe8c6e268b93e084f",
+      "state": "machine-cross-checked",
+      "text": "Selecciona primero una fuente de luz ambiental."
+    },
+    "configure.brightness.selected_history_loading": {
+      "sourceHash": "e37b9a70808f320dba6dd3a3ac588ff66357e2287189a9079ad962d0d4cffcab",
+      "state": "machine-cross-checked",
+      "text": "Cargando el historial de la fuente seleccionada…"
+    },
+    "configure.brightness.selected_samples_none": {
+      "sourceHash": "3beb024eaee681a17b4cfd074b47ee2c56ecd29d4c21b20c97b4db57e04d3f4c",
+      "state": "machine-cross-checked",
+      "text": "La fuente seleccionada aún no tiene muestras de luz ambiental."
+    },
+    "configure.brightness.selected_source_failed": {
+      "sourceHash": "62b265c191f452f772e6a2accd686bc29f6bf99e84aae2b4878e11ba6862d4b8",
+      "state": "machine-cross-checked",
+      "text": "No se pudo cargar la fuente seleccionada; se reintentará durante la actualización habitual."
+    },
+    "configure.brightness.selected_source_loading": {
+      "sourceHash": "e4ed19af2f61c698b56d9ddaffc5bbedf344bedd801cf61b6dfd4bf7fc53d309",
+      "state": "machine-cross-checked",
+      "text": "La fuente seleccionada aún se está cargando…"
+    },
+    "configure.brightness.sensitivity": {
+      "sourceHash": "957e16c4637b1b5be3e5c4871f302ee02d20755cd8a09bf3ce07cc68bfa2036a",
+      "state": "machine-cross-checked",
+      "text": " · Sensibilidad {percent}%"
+    },
+    "configure.brightness.source_checking": {
+      "sourceHash": "560abe5235adc8e3dd0f77658f659c7af5f7533c5b93ba9d59f22584060877dc",
+      "state": "machine-cross-checked",
+      "text": "Comprobando la fuente de luz ambiental…"
+    },
+    "configure.brightness.source_updating": {
+      "sourceHash": "26bd5e289e85479c66aca718282f17dd9c69ad1b43d8981238fe9dedeb63723e",
+      "state": "machine-cross-checked",
+      "text": "Actualizando la fuente de luz ambiental… · Fuente: {source}"
+    },
+    "configure.brightness.sources_available": {
+      "sourceHash": "fe7de22f40d775fb2cd572245be9319f093b17dba2fd588af64bfed7faa1caa5",
+      "state": "machine-cross-checked",
+      "text": "Hay {count} fuente(s) de iluminancia disponible(s). Si se deja en blanco, se usa el sensor del panel."
+    },
+    "configure.brightness.sources_load_failed": {
+      "sourceHash": "c7968b3a9d9a13e3abc244c1404692d1359fed376b56f61f5a53005127b7bd29",
+      "state": "machine-cross-checked",
+      "text": "No se pudieron cargar las fuentes de Home Assistant; aún puedes introducir el ID exacto de la entidad del sensor."
+    },
+    "configure.brightness.sources_loading": {
+      "sourceHash": "0dcd47ac5122f1b938df7cf08d85931cb113d0820367ac574653d0b29882bfbc",
+      "state": "machine-cross-checked",
+      "text": "Cargando sensores de iluminancia de Home Assistant…"
+    },
+    "configure.brightness.sources_none": {
+      "sourceHash": "103cb4ab6f82d68cc76a805062c18b458c5a899a95e94355cf3fb1b14ef2b39f",
+      "state": "machine-cross-checked",
+      "text": "No se encontraron sensores de iluminancia de Home Assistant; aún puedes introducir el ID exacto de la entidad del sensor."
+    },
+    "configure.brightness.sources_unavailable": {
+      "sourceHash": "cb57d539905851c5c9c7144ab04547cfb584b02d55edbf16424b168726eded68",
+      "state": "machine-cross-checked",
+      "text": "Las fuentes de Home Assistant no están disponibles; aún puedes introducir el ID exacto de la entidad del sensor."
+    },
+    "configure.brightness.state_disabled": {
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked",
+      "text": "deshabilitado"
+    },
+    "configure.brightness.state_enabled": {
+      "sourceHash": "fb9cf75606b4070dd6a9705810906bba28d0e2ea74ff301b999a91dbb68c7d98",
+      "state": "machine-cross-checked",
+      "text": "habilitado"
+    },
+    "configure.brightness.state_learning": {
+      "sourceHash": "edd95740e339e6aa0a1dab45741b0521185680b051631a7c265b5630da4f2158",
+      "state": "machine-cross-checked",
+      "text": "aprendiendo"
+    },
+    "configure.brightness.state_source": {
+      "sourceHash": "ecc42ca308bdb4eb0159b27370ef687797f9a8279456d236cc31cf85f294b9bd",
+      "state": "machine-cross-checked",
+      "text": "{state} · Fuente: {source}"
+    },
+    "configure.brightness.state_temporary_preference": {
+      "sourceHash": "24d95b0bcd6e5ab2ad803b07f354293284e2e6e17a87942f118c0a1a7416fcf2",
+      "state": "machine-cross-checked",
+      "text": "preferencia temporal"
+    },
+    "configure.brightness.status_unavailable": {
+      "sourceHash": "9b0d196bc84e8c0a0d11d181657e5615eec79106378321e87728a0e48a545520",
+      "state": "machine-cross-checked",
+      "text": "El estado del brillo adaptativo no está disponible."
+    },
+    "configure.brightness.waiting": {
+      "sourceHash": "0c8c21cd0a9a25e4a91bd5a6eb5f7b23d30215ea952fb1de85cc7c345288de0d",
+      "state": "machine-cross-checked",
+      "text": "Esperando luz ambiental… · Fuente: {source}"
+    },
+    "configure.brightness.waiting_valid_reading": {
+      "sourceHash": "edd5ed1e90d7e79bd34ca9d5b5cf71c03665e8e81068a346681493bb771c8f38",
+      "state": "machine-cross-checked",
+      "text": "Esperando una lectura válida de luz ambiental."
+    },
+    "configure.dashboard.auto_account_default": {
+      "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
+      "state": "machine-cross-checked",
+      "text": "Automático — usar el valor predeterminado de esta cuenta"
+    },
+    "configure.dashboard.auto_list_unavailable": {
+      "sourceHash": "b8950035556b06dd31f443be97d7c771e32d031b44fbfe548e3cd54c4f668efc",
+      "state": "machine-cross-checked",
+      "text": "Automático — lista de paneles de control no disponible"
+    },
+    "configure.dashboard.auto_no_default": {
+      "sourceHash": "7b82f22b1413e07c8671b4d4a7b847856157697f2b735396d3b9af343799326c",
+      "state": "machine-cross-checked",
+      "text": "Automático — esta cuenta no tiene uno predeterminado"
+    },
+    "configure.dashboard.custom": {
+      "sourceHash": "354213584eda4f955950c5954d8ffd233f23e57b87147153f0c369d21d2390f4",
+      "state": "machine-cross-checked",
+      "text": "Personalizado — introduce una ruta de panel de control…"
+    },
+    "configure.dashboard.fetch_failed": {
+      "sourceHash": "34f5a5ab707babb51ca05d6f7504708ce34846cfe9f4ec3c45ba2d2c27c7238c",
+      "state": "machine-cross-checked",
+      "text": "Aún no se pudo obtener de Home Assistant la lista de paneles de control de esta cuenta. Inténtalo de nuevo cuando se restablezca la conexión."
+    },
+    "configure.dashboard.group_ha": {
+      "sourceHash": "3fc2a7583aa9e04b174dc19dc792089a3bd00e4e1d1081077f2a2904f566462b",
+      "state": "machine-cross-checked",
+      "text": "Paneles de control de Home Assistant"
+    },
+    "configure.dashboard.group_yours": {
+      "sourceHash": "1eae7261ac3538d5d912509465916c3a33d7fad19970a0ce27d53c37ba115203",
+      "state": "machine-cross-checked",
+      "text": "Tus paneles de control"
+    },
+    "configure.dashboard.no_default": {
+      "sourceHash": "d491bed061c60e1745eb3212c40ff7fd554851354c2d8b4d9c8a31b873f65ec8",
+      "state": "machine-cross-checked",
+      "text": "Esta cuenta no tiene ningún panel de control predeterminado; elige el panel de control que debe mostrar este panel."
+    },
+    "configure.dashboard.none_accessible": {
+      "sourceHash": "85c12503ff1cc21593b8d6167b5fb834ecf6e1196c0f1d1df74c9397104a7f20",
+      "state": "machine-cross-checked",
+      "text": "Esta cuenta no puede acceder a ningún panel de control. Crea uno o concede acceso en Home Assistant."
+    },
+    "configure.dashboard.path_help": {
+      "sourceHash": "70983ce0dd46a73e6a903ce96411af18990bab0dfa39e1878a9ae81e91c07689",
+      "state": "machine-cross-checked",
+      "text": "Una ruta de este Home Assistant que comience por un panel de control de la lista anterior."
+    },
+    "configure.dashboard.path_invalid": {
+      "sourceHash": "44e97a76f2ba646917a08ea5e9b8ea2a25029bb30b73d0d9094d201f49d8afdc",
+      "state": "machine-cross-checked",
+      "text": "Introduce una ruta de panel de control, como /dashboard-name/tab-name."
+    },
+    "configure.dashboard.path_label": {
+      "sourceHash": "08e0f39c31b74ee65647b268f819ae96f3669dc62daa2345760e91b396585937",
+      "state": "machine-cross-checked",
+      "text": "Ruta del panel de control"
+    },
+    "configure.dashboard.path_not_visible": {
+      "sourceHash": "7464a115e40c5a97c3999bdc9f2dbf984f4298a406b10766470f28e15667bcae",
+      "state": "machine-cross-checked",
+      "text": "{path} no es un panel de control que pueda ver la cuenta de Home Assistant de este panel; el panel usará el predeterminado hasta que exista ese panel de control."
+    },
+    "configure.display.recommend_prefix": {
+      "sourceHash": "4d979ffba01fc73a7ac81c32b38e5cbf5e4cfe0baaaa103108e6182da71c9442",
+      "state": "machine-cross-checked",
+      "text": " Se recomienda usar "
+    },
+    "configure.display.recommend_suffix": {
+      "sourceHash": "3a3a94c4d8734ac0bf929af4a08ad3d85c0b698f2a890af8bf131f585a080a68",
+      "state": "machine-cross-checked",
+      "text": " para obtener mejores resultados"
+    },
+    "configure.display.sizing": {
+      "sourceHash": "fe67dda7f8deb07ddda67fa64e03fa32e44e164b089056bd990b1a8a5014cfa3",
+      "state": "machine-cross-checked",
+      "text": "Tamaño de pantalla"
+    },
+    "configure.duration.hours_minutes": {
+      "sourceHash": "cf8484035b7fa8c13811a16b0f926ad7f56b4161501e105431231873eae43156",
+      "state": "machine-cross-checked",
+      "text": "{hours} h y {minutes} min"
+    },
+    "configure.duration.minutes": {
+      "sourceHash": "1829c58ba472520fd39e61f9e337a1b7da27e86299332dde5bfdea355c3895a8",
+      "state": "machine-cross-checked",
+      "text": "{count} minutos"
+    },
+    "configure.empty": {
+      "sourceHash": "98d6ce0ae7ddc3af8406b87feaba58535a5f45b9a47286fa83adcc6db2df7808",
+      "state": "machine-cross-checked",
+      "text": "No hay ajustes en esta vista."
+    },
+    "configure.error.http": {
+      "sourceHash": "0b638daf70a6ba80fcd9b50cd3327832e0aea06ac8468a918ebe019140e937ac",
+      "state": "machine-cross-checked",
+      "text": "Error (HTTP {status})"
+    },
+    "configure.error.network": {
+      "sourceHash": "9556f262b2a69e7e8150850a01cc520a268fbde7b022fad59e0850df2b355d6f",
+      "state": "machine-cross-checked",
+      "text": "Error (de red)"
+    },
+    "configure.exposure.expose_title": {
+      "sourceHash": "b08fdfe608433be2531aaf092763f77ca8a2a26ba55a018ced56a51d98f2c821",
+      "state": "machine-cross-checked",
+      "text": "Oculto para Home Assistant — haz clic para exponer"
+    },
+    "configure.exposure.exposed": {
+      "sourceHash": "7e8cc952097b411c9cee8ee9dec2beb2432d1aa78d3a81abab4d4f13485bad72",
+      "state": "machine-cross-checked",
+      "text": "Expuesto a Home Assistant"
+    },
+    "configure.exposure.hidden": {
+      "sourceHash": "0f75fa073e40f7e53dca80d45f440f414483e9b08065923db4e5d9118c2073d1",
+      "state": "machine-cross-checked",
+      "text": "Oculto para Home Assistant"
+    },
+    "configure.exposure.hide_title": {
+      "sourceHash": "17c904c6124636a4c4eb0337c86bc636e15e675e2256ec752dc8cb918b58c01c",
+      "state": "machine-cross-checked",
+      "text": "Expuesto a Home Assistant — haz clic para ocultar"
+    },
+    "configure.group.behaviour": {
+      "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
+      "state": "machine-cross-checked",
+      "text": "Comportamiento"
+    },
+    "configure.group.builtin_renderer": {
+      "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",
+      "state": "machine-cross-checked",
+      "text": "Renderizador integrado"
+    },
+    "configure.group.camera": {
+      "sourceHash": "03494b0d1f803522a3497d751eaaf6f987883cd4fe0b0e66baf67a662ae231b2",
+      "state": "machine-cross-checked",
+      "text": "Cámara"
+    },
+    "configure.group.dashboard": {
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "state": "machine-cross-checked",
+      "text": "Panel de control"
+    },
+    "configure.group.diagnostics": {
+      "sourceHash": "268f14bbfe119c1e92150583af960a086d7db9619a097f8aa72ff6779842f610",
+      "state": "machine-cross-checked",
+      "text": "Diagnósticos"
+    },
+    "configure.group.display": {
+      "sourceHash": "34e108c0896d0158ca4f2797d4f12a143943803be2151aa5d2136ea1bcd9a468",
+      "state": "machine-cross-checked",
+      "text": "Pantalla"
+    },
+    "configure.group.ha_connection": {
+      "sourceHash": "9dd2f46d80ce0d921ccb252229d9e3bb7780460f3070b2a1706641e37a7421d0",
+      "state": "machine-cross-checked",
+      "text": "Conexión con Home Assistant"
+    },
+    "configure.group.ha_reporting_note": {
+      "sourceHash": "2122476a018a2cae123346c82932ad9882b567190b4b81df0b65027341111eef",
+      "state": "machine-cross-checked",
+      "text": " · Informes a Home Assistant"
+    },
+    "configure.group.identity": {
+      "sourceHash": "999f23fcd7bec7075e54bb5dea0d9c548bfe7261f95b911ed8e23d2f4188724f",
+      "state": "machine-cross-checked",
+      "text": "Identidad"
+    },
+    "configure.group.logging": {
+      "sourceHash": "d3ef01b4a9c9910364c9b26b2499c8787a0461d2d24ab80376fff736a288b34c",
+      "state": "machine-cross-checked",
+      "text": "Registro"
+    },
+    "configure.group.sensors": {
+      "sourceHash": "76140e34f635bb941ff5b06eb58aa6c34d688acd2c6c72d4ded71b0d7410b287",
+      "state": "machine-cross-checked",
+      "text": "Sensores"
+    },
+    "configure.group.system": {
+      "sourceHash": "6725e7bbcd28f3a8a586fa34bf191fd72dde8b61756932cd3237c17a6f196f1a",
+      "state": "machine-cross-checked",
+      "text": "Sistema"
+    },
+    "configure.group.voice": {
+      "sourceHash": "87bf2bc08589f0bd4a078db145c34ad5e14b8fda53c3ae65b78601294913df95",
+      "state": "machine-cross-checked",
+      "text": "Voz"
+    },
+    "configure.hardened.action_approval": {
+      "sourceHash": "767aa74fd80b54cf8f98cff7e097ab3c8344984f69e496be02fefc7fe4cb51aa",
+      "state": "machine-cross-checked",
+      "text": "Esta acción requiere aprobación física en el panel cuando está activado el modo reforzado."
+    },
+    "configure.hardened.setting_approval": {
+      "sourceHash": "945c00063ff9caeec6ab547988a7285b401de138fdd0090be0531f103d74f5f9",
+      "state": "machine-cross-checked",
+      "text": "Cambiar este ajuste puede requerir aprobación física en el panel cuando está activado el modo reforzado."
+    },
+    "configure.language.automatic": {
+      "sourceHash": "d461a493a3753877c9486cffa3444265a33370af8a7fff242fb119b71750839c",
+      "state": "machine-cross-checked",
+      "text": "Automático"
+    },
+    "configure.load_failed": {
+      "sourceHash": "c2f0b0f12e2b21748d5a23f46604652f1dce8c71799052d73de2533abfa63f81",
+      "state": "machine-cross-checked",
+      "text": "No se pudo cargar la configuración ({error})."
+    },
+    "configure.loading": {
+      "sourceHash": "ba3bbbe10d8bef66441c88536ce7b8e724e2829b59a3da658654f4961cd61ae5",
+      "state": "machine-cross-checked",
+      "text": "Cargando…"
+    },
+    "configure.oauth.browser_recommended": {
+      "sourceHash": "cf970982eab16b244e4b741429787443be4627c11c694862e71bd2b3981661b5",
+      "state": "machine-cross-checked",
+      "text": "Se recomienda iniciar sesión en el navegador; el token de larga duración sigue disponible como alternativa avanzada."
+    },
+    "configure.oauth.browser_sign_in": {
+      "sourceHash": "5db278ec4eec0987c1ef9ed55e817c498622433d61be782224386d481f9fd11b",
+      "state": "machine-cross-checked",
+      "text": "Inicio de sesión en el navegador"
+    },
+    "configure.oauth.configured": {
+      "sourceHash": "e77ad48809534103b9980cdaa816ddf12f6a4d0914dbb7865945f84895a5bf80",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant configurado."
+    },
+    "configure.oauth.connect": {
+      "sourceHash": "1a2303ede07493acc7caaa7c737f3c52bcc9cf04372be19ed1b0af6b9f2c791e",
+      "state": "machine-cross-checked",
+      "text": "Conectar"
+    },
+    "configure.oauth.connected": {
+      "sourceHash": "22965568d22a14ee17af055d2870b50afcfe9fd94a83eec3196e266932297bb2",
+      "state": "machine-cross-checked",
+      "text": "Conectado"
+    },
+    "configure.oauth.connected_as": {
+      "sourceHash": "f90e6ca369bdb5fcf9ac87edb8838b724f01325a617b1d3885c352a64673e0db",
+      "state": "machine-cross-checked",
+      "text": "Conectado como {name}"
+    },
+    "configure.oauth.copy_failed": {
+      "sourceHash": "f5e805d39112ad2ea889fb17a7fca8949d356f58e427ed807f8a27e5d3be3060",
+      "state": "machine-cross-checked",
+      "text": "No se pudo copiar el enlace."
+    },
+    "configure.oauth.copy_link": {
+      "sourceHash": "dbf362d4f210c780513a9258278d4d07abe8a224f84ba7ad775d819039342e77",
+      "state": "machine-cross-checked",
+      "text": "Copiar enlace"
+    },
+    "configure.oauth.enter_url": {
+      "sourceHash": "731913177c87bd9f3829e7bbb1169127c6092ba3b914de790b4497bc1e377a20",
+      "state": "machine-cross-checked",
+      "text": "Introduce arriba la URL de Home Assistant y conecta este panel."
+    },
+    "configure.oauth.link_copied": {
+      "sourceHash": "9f8b0b0cc949988198be709a2f3dfc4d695794c9af20a9793492f02456e2ec2c",
+      "state": "machine-cross-checked",
+      "text": "Enlace de inicio de sesión copiado."
+    },
+    "configure.oauth.link_ready": {
+      "sourceHash": "397769cfb1f6d746cc9632dbcaecbdba2d8fdc2ab5ef18aada605c50ae56c306",
+      "state": "machine-cross-checked",
+      "text": "El enlace de inicio de sesión está listo. Ábrelo normalmente o cópialo en una ventana privada."
+    },
+    "configure.oauth.method_oauth": {
+      "sourceHash": "d2fce9e31ab14e085a8a03e5eade45ec5ad0aa0f37f827d0de78eea7c4b9b78e",
+      "state": "machine-cross-checked",
+      "text": "OAuth configurado"
+    },
+    "configure.oauth.method_token": {
+      "sourceHash": "6ddb5d45086947c3e4a313263a84db398c60d2b7422016e781b85ca709a937b4",
+      "state": "machine-cross-checked",
+      "text": "Token de larga duración configurado"
+    },
+    "configure.oauth.not_completed": {
+      "sourceHash": "2990c3a26a703ff30b5e843a1ee86e6ae02ebf81fbf739e0f1447e99a95dc197",
+      "state": "machine-cross-checked",
+      "text": "No se completó el inicio de sesión. Empieza de nuevo."
+    },
+    "configure.oauth.not_configured": {
+      "sourceHash": "dd1841d295024256e8884cb898d863cb17333ef927fefae59368238e401c6ef0",
+      "state": "machine-cross-checked",
+      "text": "Sin configurar"
+    },
+    "configure.oauth.open_sign_in": {
+      "sourceHash": "c766817ace23b0a631e0fc10b24576d12fd716fe3c26705eca57a31a23d278e1",
+      "state": "machine-cross-checked",
+      "text": "Abrir inicio de sesión"
+    },
+    "configure.oauth.reconnect": {
+      "sourceHash": "bf8a9eab9e7e141bfb81f0ca9244a5f68f476ed0b57f03538410417298169d18",
+      "state": "machine-cross-checked",
+      "text": "Volver a conectar"
+    },
+    "configure.oauth.rejected": {
+      "sourceHash": "5c0f79bb1a6969fa6c1381b5d93fe5e65d64a67861291a34d108ff459c79ae0e",
+      "state": "machine-cross-checked",
+      "text": "Inicio de sesión rechazado — vuelve a conectar con Home Assistant"
+    },
+    "configure.oauth.sign_in_help": {
+      "sourceHash": "129beb36192074bfb2af9ea57a84a2d437e0567d3f71c2a72e45fb79fd56d84a",
+      "state": "machine-cross-checked",
+      "text": "Inicia sesión desde este ordenador. Para iniciar sesión como otro usuario, copia el enlace en una ventana privada."
+    },
+    "configure.oauth.start_failed": {
+      "sourceHash": "1b939793efe69babdad069463d47dcc05702bc4842503f4b125eb61b656deaf0",
+      "state": "machine-cross-checked",
+      "text": "No se pudo iniciar el proceso de acceso."
+    },
+    "configure.oauth.starting": {
+      "sourceHash": "c9e72793bb83a13e909114b428a68b7fb74f6f3d676ee4fde2e18cead5e7f71e",
+      "state": "machine-cross-checked",
+      "text": "Iniciando sesión…"
+    },
+    "configure.oauth.status_unavailable": {
+      "sourceHash": "ab0e35c6fb00cb0480abe12c1a0e0e07d50d15612f847984dd64e6d960474474",
+      "state": "machine-cross-checked",
+      "text": "{method} · estado no disponible"
+    },
+    "configure.oauth.valid_url_first": {
+      "sourceHash": "4e9962f7c4d9511c28f2357e4d5f6b4e87e25d02aa5780e573e814e49272415e",
+      "state": "machine-cross-checked",
+      "text": "Introduce primero una URL válida de Home Assistant."
+    },
+    "configure.option.auto": {
+      "sourceHash": "929260ad9b9ea9fe0f3553dd964f4ff3deb5792efd031a2b90f573fe91f012bb",
+      "state": "machine-cross-checked",
+      "text": "automático"
+    },
+    "configure.option.auto_detail": {
+      "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
+      "state": "machine-cross-checked",
+      "text": "automático ({value})"
+    },
+    "configure.package.auto_detect": {
+      "sourceHash": "89ebfb7a88ca8e6cafba752d40719e9ebdbf1d4250b0b3a275566a9b7c00b5c4",
+      "state": "machine-cross-checked",
+      "text": "Detectar automáticamente"
+    },
+    "configure.package.not_installed": {
+      "sourceHash": "7d6b4370772768097a87613b0af4c0681f124f9c02dbbd5a55b7ce8e982aa34b",
+      "state": "machine-cross-checked",
+      "text": "{package} · (no instalado)"
+    },
+    "configure.renderer.builtin": {
+      "sourceHash": "838a46e057e83db8885d0761337db9d0f2a7ffb8bd723bfc33fcf495cde873a9",
+      "state": "machine-cross-checked",
+      "text": "Renderizador integrado (ha-paneld)"
+    },
+    "configure.renderer.clear_requested": {
+      "sourceHash": "e6a898912dc779815fe42bbd35ade077c360fbfdc49cde43262c7d1960e4afb7",
+      "state": "machine-cross-checked",
+      "text": "Borrado solicitado."
+    },
+    "configure.renderer.clear_storage": {
+      "sourceHash": "989131b53206340fe9cf395936d94146ee460db8c6a7d58a280bd16cfe276d22",
+      "state": "machine-cross-checked",
+      "text": "Borrar almacenamiento del renderizador"
+    },
+    "configure.renderer.clear_storage_help": {
+      "sourceHash": "de5965dc388b46e57b80e0069a3ab9883397d841ca82c47787e9107978378b3b",
+      "state": "machine-cross-checked",
+      "text": "Borra los datos del panel de control en caché. Conserva la sesión."
+    },
+    "configure.renderer.clearing": {
+      "sourceHash": "9a81378b00d70e669413ed91a709d5b23dd10a3f2d38cb15243bdc97dccb2ac6",
+      "state": "machine-cross-checked",
+      "text": "Borrando…"
+    },
+    "configure.renderer.configured_external": {
+      "sourceHash": "78d416d2e6869c26000b9ec4728509e68c4ab71fda1939964c10fef6d30eb9bb",
+      "state": "machine-cross-checked",
+      "text": "{package} · renderizador externo configurado"
+    },
+    "configure.renderer.storage": {
+      "sourceHash": "eec803f81f175fae9289185d372068eea10fdbc5e058e893315528c337abdd1e",
+      "state": "machine-cross-checked",
+      "text": "Datos del renderizador"
+    },
+    "configure.save.action": {
+      "sourceHash": "dd0ae7a5cbcf233968657563dce34639e681861e2df6d3f845c08d49981c0999",
+      "state": "machine-cross-checked",
+      "text": "Guardar cambios"
+    },
+    "configure.save.applied_newer_changes": {
+      "sourceHash": "922c6c27af2eadf2a8bd74b0ed260b1c9955cf4b55e8dd631500349797ac4631",
+      "state": "machine-cross-checked",
+      "text": "La configuración guardada ya se aplicó; aún debes guardar los cambios más recientes."
+    },
+    "configure.save.failed": {
+      "sourceHash": "19b9455ce71a631f52e74d6fc358e95b9f35ab9a933aaf2fb159d97f1246983c",
+      "state": "machine-cross-checked",
+      "text": "Error al guardar."
+    },
+    "configure.save.hardware_pending": {
+      "sourceHash": "9bd2748bda208a2e6c2bac42067692436f2f9189a3f7e197e5b338bdba1c44ef",
+      "state": "machine-cross-checked",
+      "text": "Valor deseado guardado; falta aplicarlo al hardware."
+    },
+    "configure.save.now_applied": {
+      "sourceHash": "f7bfcea102edeb4ba0e93aa5a17733d1de0cc1183edc5b707e474640363b018e",
+      "state": "machine-cross-checked",
+      "text": "La configuración guardada ya se aplicó."
+    },
+    "configure.save.outcome_newer_changes": {
+      "sourceHash": "1afa8dc5ecaddb4f7ea2e4bdf97f0ec039ea7ddbb919727f42f339178250829d",
+      "state": "machine-cross-checked",
+      "text": "{outcome} Aún debes guardar los cambios más recientes."
+    },
+    "configure.save.reload_failed": {
+      "sourceHash": "a2dd4f224888a496a50ea48da45bb9db08515fa0c2c4d962760aa3d83fd089e6",
+      "state": "machine-cross-checked",
+      "text": "Guardado (falló la recarga; actualiza la página)."
+    },
+    "configure.save.saved": {
+      "sourceHash": "fca046ccd586c67f7fe0b3c12c29873a8abf9376f7cd514fc6272ec03b2de0b3",
+      "state": "machine-cross-checked",
+      "text": "Guardado."
+    },
+    "configure.save.saved_newer_changes": {
+      "sourceHash": "ce417972a2f79643e1f4952031e4f0878c53746492d013b7667a6238312156f7",
+      "state": "machine-cross-checked",
+      "text": "Guardado; aún debes guardar los cambios más recientes."
+    },
+    "configure.save.saving": {
+      "sourceHash": "23e39291d6135814ed7c936e278974544b0df5fbf0eb0427b6700979b7472a93",
+      "state": "machine-cross-checked",
+      "text": "Guardando…"
+    },
+    "configure.save.waiting_to_apply": {
+      "sourceHash": "38120c8464a6a191ec813e411dd11ae6c3ad94acf6cd05d5e6842f03ef02b400",
+      "state": "machine-cross-checked",
+      "text": "Configuración guardada pendiente de aplicar: {settings}."
+    },
+    "configure.secret.blank_keeps_current": {
+      "sourceHash": "a1fd67a2fad62ffba6c9be55ccfc50d793385a19d23e769f5bb4714175837338",
+      "state": "machine-cross-checked",
+      "text": "En blanco conserva el valor actual"
+    },
+    "configure.setup.explanation": {
+      "sourceHash": "06f97d616bdc1eb895f8ae22cd297c486eda4a15e5915f73eb92c9d73a71187b",
+      "state": "machine-cross-checked",
+      "text": "te guía paso a paso. Esta página muestra todos los ajustes a la vez."
+    },
+    "configure.setup.ha_signin.body": {
+      "sourceHash": "b14fe9b7c942a78eb940cb68135e7f4d2c5236919930c977576168e6182a90f5",
+      "state": "machine-cross-checked",
+      "text": "Está seleccionado el renderizador integrado de ha-paneld. Usa el inicio de sesión en el navegador de la tarjeta de conexión con Home Assistant situada abajo, o completa el inicio de sesión que aparece en el panel."
+    },
+    "configure.setup.ha_signin.title": {
+      "sourceHash": "180528809c42cbabe179f0f91a557e3d77b0cd39027113ed90ab02554fb44a8c",
+      "state": "machine-cross-checked",
+      "text": "MQTT está configurado. Siguiente paso: iniciar sesión en Home Assistant."
+    },
+    "configure.setup.link": {
+      "sourceHash": "8ef7823ca89be62373c9a695bd093d6bf0b16744b7302d44447084f39faa0c87",
+      "state": "machine-cross-checked",
+      "text": "Configuración guiada"
+    },
+    "configure.setup.question": {
+      "sourceHash": "e89482152b7dc5437503de4a0bbe5da7d074a5167b02d10c3682c75edb4ff95f",
+      "state": "machine-cross-checked",
+      "text": "¿Estás configurando este panel?"
+    },
+    "configure.setup.renderer.body": {
+      "sourceHash": "f0598d3d45b0297c299d992eef987c0f77ad80079f755ff7d74cb02238e1dd3e",
+      "state": "machine-cross-checked",
+      "text": "Selecciona el renderizador integrado de ha-paneld en la tarjeta Dashboard situada abajo o configura otro paquete de panel de control. Hasta entonces, este panel no mostrará ningún panel de control."
+    },
+    "configure.setup.renderer.note": {
+      "sourceHash": "41a82e1a4b2967a3593b4a29619b743402b8885d9d67e2b4474a86ea71880142",
+      "state": "machine-cross-checked",
+      "text": "(ha-paneld funciona correctamente sin uno)."
+    },
+    "configure.setup.renderer.title": {
+      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
+      "state": "machine-cross-checked",
+      "text": "MQTT está configurado. Siguiente paso: elegir un renderizador de panel de control."
+    },
+    "configure.state.active": {
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked",
+      "text": "activo"
+    },
+    "configure.state.inactive": {
+      "sourceHash": "d1022618b99a974b56caeae99b4f9e2eac444335123e3ab94bbbc817c306f2c0",
+      "state": "machine-cross-checked",
+      "text": "inactivo"
+    },
+    "configure.state.unavailable": {
+      "sourceHash": "ca184496974204a0bd3fd4925e0540bc4b0df6fcc232994d29754272b7183812",
+      "state": "machine-cross-checked",
+      "text": "No disponible"
+    },
+    "configure.state.unavailable_lower": {
+      "sourceHash": "ba691ba042bcedd9a61a36f5969026bc95859dccdc7e47f24e6bce35673baf2f",
+      "state": "machine-cross-checked",
+      "text": "no disponible"
+    },
+    "configure.status.loading": {
+      "sourceHash": "e71a13459ccdcc885ea1f141d67fe1a6a6fd78e70d584abdf05324561b2b4309",
+      "state": "machine-cross-checked",
+      "text": "Cargando configuración…"
+    },
+    "configure.tab.advanced": {
+      "sourceHash": "9f088dbebd6c3c70a5ddbc2c943b11e4ca9acea5757b0b4f2b32479f0dbb747e",
+      "state": "machine-cross-checked",
+      "text": "Avanzado"
+    },
+    "configure.tab.basic": {
+      "sourceHash": "0e35f6e9742e074dfd62e874de3c242c6d9b64c21bf9afbaf3d11f05579b4495",
+      "state": "machine-cross-checked",
+      "text": "Básico"
+    },
+    "configure.time.days_ago": {
+      "sourceHash": "b9724f3a20eef5c65ae4af50856f38f0338d73fc80f01b8829d5faa2477ef331",
+      "state": "machine-cross-checked",
+      "text": "hace {count} días"
+    },
+    "configure.time.hours_ago": {
+      "sourceHash": "20c1a815375f840035e51ecfbf6c1c339b0d2764248e8134ba2695b9d79233ed",
+      "state": "machine-cross-checked",
+      "text": "hace {count} h"
+    },
+    "configure.time.just_now": {
+      "sourceHash": "7ddb44d8a533a7535d85cedddf35d7f3414632ad4e10a0d7ca697723e1d97993",
+      "state": "machine-cross-checked",
+      "text": "ahora mismo"
+    },
+    "configure.time.minutes_ago": {
+      "sourceHash": "6bf264f3fc92ac66510a3b9279e1c08391841c9e78bd0e9bbe3ea6d624feb426",
+      "state": "machine-cross-checked",
+      "text": "hace {count} min"
+    },
+    "configure.time.updated": {
+      "sourceHash": "f30f0038ab9360511cab3626792d2c21140065599d0e2d78bca81a55b116ba63",
+      "state": "machine-cross-checked",
+      "text": "Actualizado el {date} ({relative})"
+    },
+    "configure.unsaved.label": {
+      "sourceHash": "842e70aacb24a1d6bdea7c34b46777aee7e3446d3ab8f346147b16670e5b974a",
+      "state": "machine-cross-checked",
+      "text": "Configuración sin guardar"
+    },
+    "configure.validation.invalid": {
+      "sourceHash": "0777a1e67635c2883095675c05a9cbc18ff3d9649867f6105e9e77a580cd7655",
+      "state": "machine-cross-checked",
+      "text": "{label} tiene un valor no válido."
+    },
+    "configure.validation.range": {
+      "sourceHash": "054c9181365746dd56b7fd3565f1e9a019456a996732f3d0caff9184baa22585",
+      "state": "machine-cross-checked",
+      "text": "{label} debe estar entre {min} y {max}."
+    },
+    "configure.voice.configure_wake_word_first": {
+      "sourceHash": "29db9e0656abb9d76014f07d2f3faac2ece244b4b3e8c217ae984de03ab4aff8",
+      "state": "machine-cross-checked",
+      "text": "Configura antes una palabra de activación arriba."
+    },
+    "configure.voice.pipeline_not_listed": {
+      "sourceHash": "71773debc9e3b12cc0d7cd4efd8241dd25e5e42e51532072c309dabbd180dd46",
+      "state": "machine-cross-checked",
+      "text": "{pipeline} · no está en la lista de Home Assistant"
+    },
+    "configure.voice.pipeline_unavailable": {
+      "sourceHash": "286405ce6216743cba4d977faa5d8c49ff9f98f965ae330bb5dd1a5b33d16e1a",
+      "state": "machine-cross-checked",
+      "text": "Lista de canalizaciones no disponible; edítala como JSON."
+    },
+    "configure.voice.preferred_pipeline": {
+      "sourceHash": "9a789161001e3b76ebe9ac218c75adf8be5646374ffb1dcca89748408b0371ea",
+      "state": "machine-cross-checked",
+      "text": "Canalización preferida"
+    },
+    "configure.zigbee.already_joined": {
+      "sourceHash": "0db7f81371f05fcfbc9a6507fd43e5666ee10bad28d337a85635d78d7264fc63",
+      "state": "machine-cross-checked",
+      "text": "Este router Zigbee ya se ha unido."
+    },
+    "configure.zigbee.enable_first": {
+      "sourceHash": "203b6dca078ad6f9946f39f0401986fcedd9a545423d5ca4a2c469a6b75766c2",
+      "state": "machine-cross-checked",
+      "text": "Activa primero el interruptor del router Zigbee y guarda."
+    },
+    "configure.zigbee.join_confirm": {
+      "sourceHash": "76f333e7b54f36296e81bbeee30b8bdb7a789136c4cf968df78cc7905e5e5d91",
+      "state": "machine-cross-checked",
+      "text": "Activa primero Permitir uniones en Zigbee2MQTT o ZHA. Esto solicitará el modo repetidor e iniciará un nuevo periodo de unión de 15 minutos. No reiniciará ni volverá a poner en marcha el panel. Permitir uniones está activado. ¿Solicitar la unión?"
+    },
+    "configure.zigbee.join_failed": {
+      "sourceHash": "aed9a2e33685d3085c2f032eaad81b8c833fdc8d6c2267cbe4e0c5d159bfa52d",
+      "state": "machine-cross-checked",
+      "text": "Error al solicitar la unión ({error})."
+    },
+    "configure.zigbee.join_help": {
+      "sourceHash": "6e78f0923185718229d870e8a3f1d3a6b798dee7922fd42154f6b3406cc60ad1",
+      "state": "machine-cross-checked",
+      "text": "Habilita las uniones en el coordinador y solicita el modo repetidor."
+    },
+    "configure.zigbee.join_network": {
+      "sourceHash": "ebbf14574beb960f63afdacf11d337ac5ec3da4907880b3fafb798ff20235066",
+      "state": "machine-cross-checked",
+      "text": "Unirse a la red Zigbee"
+    },
+    "configure.zigbee.recent_request": {
+      "sourceHash": "88d1d3505eed700f3c3c3ebadd49c0c17aa14de1f60dd3b292fdf63dc53ce313",
+      "state": "machine-cross-checked",
+      "text": "Se ha enviado una solicitud de unión recientemente."
+    },
+    "configure.zigbee.request_help": {
+      "sourceHash": "8a1e10df95b4b9e4c7dc40fdb9e5df22d6f4c9ac48eff1713280893102de88c7",
+      "state": "machine-cross-checked",
+      "text": "Solicita el modo repetidor mientras el coordinador permita uniones."
+    },
+    "configure.zigbee.request_join": {
+      "sourceHash": "d92dd6e9ae2daa457a2a9db8d42aa03fe2d722761b0c2936a65bda785bdc9e76",
+      "state": "machine-cross-checked",
+      "text": "Solicitar unión"
+    },
+    "dashboard.action.enable": {
+      "sourceHash": "5342e09f2729fbc6514528e727aeb9857afb31719d43568e6b18661ace7d1014",
+      "state": "machine-cross-checked",
+      "text": "Habilitar"
+    },
+    "dashboard.action.refresh": {
+      "sourceHash": "0e91610117029a62a478b7fa7df0b8598bebe3ab1e192d4b1882e310719c9671",
+      "state": "machine-cross-checked",
+      "text": "Actualizar"
+    },
+    "dashboard.action.reveal": {
+      "sourceHash": "36b830bdb447f8c758a9b58f190eed468c4bd53e9c7662ee19bca9c53d3a3e3d",
+      "state": "machine-cross-checked",
+      "text": "Mostrar"
+    },
+    "dashboard.action.stop": {
+      "sourceHash": "cae7d57bc067a514b8e34c9589631a95c7dc051638ddd2a190773269279a99df",
+      "state": "machine-cross-checked",
+      "text": "Detener"
+    },
+    "dashboard.actions.approve_on_panel": {
+      "sourceHash": "be7545a353d7b786a59ce8893679e105d9fe23794cee284b5127c4037408f353",
+      "state": "machine-cross-checked",
+      "text": "Aprueba esta solicitud en el panel y vuelve a intentarla."
+    },
+    "dashboard.actions.confirm_reboot": {
+      "sourceHash": "1005666f1c1eb74e930eede648c7fbab791726a9211b7a9aee33d912b79a31a3",
+      "state": "machine-cross-checked",
+      "text": "¿Reiniciar este panel ahora?"
+    },
+    "dashboard.actions.failed_http": {
+      "sourceHash": "94ed1dd9dd4565ff3e5427a953b37e8c3ea3cdeab817a8864ecf7f5639d9a6d0",
+      "state": "machine-cross-checked",
+      "text": "La acción falló (HTTP {status})."
+    },
+    "dashboard.actions.failed_network": {
+      "sourceHash": "2b0dade9b2c0baf781c16069035169f50760e7c1fc1dd275c5b3b034a6e00cd0",
+      "state": "machine-cross-checked",
+      "text": "La acción falló (red)."
+    },
+    "dashboard.actions.hardened_approval": {
+      "sourceHash": "7cebbbb063c4ee4afd81e5f244967f8c1c8d281e01b51785e00b8e97f7618d4e",
+      "state": "machine-cross-checked",
+      "text": "El modo reforzado requiere aprobación física en este panel; no se puede aprobar a distancia."
+    },
+    "dashboard.actions.remote_input_disabled": {
+      "sourceHash": "3aaa115bb156e96c5f3b2f9a1daa5d19806a92e5f1a47f6cd80066b36cc9e209",
+      "state": "machine-cross-checked",
+      "text": "La entrada remota mediante toques está desactivada para los clientes de red en el modo reforzado."
+    },
+    "dashboard.banner.auth_rejected.action": {
+      "sourceHash": "521df20fbc23f0d26403dd8d82708d66019af14cc2081330ea88e5f3854d719a",
+      "state": "machine-cross-checked",
+      "text": "Configure → Conexión con Home Assistant"
+    },
+    "dashboard.banner.auth_rejected.explanation": {
+      "sourceHash": "e414f00aea1c8c8d9ac8a59a1fa6902c8fca809a1ad9990d1bed61898c4d8e96",
+      "state": "machine-cross-checked",
+      "text": "se rechazaron los datos de acceso guardados, por lo que el panel de control dejó de reintentarlo (muestra instrucciones para corregirlo en el panel). Usa Inicio de sesión en navegador en"
+    },
+    "dashboard.banner.auth_rejected.reload_suffix": {
+      "sourceHash": "ac2f4f87a33bda1c9d97387ce8d5ba0f27926025bd37ca5ce0a7d396fc5008c0",
+      "state": "machine-cross-checked",
+      "text": "el panel de control se recarga automáticamente al cambiar las credenciales."
+    },
+    "dashboard.banner.auth_rejected.title": {
+      "sourceHash": "9fb8291c15b7f5ed04e8c99d9c63419c732ec377adf5f7bdad4ea59f85170b78",
+      "state": "machine-cross-checked",
+      "text": "Renderizador integrado: acceso a Home Assistant rechazado"
+    },
+    "dashboard.banner.companion_probe_failed.explanation": {
+      "sourceHash": "0fb05a33392aa3fc02b14f0a78ba2bd459b43bc4b54e5ba7cd9162443175b1ee",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld conservará el último resultado conocido y volverá a intentarlo automáticamente."
+    },
+    "dashboard.banner.companion_probe_failed.title": {
+      "sourceHash": "899526133e9731be0d344d64ff4e7deff296d562694991aa95aa965fec43c354",
+      "state": "machine-cross-checked",
+      "text": "No se pudo consultar la configuración de Home Assistant Companion"
+    },
+    "dashboard.banner.companion_url.explanation": {
+      "sourceHash": "1fc0536e933993621bd1b791bad1196de804ee4c31783a6fade2011d34bd0c73",
+      "state": "machine-cross-checked",
+      "text": "Reparar asigna a la URL interna el valor de la URL externa."
+    },
+    "dashboard.banner.companion_url.install_action": {
+      "sourceHash": "d36d81e74fe3a959a745f091134741be7a6fdf8eaaa9a09835c19cd8c219b6d3",
+      "state": "machine-cross-checked",
+      "text": "Reparar en la pestaña Install →"
+    },
+    "dashboard.banner.companion_url.repair": {
+      "sourceHash": "8192fbd2559223b9ded4b9199b6c9f54622863f4151afb5c292fe902fe350c25",
+      "state": "machine-cross-checked",
+      "text": "Reparar URL interna"
+    },
+    "dashboard.banner.companion_url.summary_many": {
+      "sourceHash": "aa53e84cf786b06f13cee6812a280e46bae647fd0290b0849b9a20237e899afe",
+      "state": "machine-cross-checked",
+      "text": "({count} servidores): el panel de control puede no cargarse con"
+    },
+    "dashboard.banner.companion_url.summary_one": {
+      "sourceHash": "56203c170dac72c1625b265579265ec88a750300873d2accad41690efe1e0a0f",
+      "state": "machine-cross-checked",
+      "text": "({count} servidor): el panel de control puede no cargarse con"
+    },
+    "dashboard.banner.companion_url.title": {
+      "sourceHash": "c919755118a3442bc3fed461d142cd7e575a4289d3a5c9f8a044e7a679044c86",
+      "state": "machine-cross-checked",
+      "text": "Home Assistant Companion no tiene URL interna"
+    },
+    "dashboard.banner.ha_sign_in.action": {
+      "sourceHash": "b9ce2f85fea6f8548721dc2e95170eb6501d1cb71444f211656d9aa22f968553",
+      "state": "machine-cross-checked",
+      "text": "conecta este panel desde un navegador"
+    },
+    "dashboard.banner.ha_sign_in.explanation": {
+      "sourceHash": "845b28bc13330df790a1259e165e79ee6d56841495cad3c325bee32c17d49459",
+      "state": "machine-cross-checked",
+      "text": "Está seleccionado el renderizador integrado de ha-paneld. Completa el inicio de sesión que aparece en el panel o"
+    },
+    "dashboard.banner.ha_sign_in.title": {
+      "sourceHash": "180528809c42cbabe179f0f91a557e3d77b0cd39027113ed90ab02554fb44a8c",
+      "state": "machine-cross-checked",
+      "text": "MQTT está configurado. Siguiente: inicia sesión en Home Assistant."
+    },
+    "dashboard.banner.manage_install": {
+      "sourceHash": "3a44b8764e7cc637360c1249abf2574724b61a152b99714fd55f09cdccd6999a",
+      "state": "machine-cross-checked",
+      "text": "Gestionar en la pestaña Install →"
+    },
+    "dashboard.banner.no_renderer.configure_prefix": {
+      "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
+      "state": "machine-cross-checked",
+      "text": "Selecciona el renderizador integrado de ha-paneld en"
+    },
+    "dashboard.banner.no_renderer.explanation": {
+      "sourceHash": "5aee351360d4e2deffde50f405e582262d7ac56d4909d5a35be51c8a96123bc3",
+      "state": "machine-cross-checked",
+      "text": "o configura otro paquete de panel de control. Hasta entonces, este panel no mostrará ningún panel de control."
+    },
+    "dashboard.banner.no_renderer.note": {
+      "sourceHash": "41a82e1a4b2967a3593b4a29619b743402b8885d9d67e2b4474a86ea71880142",
+      "state": "machine-cross-checked",
+      "text": "(ha-paneld funciona correctamente sin él)."
+    },
+    "dashboard.banner.no_renderer.title": {
+      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
+      "state": "machine-cross-checked",
+      "text": "MQTT está configurado. Siguiente: elige un renderizador de panel de control."
+    },
+    "dashboard.banner.proximity_learning.action": {
+      "sourceHash": "57564a7788a6a1a13cab9ef247bb024ce97fb9745f0e767eb0ff40e47674a4af",
+      "state": "machine-cross-checked",
+      "text": "Ver progreso o enseñar el gesto de activación"
+    },
+    "dashboard.banner.proximity_learning.title": {
+      "sourceHash": "c344400e0be09185e362531c8c91287fc095b1303c78d556a83b4a323c738010",
+      "state": "machine-cross-checked",
+      "text": "Aprendiendo a activar al pasar la mano"
+    },
+    "dashboard.banner.proximity_learning.touch_available": {
+      "sourceHash": "903915dd8ee56238ac39ddd50edf407ff66796e29173afbeb3da700f6838c234",
+      "state": "machine-cross-checked",
+      "text": "La activación táctil sigue disponible."
+    },
+    "dashboard.banner.schema_rollback.configure_action": {
+      "sourceHash": "d8ec542d4afb557de9d173fa65c10ad47c3b9357a741084ceb548c815c8df1af",
+      "state": "machine-cross-checked",
+      "text": "Comprueba Configure →"
+    },
+    "dashboard.banner.schema_rollback.explanation": {
+      "sourceHash": "046030ae07aa906959b9ee562f63453ce1906dfa2607da9e06d030d1dfa5fb94",
+      "state": "machine-cross-checked",
+      "text": "esta compilación abrió un almacén de estado nuevo porque su esquema es más antiguo; es posible que se hayan restablecido algunos ajustes. La base de datos anterior se conserva en el panel para poder recuperarla."
+    },
+    "dashboard.banner.schema_rollback.or_restore": {
+      "sourceHash": "c4ae614553a2b22db8a4953db19a3b0d4cc99abc6914d1162d7cef90af4befc7",
+      "state": "machine-cross-checked",
+      "text": "o restaura una copia de seguridad en la"
+    },
+    "dashboard.banner.schema_rollback.title": {
+      "sourceHash": "c6b434eb6d5f96ee9185ae968a89e7a1039ba9b2aad65bde00e6555a02b7fc78",
+      "state": "machine-cross-checked",
+      "text": "Base de datos más reciente conservada tras volver a una versión anterior"
+    },
+    "dashboard.banner.setup_needs.joiner": {
+      "sourceHash": "6201111b83a0cb5b0922cb37cc442b9a40e24e3b1ce100a4bb204f4c63fd2ac0",
+      "state": "machine-cross-checked",
+      "text": "y"
+    },
+    "dashboard.banner.setup_needs.mqtt_configuration": {
+      "sourceHash": "dc67038dbc78f5ac4acaf201ff99b74d567c4a570b11c78fbef59a586da566f4",
+      "state": "machine-cross-checked",
+      "text": "configuración de MQTT"
+    },
+    "dashboard.banner.setup_needs.prefix": {
+      "sourceHash": "2d9faa88e40af4265de7e9424e308724b1e7b96e30c1ea1f586704a10235225a",
+      "state": "machine-cross-checked",
+      "text": "Este panel necesita"
+    },
+    "dashboard.banner.setup_needs.reachable_broker": {
+      "sourceHash": "045ac1f4b721cd39b484c8273ebd33c7756cdb487214f63888ac86f9490f698f",
+      "state": "machine-cross-checked",
+      "text": "un bróker MQTT accesible"
+    },
+    "dashboard.banner.setup_needs.rejected_credentials": {
+      "sourceHash": "e3bec86a375b717aa06b9ef49db160cda580cfdebfe9a77fc35a6e1bc79d120d",
+      "state": "machine-cross-checked",
+      "text": "credenciales MQTT válidas (el bróker las rechazó)"
+    },
+    "dashboard.banner.setup_needs.suffix": {
+      "sourceHash": "a623aa42d2f1f53aa662a6afe155e3e0c1e47b2b888d5b843985025ef198d430",
+      "state": "machine-cross-checked",
+      "text": "— se configura en la pestaña Configure."
+    },
+    "dashboard.banner.setup_needs.valid_broker_url": {
+      "sourceHash": "ee8fc48bc75378fd7cad15208047034017bceaff1864019a22416e40b281a734",
+      "state": "machine-cross-checked",
+      "text": "una URL válida del bróker MQTT"
+    },
+    "dashboard.banner.setup_needs.valid_credentials": {
+      "sourceHash": "c3a2944f7904354478c69932bda9ef2ee929ef06cb1728669fc31f31e0524fb3",
+      "state": "machine-cross-checked",
+      "text": "credenciales MQTT válidas"
+    },
+    "dashboard.banner.update.available": {
+      "sourceHash": "e726d7045129a6d908ceb5f9d5ad758e78268c09aca52d104d2e9158709a4b45",
+      "state": "machine-cross-checked",
+      "text": "{latest} está disponible (instalada: {current})"
+    },
+    "dashboard.banner.update.ignore": {
+      "sourceHash": "72d0f08eee13ed1268875490b1f5cdc24e103edcb2a16d55862ace2c9223aa63",
+      "state": "machine-cross-checked",
+      "text": "Ignorar esta versión"
+    },
+    "dashboard.banner.webview_old.engine_note": {
+      "sourceHash": "03639d66ebce5ea8cce72dd876874ae458b40ddd0eccf06217a459eab4a5134a",
+      "state": "machine-cross-checked",
+      "text": "Se comprueba la versión real del motor (desde WebView UA), no solo la versión indicada del paquete, para que un LineageOS SystemWebView o Cromite no active este aviso."
+    },
+    "dashboard.banner.webview_old.explanation": {
+      "sourceHash": "ff191e5d689ffb361fc76cbffb902c16185f7355b227ddccb705d42aed4b54f1",
+      "state": "machine-cross-checked",
+      "text": "el panel de control de Home Assistant puede aparecer en blanco o mostrarse incorrectamente."
+    },
+    "dashboard.banner.webview_old.target": {
+      "sourceHash": "d145b2299c214056f667aaa46ed712ccad5275e9e75eb57223bde1ff2ca7b21d",
+      "state": "machine-cross-checked",
+      "text": "(objetivo: Chromium {version}+)"
+    },
+    "dashboard.banner.webview_old.title": {
+      "sourceHash": "32f9602603cf386e8accd721782721ab0c29ff77a86e739370a819d2c2ae5d59",
+      "state": "machine-cross-checked",
+      "text": "System WebView es demasiado antiguo"
+    },
+    "dashboard.banner.webview_old.update_action": {
+      "sourceHash": "e47c274a443c3dfb22bfdfa0a49f6908e720d8b1518a6ba71e5d5014f52daea8",
+      "state": "machine-cross-checked",
+      "text": "Cómo y por qué actualizar"
+    },
+    "dashboard.banner.zoom.action_suffix": {
+      "sourceHash": "7220acdb7b7548881a3939db495a9a5117cc8975f49c21d5c5f447c802508074",
+      "state": "machine-cross-checked",
+      "text": "del panel, que ajusta la escala de todo el panel con nitidez; configúrala y luego restablece aquí el zoom."
+    },
+    "dashboard.banner.zoom.display_density": {
+      "sourceHash": "8ed65550c9c872be049e78dc7c88aeca0b7a035c05b7fa79496c17ab127ebb6f",
+      "state": "machine-cross-checked",
+      "text": "densidad de pantalla"
+    },
+    "dashboard.banner.zoom.explanation": {
+      "sourceHash": "9b8b90e77b2c5fe92483b1773920fc2568273ca3117badb474db74ac7642b72a",
+      "state": "machine-cross-checked",
+      "text": "(no es 100 %) — normalmente heredado del zoom de página de la aplicación Companion. La forma más limpia de ajustar el tamaño de un panel de control es usar la"
+    },
+    "dashboard.banner.zoom.reset": {
+      "sourceHash": "39cdc8918f48e707c7dcbee5f5d331d7ef1c1265c875ac17181073e46ca7d135",
+      "state": "machine-cross-checked",
+      "text": "Restablecer el zoom al 100 %"
+    },
+    "dashboard.banner.zoom.title": {
+      "sourceHash": "7c420345226ec705034cdbc69b791fd059d1bfea7736e944fa5bbe605667795a",
+      "state": "machine-cross-checked",
+      "text": "El zoom del panel de control es del {zoom} %"
+    },
+    "dashboard.camera.action.check_hardware": {
+      "sourceHash": "ead895a9433b1b339ce71fb87b51a913cea97707df38d20d00a76d06e112b66c",
+      "state": "machine-cross-checked",
+      "text": "comprueba el hardware de la cámara; un nuevo cliente tras la espera o alternar el ajuste provoca otro intento"
+    },
+    "dashboard.camera.action.check_indicator": {
+      "sourceHash": "f215faa3267178604f1d4d8c8fa70f5d6e4ab132f7942ffa677d64eb1726e37c",
+      "state": "machine-cross-checked",
+      "text": "no se pudo mostrar la luz de cámara en uso; comprueba el permiso de superposición y el LED"
+    },
+    "dashboard.camera.action.enable": {
+      "sourceHash": "b5ba02397f9882f0957226dffeb565fed6081c3851f010523f56a31b0c5608f0",
+      "state": "machine-cross-checked",
+      "text": "activa el ajuste de cámara para ofrecer capturas y una transmisión"
+    },
+    "dashboard.camera.action.encoder_unavailable": {
+      "sourceHash": "62374b18e506772270e18c91afafca04ccb240b69e763ad83de6b8350a21f082",
+      "state": "machine-cross-checked",
+      "text": "ningún codificador H.264 por hardware admite el límite de tasa de bits de la cámara; las capturas funcionan, la transmisión no"
+    },
+    "dashboard.camera.action.grant_permission": {
+      "sourceHash": "b8021f57862db8b3de847ed071a7d422746cc592947888bb9f369fff7668c4e0",
+      "state": "machine-cross-checked",
+      "text": "concede el permiso de cámara en el panel cuando se solicite"
+    },
+    "dashboard.camera.action.report_encode_failure": {
+      "sourceHash": "e357e35fdd3e41b26dfcd530e77a10a34b239a0b525a735f9ed401554bf40eb6",
+      "state": "machine-cross-checked",
+      "text": "la cámara entrega fotogramas, pero no se pudieron codificar; informa del problema con los diagnósticos del panel"
+    },
+    "dashboard.camera.action.wake_panel": {
+      "sourceHash": "e88ad0895ee4cc2d7f5cd28e848d4c0aedc45e90ae7958a5517605497a6fd85f",
+      "state": "machine-cross-checked",
+      "text": "despierta el panel: una sesión de cámara solo puede iniciarse mientras el panel de control esté visible"
+    },
+    "dashboard.camera.bitrate.cap": {
+      "sourceHash": "747e84d559f969df60a9060b54e4ac8d3beca53410849ce9034c246f8e2ea08a",
+      "state": "machine-cross-checked",
+      "text": "· límite de {cap} kbps"
+    },
+    "dashboard.camera.bitrate.cap_unavailable": {
+      "sourceHash": "4de5c8d30a27b3b44efbb37a9e74d46d2646b7b22152456ae7706822dda335c2",
+      "state": "machine-cross-checked",
+      "text": "· límite no disponible"
+    },
+    "dashboard.camera.bitrate.nothing": {
+      "sourceHash": "5ac4c69564b214ec8379e8d493edaa39a2e23a8aabfe667331af08929fd19949",
+      "state": "machine-cross-checked",
+      "text": "no se entrega nada"
+    },
+    "dashboard.camera.bitrate.of_cap": {
+      "sourceHash": "c3870e582520e293665259969b9c4cd6009f6e5b9041322ff840fee938485a08",
+      "state": "machine-cross-checked",
+      "text": "{delivered} de un límite de {cap} kbps"
+    },
+    "dashboard.camera.bitrate.over_cap": {
+      "sourceHash": "1cda408560fa8159c2a265f8e9d2375c93265599a96eebc7f34fe13b0443c663",
+      "state": "machine-cross-checked",
+      "text": "· supera el límite asignado; el codificador consume más ancho de banda del permitido"
+    },
+    "dashboard.camera.bitrate.under_cap": {
+      "sourceHash": "7200bec5fae918383ebe5035b8a5dd45ef109a5b654ec4e28768e3e181720113",
+      "state": "machine-cross-checked",
+      "text": "· estar por debajo del límite es normal en una escena estática"
+    },
+    "dashboard.camera.configure_link": {
+      "sourceHash": "6870136fd6944e6b56c7e4665108db488f5a2bf7ad7190c4183ed41eccd8a3cc",
+      "state": "machine-cross-checked",
+      "text": "Configure → Cámara"
+    },
+    "dashboard.camera.delivery.measuring": {
+      "sourceHash": "821d52cb24753a97c13c311ade54818df413a5db241e340710b26e26ef2c1b55",
+      "state": "machine-cross-checked",
+      "text": "midiendo…"
+    },
+    "dashboard.camera.delivery.measuring_help": {
+      "sourceHash": "2cdb516c661e524b4b5c4abc431c88f84a25b33578b8e436033767193f63f459",
+      "state": "machine-cross-checked",
+      "text": "· esperando suficientes lecturas consecutivas para evaluarlo"
+    },
+    "dashboard.camera.delivery.no_frames": {
+      "sourceHash": "fece418d7eaadd1f9bffb400a95787c49e47e5b7862339594c9690ce101704d2",
+      "state": "machine-cross-checked",
+      "text": "· el codificador está vinculado a la sesión, pero no llegan fotogramas"
+    },
+    "dashboard.camera.delivery.not_delivering": {
+      "sourceHash": "dfe296a65185027735aa6a4c92d84125f7063470124c0fb3509180b52cb1b686",
+      "state": "machine-cross-checked",
+      "text": "no entrega datos"
+    },
+    "dashboard.camera.delivery.ok": {
+      "sourceHash": "636605e8e8d86c3c6c20da380d75decac101f59b598e67dfecb39e52b967efe0",
+      "state": "machine-cross-checked",
+      "text": "entrega lo solicitado"
+    },
+    "dashboard.camera.delivery.short": {
+      "sourceHash": "ea0e6d628d45112790380f49ec0d4eacbc1a1fa66b3b912cf507a8b13bc1a2ab",
+      "state": "machine-cross-checked",
+      "text": "no mantiene el ritmo"
+    },
+    "dashboard.camera.delivery.short_help": {
+      "sourceHash": "df7455427a2aa173ab64715f3d544617593051440b36c4dc33aa5d30533b97fc",
+      "state": "machine-cross-checked",
+      "text": "· reduce la tasa de fotogramas o la resolución en Configure → Cámara, o acepta la tasa que ofrece este panel; aquí no se determina por qué es inferior"
+    },
+    "dashboard.camera.encoder.output_unavailable": {
+      "sourceHash": "22f1442df9b228b9b287aa441c2ccc7db7db297a2344a2d77ac4bc45d9d48988",
+      "state": "machine-cross-checked",
+      "text": "· tamaño de salida no disponible"
+    },
+    "dashboard.camera.encoding.idle_cost": {
+      "sourceHash": "6cb549a11ad9b56c4aef4f0a9ae4e5ff3124beb2583e09d0b46f10c7b5e95a01",
+      "state": "machine-cross-checked",
+      "text": "· una cámara inactiva no consume recursos del panel"
+    },
+    "dashboard.camera.encoding.no_stream": {
+      "sourceHash": "f09765ea6b8220905d098896b79b4233007c5198b34b4eb4ec2da25468a00a48",
+      "state": "machine-cross-checked",
+      "text": "no se codifica ninguna transmisión"
+    },
+    "dashboard.camera.encoding.nothing": {
+      "sourceHash": "9eeb0506641023080a6906ef60f4963fa7f7d88cc5ccc28ee06fc03760af9cad",
+      "state": "machine-cross-checked",
+      "text": "no se está codificando nada"
+    },
+    "dashboard.camera.encoding.snapshot": {
+      "sourceHash": "17d887e88648cde718c676c471ba816a85ae2afa5d547081b9bdd0fb65e41def",
+      "state": "machine-cross-checked",
+      "text": "· la cámara está abierta para obtener una captura"
+    },
+    "dashboard.camera.encoding.waiting": {
+      "sourceHash": "466e8eb1b3a8786ee3270a2b42477a3d2a32761a2a00b7272b554d4c487769da",
+      "state": "machine-cross-checked",
+      "text": "esperando al codificador"
+    },
+    "dashboard.camera.encoding.waiting_with_rate": {
+      "sourceHash": "58f7975017f3a195af3fc588d54d9d6445870ad4b4b730fb4ba62ca8044257d9",
+      "state": "machine-cross-checked",
+      "text": "· una transmisión solicitó {rate} fps y el codificador aún no se ha iniciado"
+    },
+    "dashboard.camera.encoding.waiting_without_rate": {
+      "sourceHash": "2fade1864038e22d960bccb639d2ce33c8db39f40b8479d6aba35347b3697a34",
+      "state": "machine-cross-checked",
+      "text": "· aún no se ha asignado un codificador a la transmisión"
+    },
+    "dashboard.camera.error.no_answer": {
+      "sourceHash": "e311f42e351214caade4db0e83fa99c77150c0e7a088d8524ed74f7f7a584d12",
+      "state": "machine-cross-checked",
+      "text": "· el panel no respondió"
+    },
+    "dashboard.camera.error.status_unavailable": {
+      "sourceHash": "180119be630b8959719594b6094fda28ea2fd054860d95730af0c0c3b47aa64f",
+      "state": "machine-cross-checked",
+      "text": "estado no disponible"
+    },
+    "dashboard.camera.fault.configure": {
+      "sourceHash": "3ef2a58a429f53dcfbdbc571ef6a2ee3c1ecc925678f2a6411d66f54b7b692dc",
+      "state": "machine-cross-checked",
+      "text": "falló la configuración de la cámara"
+    },
+    "dashboard.camera.fault.device_error": {
+      "sourceHash": "e5ecf72d7e2a39287d656367e5a357a4861b865c59870afaa5097d5fa7a503a7",
+      "state": "machine-cross-checked",
+      "text": "error del dispositivo de cámara"
+    },
+    "dashboard.camera.fault.disconnected": {
+      "sourceHash": "b58446cb14cebaab1e8ef3a6c9a0db7a4ef47b21bd6c1fa0c35cb275f377aeea",
+      "state": "machine-cross-checked",
+      "text": "cámara desconectada"
+    },
+    "dashboard.camera.fault.encode": {
+      "sourceHash": "54274a8a62fbbb757df1686604a6f2220be75671ff26a7753dfc8c9e710ea8d8",
+      "state": "machine-cross-checked",
+      "text": "falló la codificación de fotogramas"
+    },
+    "dashboard.camera.fault.foreground": {
+      "sourceHash": "b08e73f27623e299432281a9a7e16f1d174b10048cfe2efecb9040d0d0ab53f3",
+      "state": "machine-cross-checked",
+      "text": "se rechazó el servicio en primer plano"
+    },
+    "dashboard.camera.fault.indication": {
+      "sourceHash": "ce7ed97611a2429091a87b70434de24f04c56fdd61a2985ac5f3e6223ac03ba9",
+      "state": "machine-cross-checked",
+      "text": "falló la indicación de uso de la cámara"
+    },
+    "dashboard.camera.fault.open": {
+      "sourceHash": "7526b42b99c08d918585e3d3d6dc08abfc093105c2bfe4164548daad36317e3e",
+      "state": "machine-cross-checked",
+      "text": "no se pudo abrir la cámara"
+    },
+    "dashboard.camera.fault.permission": {
+      "sourceHash": "7487273eba77da5fbe1abf855e6d80b10df248bb211fdcb0e39dafe3c047a170",
+      "state": "machine-cross-checked",
+      "text": "falta el permiso de cámara"
+    },
+    "dashboard.camera.fault.starved": {
+      "sourceHash": "73f2507a615ac16a76659beef2277218df8f549ab95468ffac627c6775051776",
+      "state": "machine-cross-checked",
+      "text": "la cámara dejó de entregar fotogramas"
+    },
+    "dashboard.camera.fault.stream_encoder": {
+      "sourceHash": "5215cc3544b062d51644fdec7db0c1db9dce1f6f4f9e529d728136d4b7031c49",
+      "state": "machine-cross-checked",
+      "text": "falló el codificador de transmisión"
+    },
+    "dashboard.camera.frame_rate.asked": {
+      "sourceHash": "26f2f0b0dd0dfab787d6bc4a910ffd17dd35a4c1f4d6c5af4aad726aaa6a0cd2",
+      "state": "machine-cross-checked",
+      "text": "· se solicitaron {rate} fps"
+    },
+    "dashboard.camera.frame_rate.comparison": {
+      "sourceHash": "e89313db19102da00d7745687f8b78bc49b4dfb11ff058df3d9f51e00bc33be0",
+      "state": "machine-cross-checked",
+      "text": "· entrega respecto a lo solicitado"
+    },
+    "dashboard.camera.frame_rate.delivered": {
+      "sourceHash": "fec4f974ab19e874a46eeec270462c45edcf4e54f8658fe9bf1143e9ad60f33b",
+      "state": "machine-cross-checked",
+      "text": "{rate} fps entregados"
+    },
+    "dashboard.camera.frame_rate.no_frames": {
+      "sourceHash": "e76570d9bcd60a396b991fa27f03b918fbf8dc1aa8497b9e286961677e8279e1",
+      "state": "machine-cross-checked",
+      "text": "sin fotogramas durante {seconds} s"
+    },
+    "dashboard.camera.frame_rate.of_requested": {
+      "sourceHash": "540948ca12bba416dc5adff38135d0f266a705afb1ee9df1a17323144bd7d261",
+      "state": "machine-cross-checked",
+      "text": "{delivered} de {requested} fps"
+    },
+    "dashboard.camera.frame_rate.request_unavailable": {
+      "sourceHash": "74373138fe65a4054112af2989f9687d93730e11c13b328ffb10b5befb02dc5b",
+      "state": "machine-cross-checked",
+      "text": "· tasa solicitada no disponible"
+    },
+    "dashboard.camera.frame_rate.stopped": {
+      "sourceHash": "186d8169818e7e412df9e134a7d41d0d3b30d51cee108af368aa6de697ef2b2a",
+      "state": "machine-cross-checked",
+      "text": "detenida — {fault}"
+    },
+    "dashboard.camera.label.bitrate": {
+      "sourceHash": "0b2b7f69b8eff5316e661ca4d809aaf6fd0ef04e9b986a5489eec9944fdbf2cd",
+      "state": "machine-cross-checked",
+      "text": "Tasa de bits"
+    },
+    "dashboard.camera.label.camera": {
+      "sourceHash": "03494b0d1f803522a3497d751eaaf6f987883cd4fe0b0e66baf67a662ae231b2",
+      "state": "machine-cross-checked",
+      "text": "Cámara"
+    },
+    "dashboard.camera.label.delivery": {
+      "sourceHash": "52bfe584a5fc450539e2aa651b990fa2415060492a243816ab2994292089c6fd",
+      "state": "machine-cross-checked",
+      "text": "Entrega"
+    },
+    "dashboard.camera.label.encoder": {
+      "sourceHash": "3693e7913a44ffcfc9744f6dcb1cb774936458afd1b57ecea2b2ab7fbf56ea15",
+      "state": "machine-cross-checked",
+      "text": "Codificador"
+    },
+    "dashboard.camera.label.encoding": {
+      "sourceHash": "4d25a47625ceaa596a02112e807209e5248a4a3bc61cd07d9191a9547a182550",
+      "state": "machine-cross-checked",
+      "text": "Codificación"
+    },
+    "dashboard.camera.label.frame_rate": {
+      "sourceHash": "68e19e4ca3a5670a9f2af8b18a5b437332601a9660565681abf4555d5e67c32d",
+      "state": "machine-cross-checked",
+      "text": "Tasa de fotogramas"
+    },
+    "dashboard.camera.label.requested": {
+      "sourceHash": "2d9e28289facab94b41f9592b7f55bc4fc10fed54e789669468e8da31c9a5caf",
+      "state": "machine-cross-checked",
+      "text": "Solicitado"
+    },
+    "dashboard.camera.label.session": {
+      "sourceHash": "6959b4159575d8dd76d9f3bbe2c6437904f861e7860c35abd18deffb1c3425a0",
+      "state": "machine-cross-checked",
+      "text": "Sesión"
+    },
+    "dashboard.camera.note": {
+      "sourceHash": "bb5a06ff9300a2fa1d7bba9f81f2cedb4f380f6f1ac622abfb2c080c640e67c8",
+      "state": "machine-cross-checked",
+      "text": "Lo que se solicitó a la transmisión y lo que entrega. No es un valor de CPU: la codificación también se ejecuta en el hardware del códec y mediante el compositor, además de en esta aplicación. Por tanto, ningún proceso por sí solo refleja el coste de la cámara; consulta la carga total del panel en las tarjetas Rendimiento y Procesos principales."
+    },
+    "dashboard.camera.requested.bound": {
+      "sourceHash": "d09de2d910244d57d1e609b094babec9ec06ebcb15615a6a6b25fe9c46a285bb",
+      "state": "machine-cross-checked",
+      "text": "· la sesión está vinculada a {rate} fps, fijados al abrir la cámara"
+    },
+    "dashboard.camera.requested.value": {
+      "sourceHash": "175a064a8f5e57bb3a642998e7d809ecd05b82f583aa780abbf147b04b469764",
+      "state": "machine-cross-checked",
+      "text": "{rate} fps solicitados"
+    },
+    "dashboard.camera.session.absent": {
+      "sourceHash": "9f6012869d87a871b8713e6d1d5a9395856555952f513084973b44588198d26b",
+      "state": "machine-cross-checked",
+      "text": "este panel no tiene cámara"
+    },
+    "dashboard.camera.session.closed": {
+      "sourceHash": "c3eefb58d7c42440a9d4abec51d629544d635a6d936ff3c4d3fca96d611b3cf3",
+      "state": "machine-cross-checked",
+      "text": "cerrada"
+    },
+    "dashboard.camera.session.degraded": {
+      "sourceHash": "2289f27e6898a01c26fd5e720f7dbeefc6e4f042e57cabfa3280a70f47227a92",
+      "state": "machine-cross-checked",
+      "text": "dejó de reintentar tras {count} fallos"
+    },
+    "dashboard.camera.session.off": {
+      "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+      "state": "machine-cross-checked",
+      "text": "desactivada"
+    },
+    "dashboard.camera.session.open": {
+      "sourceHash": "2348f998744212575d85959674f9607ab26f67708a917157472832386337c904",
+      "state": "machine-cross-checked",
+      "text": "abierta"
+    },
+    "dashboard.camera.session.opening": {
+      "sourceHash": "2b3fdf05c4dda454998927370bf2cf20b0c17bcf1e3d3f294a550e341033ed61",
+      "state": "machine-cross-checked",
+      "text": "abriéndose"
+    },
+    "dashboard.camera.session.permission_needed": {
+      "sourceHash": "7ea470b0d8640309098903185d11079abba3a23e7ce0d8b740769207a7514736",
+      "state": "machine-cross-checked",
+      "text": "esperando el permiso de cámara de Android"
+    },
+    "dashboard.camera.session.stopping": {
+      "sourceHash": "9ea90488b5c8219acc0b2eb36f115242abdbc865d061c24f2c8dfc0c9b57efab",
+      "state": "machine-cross-checked",
+      "text": "deteniéndose"
+    },
+    "dashboard.camera.session.unavailable": {
+      "sourceHash": "ba691ba042bcedd9a61a36f5969026bc95859dccdc7e47f24e6bce35673baf2f",
+      "state": "machine-cross-checked",
+      "text": "no disponible"
+    },
+    "dashboard.camera.settings_on": {
+      "sourceHash": "f54672066b62686eee5b39929797b9ee07554d3e99cc56533d05f27e4f009527",
+      "state": "machine-cross-checked",
+      "text": "Ajuste activado"
+    },
+    "dashboard.camera.status.starting": {
+      "sourceHash": "407944301e010c98c59b6de3b65332dc6541e40a88977303c32f342d28b52a50",
+      "state": "machine-cross-checked",
+      "text": "iniciándose…"
+    },
+    "dashboard.camera.status.starting_plain": {
+      "sourceHash": "59dbf36d9930a99bfc1e13a10518cd5cf42d29ef9b21993c424b4146a81aa30e",
+      "state": "machine-cross-checked",
+      "text": "iniciándose"
+    },
+    "dashboard.camera.title": {
+      "sourceHash": "7d2a3e8e8db5f55f008dcd361b641663d406588f505f18d559eec33473ccee9b",
+      "state": "machine-cross-checked",
+      "text": "Transmisión de la cámara"
+    },
+    "dashboard.camera.watchers.many": {
+      "sourceHash": "e24f8a5e7a214a3d03428892622c755fed0bf51840c925fa0bc5c244ba147a25",
+      "state": "machine-cross-checked",
+      "text": "{count} clientes"
+    },
+    "dashboard.camera.watchers.none": {
+      "sourceHash": "0423798ddfc186bd693d4beac49de719162a89bb78b51ce9abfd776da79944b6",
+      "state": "machine-cross-checked",
+      "text": "nadie está viendo"
+    },
+    "dashboard.camera.watchers.one": {
+      "sourceHash": "f6ae85d9ce781a95153ffe8cbfbbfcc4c3bd347e96729f4a7eb1ac0b05c92c38",
+      "state": "machine-cross-checked",
+      "text": "{count} cliente"
+    },
+    "dashboard.camera.watchers.streaming": {
+      "sourceHash": "52c5073dc7077b9b8690d6b29f8e1601d78e75726863511203273f255040d078",
+      "state": "machine-cross-checked",
+      "text": "{watching} viendo, {count} transmitiendo"
+    },
+    "dashboard.capability.hardware_buttons": {
+      "sourceHash": "4acca9a71cd750ae7a450792591c91856a5483473ab2a9ca5d6c52366b3fc99b",
+      "state": "machine-cross-checked",
+      "text": "Botones físicos"
+    },
+    "dashboard.capability.helper_daemon": {
+      "sourceHash": "69751952a2f35b1eb2a5741d3dc93ed9e6e8e2f278fea5da3a3a7fc5c862dd19",
+      "state": "machine-cross-checked",
+      "text": "Demonio auxiliar"
+    },
+    "dashboard.capability.note.android_sleep": {
+      "sourceHash": "e1923775e4c2c360f03fd9f4a5fa04cc2eb3fd63f044804acd8b4ec60250669a",
+      "state": "machine-cross-checked",
+      "text": "Suspensión de Android mediante KEYCODE_SLEEP; Home Assistant siempre lo reactiva, y un toque local solo lo reactiva si la pantalla táctil de este panel es una fuente de activación de la plataforma"
+    },
+    "dashboard.capability.note.available": {
+      "sourceHash": "ddd9818abacfde7afed60c93129175401439367a77e69ea93e0ddb3bb38e0bd9",
+      "state": "machine-cross-checked",
+      "text": "disponible"
+    },
+    "dashboard.capability.note.backlight_off_helper": {
+      "sourceHash": "e1afa6ed1a6cd4ed2b169fb71e9e9fa8db7a29112697e0d39643f9126a485207",
+      "state": "machine-cross-checked",
+      "text": "apagado real de la retroiluminación mediante el demonio auxiliar"
+    },
+    "dashboard.capability.note.backlight_off_su": {
+      "sourceHash": "925907adfd86942e8d7f40c071a4acbde4c7f22face097af64dfc149cfca2af9",
+      "state": "machine-cross-checked",
+      "text": "apagado real de la retroiluminación mediante su bl_power"
+    },
+    "dashboard.capability.note.brightness_helper": {
+      "sourceHash": "adb57c0744977c72e567539d3337098a0e19eea90d77390beb3ceaf66dcb78a5",
+      "state": "machine-cross-checked",
+      "text": "control de la retroiluminación mediante el demonio auxiliar; el ajuste de Android no cambia"
+    },
+    "dashboard.capability.note.brightness_su": {
+      "sourceHash": "69f141ed1c25807a253437529b3a99366435a8088d4a9e943ae78e8e647e580c",
+      "state": "machine-cross-checked",
+      "text": "control de la retroiluminación mediante su; el ajuste de Android no cambia"
+    },
+    "dashboard.capability.note.buttons_accessibility": {
+      "sourceHash": "49c7b16fabb7731aa57f75b09c751e5c6604364aa5ca40f4021b1988ac7a6a01",
+      "state": "machine-cross-checked",
+      "text": "captura de teclas por accesibilidad habilitada"
+    },
+    "dashboard.capability.note.buttons_accessibility_not_verified": {
+      "sourceHash": "2366eae11f0e73209eaa8b91085c954f0589c330a03adb4f65f21c0e28834267",
+      "state": "machine-cross-checked",
+      "text": "la captura de teclas por accesibilidad funciona; hay {count} botón(es) físico(s) del perfil sin verificar ({detail})"
+    },
+    "dashboard.capability.note.buttons_accessibility_unverified_stream": {
+      "sourceHash": "8f449ea1b2498436029c2ffd0a3f0b3ef1a1cf854ea8abce1dc3dd71ca6311dd",
+      "state": "machine-cross-checked",
+      "text": "captura de teclas por accesibilidad y {count} botón(es) físico(s) del perfil en un flujo sin verificar ({detail})"
+    },
+    "dashboard.capability.note.buttons_accessibility_verified": {
+      "sourceHash": "8118541dec6bfaa414789c7f81da23fcdf1f47996565b62c7aaf5e349e0456b9",
+      "state": "machine-cross-checked",
+      "text": "captura de teclas por accesibilidad y {count} botón(es) físico(s) del perfil en un flujo verificado del demonio auxiliar"
+    },
+    "dashboard.capability.note.buttons_enable_no_root": {
+      "sourceHash": "291011f6218668e232f4c777286046293eab5e67959dd8fc4d0c4474caabd79d",
+      "state": "machine-cross-checked",
+      "text": "habilitar (sin root): {command}"
+    },
+    "dashboard.capability.note.buttons_not_verified": {
+      "sourceHash": "43215aff70fa1552c1f2d2c6d918f774b03e249d6a705129691ff14c5e398f23",
+      "state": "machine-cross-checked",
+      "text": "hay {count} botón(es) físico(s) del perfil sin verificar ({detail})"
+    },
+    "dashboard.capability.note.buttons_unverified_stream": {
+      "sourceHash": "add3e029da3ad0f8711b007609a85cd7e021c34138e92ae08beae79caf523c4b",
+      "state": "machine-cross-checked",
+      "text": "{count} botón(es) físico(s) del perfil transmiten, pero no están verificados ({detail})"
+    },
+    "dashboard.capability.note.buttons_verified": {
+      "sourceHash": "8addd3febfb811d8b7faf754ff7066df1e7636619c137d891440e97ef17c4d1e",
+      "state": "machine-cross-checked",
+      "text": "{count} botón(es) físico(s) del perfil en un flujo verificado del demonio auxiliar"
+    },
+    "dashboard.capability.note.daemon_button_backlight": {
+      "sourceHash": "e03349a8e83008eccd77a5f30569dd960728b633b96dc891a77a8b4b08058c8a",
+      "state": "machine-cross-checked",
+      "text": "necesario para la retroiluminación de los botones del perfil"
+    },
+    "dashboard.capability.note.daemon_buttons": {
+      "sourceHash": "44768533635d18567cff1ab8a36a728ad147f2eeebb91209b2bad9057f3a4220",
+      "state": "machine-cross-checked",
+      "text": "necesario para {count} botón(es) físico(s) del perfil, aunque las acciones privilegiadas normales pueden usar su"
+    },
+    "dashboard.capability.note.daemon_hardware": {
+      "sourceHash": "25f8d6ef27123d7bd72c4270f2d45cca37e22ae37e5ce1a7eade527d15cc9725",
+      "state": "machine-cross-checked",
+      "text": "necesario para el hardware de este perfil gestionado por el demonio auxiliar"
+    },
+    "dashboard.capability.note.daemon_needed": {
+      "sourceHash": "3e7b2f9f5409d62f70a2137e4674155e7d8f5542365fcc257ea3e1e4b05d80b7",
+      "state": "machine-cross-checked",
+      "text": "NECESARIO, pero no está en ejecución"
+    },
+    "dashboard.capability.note.daemon_running": {
+      "sourceHash": "c071cf5f5ed6f884cc70155b6f05f755fd46a302d05e4261b7e92ce878bbfed8",
+      "state": "machine-cross-checked",
+      "text": "en ejecución"
+    },
+    "dashboard.capability.note.daemon_sandbox_path": {
+      "sourceHash": "a505a08012bb148112959a5048080f1650b90a651482e8e70616aca5b44e7554",
+      "state": "machine-cross-checked",
+      "text": "la vía de control privilegiado de este panel aislado; sin ella, los controles exclusivos de root siguen sin estar disponibles"
+    },
+    "dashboard.capability.note.daemon_state": {
+      "sourceHash": "1eca5000089aa22f20d14024f9091229385ed498ea04161952a8622e1015641b",
+      "state": "machine-cross-checked",
+      "text": "{state} — {detail}"
+    },
+    "dashboard.capability.note.dim_backlight_powered": {
+      "sourceHash": "9ad1df56612df39975a440c255b5ab080f918e9212240b5ec22a290c21973621",
+      "state": "machine-cross-checked",
+      "text": "la retroiluminación sigue encendida; necesita su o el demonio auxiliar para apagarse de verdad"
+    },
+    "dashboard.capability.note.dim_brightness_zero": {
+      "sourceHash": "49361392d902ac3b22f9d5597a3796a44c77b5f1eaa17912d825a93b99213569",
+      "state": "machine-cross-checked",
+      "text": "el perfil de este panel usa la vía de brillo cero, que nunca apaga la retroiluminación"
+    },
+    "dashboard.capability.note.dim_keycode_sleep": {
+      "sourceHash": "fdfbf3af9f2f97c4f37fbd64d08b71e7fd876dee7d4e57a7ea780dc9e6030878",
+      "state": "machine-cross-checked",
+      "text": "necesita su o el demonio auxiliar para inyectar KEYCODE_SLEEP"
+    },
+    "dashboard.capability.note.dim_only": {
+      "sourceHash": "566087c8cb755bd8c6f4af9d07008a957ecf50a377eb32e5b851bbf81cf3de3c",
+      "state": "machine-cross-checked",
+      "text": "DIM ONLY — {reason}"
+    },
+    "dashboard.capability.note.helper_routed": {
+      "sourceHash": "e9c4863384d41335b9ae2dea3d0ba01fbacddc489e4271439109765b442b2d1e",
+      "state": "machine-cross-checked",
+      "text": "no disponible directamente para ha-paneld; las acciones privilegiadas se canalizan mediante el demonio auxiliar"
+    },
+    "dashboard.capability.note.led_unreachable": {
+      "sourceHash": "6c32a3e8242a947d1c8e684587cfa1b63bfdb3c63e108a985bc724f272df055d",
+      "state": "machine-cross-checked",
+      "text": "no hay ningún nodo LED accesible; necesita el demonio auxiliar con root (la instalación requiere su una vez)"
+    },
+    "dashboard.capability.note.needs_privileged_access": {
+      "sourceHash": "ccc3d966a928d6cd96e9a779950fe9be66865f03c09b3ed912ad691540906243",
+      "state": "machine-cross-checked",
+      "text": "necesita acceso privilegiado compatible con el panel"
+    },
+    "dashboard.capability.note.needs_su_or_helper": {
+      "sourceHash": "4e9c9b45a00e9db3c69382330e119f40fa835bd7898b1abb0b3077df5ac65e0f",
+      "state": "machine-cross-checked",
+      "text": "necesita su o el demonio auxiliar"
+    },
+    "dashboard.capability.note.needs_write_settings": {
+      "sourceHash": "5356e1ca4a3a487fb59a9181ed108a1077e53887e3a521aec59c47c3f89da8ef",
+      "state": "machine-cross-checked",
+      "text": "necesita WRITE_SETTINGS: {command}"
+    },
+    "dashboard.capability.note.preferred_route_prefix": {
+      "sourceHash": "f1ab2487d4655ed06023393219c15889849d1dfc235f4db57b572cc909a58828",
+      "state": "machine-cross-checked",
+      "text": "no añade ninguna capacidad mientras root o el demonio auxiliar proporcionen la vía preferida; "
+    },
+    "dashboard.capability.note.rockchip_led_direct": {
+      "sourceHash": "f5876fe3b48b4aeb1411b01ffc22454d72a3ab77bac26c52751b595f6c5a2dc8",
+      "state": "machine-cross-checked",
+      "text": "Rockchip /dev/ledjni (directo desde la aplicación, sin root)"
+    },
+    "dashboard.capability.note.rockchip_led_helper": {
+      "sourceHash": "26abef3a1d288f74a47761063b7232101264d83a0e850dbcab576de17dd1e7e8",
+      "state": "machine-cross-checked",
+      "text": "ioctl de Rockchip /dev/ledjni mediante el demonio auxiliar (root)"
+    },
+    "dashboard.capability.note.root_or_helper": {
+      "sourceHash": "165f7476c83ccff55a53fe81df2bb7213eb58cc7dc042802bf754fc9a75d8acc",
+      "state": "machine-cross-checked",
+      "text": "disponible mediante root o el demonio auxiliar"
+    },
+    "dashboard.capability.note.shizuku_connecting": {
+      "sourceHash": "20ee03c32f465fae6c1c11e967e0e84adcc9bbb3020f72c9aeacaa08c27fe72a",
+      "state": "machine-cross-checked",
+      "text": "conectando con el servicio Shizuku aprobado localmente"
+    },
+    "dashboard.capability.note.shizuku_disabled": {
+      "sourceHash": "3bee0070aeb6277cf63a471498b0fd5694cf27f969e666b702644b440086e92a",
+      "state": "machine-cross-checked",
+      "text": "deshabilitado en ha-paneld; en el panel, abre Configure → menú adicional de la barra de herramientas → Acceso mejorado → Habilitar"
+    },
+    "dashboard.capability.note.shizuku_failed": {
+      "sourceHash": "c55ae7ee37cbc132cc37edd487b0d96b87317868a2912f108147ee9867c445d5",
+      "state": "machine-cross-checked",
+      "text": "no se ha podido conectar con Shizuku; reinténtalo desde el diálogo Acceso mejorado del panel"
+    },
+    "dashboard.capability.note.shizuku_grant": {
+      "sourceHash": "7788db822a8fbe15837d8cc318945e47ee7ce3725c6b3282cba6c5c5273042c4",
+      "state": "machine-cross-checked",
+      "text": "acceso denegado; autoriza ha-paneld en Shizuku → Aplicaciones autorizadas"
+    },
+    "dashboard.capability.note.shizuku_incompatible": {
+      "sourceHash": "86b1e0cf086b8ad212410b559f017fea9d4662bb263a68413efa934c1cfe7d80",
+      "state": "machine-cross-checked",
+      "text": "bloqueado: identidad o protocolo inesperados del servicio Shizuku"
+    },
+    "dashboard.capability.note.shizuku_missing": {
+      "sourceHash": "fb760f6c866b73fcb6e8c782783813d5011fea64d563d767ad9b1643f635a78c",
+      "state": "machine-cross-checked",
+      "text": "falta el gestor; repite el aprovisionamiento con --shizuku"
+    },
+    "dashboard.capability.note.shizuku_permission": {
+      "sourceHash": "d83310993a1a94b12cdec092d96a629a92285d910255d1c61f308a201c624a2a",
+      "state": "machine-cross-checked",
+      "text": "servicio en ejecución; solicita y aprueba localmente el acceso de ha-paneld"
+    },
+    "dashboard.capability.note.shizuku_ready": {
+      "sourceHash": "ecdf8f84be742bd0ba8d4633061b3d355cefae6b946bc0eb030889ebe0344b14",
+      "state": "machine-cross-checked",
+      "text": "listo como shell UID; solo operaciones locales tipificadas"
+    },
+    "dashboard.capability.note.shizuku_stopped": {
+      "sourceHash": "081425f46f4ebb0257a08721060226f25d4e9ce1221ba37ca6e85847ef5c5079",
+      "state": "machine-cross-checked",
+      "text": "habilitado en ha-paneld, pero el servicio Shizuku está detenido; abre Shizuku e inicia su servicio"
+    },
+    "dashboard.capability.note.shizuku_untrusted": {
+      "sourceHash": "ca917912583f3b7942d9ba51510733d455007c04e339fe3101687c9dc83d73d4",
+      "state": "machine-cross-checked",
+      "text": "bloqueado: no se confía en el firmante del gestor instalado"
+    },
+    "dashboard.capability.note.shizuku_verified": {
+      "sourceHash": "3b125c2e143d0b144888f9d28ef510a0d7a05f77298ea490b8736c7087961ecf",
+      "state": "machine-cross-checked",
+      "text": "disponible mediante acceso Shizuku aprobado localmente; las actualizaciones de la aplicación siguen verificándose por firma"
+    },
+    "dashboard.capability.note.su_direct": {
+      "sourceHash": "a0ba5183f28168934f6d83d722669ab6cc27b21777617658035d9f9934c3992e",
+      "state": "machine-cross-checked",
+      "text": "disponible directamente para ha-paneld"
+    },
+    "dashboard.capability.note.su_unavailable": {
+      "sourceHash": "6c0c02f245f4aabdb395f95353d4565c38affbb4ef9bf4327e70470c5b580c98",
+      "state": "machine-cross-checked",
+      "text": "no disponible directamente para ha-paneld; consulta las filas de cada capacidad más abajo"
+    },
+    "dashboard.capability.note.sysfs_led_helper": {
+      "sourceHash": "6e48992050b0bb9ef7ad7b482b89a339b779873721ede294ffb3929ccb77e7d8",
+      "state": "machine-cross-checked",
+      "text": "LED sysfs mediante el demonio auxiliar"
+    },
+    "dashboard.capability.note.write_settings_granted": {
+      "sourceHash": "2cc506ffccedc8432c430164530ff4fd2501d7e3a5a0a0fc91a494facb15adac",
+      "state": "machine-cross-checked",
+      "text": "WRITE_SETTINGS concedido"
+    },
+    "dashboard.capability.rgb_led": {
+      "sourceHash": "c2ab80360c8bb8cec47877c643abdeabd2ece37ec7b59ec506a4f2de1fcc1c0e",
+      "state": "machine-cross-checked",
+      "text": "RGB LED"
+    },
+    "dashboard.capability.root_su": {
+      "sourceHash": "dca17bff62e8f077eb8628174e0fa236b29c9448343eae86ee89cd0a37e94b63",
+      "state": "machine-cross-checked",
+      "text": "Acceso raíz (su)"
+    },
+    "dashboard.capability.screen_brightness": {
+      "sourceHash": "694cb749771a50b425951ffbdc7b070db7350d4280f98d321ef946b6a7292a68",
+      "state": "machine-cross-checked",
+      "text": "Brillo de la pantalla"
+    },
+    "dashboard.capability.screen_power": {
+      "sourceHash": "0d4d080bcd55f5ee63c4d2574a7c7e2a743c63673b4d440bbee7984f28e40c4a",
+      "state": "machine-cross-checked",
+      "text": "Encender/apagar pantalla"
+    },
+    "dashboard.capability.shizuku": {
+      "sourceHash": "195c2335bc7909021beca0b17dd90d7d6690c4d9b1bc28d3b41825d6712a83f5",
+      "state": "machine-cross-checked",
+      "text": "Acceso mejorado de Shizuku"
+    },
+    "dashboard.capability.system_actions": {
+      "sourceHash": "4a70712df481ed02525edcbf9e3507d7a28fca003abcbdd8b63516be53628ef0",
+      "state": "machine-cross-checked",
+      "text": "Reiniciar / recargar / iniciador"
+    },
+    "dashboard.capability.verified_operations": {
+      "sourceHash": "915a6bc11072c301c0f6504d5e7139c4736c62e0798fb0e221d55321a3049414",
+      "state": "machine-cross-checked",
+      "text": "Actualización verificada de la aplicación / captura / pantalla"
+    },
+    "dashboard.card.behaviour": {
+      "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
+      "state": "machine-cross-checked",
+      "text": "Comportamiento"
+    },
+    "dashboard.card.builtin_renderer": {
+      "sourceHash": "ad8f7c1dd1e97ac88e10dbb268e5258775337ba52217964f0984bfae18a4bcd5",
+      "state": "machine-cross-checked",
+      "text": "renderizador integrado"
+    },
+    "dashboard.card.capabilities": {
+      "sourceHash": "9460f16ac9b5171e7f3d3f2336ec66b547231be8996ea9a0ad25079f84641be4",
+      "state": "machine-cross-checked",
+      "text": "Capacidades"
+    },
+    "dashboard.card.controls": {
+      "sourceHash": "799c269135742a36ae48dddf3a69c47c7d2a428a34e351f6da93ae6490101b47",
+      "state": "machine-cross-checked",
+      "text": "Controles"
+    },
+    "dashboard.card.display_tuning": {
+      "sourceHash": "02dbc5896b59e22426f5c47fbcf1c9dd1009eead9ccdcf841d86265cfc5272aa",
+      "state": "machine-cross-checked",
+      "text": "Pantalla y ajustes"
+    },
+    "dashboard.card.ha_state_stream": {
+      "sourceHash": "5c4837d3937413e5f3ea56b3d901abe57d6272c4d1f6fb7dc9ff565d4c5dfaf3",
+      "state": "machine-cross-checked",
+      "text": "Flujo de estados de Home Assistant"
+    },
+    "dashboard.card.live_panel": {
+      "sourceHash": "625551c38ad565af2c78b5c6c04e2133fe35999189ee5b7b43045a87198c71d7",
+      "state": "machine-cross-checked",
+      "text": "panel en directo"
+    },
+    "dashboard.card.live_state": {
+      "sourceHash": "7156ecf07de383da5a91c59cd62e3ee36c5542aad5566730497a37a99b9dc23e",
+      "state": "machine-cross-checked",
+      "text": "Estado en directo"
+    },
+    "dashboard.card.networking": {
+      "sourceHash": "204de4b6d5a34560d2e3e6b15bfb2f3df0152de7d7b74474ac9a866b74dd70d1",
+      "state": "machine-cross-checked",
+      "text": "Red"
+    },
+    "dashboard.card.panel_information": {
+      "sourceHash": "381e6257c811681af29f6293890e6ff1c55f36a2f4ce597d653ae94d90e3967f",
+      "state": "machine-cross-checked",
+      "text": "Información del panel"
+    },
+    "dashboard.card.performance": {
+      "sourceHash": "442aded87a55aa8c8f7d5ff0c30228150d4b1cb8756e4be138d615ca4708fc26",
+      "state": "machine-cross-checked",
+      "text": "Rendimiento"
+    },
+    "dashboard.card.profile": {
+      "sourceHash": "24c0cf5404e8c4ae50ea14e55872d9858651afe321338940214ab9941977db59",
+      "state": "machine-cross-checked",
+      "text": "Perfil de ha-paneld"
+    },
+    "dashboard.card.remote_webview": {
+      "sourceHash": "3351a255be0419bf4e6232c19efd2ba93dd357787e0f5add6c85aa6d74ee3df4",
+      "state": "machine-cross-checked",
+      "text": "Depuración remota de WebView"
+    },
+    "dashboard.card.responsiveness": {
+      "sourceHash": "c3a5b81b72c2839068f12c59c5bc192d061aa12064c6e890effa27893c402bf5",
+      "state": "machine-cross-checked",
+      "text": "Capacidad de respuesta del panel de control"
+    },
+    "dashboard.card.runtime_diagnostics": {
+      "sourceHash": "892e412d7f3914a78a8a068b04f376a4665dfc2126be339ab00c056ae0df8621",
+      "state": "machine-cross-checked",
+      "text": "Diagnóstico en tiempo de ejecución"
+    },
+    "dashboard.card.screenshot": {
+      "sourceHash": "029320ad166c1807cd70230b908d6552a5f4bc8054449a58856a31a2c765c5c4",
+      "state": "machine-cross-checked",
+      "text": "Captura de pantalla"
+    },
+    "dashboard.card.sensors": {
+      "sourceHash": "76140e34f635bb941ff5b06eb58aa6c34d688acd2c6c72d4ded71b0d7410b287",
+      "state": "machine-cross-checked",
+      "text": "Sensores"
+    },
+    "dashboard.card.software_nav_bar": {
+      "sourceHash": "2ea07b608805707cf52fdd97446019371fd3a9b5aef6f1ee2c7c5de966f5102f",
+      "state": "machine-cross-checked",
+      "text": "barra de navegación virtual"
+    },
+    "dashboard.card.top_processes": {
+      "sourceHash": "c176917bb20cd5997638eed66e15bf50d0354d51dab563e1d015b6dab0ad0b43",
+      "state": "machine-cross-checked",
+      "text": "Procesos principales"
+    },
+    "dashboard.card.updates": {
+      "sourceHash": "22e2bada8f1c65cd83f4ba976f0027c5dd7cb81d5d2199cd1b0130792841eef4",
+      "state": "machine-cross-checked",
+      "text": "Actualizaciones"
+    },
+    "dashboard.cause.collecting": {
+      "sourceHash": "0e9bfc2f92df2a36fd2a3c5c2155b67977c1caf6e8a4deb1c0b773c7d65f546d",
+      "state": "machine-cross-checked",
+      "text": "Recopilando evidencias"
+    },
+    "dashboard.cause.dashboard_or_state_proxy": {
+      "sourceHash": "425a2c150980fd510bf9ef45900a5091dd5d49faafcdca8e8f8f1ef3bab89bd9",
+      "state": "machine-cross-checked",
+      "text": "Carga del panel de control o del estado (proxy)"
+    },
+    "dashboard.cause.dashboard_script": {
+      "sourceHash": "db93f478db12c742d1a6130f62649e31b5d7b4431cb8a48fc360d8ec73d0de97",
+      "state": "machine-cross-checked",
+      "text": "JavaScript del panel de control o las tarjetas"
+    },
+    "dashboard.cause.ha_network_path": {
+      "sourceHash": "a45cf48d0f0710629bbf9b548c33ca8d9ecad5ddc51f9566d13756d166bcde9b",
+      "state": "machine-cross-checked",
+      "text": "Ruta de red a Home Assistant"
+    },
+    "dashboard.cause.memory_or_renderer_instability": {
+      "sourceHash": "d2bd7217d35859b1ba78a832646061907bd558d92a8640e7b1f9b4e7fb4a7013",
+      "state": "machine-cross-checked",
+      "text": "Inestabilidad del renderizador o la memoria"
+    },
+    "dashboard.cause.no_clear_dominant_cause": {
+      "sourceHash": "18df63ee89cf766409a816e96ede842862c65797c160e53b161b34819fe505f8",
+      "state": "machine-cross-checked",
+      "text": "Sin una causa dominante clara"
+    },
+    "dashboard.cause.rendering_or_media": {
+      "sourceHash": "a0d90b2d52228f32154e78d658a15932f02b7312a5d36290ea2239abd3b732d4",
+      "state": "machine-cross-checked",
+      "text": "Renderizado, disposición o contenido multimedia"
+    },
+    "dashboard.cause.state_stream": {
+      "sourceHash": "a49a99c4222cc71e7ceb9984723d26580817796a9cc8bfe95cb5a8ad630bd831",
+      "state": "machine-cross-checked",
+      "text": "Presión del flujo de estados"
+    },
+    "dashboard.cause.system_contention": {
+      "sourceHash": "fb25a25eda210413e67a46008a712956153a263d2663f2fbcbed5741de46c019",
+      "state": "machine-cross-checked",
+      "text": "Contención de procesos del sistema"
+    },
+    "dashboard.chart.interaction_latency": {
+      "sourceHash": "33ed1e9c0927655e505d14b2020c1262732cb2c08dac458f600dbf0cfce4bf55",
+      "state": "machine-cross-checked",
+      "text": "latencia de interacción"
+    },
+    "dashboard.chart.main_thread_blocking": {
+      "sourceHash": "aac003a3e9708c8686eb682f6b1f22b76779ae43621d83e907ee66b054c161de",
+      "state": "machine-cross-checked",
+      "text": "bloqueo del hilo principal"
+    },
+    "dashboard.chart.percent_used": {
+      "sourceHash": "19e8fbbc0d7bbb594255aa6a35489b66b1b5e9bbebe3cbf104dbdde08f9377b9",
+      "state": "machine-cross-checked",
+      "text": "% usado"
+    },
+    "dashboard.chart.state_updates": {
+      "sourceHash": "772d0aa06c819550996c834f637c629220ac691a64791fb8a03a06e98b3f0034",
+      "state": "machine-cross-checked",
+      "text": "actualizaciones de estado"
+    },
+    "dashboard.common.entity_count": {
+      "sourceHash": "7a24f136c7962dbfb2cad102d51fcf50fffb4eacebe8395e9677cfe6d467bfbe",
+      "state": "machine-cross-checked",
+      "text": "{count} entidades"
+    },
+    "dashboard.common.live": {
+      "sourceHash": "47a1a6c07beb66ed57a4f0f1aa286649a325e99f3e0d19c5b4a07615632c8c45",
+      "state": "machine-cross-checked",
+      "text": "· en directo"
+    },
+    "dashboard.common.stable": {
+      "sourceHash": "d866a5a42ca124e6cc277c956d3f5caf6ebd2929164fc7d70983fa71e29755bd",
+      "state": "machine-cross-checked",
+      "text": "· estable"
+    },
+    "dashboard.common.unavailable": {
+      "sourceHash": "c153ea6d73b01f15a2ab31f1ca5fd96ed9d1c04982a777772fc1759df1159592",
+      "state": "machine-cross-checked",
+      "text": "· no disponible"
+    },
+    "dashboard.controls.admin_launcher": {
+      "sourceHash": "9eb21edbd62bb8c67ed58687e8d853b3965faf19f4b68ad587e0667e3667e582",
+      "state": "machine-cross-checked",
+      "text": "Iniciador de administración"
+    },
+    "dashboard.controls.back": {
+      "sourceHash": "76900f1bfd16c8d4dd3d25e6f46638d7165aee23883ccea6bfe071c514421769",
+      "state": "machine-cross-checked",
+      "text": "Volver"
+    },
+    "dashboard.controls.checking_capabilities": {
+      "sourceHash": "b50b00a247ff6e21fbb9456e1e8fbe6aa835b0bfda6fc865b0f514f62d236189",
+      "state": "machine-cross-checked",
+      "text": "comprobando capacidades…"
+    },
+    "dashboard.controls.dashboard": {
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "state": "machine-cross-checked",
+      "text": "Panel de control"
+    },
+    "dashboard.controls.input_required": {
+      "sourceHash": "41af12319dcb350491ba5326995add52a1145052811e1d8dc1bb958a074587fd",
+      "state": "machine-cross-checked",
+      "text": "Requiere entrada mediante Accessibility o Shizuku"
+    },
+    "dashboard.controls.launcher": {
+      "sourceHash": "22614ace1aef7766b6d6a7e29da0f3da734999bd0b87dc07f54d5b14c23f3748",
+      "state": "machine-cross-checked",
+      "text": "Iniciador"
+    },
+    "dashboard.controls.no_separate_launcher": {
+      "sourceHash": "a0116188ce3a91b305615048528239170e2e9c75bac41e89dc3d0da3b369403c",
+      "state": "machine-cross-checked",
+      "text": "Este panel no tiene un lanzador independiente: equivale a Admin launcher"
+    },
+    "dashboard.controls.reboot": {
+      "sourceHash": "fba023ca78ebb022146bbfe95e638d252b0727075bff6b4661f26dbe1e1a8fd0",
+      "state": "machine-cross-checked",
+      "text": "Reiniciar"
+    },
+    "dashboard.controls.recents": {
+      "sourceHash": "41a86988751ad5cbcd9f1a336274976be421b311b8fe80b5a70dc2c08c8eecb3",
+      "state": "machine-cross-checked",
+      "text": "Recientes"
+    },
+    "dashboard.controls.reload": {
+      "sourceHash": "bdc090ec61e3fcfc65f469951dfe00f3f2ecfc6003c44deac8e05b7237092de6",
+      "state": "machine-cross-checked",
+      "text": "Recargar"
+    },
+    "dashboard.controls.root_required": {
+      "sourceHash": "d298b76947c6260dab6cc80b19856c12dac0b1fe9f3382804fc254fb3d5946b1",
+      "state": "machine-cross-checked",
+      "text": "Requiere un panel con root"
+    },
+    "dashboard.controls.root_required_note": {
+      "sourceHash": "69d1baecdcbf9dfa80c51a89da504b4e82674dddc3d119cbd4169802d858b409",
+      "state": "machine-cross-checked",
+      "text": "Launcher, Admin launcher y Reboot requieren root; están desactivados en este panel."
+    },
+    "dashboard.controls.unavailable": {
+      "sourceHash": "23b08e93ff70b56bc7f1414f564d98196c64ccf6c6e8d19cdccd3059e21c2f6e",
+      "state": "machine-cross-checked",
+      "text": "No disponible mientras se carga el panel de control"
+    },
+    "dashboard.diagnostics_dump.explanation": {
+      "sourceHash": "d6301b1bff4840ec7fc5c53bd52cff5bcbd29b94cae72db0d4500e9e96639efc",
+      "state": "machine-cross-checked",
+      "text": "un informe para copiar y pegar con datos del hardware, firmware, SELinux, su y las comprobaciones de nodos de este panel para informar de errores."
+    },
+    "dashboard.diagnostics_dump.link": {
+      "sourceHash": "85529ca4d488e68a812c6db33828b13074ccd77bea93f820363dc3ef6060410a",
+      "state": "machine-cross-checked",
+      "text": "Volcado de diagnósticos"
+    },
+    "dashboard.display.factory_base": {
+      "sourceHash": "8449663a3b640dea7dba2d60bf06bb7579f18f9c9554c22d80b18c0785e48f69",
+      "state": "machine-cross-checked",
+      "text": "base de fábrica"
+    },
+    "dashboard.display.logical_density": {
+      "sourceHash": "6003ed89b05df0c6f650f7726df7abb96f7dc3e369b5c61a76d519405cc75aaa",
+      "state": "machine-cross-checked",
+      "text": "Densidad lógica"
+    },
+    "dashboard.display.tamed_packages": {
+      "sourceHash": "e38849aa0ab033321995ee3221ee0c546606c9812f0280fa0607e69da81610ba",
+      "state": "machine-cross-checked",
+      "text": "Paquetes restringidos"
+    },
+    "dashboard.display.text_size": {
+      "sourceHash": "d68761cc1eb296478531e007ff1fda9252fb7be5d24429a97eb05765211dafe5",
+      "state": "machine-cross-checked",
+      "text": "Tamaño del texto"
+    },
+    "dashboard.fact.android": {
+      "sourceHash": "6d612a86bee4b0a659b8b3affd6f1fbcad15c4cbbbbdc4996c6c01c786711a21",
+      "state": "machine-cross-checked",
+      "text": "Android"
+    },
+    "dashboard.fact.app_database": {
+      "sourceHash": "4ecdb3931af33bb1553c98a8c023bf11d11b6f29ef424358cfa9a2dc7131037d",
+      "state": "machine-cross-checked",
+      "text": "Base de datos de la aplicación"
+    },
+    "dashboard.fact.audio_playback": {
+      "sourceHash": "8c08339401b776bb5be0c63d89c4f32c27797c245867be1e607e0b5c7423cf62",
+      "state": "machine-cross-checked",
+      "text": "Reproducción de audio"
+    },
+    "dashboard.fact.camera": {
+      "sourceHash": "03494b0d1f803522a3497d751eaaf6f987883cd4fe0b0e66baf67a662ae231b2",
+      "state": "machine-cross-checked",
+      "text": "Cámara"
+    },
+    "dashboard.fact.cpu": {
+      "sourceHash": "db9a4c7d4c195ebf80068dd04120accce1cbfbef342bb43a53cbd651eb96e37b",
+      "state": "machine-cross-checked",
+      "text": "CPU"
+    },
+    "dashboard.fact.cpu_profile": {
+      "sourceHash": "004574377e217b06381bc71633aca50cbb8494c95d2b638920bea8ffb7464280",
+      "state": "machine-cross-checked",
+      "text": "Perfil de CPU"
+    },
+    "dashboard.fact.device": {
+      "sourceHash": "6ba0bdeccb426d7b2ccb601c4e07015f50b6b427ec52c93a3b95f2245b67bdd4",
+      "state": "machine-cross-checked",
+      "text": "Dispositivo"
+    },
+    "dashboard.fact.device_id": {
+      "sourceHash": "6e0a0b9d8c5ee4d9fb14be1c846a402634b77030c53b3f328007cd1c9cd43ece",
+      "state": "machine-cross-checked",
+      "text": "ID del dispositivo"
+    },
+    "dashboard.fact.display": {
+      "sourceHash": "34e108c0896d0158ca4f2797d4f12a143943803be2151aa5d2136ea1bcd9a468",
+      "state": "machine-cross-checked",
+      "text": "Pantalla"
+    },
+    "dashboard.fact.firmware": {
+      "sourceHash": "c2a314c3b32b319cf5f868d620f96245f593dc7c401acd8b5a566fac88bb40f4",
+      "state": "machine-cross-checked",
+      "text": "Firmware instalado"
+    },
+    "dashboard.fact.friendly_name": {
+      "sourceHash": "d25d7b3edd1c0e6896d2e5754a0a21bb11c3614972d11cc421bb194442e0394d",
+      "state": "machine-cross-checked",
+      "text": "Nombre descriptivo"
+    },
+    "dashboard.fact.ha_companion": {
+      "sourceHash": "4ba71aa7515c52cb40ea08235d8d48a96cde7c51ab3475d8327ca6a984a8b62f",
+      "state": "machine-cross-checked",
+      "text": "HA Companion"
+    },
+    "dashboard.fact.ha_lifecycle": {
+      "sourceHash": "49e67338e36425bd16f3dd557c9f814fbf6a8398b6aee904473891029642fcfa",
+      "state": "machine-cross-checked",
+      "text": "Ciclo de vida de HA"
+    },
+    "dashboard.fact.ha_network_path": {
+      "sourceHash": "3c86761b01aa8d00f6f4c44d82ffc8de5230e998c6a223e86cee9e724b628c06",
+      "state": "machine-cross-checked",
+      "text": "Ruta de red de HA"
+    },
+    "dashboard.fact.ha_renderer": {
+      "sourceHash": "c9f13e2fb6406ed3eab20ce8206c7f55ecdc59f78b71f318f98e5239f4d5849f",
+      "state": "machine-cross-checked",
+      "text": "Renderizador de HA"
+    },
+    "dashboard.fact.http_port": {
+      "sourceHash": "dab12d2ccc22d28d77d15011eb0be2e1dc726358bdec5aa7f8515ddad29e2bc3",
+      "state": "machine-cross-checked",
+      "text": "Puerto HTTP"
+    },
+    "dashboard.fact.led": {
+      "sourceHash": "498785455dcb5a9e49d815731ead0399021427b333d2b29c79075525c12c2c17",
+      "state": "machine-cross-checked",
+      "text": "LED"
+    },
+    "dashboard.fact.light_sensor": {
+      "sourceHash": "7cde7fa1b5d5e87a0259ed6ae848ca13727c41b8782079b6319f323f437fccac",
+      "state": "machine-cross-checked",
+      "text": "Sensor de luz"
+    },
+    "dashboard.fact.local_ip": {
+      "sourceHash": "89021892db6567352e1dd90ec679776203f50aa454552b3940e9fc56f2e75edd",
+      "state": "machine-cross-checked",
+      "text": "Dirección IP local"
+    },
+    "dashboard.fact.local_ipv6": {
+      "sourceHash": "25d8a85ff3630fcd899d5edce2c6547e1f7c4c5323d52fa403a18b371ce21486",
+      "state": "machine-cross-checked",
+      "text": "Dirección IPv6 local"
+    },
+    "dashboard.fact.local_state_sync": {
+      "sourceHash": "d6669e4250bce3cd7d1d101ab9a296f0040770664053d24793f3ffdeafd85761",
+      "state": "machine-cross-checked",
+      "text": "Sincronización del estado local"
+    },
+    "dashboard.fact.log_shipping": {
+      "sourceHash": "5920a9f0c9fb9680781176adb10176b3eb5a2c7f2bfcf39e3f720fcdc7d37e97",
+      "state": "machine-cross-checked",
+      "text": "Envío de registros"
+    },
+    "dashboard.fact.mdns": {
+      "sourceHash": "738a8d7c6853a421b73d91990afba3d73f37ed9ec7305ecfd3284408e3315992",
+      "state": "machine-cross-checked",
+      "text": "mDNS"
+    },
+    "dashboard.fact.model": {
+      "sourceHash": "5e2c614c23f02239bc03c6c04fcb681950f9e72bf8fdff6be79c79841cbb10c0",
+      "state": "machine-cross-checked",
+      "text": "Modelo"
+    },
+    "dashboard.fact.mqtt": {
+      "sourceHash": "51b197a5083739756d3f8634ae444e9874b51e7703a7b6e72276385d54cf4db3",
+      "state": "machine-cross-checked",
+      "text": "MQTT"
+    },
+    "dashboard.fact.mqtt_timing": {
+      "sourceHash": "e98d05be712824bc204ff342d965a29d937fc75bbec8481fe8c106a992abb89c",
+      "state": "machine-cross-checked",
+      "text": "Tiempos de conexión y autenticación de MQTT"
+    },
+    "dashboard.fact.navbar": {
+      "sourceHash": "ea22ed8d628dd906c10d91accf3769b68cbf37127f2ecab6a66a1f3d27e6e5a6",
+      "state": "machine-cross-checked",
+      "text": "Barra de navegación"
+    },
+    "dashboard.fact.network_adb": {
+      "sourceHash": "468304e24dd01a9c3ac85163a7ea7bb83e11644a2d5b632c817863337454701b",
+      "state": "machine-cross-checked",
+      "text": "ADB por red"
+    },
+    "dashboard.fact.panel_id": {
+      "sourceHash": "e738d52375d65eb02067cf41e0807c06c4e21f391d5334bb5bed79e9a2e61daf",
+      "state": "machine-cross-checked",
+      "text": "ID del panel"
+    },
+    "dashboard.fact.platform": {
+      "sourceHash": "c78ffe19571018fbc93a78873969046fe1a80c3d21e5d20fbb2ca17c7c53a144",
+      "state": "machine-cross-checked",
+      "text": "Plataforma"
+    },
+    "dashboard.fact.proximity": {
+      "sourceHash": "101194f3e33d01133851120bc7bab9967d2d8988266a7c07ae800f7127e7e3e2",
+      "state": "machine-cross-checked",
+      "text": "Proximidad"
+    },
+    "dashboard.fact.ram": {
+      "sourceHash": "bf4b0c03c646add9b518fc4f658deba189e5bc4918607186e4570472bf6cb19f",
+      "state": "machine-cross-checked",
+      "text": "RAM"
+    },
+    "dashboard.fact.relays": {
+      "sourceHash": "df8ebcd185dda2acd41f75c848de5fa0c3ba4ad0b45676a74b4f8e67d374837e",
+      "state": "machine-cross-checked",
+      "text": "Relés"
+    },
+    "dashboard.fact.releases_on_github": {
+      "sourceHash": "ff84d5159927d35667e17745a56a937ad177ed6cac7decd6706a7ba2a8761954",
+      "state": "machine-cross-checked",
+      "text": "Versiones en GitHub"
+    },
+    "dashboard.fact.security_mode": {
+      "sourceHash": "8612eb7c794913308500198a622fb2dfe8be0515a9a944ae23e715c1ddc03b88",
+      "state": "machine-cross-checked",
+      "text": "Modo de seguridad"
+    },
+    "dashboard.fact.soc": {
+      "sourceHash": "2600f7e4db554c9760c141813188c03fb71f9694f085ca541eba178333899c5c",
+      "state": "machine-cross-checked",
+      "text": "SoC"
+    },
+    "dashboard.fact.state_convergence": {
+      "sourceHash": "a952d13f5e5135175bab1d28aeac5d7f6beba372b7ba1a60cd3e38d1689bf212",
+      "state": "machine-cross-checked",
+      "text": "Convergencia de estados"
+    },
+    "dashboard.fact.storage": {
+      "sourceHash": "a69c4dece144a46e40d430726395533d8f335a7d601d8ca292220b3a4a7faca4",
+      "state": "machine-cross-checked",
+      "text": "Almacenamiento"
+    },
+    "dashboard.fact.system_webview": {
+      "sourceHash": "52eb514e213a290a3b780b56757c47dcd6085f1f359e4f1e74b4355133e7711b",
+      "state": "machine-cross-checked",
+      "text": "WebView del sistema"
+    },
+    "dashboard.fact.webview_reporting": {
+      "sourceHash": "8a803bb805676261f2d7d35ad7880bec48082293ee16ed448bf0deceb816bec4",
+      "state": "machine-cross-checked",
+      "text": "Informes de WebView del sistema"
+    },
+    "dashboard.fact.wifi_stability": {
+      "sourceHash": "c41a095de2a41138b838cf06af205635f5223b0c673d895da17addb3fad72a1f",
+      "state": "machine-cross-checked",
+      "text": "Estabilidad de Wi-Fi"
+    },
+    "dashboard.fact.zigbee": {
+      "sourceHash": "b63c865af73d1f1ac4af3f8e43cdd320f52e42f5463b88bc46213d5c92db8f01",
+      "state": "machine-cross-checked",
+      "text": "Zigbee"
+    },
+    "dashboard.footer.api_explorer": {
+      "sourceHash": "b8f10c9c2dc3f7e68d90cd69f59ce58e14f39f2ec3b1888deaa527b7c2c003a1",
+      "state": "machine-cross-checked",
+      "text": "Explorador de REST API"
+    },
+    "dashboard.footer.diagnostics": {
+      "sourceHash": "8fa78148b702fb4492246c6ccdf5b194f1a4de68b791cae14800c730456f9e67",
+      "state": "machine-cross-checked",
+      "text": "diagnósticos"
+    },
+    "dashboard.ha_stream.note": {
+      "sourceHash": "9b65016afe1dd47652a9e591e65590d3ee03222949e36b90ca73328855c4ec81",
+      "state": "machine-cross-checked",
+      "text": "La carga útil es JSON de la aplicación sin comprimir. El tiempo del hilo principal se mide desde el despacho hasta que el navegador cede el control; no se atribuye únicamente a la CPU de Home Assistant."
+    },
+    "dashboard.ha_stream.open_diagnostics": {
+      "sourceHash": "a1472369deb306a985ccd17e86efbad6029805fcc72ec6515fc900b268d4f23b",
+      "state": "machine-cross-checked",
+      "text": "Abrir diagnósticos de la entidad"
+    },
+    "dashboard.inspect.direct_instrumentation": {
+      "sourceHash": "2d5a9099e0dcb14a9a7ae946b7d49b9c5056f4f9700849e158180758c7afc976",
+      "state": "machine-cross-checked",
+      "text": "Las tarjetas de rendimiento anteriores usan instrumentación integrada directa sin DevTools."
+    },
+    "dashboard.inspect.enable_in_companion": {
+      "sourceHash": "760752b57777587b23fb91a39c73f1865016cc24324d3bf3e64d4d55fb5fcc74",
+      "state": "machine-cross-checked",
+      "text": "Habilítalo primero en el panel de control: Companion → Configuración → Solución de problemas → «Depuración remota de WebView»; después, vuelve a abrir el panel de control y pulsa Habilitar de nuevo."
+    },
+    "dashboard.inspect.hardened_disabled": {
+      "sourceHash": "ee70f4d65d45904d8878a2146235add5ac0fc61183d50fc2d7c7369eb52b0970",
+      "state": "machine-cross-checked",
+      "text": "No disponible mientras el modo reforzado esté habilitado. Cambia al modo relajado antes de exponer las herramientas de desarrollo de WebView a la LAN."
+    },
+    "dashboard.inspect.instructions": {
+      "sourceHash": "4d4bde17b98b24bd56c637a96ebcb90b9adc7cdfb9a6e43f14eead421735fed7",
+      "state": "machine-cross-checked",
+      "text": "Para una inspección más detallada, abre chrome://inspect → Configure…, añade {host} y pulsa Habilitar. Companion también requiere Configuración → Solución de problemas → Depuración remota de WebView y volver a abrir el panel de control. El relé requiere root."
+    },
+    "dashboard.inspect.needs_root": {
+      "sourceHash": "97722572b041c17d0e55845458ee601cb669d501205f260efbac337ece6d7e35",
+      "state": "machine-cross-checked",
+      "text": "Requiere root (su) en este panel."
+    },
+    "dashboard.inspect.off": {
+      "sourceHash": "8a675f431af1d62cddfc997fe7f3eb7d992754e4f4f66cc3f9417fb353089df6",
+      "state": "machine-cross-checked",
+      "text": "· apagado"
+    },
+    "dashboard.inspect.on": {
+      "sourceHash": "73c6aa10511c5daba9a1702d058ca9585489ad652e20bc7eff0f9824056c93d2",
+      "state": "machine-cross-checked",
+      "text": "· encendido"
+    },
+    "dashboard.inspect.running": {
+      "sourceHash": "2e061fb7d41c99241a10ac0799976d3994087845144cc55526eeb1e3585b8fa6",
+      "state": "machine-cross-checked",
+      "text": "Relé activo. En chrome://inspect, el panel de control aparece ahora en Destino remoto: haz clic en Inspeccionar. Si no aparece, debes añadir el host antes de habilitarlo: añade {host} en Configure… y actualiza chrome://inspect. Mientras esté activo, expone DevTools a la LAN; pulsa Detener al terminar."
+    },
+    "dashboard.inspect.start_failed": {
+      "sourceHash": "6d35dd65046d7633824867470f051411b6013e6a7be45a3677d6f2e4862b4cfd",
+      "state": "machine-cross-checked",
+      "text": "No se ha podido iniciar el relé."
+    },
+    "dashboard.link.edit": {
+      "sourceHash": "464c4ffd019e1e9691dcf0537c797353ef2b1c1d4833d3d463e5b74ae4547344",
+      "state": "machine-cross-checked",
+      "text": "Editar"
+    },
+    "dashboard.link.edit_configure": {
+      "sourceHash": "d75a23f2180bbf4b16cdb8deab9099a4a9aec9709e122e21c211e080d535ca91",
+      "state": "machine-cross-checked",
+      "text": "Editar en la pestaña Configure"
+    },
+    "dashboard.link.open": {
+      "sourceHash": "ed077f3d8125d60dca1979c7133601bd187d47c73ed9975028f677e49e709942",
+      "state": "machine-cross-checked",
+      "text": "Abrir"
+    },
+    "dashboard.link.open_install": {
+      "sourceHash": "f5ed36e35c39c2b351302d18126528be7471de98ed623c0018f0881a2b9426a5",
+      "state": "machine-cross-checked",
+      "text": "Abrir en la pestaña Install"
+    },
+    "dashboard.live.navigate": {
+      "sourceHash": "5ea5fbe811dbe99a3f3d0d79704d2f54194692b349f2d682bd6fb86a9cbf8f12",
+      "state": "machine-cross-checked",
+      "text": "Navegar"
+    },
+    "dashboard.live.screen_brightness": {
+      "sourceHash": "694cb749771a50b425951ffbdc7b070db7350d4280f98d321ef946b6a7292a68",
+      "state": "machine-cross-checked",
+      "text": "Brillo de la pantalla"
+    },
+    "dashboard.live.volume": {
+      "sourceHash": "b10fb966d72063f534774c7c6b404f4decca76ac283093ae65fef78d07c1b75e",
+      "state": "machine-cross-checked",
+      "text": "Volumen"
+    },
+    "dashboard.live_state.note": {
+      "sourceHash": "49b161284bad6dc17436604196248af6d170ad4534da706a03dfcfdbcf4c994f",
+      "state": "machine-cross-checked",
+      "text": "Lo que muestran actualmente las entidades de control de Home Assistant."
+    },
+    "dashboard.noisy.aggregate_only": {
+      "sourceHash": "f774453f78cf65bf8e652f1c7a59ef1e7d41c40e99af8e5a796dc35780f3cf92",
+      "state": "machine-cross-checked",
+      "text": "Solo datos agregados: habilita el aprendizaje automático de entidades para identificar las contribuyentes"
+    },
+    "dashboard.noisy.none": {
+      "sourceHash": "96cf06a322c649c2843d4f4fb795866cb90f7235a115a8c95fd402f5ec6f6f8b",
+      "state": "machine-cross-checked",
+      "text": "No hay entidades ruidosas en esta muestra"
+    },
+    "dashboard.noisy.payload": {
+      "sourceHash": "99733344956dde482674bdb7ee44a5a2f203569c8a0a5c7a10284f97cd5d65c8",
+      "state": "machine-cross-checked",
+      "text": "Carga útil"
+    },
+    "dashboard.noisy.rate": {
+      "sourceHash": "45b63ffd01af7b9ce4da03810274e580fcc47f382dc476dc50089006feb8de89",
+      "state": "machine-cross-checked",
+      "text": "Tasa"
+    },
+    "dashboard.noisy.top_entities": {
+      "sourceHash": "0689cb4c56fa65718de91eaf61efdc8ec712b2f74c43f211aa556b360e85606e",
+      "state": "machine-cross-checked",
+      "text": "Entidades principales"
+    },
+    "dashboard.open_in_ha.title": {
+      "sourceHash": "c1ebd660a6252ac9e9206b75eb08e9460c1207531d23e63f3f8cc137463f61c6",
+      "state": "machine-cross-checked",
+      "text": "Abrir Home Assistant (la página del dispositivo de este panel, si se conoce)"
+    },
+    "dashboard.performance.clock_max": {
+      "sourceHash": "9a07342349be9dfe51fc636bd4625e153fe6459901f3e215591febddf5381f6a",
+      "state": "machine-cross-checked",
+      "text": "/ {gigahertz} GHz máx."
+    },
+    "dashboard.performance.cpu_clock": {
+      "sourceHash": "7cf7929922571f9bf33bd65763d4d4288423e524b7f516a9ba72a7c692c6bc5c",
+      "state": "machine-cross-checked",
+      "text": "Frecuencia de CPU"
+    },
+    "dashboard.performance.load_average": {
+      "sourceHash": "a20ac7d5a5f4c5023c42f68c89b941e681b5758606047a5381f59ef6a19c6640",
+      "state": "machine-cross-checked",
+      "text": "Carga media"
+    },
+    "dashboard.performance.peak_core": {
+      "sourceHash": "0f520be08837255e92703ad37a957c7f2f582b4ac22156400a7c3b48853b6020",
+      "state": "machine-cross-checked",
+      "text": "pico de núcleo {percent}%"
+    },
+    "dashboard.performance.samples_note": {
+      "sourceHash": "df85a9a8e2c841f096ebb91613aef0a0c812609d2534a6256da3402fb372dd9e",
+      "state": "machine-cross-checked",
+      "text": "Solo se toman muestras mientras esta página está abierta."
+    },
+    "dashboard.performance.temperature": {
+      "sourceHash": "b958ce8b871ab36b3ceee0e0f012b6182962b2db7926be0a670149f9fbd00b84",
+      "state": "machine-cross-checked",
+      "text": "Temperatura"
+    },
+    "dashboard.performance.waiting_sample": {
+      "sourceHash": "dffae8436eb7788dacba3c4da5de726a409d00c04c17b81db67f588ab254c208",
+      "state": "machine-cross-checked",
+      "text": "esperando una muestra"
+    },
+    "dashboard.processes.rank_by": {
+      "sourceHash": "eb1481d26fa9a8d63a0d91f51996f0572a27dce5551463d1f35c3dcec50dc008",
+      "state": "machine-cross-checked",
+      "text": "Ordenar procesos por"
+    },
+    "dashboard.profile_note.link": {
+      "sourceHash": "c2457fe25809af9d4d7379f54ca3b44cfad650a87647ff83d8f7e27c36a8e1a6",
+      "state": "machine-cross-checked",
+      "text": "perfil del dispositivo"
+    },
+    "dashboard.profile_note.prefix": {
+      "sourceHash": "6c19166398f5f8511969fe7145afb7da147b9c1a60194b35013e4dcf789606c1",
+      "state": "machine-cross-checked",
+      "text": "Valores declarados por el"
+    },
+    "dashboard.proximity.adapting": {
+      "sourceHash": "5ca43fc74da45ad9124fbe82cb4e5c83990e956de60ab7d6e7aa63d370f7ee9a",
+      "state": "machine-cross-checked",
+      "text": "Adaptándose con seguridad a un cambio en la señal de proximidad"
+    },
+    "dashboard.proximity.checking_previous_range": {
+      "sourceHash": "8d149efcb95a9578c5e158fd8a4d47127baa8205ce8152bc0e3e4c44d0aad38f",
+      "state": "machine-cross-checked",
+      "text": "Comparando el intervalo aprendido anteriormente con las lecturas actuales"
+    },
+    "dashboard.proximity.learning_baseline": {
+      "sourceHash": "594eb724417419650ee78b54e4ec36f2f63982f7d3ed747dd4779caa2821584b",
+      "state": "machine-cross-checked",
+      "text": "Aprendiendo la referencia con la habitación despejada"
+    },
+    "dashboard.proximity.learning_gestures": {
+      "sourceHash": "bcfb4fefb4dc05108ad8035b32a4497a4dcfe27d324c457a8095d64a40494080",
+      "state": "machine-cross-checked",
+      "text": "Detección de presencia lista; aprendiendo gestos deliberados de activación"
+    },
+    "dashboard.proximity.mode.binary": {
+      "sourceHash": "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd",
+      "state": "machine-cross-checked",
+      "text": "binario"
+    },
+    "dashboard.proximity.mode.graded": {
+      "sourceHash": "a20f6f9419f532136fc52d02e13fb6e194821d6289cbaf84d6e0884b4240d0da",
+      "state": "machine-cross-checked",
+      "text": "por niveles"
+    },
+    "dashboard.proximity.no_source": {
+      "sourceHash": "c1e1450f923c38e6346abb88bb8ea3d019c03887b79b3e25f066f7ac88abdd9d",
+      "state": "machine-cross-checked",
+      "text": "Sin fuente de proximidad"
+    },
+    "dashboard.proximity.ready": {
+      "sourceHash": "d1ae4383e215c98ae7a375b970ec44769975efe65f08e79ad8df42b8276c9a02",
+      "state": "machine-cross-checked",
+      "text": "Listo · {mode} · normalizado a 0–100"
+    },
+    "dashboard.proximity.waiting_first_reading": {
+      "sourceHash": "4349215e0cbf815aa0d54ea8d5e716471830b4e205a8a611e69a39fb64db31f9",
+      "state": "machine-cross-checked",
+      "text": "Esperando la primera lectura fiable de la fuente de proximidad"
+    },
+    "dashboard.proximity.waiting_movements": {
+      "sourceHash": "37561a40be70db6f873dad23a1c28094bc4e75e75343da6e517631ffe9d495de",
+      "state": "machine-cross-checked",
+      "text": "Referencia aprendida; esperando movimientos completos de acercamiento y alejamiento"
+    },
+    "dashboard.proximity.waiting_readings": {
+      "sourceHash": "b2803f401b72d6508d6f33e032bfaeee7cb22ae465701f8ff614d8dcadf427c9",
+      "state": "machine-cross-checked",
+      "text": "Esperando lecturas de proximidad fiables"
+    },
+    "dashboard.remote_webview.hardened_unavailable": {
+      "sourceHash": "c033a99023a02ded9ca4812bb3edd59772517da8470986440a9fd03cebf32722",
+      "state": "machine-cross-checked",
+      "text": "No disponible mientras el modo Hardened esté habilitado"
+    },
+    "dashboard.renderer.core_percent": {
+      "sourceHash": "6768dbdc201c72ab2e61e69193ae0470f855a0171afd83ed0cc67d1c1fbcc6cc",
+      "state": "machine-cross-checked",
+      "text": "{percent}% de un núcleo"
+    },
+    "dashboard.renderer.cpu_proxy": {
+      "sourceHash": "9276564466d4e271f4eaf21eb582ed78de48fef19518f45eb4e794b7d39457b5",
+      "state": "machine-cross-checked",
+      "text": "proxy de CPU del renderizador"
+    },
+    "dashboard.renderer.external_proxy_header": {
+      "sourceHash": "142ad8f9ab851fd480e30b65870c4d52f4023a9ff15d3c16d9f25fd957fd7dca",
+      "state": "machine-cross-checked",
+      "text": "· proxy del renderizador externo"
+    },
+    "dashboard.renderer.janky_percent": {
+      "sourceHash": "279f2498764ab90aa58b8c0b681a863717d01ebd297d0c1c4b4cd40b0ea3ca18",
+      "state": "machine-cross-checked",
+      "text": "{percent}% trabado"
+    },
+    "dashboard.renderer.main_thread": {
+      "sourceHash": "88cd2baeff4fc9e88ddf4f6ae14d884e57d5cc91439b491b91998f78562e8fcc",
+      "state": "machine-cross-checked",
+      "text": "Hilo principal del panel de control"
+    },
+    "dashboard.renderer.measurement_mode": {
+      "sourceHash": "b842361bbe8802dfd47d23606d2c8d08ecc7a9201e7bd70e5cce3fe1fe4936dc",
+      "state": "machine-cross-checked",
+      "text": "Modo de medición"
+    },
+    "dashboard.renderer.measuring": {
+      "sourceHash": "fc02d55f1c4dad794482b63798f7ae8bed9e7cd31ba33ad589c2319545e7cbf8",
+      "state": "machine-cross-checked",
+      "text": "midiendo {package}"
+    },
+    "dashboard.renderer.needs_root": {
+      "sourceHash": "0dc334c498e2303d2b20e5ab15cae1132dfc68f974d4776c5e0b37a6fbcde8c7",
+      "state": "machine-cross-checked",
+      "text": "El proxy del renderizador externo requiere acceso root o auxiliar"
+    },
+    "dashboard.renderer.not_tap_latency": {
+      "sourceHash": "ec9aba9dc6dc6a4c5fcc9c929755599495a257b3fbe998d6d00455cc018f2014",
+      "state": "machine-cross-checked",
+      "text": "· no es la latencia real de pulsación"
+    },
+    "dashboard.renderer.observer_unavailable": {
+      "sourceHash": "8653ed9c49ee0b6f2beb9b5ddca9aa0a7c64442bc9df96f3d71d3d6db508d7d5",
+      "state": "machine-cross-checked",
+      "text": "observador integrado en tiempo real no disponible"
+    },
+    "dashboard.renderer.observer_unavailable_header": {
+      "sourceHash": "cb6842599066a6e1d05048efc7b8c5ac2db2dd170635553634726905fb7eaa0e",
+      "state": "machine-cross-checked",
+      "text": "· observador integrado no disponible"
+    },
+    "dashboard.renderer.observer_unavailable_title": {
+      "sourceHash": "fcdc07cffdb92deff86270ed07f94bc4504a4969c38ca8b4a3fcf82041a7508c",
+      "state": "machine-cross-checked",
+      "text": "El renderizador integrado está activo sin su observador del navegador en tiempo real"
+    },
+    "dashboard.renderer.reload_to_retry": {
+      "sourceHash": "24aba4e861f684023d646a5df22b12afdd988d412cc7046a7a421bccf971e8c0",
+      "state": "machine-cross-checked",
+      "text": "recarga el panel de control integrado para reintentarlo"
+    },
+    "dashboard.renderer.rendering_proxy": {
+      "sourceHash": "696607e035ec0df4c41b9db11b9935bb9187ddc4192ba3971e679125cd492737",
+      "state": "machine-cross-checked",
+      "text": "Proxy de renderizado"
+    },
+    "dashboard.renderer.restore": {
+      "sourceHash": "f258043234261a8488de3c0e6dbc565e7754e4cfd6459adcf9c4911c39c91edb",
+      "state": "machine-cross-checked",
+      "text": "Cómo restaurarlo"
+    },
+    "dashboard.renderer.saturated": {
+      "sourceHash": "a96f97026f374598dc5b4aacedeb71dd4aada7a5f542f85bea88b82473f5888b",
+      "state": "machine-cross-checked",
+      "text": "· 100% significa que el hilo de renderizado está saturado"
+    },
+    "dashboard.renderer.update_webview": {
+      "sourceHash": "dbb0bcea10f08da799406a5c42b214d3856226d02b212f6d40c4f6a89cb170b7",
+      "state": "machine-cross-checked",
+      "text": "· si persiste, actualiza WebView en el panel"
+    },
+    "dashboard.renderer.worst_frame": {
+      "sourceHash": "1c7e173a5eb667229d4ddb569eea0ae01ed6c548ff8b57b523f460442309100f",
+      "state": "machine-cross-checked",
+      "text": "· peor fotograma: {milliseconds} ms"
+    },
+    "dashboard.responsiveness.blocking_detail": {
+      "sourceHash": "d28cf5ded7ab22eeb0532ec66d0277174618b2d7e244331d343879bbe50ae841",
+      "state": "machine-cross-checked",
+      "text": "· p95 {p95} ms/s · fotograma más largo: {longest} ms"
+    },
+    "dashboard.responsiveness.cold_seconds": {
+      "sourceHash": "1467955b0b79ab836c5eb1dec40bc78511f0a1a918b3bf0eec69838e0a9699bf",
+      "state": "machine-cross-checked",
+      "text": "{seconds}s frío"
+    },
+    "dashboard.responsiveness.confidence": {
+      "sourceHash": "d94b9dd89d72a86ec7167d293a28a3f3a768d8ff93ce6a2e5f918030b3b4f512",
+      "state": "machine-cross-checked",
+      "text": "· confianza {level}"
+    },
+    "dashboard.responsiveness.heap_churn": {
+      "sourceHash": "842308abc8a73d056c45c4a0f01d1ac06217ee529e0adf91c77f9bfb38be6f7d",
+      "state": "machine-cross-checked",
+      "text": "· ciclos de heap/OOM"
+    },
+    "dashboard.responsiveness.interact_to_measure": {
+      "sourceHash": "1df8b14402ffb0eed977a5e266230137209f970a710064dfa25ece185d32e357",
+      "state": "machine-cross-checked",
+      "text": "interactúa con el panel de control para medir"
+    },
+    "dashboard.responsiveness.interaction": {
+      "sourceHash": "167d4b09d014f218c42abf5ebb397a2fc819401fe709223fbd729f1f8e9e790e",
+      "state": "machine-cross-checked",
+      "text": "interacción"
+    },
+    "dashboard.responsiveness.launch_ready": {
+      "sourceHash": "8d1041b457f9c11bd8a8635d0b643fb818596c93a80412a87ce677ab109f01c4",
+      "state": "machine-cross-checked",
+      "text": "· inicio → panel de control listo"
+    },
+    "dashboard.responsiveness.likely_cause": {
+      "sourceHash": "37df288399804af4406547013dfc6e21fb1db3a675036b45bc6dd21883b73449",
+      "state": "machine-cross-checked",
+      "text": "Causa probable"
+    },
+    "dashboard.responsiveness.live_instrumentation": {
+      "sourceHash": "35eb2b85e821492b6e0cc1cca1971fe78a491f04a1204a483f15f0500e45d0fb",
+      "state": "machine-cross-checked",
+      "text": "· instrumentación integrada en tiempo real"
+    },
+    "dashboard.responsiveness.main_blocked": {
+      "sourceHash": "b84651e67134ecde0463e65385615b773465a325921910113cb2f8b5a0757842",
+      "state": "machine-cross-checked",
+      "text": "hilo principal bloqueado"
+    },
+    "dashboard.responsiveness.main_thread_blocking": {
+      "sourceHash": "18da563e4cb2b6f88024f77b0b3be5eef18bb2531d435872feee022f5160d1c2",
+      "state": "machine-cross-checked",
+      "text": "Bloqueo del hilo principal"
+    },
+    "dashboard.responsiveness.reload_seconds": {
+      "sourceHash": "d530dc9cb597968d5d0a680d40db823d377490d0b95825faf6fa34c31b1e9f34",
+      "state": "machine-cross-checked",
+      "text": "· recarga: {seconds}s"
+    },
+    "dashboard.responsiveness.renderer_reloads": {
+      "sourceHash": "6de68adfd9cd8d609e785bb92ce376b13cc94c28eb884e377cf56003c3619f22",
+      "state": "machine-cross-checked",
+      "text": "Recargas del renderizador (24 h)"
+    },
+    "dashboard.responsiveness.state_updates": {
+      "sourceHash": "772d0aa06c819550996c834f637c629220ac691a64791fb8a03a06e98b3f0034",
+      "state": "machine-cross-checked",
+      "text": "actualizaciones de estado"
+    },
+    "dashboard.responsiveness.tap_breakdown": {
+      "sourceHash": "3da84bb8f3d0181768aa5e7d55fdd0f22e23288206ceef41ce02701f685b4245",
+      "state": "machine-cross-checked",
+      "text": "· peor: {worst} ms = entrada {input} + gestor {handler} + presentación {presentation}"
+    },
+    "dashboard.responsiveness.tap_percentiles": {
+      "sourceHash": "ec87d474ada79458ab64a148fa4f119f3f4c88c493d242cedea29bd186a6391e",
+      "state": "machine-cross-checked",
+      "text": "~p50 {p50} ms / ~p95 {p95} ms"
+    },
+    "dashboard.responsiveness.tap_response": {
+      "sourceHash": "584a10d446b38404d69cef0bd3dcbdfbea875bf6665928badbcd9add05ccdf90",
+      "state": "machine-cross-checked",
+      "text": "Respuesta al toque"
+    },
+    "dashboard.responsiveness.time_to_interactive": {
+      "sourceHash": "081eb4e83635e8d5c696b5c24b567ba6cf7fc01ce417cb9f94844ff01504ebbc",
+      "state": "machine-cross-checked",
+      "text": "Tiempo hasta poder interactuar"
+    },
+    "dashboard.reveal.title": {
+      "sourceHash": "b6976c2d96968d679b621136f2b8b300db6db5d6fadfaa0961e2bad94841fb4b",
+      "state": "machine-cross-checked",
+      "text": "Mostrar u ocultar los valores difuminados para editarlos; se difuminan por defecto para que las capturas no los revelen"
+    },
+    "dashboard.runtime.audio_active": {
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked",
+      "text": "activo"
+    },
+    "dashboard.runtime.audio_closed": {
+      "sourceHash": "c3eefb58d7c42440a9d4abec51d629544d635a6d936ff3c4d3fca96d611b3cf3",
+      "state": "machine-cross-checked",
+      "text": "cerrado"
+    },
+    "dashboard.runtime.audio_failed": {
+      "sourceHash": "5d28a90f4498a81461efbaf6f628a19d9778390bb5c81a393dd936181cc3d826",
+      "state": "machine-cross-checked",
+      "text": "fallido"
+    },
+    "dashboard.runtime.audio_failed_detail": {
+      "sourceHash": "8ee1e374afa8721ba99fc4a562e3cca69e0f97cae7c7a9729c45a48a7f008356",
+      "state": "machine-cross-checked",
+      "text": "fallido · {detail}"
+    },
+    "dashboard.runtime.audio_idle": {
+      "sourceHash": "4fb62348858c2f6fbd6db27fa4c11edd8559119869d1034e2bd3390fd92b1a04",
+      "state": "machine-cross-checked",
+      "text": "inactivo"
+    },
+    "dashboard.runtime.audio_queued": {
+      "sourceHash": "d36be6494248ee06ac18f38ea1119dfe4699fdcfcbbcc30a2e4f1ccbce68dfac",
+      "state": "machine-cross-checked",
+      "text": "en cola"
+    },
     "dashboard.runtime.camera.degraded": {
-      "text": "camera gave up after {count} failures ({fault}); {stream}",
       "sourceHash": "cb1a216be1393d32e3a40b86a480b4537b945f13af5efede61523484aeb2e902",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "la cámara desistió tras {count} fallos ({fault}); {stream}"
     },
     "dashboard.runtime.camera.idle": {
-      "text": "camera closed; nobody is watching; {stream}",
       "sourceHash": "15b36d156c5ed4bfe4fcf932476fa8aac67d83652e853cbca0e390c2a20a6427",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara cerrada; nadie la está viendo; {stream}"
     },
     "dashboard.runtime.camera.live_many": {
-      "text": "camera open for {count} clients; {stream}",
       "sourceHash": "6757a9380381400647c2f5c11eb875fd7d33ce295ac47a4aa76c33c8efb2cfeb",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara abierta para {count} clientes; {stream}"
     },
     "dashboard.runtime.camera.live_many_streaming": {
-      "text": "camera open for {count} clients ({streaming} streaming); {stream}",
       "sourceHash": "14dab5a8d2cb9593b30a4f8333b3244357e2fb96b8c38d182c10857186cd022f",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara abierta para {count} clientes ({streaming} transmitiendo); {stream}"
     },
     "dashboard.runtime.camera.live_one": {
-      "text": "camera open for {count} client; {stream}",
       "sourceHash": "4a79067050eb9945d3eb75a372dd6866f78196d9218d51b4b57fa0ff1813ff76",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara abierta para {count} cliente; {stream}"
     },
     "dashboard.runtime.camera.live_one_streaming": {
-      "text": "camera open for {count} client ({streaming} streaming); {stream}",
       "sourceHash": "35ea89d501f3ff4087ef7db859fa6fce0e6cc3a97b3e6f4f2877660b8402db7a",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara abierta para {count} cliente ({streaming} transmitiendo); {stream}"
     },
     "dashboard.runtime.camera.off": {
-      "text": "camera off",
       "sourceHash": "4675ebe469762dc534555484b1592e59367d8e11e2a5c20e53651a36838b4786",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara apagada"
     },
     "dashboard.runtime.camera.opening": {
-      "text": "camera opening; {stream}",
       "sourceHash": "9d2e38cfe58a6393e51ee6baceed4200b3cc3179b8dd949b6fc42a1e36a4ad28",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "abriendo la cámara; {stream}"
     },
     "dashboard.runtime.camera.permission_needed": {
-      "text": "camera on, but Android has not granted the permission",
       "sourceHash": "37df57d9ed8efdbd533eb9c3462692cfd2694a5e1af230434a548ff55bea397a",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "cámara encendida, pero Android no ha concedido el permiso"
     },
     "dashboard.runtime.camera.stopping": {
-      "text": "camera stopping",
       "sourceHash": "d1070e22ba353e86ba99eb889e6bbb7cbdf3af999209557c7757fa840cd71d64",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "deteniendo la cámara"
     },
     "dashboard.runtime.camera.stream_not_listening": {
-      "text": "stream not listening",
       "sourceHash": "e3a40cd0634618399becf4bea497de031a554cc4e1db0324c6af3e5e3092e0d8",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "transmisión no disponible"
     },
     "dashboard.runtime.camera.stream_port": {
-      "text": "stream listening on port {port}",
       "sourceHash": "83c1bf9b7ba534ecc1a6dbea0551e81ffd3a09abdb1ec9e48b9eac9f4a7511ab",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "transmisión disponible en el puerto {port}"
     },
     "dashboard.runtime.camera.stream_url": {
-      "text": "stream at {url} (not for this panel's own dashboard)",
       "sourceHash": "d3f3db923f7d17d1a473967e4cf23654596c890df0926f8f8fff90363e68dffd",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "transmisión en {url} (no es para el panel de control de este dispositivo)"
+    },
+    "dashboard.runtime.convergence": {
+      "sourceHash": "bc3a794f1545af2f3efcf5a5edb88b1889648fefb0a843e152e1a603f92d21b7",
+      "state": "machine-cross-checked",
+      "text": "{channels} canales · {dirty} con cambios · {inFlight} en curso · {unknown} desconocidos · confirm. {successes}/{failures} · en espera {pending}"
     },
     "dashboard.runtime.database.on_disk": {
-      "text": "{bytes} on disk",
       "sourceHash": "76ece6574f88f5736843495cc337b68ae23178a21b35fbe4fb8810470bd85081",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{bytes} en disco"
     },
     "dashboard.runtime.database.schema": {
-      "text": "schema {version}",
       "sourceHash": "34e4f2a16fb4af8c88576f4640e68479bab5729512058c2441cf8796a064e4b3",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "esquema {version}"
     },
     "dashboard.runtime.database.used": {
-      "text": "{bytes} used",
       "sourceHash": "b9ec98fe463481d27be6c8fa0a11e0d830b8a9dfac2f593dce1045dff7ab9a72",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{bytes} usados"
+    },
+    "dashboard.runtime.disabled": {
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked",
+      "text": "deshabilitado"
+    },
+    "dashboard.runtime.external_renderer_unobserved": {
+      "sourceHash": "395098244943c3672f1f291a6bf053b4bcb5dd7f85d71e98886f2ef94a206a26",
+      "state": "machine-cross-checked",
+      "text": "renderizador externo · ha-paneld no detecta la conexión con Home Assistant"
+    },
+    "dashboard.runtime.ha_connection_lost": {
+      "sourceHash": "fbe3bc3f09bc50985c450238be89be3c60b2291e769203da0f8865d147a0cc36",
+      "state": "machine-cross-checked",
+      "text": "conexión perdida"
+    },
+    "dashboard.runtime.ha_events_refused": {
+      "sourceHash": "cbd643272d6e1a58b031a7fabd38d256b9f99cb469f80990e5f286fde3c55b32",
+      "state": "machine-cross-checked",
+      "text": "supervisando; Home Assistant no permite eventos del ciclo de vida de WebSocket para este usuario"
+    },
+    "dashboard.runtime.ha_network_healthy": {
+      "sourceHash": "bc9986678384fbf5e9ce507e7d1a91d76e34b08bf58a8a20eb366b0982245703",
+      "state": "machine-cross-checked",
+      "text": "en buen estado; {evidence}"
+    },
+    "dashboard.runtime.ha_network_not_measured": {
+      "sourceHash": "0cecb6edb9d044c440671a9fab915ce705b495fd6d898e9d7db9bb02981fbb67",
+      "state": "machine-cross-checked",
+      "text": "sin medir; este panel no mantiene ningún socket autenticado de Home Assistant"
+    },
+    "dashboard.runtime.ha_network_severe": {
+      "sourceHash": "64f356940f9a3373feecedc98764165f8b1c405307b52a5d1cd7d0e2616e7142",
+      "state": "machine-cross-checked",
+      "text": "degradación grave; {evidence}"
+    },
+    "dashboard.runtime.ha_network_slow": {
+      "sourceHash": "975ecd4b92faa7b52cbd625d366ce7014dd07f9808b9b12d863175d1338675c3",
+      "state": "machine-cross-checked",
+      "text": "lenta; {evidence}"
+    },
+    "dashboard.runtime.ha_watching": {
+      "sourceHash": "19bda4aa00eaf9a162fb92bafdc63160190c0c8387687bb8b23027e7bb886ff6",
+      "state": "machine-cross-checked",
+      "text": "supervisando"
     },
     "dashboard.runtime.mqtt.age_never": {
-      "text": "never",
       "sourceHash": "6497e4b3d7bed16979a343a7db4efa6d57725529f5ac3cec45c1f08fabcbdafc",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "nunca"
     },
     "dashboard.runtime.mqtt.age_seconds_ago": {
-      "text": "{seconds}s ago",
       "sourceHash": "b5907e4c12962ee59cf2dcdc0690ca8f736d7cdc77f5c546cb75fc84d2781931",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "hace {seconds}s"
     },
     "dashboard.runtime.mqtt.auth_retry": {
-      "text": "{state} · rejects {rejects} · attempt {attempt} · next {next}",
       "sourceHash": "ab27a09ae2f9439f008c5f90250464af8c2752e203041bb4ac35e75eb6b589fd",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{state} · rechazos {rejects} · intento {attempt} · próximo {next}"
     },
     "dashboard.runtime.mqtt.config_error": {
-      "text": "config-error · invalid or unsupported broker URL",
       "sourceHash": "2b4df44055ce98c13abe97370dae68b9b8c5064008dd177455388e79e61ffc9d",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "error de configuración · URL del bróker no válida o incompatible"
     },
     "dashboard.runtime.mqtt.family_automatic": {
-      "text": "Automatic (next {family})",
       "sourceHash": "edada581531450033adad40e605a3dfd6211bdbef79fb5159ca89c7b857ec1ab",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "Automático (siguiente: {family})"
     },
     "dashboard.runtime.mqtt.family_force_ipv4": {
-      "text": "Force IPv4",
       "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "Forzar IPv4"
     },
     "dashboard.runtime.mqtt.family_prefer_ipv4": {
-      "text": "Prefer IPv4",
       "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "Preferir IPv4"
     },
     "dashboard.runtime.mqtt.seconds": {
-      "text": "{seconds}s",
       "sourceHash": "5307d20dc7c46cc7771e80a1d10417915bcf84ff57f50a15e3f7aea5d1661ed6",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{seconds} segundos"
     },
     "dashboard.runtime.mqtt.state.announcing": {
-      "text": "announcing",
       "sourceHash": "67209cabee758ad203e5ea33eae67637767e65aca1a440c111ac283aed2fc3d1",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "anunciando"
     },
     "dashboard.runtime.mqtt.state.auth_failed": {
-      "text": "auth-failed",
       "sourceHash": "1d75377d4dbd78456c27d8a187ae15d24bc4123a82b83de0596323e0b9525139",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "autenticación fallida"
     },
     "dashboard.runtime.mqtt.state.auth_retrying": {
-      "text": "auth-retrying",
       "sourceHash": "a2653bd8b474cef91ad8f81e15e8d1b10bf8056049c83ac62b835e9b85710403",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "reintentando autenticación"
     },
     "dashboard.runtime.mqtt.state.connected": {
-      "text": "connected",
       "sourceHash": "12a7bd86e0a430327620a0e2274d0f6f091c783b21c169636ef8997f9f1da76a",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "conectado"
     },
     "dashboard.runtime.mqtt.state.connecting": {
-      "text": "connecting",
       "sourceHash": "3d6df245178e60766e3478a821dd81b9702e3e4d4e1319d5484b0351f29c0149",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "conectando"
     },
     "dashboard.runtime.mqtt.state.disconnected": {
-      "text": "disconnected",
       "sourceHash": "d0cb8d28fd8ddcf3c8bc194941b24815924ef438f9650ad2c41bbc01806d67d8",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "desconectado"
     },
     "dashboard.runtime.mqtt.state.discovering": {
-      "text": "discovering",
       "sourceHash": "346e887d310fe3193dc94b94facaab54dea5933f8d593dcc4c67d9000dd5619d",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "descubriendo"
     },
     "dashboard.runtime.mqtt.state.unreachable": {
-      "text": "unreachable",
       "sourceHash": "5e6017027437e595ec72adee0718d78f092cddaa8d31048c9d5ba2ed647ded5e",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "inalcanzable"
     },
     "dashboard.runtime.mqtt.status": {
-      "text": "{state} · {transport} · last-ok {lastOk} · last-auth {lastAuth} · {auth} · family {family}",
       "sourceHash": "21b4a9b385928557b8618f562b0b77a974a159b081213524f7a4b24cee066ebe",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{state} · {transport} · último éxito {lastOk} · última autenticación {lastAuth} · {auth} · familia {family}"
     },
     "dashboard.runtime.renderer.admitted_age": {
-      "text": "{status} · admitted {age} ago",
       "sourceHash": "92fd22f641da39cb2efa0269be095d0282a1735efec48034da755a27035e0697",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "{status} · admitido hace {age}"
     },
     "dashboard.runtime.renderer.admitted_cached": {
-      "text": "admitted on a previously verified Home Assistant version; the dashboard has not connected",
       "sourceHash": "7e85c23b29d5ad7c28dabb3f8c4261b86e848c31a64e911bce5b10fa680240bf",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "admitido con una versión de Home Assistant verificada anteriormente; el panel de control no se ha conectado"
     },
     "dashboard.runtime.renderer.admitted_waiting": {
-      "text": "admitted; the dashboard has not connected yet",
       "sourceHash": "89c8b01a2e40da3b01620c913744f4c12b8c5669544bf736dc0d73d7b1ca76d7",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "admitido; el panel de control aún no se ha conectado"
     },
     "dashboard.runtime.renderer.builtin": {
-      "text": "built-in · {summary}",
       "sourceHash": "700d74f3da30748668edfc3425baf5195000846b62bc7b57ee43d32b254af6fd",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "integrado · {summary}"
     },
     "dashboard.runtime.renderer.checking": {
-      "text": "checking Home Assistant compatibility",
       "sourceHash": "aae85d745feb6aae58da37322c34e07a283d37ae30f9a8d487e0f2ceca009c97",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "comprobando compatibilidad con Home Assistant"
     },
     "dashboard.runtime.renderer.rendered": {
-      "text": "dashboard rendered",
       "sourceHash": "364760458d97955decc536899d96d5ec91067e214a8b461675bc0def3e5e3221",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "panel de control renderizado"
     },
     "dashboard.runtime.renderer.rendered_cached": {
-      "text": "dashboard rendered; admitted on a previously verified Home Assistant version",
       "sourceHash": "2077a2931c2fa32a27d8d8a136b7a0e5367c4007d0b7df59b559e10e337235d4",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "panel de control renderizado; admitido con una versión de Home Assistant verificada anteriormente"
     },
     "dashboard.runtime.renderer.theme_override_suffix": {
-      "text": "; an explicit Home Assistant theme is overriding this panel's Dashboard theme",
       "sourceHash": "48b00c7c6d33ce7186244ebdc2343d2c5d58a9156ebf9276d8c7e3bbbc5cb28a",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "; un tema explícito de Home Assistant prevalece sobre el tema del panel de control de este dispositivo"
     },
     "dashboard.runtime.renderer.unobserved": {
-      "text": "no admission observed for the current renderer",
       "sourceHash": "b65f8770c0d567f700d2f20e7e522d6afeb982ebe8210b632c41f937c7f5d599",
-      "state": "english-fallback"
+      "state": "machine-cross-checked",
+      "text": "no se ha detectado admisión para el renderizador actual"
+    },
+    "dashboard.runtime.security_hardened": {
+      "sourceHash": "b227adf21bf39d75dc6caf09d98bb407d924a63fb17dfc7c83d9e1bcba6aaaa6",
+      "state": "machine-cross-checked",
+      "text": "Reforzado · las acciones remotas de alto impacto requieren aprobación física en el panel"
+    },
+    "dashboard.runtime.security_relaxed": {
+      "sourceHash": "43ddd4ca77f3867dc868038ee29f599d6827cea28b5d00e7ad1827fa9373b76d",
+      "state": "machine-cross-checked",
+      "text": "Relajado"
+    },
+    "dashboard.screenshot.alt": {
+      "sourceHash": "3fd1aece0d335af6c5ec4a5aa8f59b5d74fe77ce9035967bd8de4c2572c851fa",
+      "state": "machine-cross-checked",
+      "text": "captura del panel"
+    },
+    "dashboard.screenshot.capture_title": {
+      "sourceHash": "a2ac11d561b3a135e493d0fd108c0a6115d94c5d8e927b282bebd43b88420d21",
+      "state": "machine-cross-checked",
+      "text": "Hacer una captura nueva"
+    },
+    "dashboard.screenshot.click_to_tap": {
+      "sourceHash": "798d2b91efcce21e384905f590c17f91f0f161eda13d1ef0ab00ba17803cc964",
+      "state": "machine-cross-checked",
+      "text": "Haz clic en la captura para tocar el panel."
+    },
+    "dashboard.screenshot.close": {
+      "sourceHash": "7d9eb7acb13e24625c404401d8e88b2350e32162455885f18276cf802f7701ed",
+      "state": "machine-cross-checked",
+      "text": "Cerrar"
+    },
+    "dashboard.screenshot.dialog_title": {
+      "sourceHash": "de8570d7ef53af6a3ef06f02b50365c44e6c65a7a587c9d8413fddbdc6ea311d",
+      "state": "machine-cross-checked",
+      "text": "Captura · panel en directo"
+    },
+    "dashboard.screenshot.image_alt": {
+      "sourceHash": "7dc2dcbafd294662468376b32ab17dace115dee6d8468a36b67ddf2908f2153b",
+      "state": "machine-cross-checked",
+      "text": "Captura del panel en directo"
+    },
+    "dashboard.screenshot.open_full_size": {
+      "sourceHash": "bf6a692bef2ec013e93e8e3c01b0b9efa2948c7f53f74c7763af1cef20a61e6b",
+      "state": "machine-cross-checked",
+      "text": "Abrir a tamaño completo en otra ventana"
+    },
+    "dashboard.screenshot.outcome_unknown_capturing": {
+      "sourceHash": "8a1001c74f3fad950f73b7722ab479b287241bfc9a21e7d0664cd637e1a0a47f",
+      "state": "machine-cross-checked",
+      "text": "Resultado del toque desconocido; capturando el panel actual…"
+    },
+    "dashboard.screenshot.outcome_unknown_refreshed": {
+      "sourceHash": "68460677644442f623eb295699778d16b0d26c48ac03daec2b0017fe85e1cfce",
+      "state": "machine-cross-checked",
+      "text": "Resultado del toque desconocido; se actualizó la captura actual."
+    },
+    "dashboard.screenshot.outcome_unknown_update_failed": {
+      "sourceHash": "c363b9fdf8b38dca2adf9a9b62aee33a355abb8b1e2f247c429918eb7db0e931",
+      "state": "machine-cross-checked",
+      "text": "Resultado del toque desconocido; no se pudo actualizar la captura."
+    },
+    "dashboard.screenshot.refresh": {
+      "sourceHash": "0e91610117029a62a478b7fa7df0b8598bebe3ab1e192d4b1882e310719c9671",
+      "state": "machine-cross-checked",
+      "text": "Actualizar"
+    },
+    "dashboard.screenshot.refreshing": {
+      "sourceHash": "35f2bb7b769820ffaac1665e2b02f1f6527413c71a61954dbb52e2e200a66f4d",
+      "state": "machine-cross-checked",
+      "text": "Actualizando la captura…"
+    },
+    "dashboard.screenshot.remote_input_disabled": {
+      "sourceHash": "5d609daee3c51423c9b0ebb999e71eed684b12917155d781cab803d35bfefda9",
+      "state": "machine-cross-checked",
+      "text": "La entrada remota está desactivada en el modo reforzado."
+    },
+    "dashboard.screenshot.sending_tap": {
+      "sourceHash": "81ec0be711d2fc286778b6320d32278ae3c709ce29782268fa59d706a44b7ba6",
+      "state": "machine-cross-checked",
+      "text": "Enviando toque…"
+    },
+    "dashboard.screenshot.tap_completed_capturing": {
+      "sourceHash": "08b636edf865023b936211d78b6f3ac24e1910c899049181c150e2e364291e88",
+      "state": "machine-cross-checked",
+      "text": "Toque completado; haciendo una captura nueva…"
+    },
+    "dashboard.screenshot.tap_completed_update_failed": {
+      "sourceHash": "9f8839beda97ba714d5e68159fd1c769ac8bfb6679c30d382ab68b89942a535d",
+      "state": "machine-cross-checked",
+      "text": "El toque se completó, pero no se pudo actualizar la captura."
+    },
+    "dashboard.screenshot.tap_rejected": {
+      "sourceHash": "5c7e8af4e7b00f46d59a5ee8143592c6ea3c3d0cd3eced0ca8cbf0031a5b8596",
+      "state": "machine-cross-checked",
+      "text": "No se aceptó el toque."
+    },
+    "dashboard.screenshot.updated": {
+      "sourceHash": "1c710725855d308099b76fe9e35300237c2df62e6739c4f30082bb2c2ede523e",
+      "state": "machine-cross-checked",
+      "text": "Captura actualizada."
+    },
+    "dashboard.screenshot.view_only": {
+      "sourceHash": "2f4ca77457f5d3fc7b1c457c80ca61dc1db05f16d7b5682219a71740c6866fed",
+      "state": "machine-cross-checked",
+      "text": "Solo visualización: la entrada remota está desactivada en modo reforzado."
+    },
+    "dashboard.secrets.hide": {
+      "sourceHash": "ac20a57bfde0bbc40bfe70895eb1cfacc944aaff06ca784053623c569b3e1b3d",
+      "state": "machine-cross-checked",
+      "text": "Ocultar"
+    },
+    "dashboard.secrets.reveal": {
+      "sourceHash": "36b830bdb447f8c758a9b58f190eed468c4bd53e9c7662ee19bca9c53d3a3e3d",
+      "state": "machine-cross-checked",
+      "text": "Mostrar"
+    },
+    "dashboard.sensors.ambient_light": {
+      "sourceHash": "bd754dd6ed86a26c4bdccfdd47a912232bae26b86fd38ad063f8f725bb7b8f97",
+      "state": "machine-cross-checked",
+      "text": "Luz ambiental"
+    },
+    "dashboard.sensors.brightness": {
+      "sourceHash": "ec811d30a89ce96d1c7555ffaede78b188fedb1d283adf7cdf55a4edae6697a7",
+      "state": "machine-cross-checked",
+      "text": "Brillo"
+    },
+    "dashboard.sensors.far": {
+      "sourceHash": "512eea46ceb3921dff4363c7069d89d4964d1d9fccaa0f411851a7aa60a5c868",
+      "state": "machine-cross-checked",
+      "text": "lejos"
+    },
+    "dashboard.sensors.hours_ago": {
+      "sourceHash": "945f1ad2a6276a1058cc077d3b7566a109d732467fc4e9aac2330565374721f2",
+      "state": "machine-cross-checked",
+      "text": "· hace {count} h"
+    },
+    "dashboard.sensors.humidity": {
+      "sourceHash": "46819ccb5e6dec74b34710a4fcfc45d995bcb7c5d9a9c87e92afb9342810e92d",
+      "state": "machine-cross-checked",
+      "text": "Humedad"
+    },
+    "dashboard.sensors.minutes_ago": {
+      "sourceHash": "4317533e1ee80cdeb4a67e7623460cb07e4a970bca0ba2a11c245da5626e1bdd",
+      "state": "machine-cross-checked",
+      "text": "· hace {count} min"
+    },
+    "dashboard.sensors.near": {
+      "sourceHash": "46ba34770bccfde756708d47d83fb7c8257fe8a4b3a35f25d385a8284021f476",
+      "state": "machine-cross-checked",
+      "text": "cerca"
+    },
+    "dashboard.sensors.no_reading": {
+      "sourceHash": "fb743d5508a7e6c20756b229d69a3453eb8fd3c53539bb504cb4e1f60949b09c",
+      "state": "machine-cross-checked",
+      "text": "aún sin lecturas"
+    },
+    "dashboard.sensors.none": {
+      "sourceHash": "2224c457e25ee4fa85d4119e831c0c652a7b9df05235bb7a380d3dfb8e4266c1",
+      "state": "machine-cross-checked",
+      "text": "este panel no tiene sensores"
+    },
+    "dashboard.sensors.normalized": {
+      "sourceHash": "fcc968a8f322f062884c3275d6993ae75d8ebfc3a770c7ff62dc3fd922259cd0",
+      "state": "machine-cross-checked",
+      "text": "· {percent}% normalizado · {phase}"
+    },
+    "dashboard.sensors.note": {
+      "sourceHash": "1f6f4f6027a437487039e5c3332f9644a9bd582a3212f1acb1a5c689f20f55b1",
+      "state": "machine-cross-checked",
+      "text": "Lecturas en directo de los sensores de este panel, incluso si un valor está oculto en Home Assistant."
+    },
+    "dashboard.sensors.phase_calibrating": {
+      "sourceHash": "eec6ff86e2b6ebc5476d202d3ae6a45925f96deaa8be53f487796862f9c5e253",
+      "state": "machine-cross-checked",
+      "text": "calibrando"
+    },
+    "dashboard.sensors.phase_learned": {
+      "sourceHash": "d78e3c38d98d17d7355ec4a989e477bace56a6fa2508121a520146cd0a23ec80",
+      "state": "machine-cross-checked",
+      "text": "aprendido"
+    },
+    "dashboard.sensors.phase_learning": {
+      "sourceHash": "edd95740e339e6aa0a1dab45741b0521185680b051631a7c265b5630da4f2158",
+      "state": "machine-cross-checked",
+      "text": "aprendiendo"
+    },
+    "dashboard.sensors.phase_waiting": {
+      "sourceHash": "80cfa3e7f28dde4df64436b652230aff28d7779116d1369c21ef2bbf37261d71",
+      "state": "machine-cross-checked",
+      "text": "esperando"
+    },
+    "dashboard.sensors.proximity": {
+      "sourceHash": "101194f3e33d01133851120bc7bab9967d2d8988266a7c07ae800f7127e7e3e2",
+      "state": "machine-cross-checked",
+      "text": "Proximidad"
+    },
+    "dashboard.sensors.seconds_ago": {
+      "sourceHash": "6d1bf0db15771f9872b90092501f0ef352fee951d8640840afdea80d985264e2",
+      "state": "machine-cross-checked",
+      "text": "· hace {count} s"
+    },
+    "dashboard.sensors.volume": {
+      "sourceHash": "b10fb966d72063f534774c7c6b404f4decca76ac283093ae65fef78d07c1b75e",
+      "state": "machine-cross-checked",
+      "text": "Volumen"
+    },
+    "dashboard.state_stream.available_builtin": {
+      "sourceHash": "ec701b5c4464a5e1c9e8ac51f9781091a868747a2f5a5c6c2bd7b8ada0de4883",
+      "state": "machine-cross-checked",
+      "text": "disponible con el renderizador integrado"
+    },
+    "dashboard.state_stream.filtered": {
+      "sourceHash": "e4299f6547e8811e899fd27c9c0cffe48f1de78d69bff4280f2bcba5fc393117",
+      "state": "machine-cross-checked",
+      "text": "filtrado: {count} entidades"
+    },
+    "dashboard.state_stream.initial_hydration": {
+      "sourceHash": "ca50fb27c987cb0a17008609810589315ade038c1bfa44bcb2dad0e06fb8e99d",
+      "state": "machine-cross-checked",
+      "text": "Carga inicial"
+    },
+    "dashboard.state_stream.main_thread": {
+      "sourceHash": "f3a8ff1cd7d99e4b70a6c02d6be46ecfb60437608189bc5dda6ff2d2ebce491d",
+      "state": "machine-cross-checked",
+      "text": "Hilo principal de eventos de estado"
+    },
+    "dashboard.state_stream.main_thread_detail": {
+      "sourceHash": "88561aad61d8d51078c746b73558fd8263598877644e97a81cafa3a9067169e8",
+      "state": "machine-cross-checked",
+      "text": "· p95 {p95} ms/s · más prolongado {longest} ms"
+    },
+    "dashboard.state_stream.measurement_drops": {
+      "sourceHash": "059e19ee014123ae218d9647bcb779a0042e13706cec1c75ac2355c93fd2a6a8",
+      "state": "machine-cross-checked",
+      "text": "Pérdidas de mediciones"
+    },
+    "dashboard.state_stream.p95_rate": {
+      "sourceHash": "ca4db622037d7db8b6d78acd6b739d3618f1f61f74deb4ae3e8fa7104a8efe51",
+      "state": "machine-cross-checked",
+      "text": "· p95 {rate}"
+    },
+    "dashboard.state_stream.payload_detail": {
+      "sourceHash": "841536c8b8d08e76127c038503d850bba320577da2c429c887e0787c993cf196",
+      "state": "machine-cross-checked",
+      "text": "· p95 {rate} · JSON sin comprimir"
+    },
+    "dashboard.state_stream.state_payload": {
+      "sourceHash": "6d08b19b8127d27cd57b98633e33dc18808a81ae770c14e38c3de324d10c5dfa",
+      "state": "machine-cross-checked",
+      "text": "Carga útil de estado"
+    },
+    "dashboard.state_stream.state_stream": {
+      "sourceHash": "84c5f165f02fcf3f32b29c5326e1d5c7e369e29e6144a75d4be90564b5f7ac2a",
+      "state": "machine-cross-checked",
+      "text": "Flujo de estados"
+    },
+    "dashboard.state_stream.state_updates": {
+      "sourceHash": "a15928ad4aed0de25b5ed2b4a81279cd8ad0f8b6e865e5da8ed581f7da981e72",
+      "state": "machine-cross-checked",
+      "text": "Actualizaciones de estado"
+    },
+    "dashboard.state_stream.subscription": {
+      "sourceHash": "4999c6c6c7badf456f5b0053b09a2076bdb2391a09ab10c9064a680f8f9a0b30",
+      "state": "machine-cross-checked",
+      "text": "Suscripción"
+    },
+    "dashboard.state_stream.unfiltered": {
+      "sourceHash": "4caa06bd0e89b1695f9533cb586443232dad216ffd525dcc1a628c844b9e80a4",
+      "state": "machine-cross-checked",
+      "text": "sin filtrar"
+    },
+    "dashboard.state_stream.waiting_ha": {
+      "sourceHash": "c1c51d96984addcaea43be081f903c7870d6c37f6aa5a3973de8af87f0922852",
+      "state": "machine-cross-checked",
+      "text": "esperando tráfico de estados de Home Assistant"
+    },
+    "dashboard.status.measuring": {
+      "sourceHash": "821d52cb24753a97c13c311ade54818df413a5db241e340710b26e26ef2c1b55",
+      "state": "machine-cross-checked",
+      "text": "midiendo…"
+    },
+    "dashboard.status.reading": {
+      "sourceHash": "6ab8da1b94930fb2b6c9e345f4dcd999798e54b57e481d160724dba6dfa019db",
+      "state": "machine-cross-checked",
+      "text": "leyendo…"
+    },
+    "dashboard.status.sampling": {
+      "sourceHash": "e41c939b1182f00c578765d3739155a82696c87c0b70a8bf7434f1d23a600bac",
+      "state": "machine-cross-checked",
+      "text": "muestreando…"
+    },
+    "dashboard.status.top_processes": {
+      "sourceHash": "cb97b7329a26177bdaed6abd2e9b2f4953f1772b48e2141a5515819fd0d31f25",
+      "state": "machine-cross-checked",
+      "text": "procesos principales…"
+    },
+    "dashboard.status.waiting_entity_contributors": {
+      "sourceHash": "8d853cc97d307450b3b312a935bb50fc732cdf86bf67d4bed62c7888f2290ce4",
+      "state": "machine-cross-checked",
+      "text": "esperando contribuciones de entidades…"
+    },
+    "dashboard.status.waiting_state_traffic": {
+      "sourceHash": "5c02c0e1b12925d95cd99573e743e22c483550539b4217e6c888560222132ff4",
+      "state": "machine-cross-checked",
+      "text": "esperando tráfico de estados…"
+    },
+    "dashboard.top_processes.needs_root": {
+      "sourceHash": "81a61a7141f718dbaecd630bafd4b3c1d7f8db6bd98585e2380b27b0d861b043",
+      "state": "machine-cross-checked",
+      "text": "requiere root (su)"
+    },
+    "dashboard.top_processes.process": {
+      "sourceHash": "e083bd83e9d3e97e3b3e7dbe6cca0dcac2c1342b57cb7984792ec01beee22c28",
+      "state": "machine-cross-checked",
+      "text": "Proceso"
+    },
+    "dashboard.top_processes.ram_unavailable": {
+      "sourceHash": "a4e90fbfc242e8767ae0c7ffc3d5de345d769df9bfbdd347e18577e4a0637dcd",
+      "state": "machine-cross-checked",
+      "text": "Datos de RAM no disponibles"
+    },
+    "dashboard.value.auto_detail": {
+      "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
+      "state": "machine-cross-checked",
+      "text": "automático ({value})"
+    },
+    "dashboard.value.builtin_renderer": {
+      "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",
+      "state": "machine-cross-checked",
+      "text": "Renderizador integrado"
+    },
+    "dashboard.value.ha_default_view": {
+      "sourceHash": "3461d62cc4141599cc6913e0014e1add27ae7b0f91f84490429137f68e9ac04f",
+      "state": "machine-cross-checked",
+      "text": "Vista predeterminada de HA"
+    },
+    "dashboard.value.local_override": {
+      "sourceHash": "efedba76fc9cf52975e7cbb18b95db20e8ff40deb2e3d61b12eace3d3edb8e79",
+      "state": "machine-cross-checked",
+      "text": "{value} (anulación local)"
+    },
+    "dashboard.value.none": {
+      "sourceHash": "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe",
+      "state": "machine-cross-checked",
+      "text": "ninguno"
+    },
+    "dashboard.value.off": {
+      "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+      "state": "machine-cross-checked",
+      "text": "desactivado"
+    },
+    "dashboard.value.on": {
+      "sourceHash": "b8d31e852725afb1e26d53bab6095b2bff1749c9275be13ed1c05a56ed31ec09",
+      "state": "machine-cross-checked",
+      "text": "activado"
+    },
+    "dashboard.value.set": {
+      "sourceHash": "6ee0eb490ff832101cf82a3d387c35f29e4230be786978f7acf9e811febf6723",
+      "state": "machine-cross-checked",
+      "text": "configurado"
     },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
@@ -1077,6 +4732,106 @@
       "sourceHash": "76c68d99b8cb9505d0771ff7291ab23f70e4fcba5fa81daa256c4e50461286f5",
       "state": "machine-cross-checked",
       "text": "Enrutador Zigbee"
+    },
+    "shell.action.reload": {
+      "sourceHash": "4027f515418b77482d033970fe4e6cc2c9b6dbd8d19201c31afd06d080a07f41",
+      "state": "machine-cross-checked",
+      "text": "Recargar"
+    },
+    "shell.github.title": {
+      "sourceHash": "69474ee0f60dbce1020a6bcd6db49daaeeeb20bf7601151aba213b6fd98d66a6",
+      "state": "machine-cross-checked",
+      "text": "ha-paneld en GitHub"
+    },
+    "shell.hardened.key": {
+      "sourceHash": "1cad2d18d4f0144e285115b035fa35f596fd66292288a07b1e25dd45b569f51a",
+      "state": "machine-cross-checked",
+      "text": "Las acciones protegidas requieren aprobación física en este panel en modo Hardened; no pueden aprobarse de forma remota."
+    },
+    "shell.hardened.section": {
+      "sourceHash": "7d68d1ace31daad34bfbf4b938bf1533316b87dd4c607a7e2a62db4fa5569085",
+      "state": "machine-cross-checked",
+      "text": "Las acciones de esta sección requieren aprobación física en el panel cuando el modo Hardened está activado."
+    },
+    "shell.hardened.section_conditional": {
+      "sourceHash": "d1dfc54a70bcb22ca82d3019290ef1a41372f7e12c9ac81e97948543baa0e1f7",
+      "state": "machine-cross-checked",
+      "text": "Algunas acciones de esta sección requieren aprobación física en el panel cuando el modo Hardened está activado."
+    },
+    "shell.menu.label": {
+      "sourceHash": "99af6606ff9d6cd5154d4d4e9c21e325086d3e904677cdb41d363c8a3480f862",
+      "state": "machine-cross-checked",
+      "text": "Menú"
+    },
+    "shell.nav.configure": {
+      "sourceHash": "6defafa2caa65304173956e3fbc26b6947c50bc769c08c3da32c1032fa6519d4",
+      "state": "machine-cross-checked",
+      "text": "Configurar"
+    },
+    "shell.nav.dashboard": {
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "state": "machine-cross-checked",
+      "text": "Panel de control"
+    },
+    "shell.nav.entities": {
+      "sourceHash": "7fdb3ccec0e0d23662eb4c22eb63a64c5873e7c383efde354432152eed55c9ce",
+      "state": "machine-cross-checked",
+      "text": "Entidades"
+    },
+    "shell.nav.fleet": {
+      "sourceHash": "2bb4f92ced331c66b26c0388e4cf20e4ee5965cf24f3283f1c3633befbf0c4a1",
+      "state": "machine-cross-checked",
+      "text": "Flota"
+    },
+    "shell.nav.install": {
+      "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
+      "state": "machine-cross-checked",
+      "text": "Instalar"
+    },
+    "shell.nav.logs": {
+      "sourceHash": "ea2100dc89ae9fe21fa9b08ab1bf18662dca1e53a3eebd7d03afebcaf5d57515",
+      "state": "machine-cross-checked",
+      "text": "Registros"
+    },
+    "shell.nav.profile": {
+      "sourceHash": "d696a35bdd1883da07a8d6c41bb7a3153381b23aa197629ee273479a6eaa5a9c",
+      "state": "machine-cross-checked",
+      "text": "Perfil"
+    },
+    "shell.nav.setup": {
+      "sourceHash": "4da10f1fbb17cac25e9e78536d4104cb4b2fbbc436dbc37dee5450f22c2accda",
+      "state": "machine-cross-checked",
+      "text": "Configurar"
+    },
+    "shell.new_version.installed": {
+      "sourceHash": "fdab4992846c739bca90b4ed46a981d380e0c759b4974b0ac60631ed171f5cd7",
+      "state": "machine-cross-checked",
+      "text": "Hay una versión más reciente de ha-paneld instalada"
+    },
+    "shell.new_version.refresh_suffix": {
+      "sourceHash": "26166a881506b072bfe36a83cc670af3b1e28ca411851a3dbd8cbe4033f6366b",
+      "state": "machine-cross-checked",
+      "text": "para actualizar esta página."
+    },
+    "shell.open_in_ha": {
+      "sourceHash": "5dd303715b690c9ae7eee858506460c7b6aad6f57cb148b71d916186b435f51e",
+      "state": "machine-cross-checked",
+      "text": "Abrir en HA"
+    },
+    "shell.setup_progress.next": {
+      "sourceHash": "272d0261ca0dc2b0e2a88f17d7c7589b4c1f21ae1e9ae9596e10128a156d609b",
+      "state": "machine-cross-checked",
+      "text": "A continuación aparece el paso de configuración del panel de control."
+    },
+    "shell.setup_progress.publishing": {
+      "sourceHash": "91badffcf3f64548ae77c2860e1ea840212f96d595e4f00ad17d768e1232c201",
+      "state": "machine-cross-checked",
+      "text": "MQTT conectado: publicando el descubrimiento de Home Assistant."
+    },
+    "shell.setup_progress.verifying": {
+      "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
+      "state": "machine-cross-checked",
+      "text": "Configuración de MQTT guardada: verificando la conexión con el bróker. Esto puede tardar un poco después de guardar."
     }
   }
 }

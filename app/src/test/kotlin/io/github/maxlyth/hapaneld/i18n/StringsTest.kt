@@ -151,9 +151,13 @@ class StringsTest {
         assertEquals("en", Strings(source, partial).locale)
         assertEquals("de", Strings(source, complete).locale)
         assertEquals(listOf("de", "en"), Strings(source, partial).languages)
-        assertEquals(listOf("de", "en"), Strings(source, complete).languages)
+        assertEquals(listOf("de"), Strings(source, complete).languages)
         assertEquals(listOf("de"), Strings(source, complete).languages(setOf("settings.")))
-        assertEquals(listOf("en"), Strings(source, complete).languages(setOf("shell.")))
+        assertEquals(
+            "the real German catalogue now promotes the complete HTML shell",
+            listOf("de"),
+            Strings(source, complete).languages(setOf("shell.")),
+        )
         val promotedKey = partial.strings.values.single { it.state == TranslationState.MACHINE_CROSS_CHECKED }.key
         val fallbackKey = source.strings.keys.first { it.startsWith("settings.") && it != promotedKey }
         assertEquals("de", Strings(source, partial).resolve(promotedKey).language)
