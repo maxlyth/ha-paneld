@@ -15,6 +15,7 @@ import java.util.Base64
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -159,6 +160,27 @@ class HaWebSocketClientsFailoverTest {
     }.getOrDefault(false)
 
     // ---- route iteration -----------------------------------------------------------------------
+
+    @Test fun routeCallbackReceivesThePeerOfTheConnectedWebSocket() {
+        val expected = InetAddress.getByName("127.0.0.1")
+        val connected = AtomicReference<InetAddress>()
+        WsAcceptor(expected).use { server ->
+            val client = HaWebSocketClients.client(
+                onRouteConnected = { connected.set(it) },
+            )
+            try {
+                runBlocking {
+                    val session = withTimeout(15_000) {
+                        client.webSocketSession("ws://127.0.0.1:${server.port}/api/websocket")
+                    }
+                    session.close()
+                }
+            } finally {
+                client.close()
+            }
+        }
+        assertEquals("callback must expose the socket peer used by the WebSocket", expected, connected.get())
+    }
 
     @Test fun refusedRouteFallsBackToTheNextAddress() {
         assumeTrue("no loopback alias in this environment", loopbackAliasAvailable())

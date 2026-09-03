@@ -16,8 +16,12 @@ import okhttp3.Dns
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.SocketAddress
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import javax.net.SocketFactory
 import javax.net.ssl.SSLSocketFactory
 import javax.net.ssl.X509TrustManager
 
@@ -48,6 +52,58 @@ internal object HaWebSocketClients {
      * chain checks and hostname verification still run against whatever is supplied here.
      */
     internal class TlsTrust(val socketFactory: SSLSocketFactory, val trustManager: X509TrustManager)
+
+    private class RouteReportingSocketFactory(
+        private val onConnected: (InetAddress) -> Unit,
+    ) : SocketFactory() {
+        override fun createSocket(): Socket = RouteReportingSocket(onConnected)
+
+        override fun createSocket(host: String, port: Int): Socket =
+            connected(InetSocketAddress(host, port))
+
+        override fun createSocket(
+            host: String,
+            port: Int,
+            localHost: InetAddress,
+            localPort: Int,
+        ): Socket = connected(InetSocketAddress(host, port), InetSocketAddress(localHost, localPort))
+
+        override fun createSocket(host: InetAddress, port: Int): Socket =
+            connected(InetSocketAddress(host, port))
+
+        override fun createSocket(
+            address: InetAddress,
+            port: Int,
+            localAddress: InetAddress,
+            localPort: Int,
+        ): Socket = connected(InetSocketAddress(address, port), InetSocketAddress(localAddress, localPort))
+
+        private fun connected(remote: SocketAddress, local: SocketAddress? = null): Socket =
+            RouteReportingSocket(onConnected).apply {
+                if (local != null) bind(local)
+                connect(remote)
+            }
+    }
+
+    private class RouteReportingSocket(
+        private val onConnected: (InetAddress) -> Unit,
+    ) : Socket() {
+        override fun connect(endpoint: SocketAddress) {
+            super.connect(endpoint, 0)
+            reportRoute()
+        }
+
+        override fun connect(endpoint: SocketAddress, timeout: Int) {
+            super.connect(endpoint, timeout)
+            reportRoute()
+        }
+
+        private fun reportRoute() {
+            runCatching { inetAddress }
+                .getOrNull()
+                ?.let { address -> runCatching { onConnected(address) } }
+        }
+    }
 
     fun client(
         preferIpv4: Boolean = false,
@@ -89,17 +145,10 @@ internal object HaWebSocketClients {
                 )
                 if (tls != null) sslSocketFactory(tls.socketFactory, tls.trustManager)
                 if (onRouteConnected != null) {
-                    eventListener(
-                        object : okhttp3.EventListener() {
-                            override fun connectionAcquired(call: okhttp3.Call, connection: okhttp3.Connection) {
-                                // Best effort by construction: this is a diagnostic, and nothing about
-                                // the session may depend on it succeeding.
-                                runCatching { connection.socket().inetAddress }
-                                    .getOrNull()
-                                    ?.let { address -> runCatching { onRouteConnected(address) } }
-                            }
-                        },
-                    )
+                    // OkHttp WebSockets suppress application EventListeners and skip network
+                    // interceptors. The socket factory is retained, including through TLS wrapping,
+                    // and reports only after the selected route's TCP connect succeeds.
+                    socketFactory(RouteReportingSocketFactory(onRouteConnected))
                 }
             }
         }
