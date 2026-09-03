@@ -80,7 +80,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the public release; publication remains a separate explicit action.
-        versionCode = 687
+        versionCode = 688
         versionName = "0.9.7"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
