@@ -45,6 +45,9 @@ RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
 MAX_TARGET_TEXT_CHARS = 16_384
 MAX_TARGET_TEXT_BYTES = MAX_TARGET_TEXT_CHARS * 4
 MAX_REPLACEMENT_FILE_BYTES = MAX_TARGET_TEXT_BYTES + 2
+TARGET_PARAGRAPH_COUNTS = {
+    "configure.zigbee.join_confirm": 3,
+}
 UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "configure.group.dashboard"): "Dashboard",
     ("de", "configure.group.system"): "System",
@@ -182,10 +185,16 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
 
 
 def validate_target_text_hygiene(key: str, text: str) -> None:
+    paragraphs = text.split("\n\n")
+    allows_paragraph_breaks = (
+        len(paragraphs) == TARGET_PARAGRAPH_COUNTS.get(key)
+        and all(paragraph and "\n" not in paragraph for paragraph in paragraphs)
+    )
     unsafe = sorted({
         f"U+{ord(character):04X}"
         for character in text
         if unicodedata.category(character) in {"Cc", "Cf"}
+        and not (character == "\n" and allows_paragraph_breaks)
     })
     if unsafe:
         raise CatalogueError(f"{key}: target contains unsafe control or format characters: {', '.join(unsafe)}")

@@ -1311,7 +1311,7 @@
     "configure.zigbee.join_confirm": {
       "sourceHash": "76f333e7b54f36296e81bbeee30b8bdb7a789136c4cf968df78cc7905e5e5d91",
       "state": "machine-cross-checked",
-      "text": "Abilita prima Consenti associazione in Zigbee2MQTT o ZHA. Verrà richiesta la modalità ripetitore e inizierà un nuovo periodo di associazione di 15 minuti. Il pannello non verrà riavviato. Consenti associazione è abilitato: richiedere l’associazione?"
+      "text": "Abilita prima Consenti associazione in Zigbee2MQTT o ZHA.\n\nVerrà richiesta la modalità ripetitore e inizierà un nuovo periodo di associazione di 15 minuti. Il pannello non verrà riavviato.\n\nConsenti associazione è abilitato: richiedere l’associazione?"
     },
     "configure.zigbee.join_failed": {
       "sourceHash": "aed9a2e33685d3085c2f032eaad81b8c833fdc8d6c2267cbe4e0c5d159bfa52d",
@@ -1396,7 +1396,7 @@
     "dashboard.banner.auth_rejected.action": {
       "sourceHash": "521df20fbc23f0d26403dd8d82708d66019af14cc2081330ea88e5f3854d719a",
       "state": "machine-cross-checked",
-      "text": "Configure → Connessione a Home Assistant"
+      "text": "Configura → Connessione a Home Assistant"
     },
     "dashboard.banner.auth_rejected.explanation": {
       "sourceHash": "e414f00aea1c8c8d9ac8a59a1fa6902c8fca809a1ad9990d1bed61898c4d8e96",
@@ -1431,7 +1431,7 @@
     "dashboard.banner.companion_url.install_action": {
       "sourceHash": "d36d81e74fe3a959a745f091134741be7a6fdf8eaaa9a09835c19cd8c219b6d3",
       "state": "machine-cross-checked",
-      "text": "Ripara nella scheda Install →"
+      "text": "Ripara nella scheda Installa →"
     },
     "dashboard.banner.companion_url.repair": {
       "sourceHash": "8192fbd2559223b9ded4b9199b6c9f54622863f4151afb5c292fe902fe350c25",
@@ -1471,7 +1471,7 @@
     "dashboard.banner.manage_install": {
       "sourceHash": "3a44b8764e7cc637360c1249abf2574724b61a152b99714fd55f09cdccd6999a",
       "state": "machine-cross-checked",
-      "text": "Gestisci nella scheda Install →"
+      "text": "Gestisci nella scheda Installa →"
     },
     "dashboard.banner.no_renderer.configure_prefix": {
       "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
@@ -1511,7 +1511,7 @@
     "dashboard.banner.schema_rollback.configure_action": {
       "sourceHash": "d8ec542d4afb557de9d173fa65c10ad47c3b9357a741084ceb548c815c8df1af",
       "state": "machine-cross-checked",
-      "text": "Controlla Configure →"
+      "text": "Controlla Configura →"
     },
     "dashboard.banner.schema_rollback.explanation": {
       "sourceHash": "046030ae07aa906959b9ee562f63453ce1906dfa2607da9e06d030d1dfa5fb94",
@@ -1556,7 +1556,7 @@
     "dashboard.banner.setup_needs.suffix": {
       "sourceHash": "a623aa42d2f1f53aa662a6afe155e3e0c1e47b2b888d5b843985025ef198d430",
       "state": "machine-cross-checked",
-      "text": "— da impostare nella scheda Configure."
+      "text": "— da impostare nella scheda Configura."
     },
     "dashboard.banner.setup_needs.valid_broker_url": {
       "sourceHash": "ee8fc48bc75378fd7cad15208047034017bceaff1864019a22416e40b281a734",
@@ -1696,7 +1696,7 @@
     "dashboard.camera.configure_link": {
       "sourceHash": "6870136fd6944e6b56c7e4665108db488f5a2bf7ad7190c4183ed41eccd8a3cc",
       "state": "machine-cross-checked",
-      "text": "Configure → Fotocamera"
+      "text": "Configura → Fotocamera"
     },
     "dashboard.camera.delivery.measuring": {
       "sourceHash": "821d52cb24753a97c13c311ade54818df413a5db241e340710b26e26ef2c1b55",
@@ -1731,7 +1731,7 @@
     "dashboard.camera.delivery.short_help": {
       "sourceHash": "df7455427a2aa173ab64715f3d544617593051440b36c4dc33aa5d30533b97fc",
       "state": "machine-cross-checked",
-      "text": "· riduci la frequenza dei fotogrammi o la risoluzione in Configure → Fotocamera, oppure accetta la frequenza fornita dal pannello; qui non è stabilito perché sia insufficiente"
+      "text": "· riduci la frequenza dei fotogrammi o la risoluzione in Configura → Fotocamera, oppure accetta la frequenza fornita dal pannello; qui non è stabilito perché sia insufficiente"
     },
     "dashboard.camera.encoder.output_unavailable": {
       "sourceHash": "22f1442df9b228b9b287aa441c2ccc7db7db297a2344a2d77ac4bc45d9d48988",
@@ -2196,7 +2196,7 @@
     "dashboard.capability.note.shizuku_disabled": {
       "sourceHash": "3bee0070aeb6277cf63a471498b0fd5694cf27f969e666b702644b440086e92a",
       "state": "machine-cross-checked",
-      "text": "disabilitato in ha-paneld; sul pannello apri Configure → menu della barra degli strumenti → Accesso avanzato → Abilita"
+      "text": "disabilitato in ha-paneld; sul pannello apri Configura → menu della barra degli strumenti → Accesso avanzato → Abilita"
     },
     "dashboard.capability.note.shizuku_failed": {
       "sourceHash": "c55ae7ee37cbc132cc37edd487b0d96b87317868a2912f108147ee9867c445d5",
@@ -2516,7 +2516,7 @@
     "dashboard.controls.no_separate_launcher": {
       "sourceHash": "a0116188ce3a91b305615048528239170e2e9c75bac41e89dc3d0da3b369403c",
       "state": "machine-cross-checked",
-      "text": "Nessun launcher separato su questo pannello — equivale ad Admin launcher"
+      "text": "Nessun launcher separato su questo pannello — equivale a Launcher amministratore"
     },
     "dashboard.controls.reboot": {
       "sourceHash": "fba023ca78ebb022146bbfe95e638d252b0727075bff6b4661f26dbe1e1a8fd0",
@@ -2541,7 +2541,7 @@
     "dashboard.controls.root_required_note": {
       "sourceHash": "69d1baecdcbf9dfa80c51a89da504b4e82674dddc3d119cbd4169802d858b409",
       "state": "machine-cross-checked",
-      "text": "Launcher, Admin launcher e Reboot richiedono root — disabilitati su questo pannello."
+      "text": "Launcher, Launcher amministratore e Riavvia richiedono root — disabilitati su questo pannello."
     },
     "dashboard.controls.unavailable": {
       "sourceHash": "23b08e93ff70b56bc7f1414f564d98196c64ccf6c6e8d19cdccd3059e21c2f6e",
@@ -2861,7 +2861,7 @@
     "dashboard.link.edit_configure": {
       "sourceHash": "d75a23f2180bbf4b16cdb8deab9099a4a9aec9709e122e21c211e080d535ca91",
       "state": "machine-cross-checked",
-      "text": "Modifica nella scheda Configure"
+      "text": "Modifica nella scheda Configura"
     },
     "dashboard.link.open": {
       "sourceHash": "ed077f3d8125d60dca1979c7133601bd187d47c73ed9975028f677e49e709942",
@@ -2871,7 +2871,7 @@
     "dashboard.link.open_install": {
       "sourceHash": "f5ed36e35c39c2b351302d18126528be7471de98ed623c0018f0881a2b9426a5",
       "state": "machine-cross-checked",
-      "text": "Apri nella scheda Install"
+      "text": "Apri nella scheda Installa"
     },
     "dashboard.live.navigate": {
       "sourceHash": "5ea5fbe811dbe99a3f3d0d79704d2f54194692b349f2d682bd6fb86a9cbf8f12",

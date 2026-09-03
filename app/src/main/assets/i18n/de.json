@@ -1309,7 +1309,7 @@
       "state": "machine-cross-checked"
     },
     "configure.zigbee.join_confirm": {
-      "text": "Aktiviere zuerst „Beitritt erlauben“ in Zigbee2MQTT oder ZHA. Dadurch wird der Repeater-Modus angefordert und eine neue 15-minütige Beitrittsphase gestartet. Das Panel wird weder neu gestartet noch neu gebootet. „Beitritt erlauben“ ist aktiv — Beitritt anfordern?",
+      "text": "Aktiviere zuerst „Beitritt erlauben“ in Zigbee2MQTT oder ZHA.\n\nDadurch wird der Repeater-Modus angefordert und eine neue 15-minütige Beitrittsphase gestartet. Das Panel wird weder neu gestartet noch neu gebootet.\n\n„Beitritt erlauben“ ist aktiv — Beitritt anfordern?",
       "sourceHash": "76f333e7b54f36296e81bbeee30b8bdb7a789136c4cf968df78cc7905e5e5d91",
       "state": "machine-cross-checked"
     },
@@ -1394,7 +1394,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.auth_rejected.action": {
-      "text": "Configure → Home Assistant-Verbindung",
+      "text": "Konfiguration → Home Assistant-Verbindung",
       "sourceHash": "521df20fbc23f0d26403dd8d82708d66019af14cc2081330ea88e5f3854d719a",
       "state": "machine-cross-checked"
     },
@@ -1429,7 +1429,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.companion_url.install_action": {
-      "text": "Auf dem Tab Install reparieren →",
+      "text": "Auf dem Tab Installation reparieren →",
       "sourceHash": "d36d81e74fe3a959a745f091134741be7a6fdf8eaaa9a09835c19cd8c219b6d3",
       "state": "machine-cross-checked"
     },
@@ -1469,7 +1469,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.manage_install": {
-      "text": "Auf dem Tab Install verwalten →",
+      "text": "Auf dem Tab Installation verwalten →",
       "sourceHash": "3a44b8764e7cc637360c1249abf2574724b61a152b99714fd55f09cdccd6999a",
       "state": "machine-cross-checked"
     },
@@ -1509,7 +1509,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.schema_rollback.configure_action": {
-      "text": "Configure prüfen →",
+      "text": "Konfiguration prüfen →",
       "sourceHash": "d8ec542d4afb557de9d173fa65c10ad47c3b9357a741084ceb548c815c8df1af",
       "state": "machine-cross-checked"
     },
@@ -1554,7 +1554,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.setup_needs.suffix": {
-      "text": "— richte dies auf dem Tab Configure ein.",
+      "text": "— richte dies auf dem Tab Konfiguration ein.",
       "sourceHash": "a623aa42d2f1f53aa662a6afe155e3e0c1e47b2b888d5b843985025ef198d430",
       "state": "machine-cross-checked"
     },
@@ -1694,7 +1694,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.camera.configure_link": {
-      "text": "Configure → Kamera",
+      "text": "Konfiguration → Kamera",
       "sourceHash": "6870136fd6944e6b56c7e4665108db488f5a2bf7ad7190c4183ed41eccd8a3cc",
       "state": "machine-cross-checked"
     },
@@ -1729,7 +1729,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.camera.delivery.short_help": {
-      "text": "· Bildrate oder Auflösung unter Configure → Kamera verringern oder die vom Panel gelieferte Rate akzeptieren; die Ursache für die Abweichung ist hier nicht belegt",
+      "text": "· Bildrate oder Auflösung unter Konfiguration → Kamera verringern oder die vom Panel gelieferte Rate akzeptieren; die Ursache für die Abweichung ist hier nicht belegt",
       "sourceHash": "df7455427a2aa173ab64715f3d544617593051440b36c4dc33aa5d30533b97fc",
       "state": "machine-cross-checked"
     },
@@ -2194,7 +2194,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.capability.note.shizuku_disabled": {
-      "text": "in ha-paneld deaktiviert; auf dem Panel Configure → Dreipunktmenü → Erweiterter Zugriff → Aktivieren öffnen",
+      "text": "in ha-paneld deaktiviert; auf dem Panel Konfiguration → Dreipunktmenü → Erweiterter Zugriff → Aktivieren öffnen",
       "sourceHash": "3bee0070aeb6277cf63a471498b0fd5694cf27f969e666b702644b440086e92a",
       "state": "machine-cross-checked"
     },
@@ -2514,7 +2514,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.controls.no_separate_launcher": {
-      "text": "Kein separater Launcher auf diesem Panel — entspricht Admin launcher",
+      "text": "Kein separater Launcher auf diesem Panel — entspricht Admin-Launcher",
       "sourceHash": "a0116188ce3a91b305615048528239170e2e9c75bac41e89dc3d0da3b369403c",
       "state": "machine-cross-checked"
     },
@@ -2539,7 +2539,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.controls.root_required_note": {
-      "text": "Launcher, Admin launcher und Reboot benötigen root — auf diesem Panel deaktiviert.",
+      "text": "Launcher, Admin-Launcher und Neustart benötigen root — auf diesem Panel deaktiviert.",
       "sourceHash": "69d1baecdcbf9dfa80c51a89da504b4e82674dddc3d119cbd4169802d858b409",
       "state": "machine-cross-checked"
     },
@@ -2859,7 +2859,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.link.edit_configure": {
-      "text": "Im Tab Configure bearbeiten",
+      "text": "Im Tab Konfiguration bearbeiten",
       "sourceHash": "d75a23f2180bbf4b16cdb8deab9099a4a9aec9709e122e21c211e080d535ca91",
       "state": "machine-cross-checked"
     },
@@ -2869,7 +2869,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.link.open_install": {
-      "text": "Im Tab Install öffnen",
+      "text": "Im Tab Installation öffnen",
       "sourceHash": "f5ed36e35c39c2b351302d18126528be7471de98ed623c0018f0881a2b9426a5",
       "state": "machine-cross-checked"
     },

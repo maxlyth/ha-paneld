@@ -1189,7 +1189,7 @@
       "state": "machine-cross-checked"
     },
     "configure.setup.renderer.body": {
-      "text": "Sélectionnez le moteur de rendu intégré de ha-paneld dans la carte Dashboard ci-dessous ou configurez un autre paquet de tableau de bord. D’ici là, ce panneau n’affichera aucun tableau de bord.",
+      "text": "Sélectionnez le moteur de rendu intégré de ha-paneld dans la carte Tableau de bord ci-dessous ou configurez un autre paquet de tableau de bord. D’ici là, ce panneau n’affichera aucun tableau de bord.",
       "sourceHash": "f0598d3d45b0297c299d992eef987c0f77ad80079f755ff7d74cb02238e1dd3e",
       "state": "machine-cross-checked"
     },
@@ -1309,7 +1309,7 @@
       "state": "machine-cross-checked"
     },
     "configure.zigbee.join_confirm": {
-      "text": "Activez d’abord l’autorisation d’association dans Zigbee2MQTT ou ZHA. Cette action demandera le mode répéteur et lancera une nouvelle période d’association de 15 minutes. Elle ne redémarrera ni le système ni l’application du panneau. L’association est autorisée — demander l’association ?",
+      "text": "Activez d’abord l’autorisation d’association dans Zigbee2MQTT ou ZHA.\n\nCette action demandera le mode répéteur et lancera une nouvelle période d’association de 15 minutes. Elle ne redémarrera ni le système ni l’application du panneau.\n\nL’association est autorisée — demander l’association ?",
       "sourceHash": "76f333e7b54f36296e81bbeee30b8bdb7a789136c4cf968df78cc7905e5e5d91",
       "state": "machine-cross-checked"
     },
@@ -1394,7 +1394,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.auth_rejected.action": {
-      "text": "Configure → connexion Home Assistant",
+      "text": "Configurer → connexion Home Assistant",
       "sourceHash": "521df20fbc23f0d26403dd8d82708d66019af14cc2081330ea88e5f3854d719a",
       "state": "machine-cross-checked"
     },
@@ -1429,7 +1429,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.companion_url.install_action": {
-      "text": "Réparer dans l’onglet Install →",
+      "text": "Réparer dans l’onglet Installer →",
       "sourceHash": "d36d81e74fe3a959a745f091134741be7a6fdf8eaaa9a09835c19cd8c219b6d3",
       "state": "machine-cross-checked"
     },
@@ -1469,7 +1469,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.manage_install": {
-      "text": "Gérer dans l’onglet Install →",
+      "text": "Gérer dans l’onglet Installer →",
       "sourceHash": "3a44b8764e7cc637360c1249abf2574724b61a152b99714fd55f09cdccd6999a",
       "state": "machine-cross-checked"
     },
@@ -1509,7 +1509,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.schema_rollback.configure_action": {
-      "text": "Vérifier Configure →",
+      "text": "Vérifier Configurer →",
       "sourceHash": "d8ec542d4afb557de9d173fa65c10ad47c3b9357a741084ceb548c815c8df1af",
       "state": "machine-cross-checked"
     },
@@ -1554,7 +1554,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.setup_needs.suffix": {
-      "text": "— à définir dans l’onglet Configure.",
+      "text": "— à définir dans l’onglet Configurer.",
       "sourceHash": "a623aa42d2f1f53aa662a6afe155e3e0c1e47b2b888d5b843985025ef198d430",
       "state": "machine-cross-checked"
     },
@@ -1694,7 +1694,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.camera.configure_link": {
-      "text": "Configure → Caméra",
+      "text": "Configurer → Caméra",
       "sourceHash": "6870136fd6944e6b56c7e4665108db488f5a2bf7ad7190c4183ed41eccd8a3cc",
       "state": "machine-cross-checked"
     },
@@ -1729,7 +1729,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.camera.delivery.short_help": {
-      "text": "· réduisez la fréquence d’images ou la résolution dans Configure → Caméra, ou acceptez le débit fourni par ce panneau ; la cause de l’insuffisance n’est pas établie ici",
+      "text": "· réduisez la fréquence d’images ou la résolution dans Configurer → Caméra, ou acceptez le débit fourni par ce panneau ; la cause de l’insuffisance n’est pas établie ici",
       "sourceHash": "df7455427a2aa173ab64715f3d544617593051440b36c4dc33aa5d30533b97fc",
       "state": "machine-cross-checked"
     },
@@ -2194,7 +2194,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.capability.note.shizuku_disabled": {
-      "text": "désactivé dans ha-paneld ; sur le panneau, ouvrez Configure → menu de la barre d’outils → Accès avancé → Activer",
+      "text": "désactivé dans ha-paneld ; sur le panneau, ouvrez Configurer → menu de la barre d’outils → Accès avancé → Activer",
       "sourceHash": "3bee0070aeb6277cf63a471498b0fd5694cf27f969e666b702644b440086e92a",
       "state": "machine-cross-checked"
     },
@@ -2514,7 +2514,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.controls.no_separate_launcher": {
-      "text": "Aucun lanceur distinct sur ce panneau — identique à Admin launcher",
+      "text": "Aucun lanceur distinct sur ce panneau — identique à Lanceur admin",
       "sourceHash": "a0116188ce3a91b305615048528239170e2e9c75bac41e89dc3d0da3b369403c",
       "state": "machine-cross-checked"
     },
@@ -2539,7 +2539,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.controls.root_required_note": {
-      "text": "Launcher, Admin launcher et Reboot nécessitent root — désactivés sur ce panneau.",
+      "text": "Lanceur, Lanceur admin et Redémarrer nécessitent root — désactivés sur ce panneau.",
       "sourceHash": "69d1baecdcbf9dfa80c51a89da504b4e82674dddc3d119cbd4169802d858b409",
       "state": "machine-cross-checked"
     },
@@ -2824,7 +2824,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.inspect.instructions": {
-      "text": "Pour une inspection approfondie, ouvrez chrome://inspect → Configurer…, ajoutez {host}, puis appuyez sur Activer. Companion exige aussi Paramètres → Dépannage → Débogage WebView à distance et une relance du tableau de bord. Le relais nécessite root.",
+      "text": "Pour une inspection approfondie, ouvrez chrome://inspect → Configure…, ajoutez {host}, puis appuyez sur Activer. Companion exige aussi Paramètres → Dépannage → Débogage WebView à distance et une relance du tableau de bord. Le relais nécessite root.",
       "sourceHash": "4d4bde17b98b24bd56c637a96ebcb90b9adc7cdfb9a6e43f14eead421735fed7",
       "state": "machine-cross-checked"
     },
@@ -2844,7 +2844,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.inspect.running": {
-      "text": "Relais activé. Dans chrome://inspect, le tableau de bord apparaît maintenant sous Remote Target — cliquez sur inspect. S’il n’apparaît pas, l’hôte doit être ajouté avant l’activation : ajoutez {host} dans Configurer…, puis actualisez chrome://inspect. DevTools est exposé au LAN tant que le relais est actif ; appuyez sur Arrêter lorsque vous avez terminé.",
+      "text": "Relais activé. Dans chrome://inspect, le tableau de bord apparaît maintenant sous Remote Target — cliquez sur inspect. S’il n’apparaît pas, l’hôte doit être ajouté avant l’activation : ajoutez {host} dans Configure…, puis actualisez chrome://inspect. DevTools est exposé au LAN tant que le relais est actif ; appuyez sur Arrêter lorsque vous avez terminé.",
       "sourceHash": "2e061fb7d41c99241a10ac0799976d3994087845144cc55526eeb1e3585b8fa6",
       "state": "machine-cross-checked"
     },
@@ -2859,7 +2859,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.link.edit_configure": {
-      "text": "Modifier dans l’onglet Configure",
+      "text": "Modifier dans l’onglet Configurer",
       "sourceHash": "d75a23f2180bbf4b16cdb8deab9099a4a9aec9709e122e21c211e080d535ca91",
       "state": "machine-cross-checked"
     },
@@ -2869,7 +2869,7 @@
       "state": "machine-cross-checked"
     },
     "dashboard.link.open_install": {
-      "text": "Ouvrir dans l’onglet Install",
+      "text": "Ouvrir dans l’onglet Installer",
       "sourceHash": "f5ed36e35c39c2b351302d18126528be7471de98ed623c0018f0881a2b9426a5",
       "state": "machine-cross-checked"
     },

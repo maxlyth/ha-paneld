@@ -70,6 +70,97 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
+    @Test fun `Zigbee join confirmation keeps its consequential paragraph structure in every release locale`() {
+        val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
+        val key = "configure.zigbee.join_confirm"
+        val english = checkNotNull(source.strings[key]) { "English catalogue is missing $key" }.text
+        val englishParagraphs = english.split("\n\n")
+
+        assertEquals("the consequential English confirmation must remain a three-paragraph contract", 3, englishParagraphs.size)
+        assertTrue("the English confirmation must not contain isolated line breaks", englishParagraphs.none { '\n' in it })
+        releaseTargetLocales.forEach { locale ->
+            val translated = targetText(locale, key)
+            val translatedParagraphs = translated.split("\n\n")
+
+            assertEquals(
+                "$locale $key must retain the source's three-paragraph confirmation structure",
+                englishParagraphs.size,
+                translatedParagraphs.size,
+            )
+            assertTrue("$locale $key must not contain an empty paragraph", translatedParagraphs.none { it.isBlank() })
+            assertTrue("$locale $key must not replace paragraph breaks with isolated line breaks", translatedParagraphs.none { '\n' in it })
+        }
+    }
+
+    @Test fun `translated guidance names internal controls exactly as their localized labels`() {
+        val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
+        val internalReferences = mapOf(
+            "shell.nav.configure" to setOf(
+                "dashboard.banner.auth_rejected.action",
+                "dashboard.banner.schema_rollback.configure_action",
+                "dashboard.banner.setup_needs.suffix",
+                "dashboard.camera.configure_link",
+                "dashboard.camera.delivery.short_help",
+                "dashboard.capability.note.shizuku_disabled",
+                "dashboard.link.edit_configure",
+            ),
+            "shell.nav.install" to setOf(
+                "dashboard.banner.companion_url.install_action",
+                "dashboard.banner.manage_install",
+                "dashboard.link.open_install",
+            ),
+            "dashboard.controls.admin_launcher" to setOf(
+                "dashboard.controls.no_separate_launcher",
+                "dashboard.controls.root_required_note",
+            ),
+            "dashboard.controls.launcher" to setOf(
+                "dashboard.controls.root_required_note",
+            ),
+            "dashboard.controls.reboot" to setOf(
+                "dashboard.controls.root_required_note",
+            ),
+            "dashboard.controls.dashboard" to setOf(
+                "configure.setup.renderer.body",
+            ),
+        )
+
+        releaseTargetLocales.forEach { locale ->
+            internalReferences.forEach { (labelKey, referenceKeys) ->
+                val englishLabel = checkNotNull(source.strings[labelKey]) { "English catalogue is missing $labelKey" }.text
+                val localizedLabel = targetText(locale, labelKey)
+
+                referenceKeys.forEach { referenceKey ->
+                    val guidance = targetText(locale, referenceKey)
+                    val guidanceWithoutLongerLabel = if (labelKey == "dashboard.controls.launcher") {
+                        guidance.replace(targetText(locale, "dashboard.controls.admin_launcher"), "")
+                    } else {
+                        guidance
+                    }
+                    assertTrue(
+                        "$locale $referenceKey must name $labelKey exactly as the visible localized control '$localizedLabel'",
+                        localizedLabel in guidanceWithoutLongerLabel,
+                    )
+                    if (localizedLabel != englishLabel) {
+                        assertFalse(
+                            "$locale $referenceKey must not retain the internal English control name '$englishLabel'",
+                            Regex("(?<![\\p{L}\\p{N}])${Regex.escape(englishLabel)}(?![\\p{L}\\p{N}])").containsMatchIn(guidanceWithoutLongerLabel),
+                        )
+                    }
+                }
+            }
+        }
+
+        val externalChromeLabels = setOf("dashboard.inspect.instructions", "dashboard.inspect.running")
+        releaseTargetLocales.forEach { locale ->
+            externalChromeLabels.forEach { key ->
+                assertTrue(
+                    "$locale $key must preserve Chrome DevTools' external Configure… label",
+                    "Configure…" in targetText(locale, key),
+                )
+            }
+        }
+    }
+
     @Test fun `shared shell installs localized payload and helper before page scripts`() {
         val source = server.readText()
         val payload = source.indexOf("<script id=\"ha-i18n\"")
@@ -193,6 +284,12 @@ class HtmlUiCatalogueContractTest {
         Regex("$function\\(\\s*[\\\"']((?:shell|dashboard|configure)\\.[a-z0-9._-]+)[\\\"']")
             .findAll(source)
             .mapTo(sortedSetOf()) { it.groupValues[1] }
+
+    private fun targetText(locale: String, key: String): String {
+        val strings = JSONObject(File(assets, "i18n/$locale.json").readText()).getJSONObject("strings")
+        require(strings.has(key)) { "$locale is missing $key" }
+        return strings.getJSONObject(key).getString("text")
+    }
 
     private fun dynamicFactKeys(source: String): Set<String> =
         Regex("->\\s*\\\"([a-z0-9_]+)\\\"")

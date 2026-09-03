@@ -3106,8 +3106,7 @@
       "siblings": [],
       "placeholders": [],
       "frozen": [
-        "ha-paneld",
-        "Dashboard"
+        "ha-paneld"
       ],
       "softMaxChars": 190,
       "hardMaxChars": 380
@@ -3664,8 +3663,7 @@
       ],
       "placeholders": [],
       "frozen": [
-        "Home Assistant",
-        "Configure"
+        "Home Assistant"
       ],
       "softMaxChars": 52,
       "hardMaxChars": 74
@@ -3784,9 +3782,7 @@
         "dashboard.banner.companion_url.title"
       ],
       "placeholders": [],
-      "frozen": [
-        "Install"
-      ],
+      "frozen": [],
       "softMaxChars": 38,
       "hardMaxChars": 54
     },
@@ -3926,9 +3922,7 @@
       "risk": "consequential",
       "siblings": [],
       "placeholders": [],
-      "frozen": [
-        "Install"
-      ],
+      "frozen": [],
       "softMaxChars": 38,
       "hardMaxChars": 54
     },
@@ -4059,9 +4053,7 @@
         "dashboard.banner.schema_rollback.title"
       ],
       "placeholders": [],
-      "frozen": [
-        "Configure"
-      ],
+      "frozen": [],
       "softMaxChars": 24,
       "hardMaxChars": 34
     },
@@ -4223,9 +4215,7 @@
         "dashboard.banner.setup_needs.prefix"
       ],
       "placeholders": [],
-      "frozen": [
-        "Configure"
-      ],
+      "frozen": [],
       "softMaxChars": 38,
       "hardMaxChars": 54
     },
@@ -4681,9 +4671,7 @@
         "dashboard.camera.title"
       ],
       "placeholders": [],
-      "frozen": [
-        "Configure"
-      ],
+      "frozen": [],
       "softMaxChars": 26,
       "hardMaxChars": 36
     },
@@ -4785,9 +4773,7 @@
         "dashboard.camera.delivery.short"
       ],
       "placeholders": [],
-      "frozen": [
-        "Configure"
-      ],
+      "frozen": [],
       "softMaxChars": 202,
       "hardMaxChars": 288
     },
@@ -6281,7 +6267,6 @@
       ],
       "placeholders": [],
       "frozen": [
-        "Configure",
         "ha-paneld"
       ],
       "softMaxChars": 135,
@@ -7183,9 +7168,7 @@
       "risk": "ordinary",
       "siblings": [],
       "placeholders": [],
-      "frozen": [
-        "Admin launcher"
-      ],
+      "frozen": [],
       "softMaxChars": 80,
       "hardMaxChars": 160
     },
@@ -7248,9 +7231,6 @@
       "siblings": [],
       "placeholders": [],
       "frozen": [
-        "Launcher",
-        "Admin launcher",
-        "Reboot",
         "root"
       ],
       "softMaxChars": 96,
@@ -8002,7 +7982,8 @@
         "{host}",
         "WebView",
         "root",
-        "chrome://inspect"
+        "chrome://inspect",
+        "Configure"
       ],
       "softMaxChars": 296,
       "hardMaxChars": 422
@@ -8060,7 +8041,8 @@
         "{host}",
         "DevTools",
         "LAN",
-        "chrome://inspect"
+        "chrome://inspect",
+        "Configure"
       ],
       "softMaxChars": 374,
       "hardMaxChars": 534
@@ -8101,9 +8083,7 @@
         "dashboard.link.edit"
       ],
       "placeholders": [],
-      "frozen": [
-        "Configure"
-      ],
+      "frozen": [],
       "softMaxChars": 35,
       "hardMaxChars": 50
     },
@@ -8131,9 +8111,7 @@
         "dashboard.link.open"
       ],
       "placeholders": [],
-      "frozen": [
-        "Install"
-      ],
+      "frozen": [],
       "softMaxChars": 33,
       "hardMaxChars": 46
     },

@@ -120,6 +120,25 @@ class CatalogueTest(unittest.TestCase):
             parsed = i18n.validate_source(source_path)
             i18n.validate_target(target_path, parsed)
 
+    def test_zigbee_join_confirmation_allows_only_three_paragraphs(self):
+        key = "configure.zigbee.join_confirm"
+        i18n.validate_target_text_hygiene(key, "Erster Absatz.\n\nZweiter Absatz.\n\nDritter Absatz.")
+
+        invalid = {
+            "wrong key": ("configure.zigbee.other", "Eins.\n\nZwei.\n\nDrei."),
+            "single line break": (key, "Eins.\nZwei.\n\nDrei."),
+            "only two paragraphs": (key, "Eins.\n\nZwei."),
+            "four paragraphs": (key, "Eins.\n\nZwei.\n\nDrei.\n\nVier."),
+            "empty paragraph": (key, "Eins.\n\n\n\nDrei."),
+            "leading line break": (key, "\n\nEins.\n\nZwei."),
+            "trailing line break": (key, "Eins.\n\nZwei.\n\n"),
+            "carriage return": (key, "Eins.\r\n\r\nZwei.\r\n\r\nDrei."),
+            "other control": (key, "Eins.\n\nZwei.\x00\n\nDrei."),
+        }
+        for name, (candidate_key, text) in invalid.items():
+            with self.subTest(name=name), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_text_hygiene(candidate_key, text)
+
     def test_web_surface_is_admitted_but_unknown_surface_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = Path(directory) / "en.json"
