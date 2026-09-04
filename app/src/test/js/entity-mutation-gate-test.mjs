@@ -98,14 +98,14 @@ resetFetch = async () => { throw new Error('offline'); };
 await ids['entity-reset'].fire('click');
 await settle();
 assert.equal(alerts.at(-1), undefined, 'reset failures should use the inline status, not an alert');
-assert.match(ids['entity-action-result'].textContent, /Reset failed: offline/);
+assert.match(ids['entity-action-result'].textContent, /Reset failed\. offline/);
 assert.equal(ids['entity-reset'].disabled, false, 'reset remained disabled after rejected fetch');
 assert.equal(ids['entity-auto-static'].disabled, false, 'policy remained disabled after rejected fetch');
 
 resetFetch = async () => response('reset denied', 409);
 await ids['entity-reset'].fire('click');
 await settle();
-assert.match(ids['entity-action-result'].textContent, /Reset failed: reset denied/);
+assert.match(ids['entity-action-result'].textContent, /Reset failed\. reset denied/);
 assert.equal(ids['entity-reset'].disabled, false, 'reset remained disabled after non-2xx response');
 assert.equal(ids['entity-auto-static'].disabled, false, 'policy remained disabled after non-2xx response');
 

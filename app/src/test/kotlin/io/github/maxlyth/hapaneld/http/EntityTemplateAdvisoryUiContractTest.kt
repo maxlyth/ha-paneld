@@ -25,7 +25,7 @@ class EntityTemplateAdvisoryUiContractTest {
     )
 
     @Test fun `the confirmation says plainly that continuing adds nothing`() {
-        val handler = script.substringAfter("button.textContent=issue.ignored?'Re-enable safety check'")
+        val handler = script.substringAfter("button.textContent=issue.ignored?t('entities.issue.reenable'")
             .substringBefore("issuesList.appendChild(row)")
 
         assertTrue(handler.contains("This adds no entities to the subscription."))
@@ -37,12 +37,12 @@ class EntityTemplateAdvisoryUiContractTest {
         // that cannot be allowed never claims anything about allowing.
         assertTrue(
             script.contains(
-                "var allowable=!!(issue.fingerprint&&issue.ignorable!==false&&(issue.blocking||issue.ignored))",
+                "allowable=!!(issue.fingerprint&&issue.ignorable!==false&&(issue.blocking||issue.ignored))",
             ),
         )
-        assertEquals(1, Regex("Allowing this check never adds entities").findAll(script).count())
-        assertEquals(1, Regex("allowable\\?'<div class=\"entity-issue-allow-note\"").findAll(script).count())
-        assertTrue(script.contains("if(allowable){"))
+        assertTrue(script.contains("t('entities.issue.allow_note'"))
+        assertTrue(script.contains("if(allowable)appendAllowNote(row)"))
+        assertTrue(script.contains("if(allowable){var button=document.createElement('button')"))
         // Delegated, so a poll that rebuilds the issue list does not need rebinding and the row's one
         // appended child stays the toggle the severity contracts assert on.
         assertTrue(script.contains("if(!t.closest('.entity-issue-search'))return;focusCatalogSearch()"))
@@ -69,7 +69,7 @@ class EntityTemplateAdvisoryUiContractTest {
         // EntityFilterProtocol mutates only subscribe_entities, so a render_template subscription reaches
         // the panel unfiltered and those entities need nothing. Advising a pin for them would grow the
         // subscription the entity filter exists to shrink, so no shipped surface may suggest it.
-        val page = server.substringAfter("private fun entitiesBody()")
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun ghLink")
         val filterProtocol = source(
             "src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityFilterProtocol.kt",
@@ -87,17 +87,14 @@ class EntityTemplateAdvisoryUiContractTest {
     }
 
     @Test fun `server-rendered templates are not presented as something exercising can reveal`() {
-        val page = server.substringAfter("private fun entitiesBody()")
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun entityTableHtml")
-        val dynamic = page.substringAfter("Dynamic expressions to exercise").substringBefore("entity-dynamic-list")
+        val dynamic = page.substringAfter("entities.dynamic.title").substringBefore("entity-dynamic-list")
 
-        assertTrue(dynamic, dynamic.contains("Templates that Home Assistant renders on the server"))
-        assertTrue(dynamic, dynamic.contains("exercising never reveals the entities they read"))
-        // And says so without turning that into a chore: those reads arrive outside the filter, so the
-        // only thing worth adding by hand is what such a template produces as a card reference.
-        assertTrue(dynamic, dynamic.contains("a separate subscription this filter does not touch"))
-        assertTrue(dynamic, dynamic.contains("those entities need nothing"))
-        assertTrue(dynamic, dynamic.contains("produces as a card reference"))
+        assertTrue(
+            "the complete consequential paragraph is one catalogue-owned record",
+            dynamic.contains("strings.get(\"entities.dynamic.body\")"),
+        )
     }
 
     @Test fun `the lint never reads the template it refuses`() {

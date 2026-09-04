@@ -17,7 +17,7 @@ class EntityWarningSeverityUiContractTest {
     private val css = source("src/main/assets/info.css", "app/src/main/assets/info.css")
 
     @Test fun `compatibility summary is an accessible live status`() {
-        val page = server.substringAfter("private fun entitiesBody()")
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun entityTableHtml")
 
         assertTrue(page.contains("id=\"entity-issues-summary\" class=\"muted\" role=\"status\" aria-live=\"polite\""))
@@ -32,8 +32,9 @@ class EntityWarningSeverityUiContractTest {
     }
 
     @Test fun `advisory copy says discovery remains active`() {
-        assertTrue(script.contains("compatibility '+(total===1?'note':'notes')+'. Entity discovery is active; no action is required."))
-        assertTrue(script.contains("limited?'Limited coverage'"))
-        assertTrue(script.contains("issue.blocking?'Automatic updates paused':'Compatibility note'"))
+        assertTrue(script.contains("tp('entities.issues.summary.notes'"))
+        assertTrue(script.contains("t('entities.issue.severity.limited','Limited coverage')"))
+        assertTrue(script.contains("t('entities.issue.severity.paused','Automatic updates paused')"))
+        assertTrue(script.contains("t('entities.issue.severity.note','Compatibility note')"))
     }
 }

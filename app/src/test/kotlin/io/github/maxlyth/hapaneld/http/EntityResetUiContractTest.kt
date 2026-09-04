@@ -18,11 +18,11 @@ class EntityResetUiContractTest {
     ).first(File::isFile).readText()
 
     @Test fun `entities page exposes an explicit reset action`() {
-        val page = server.substringAfter("private fun entitiesBody()")
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun entityTableHtml")
 
         assertTrue(page.contains("id=\"entity-reset\""))
-        assertTrue(page.contains(">Reset learned data</button>"))
+        assertTrue(page.contains("strings.get(\"entities.filter.reset\")"))
         assertTrue(page.contains("id=\"entity-action-result\""))
     }
 
@@ -30,11 +30,11 @@ class EntityResetUiContractTest {
         val handler = script.substringAfter("resetButton.addEventListener('click'")
             .substringBefore("async function savePolicy")
 
-        assertTrue(handler.indexOf("confirm('") < handler.indexOf("mutationRequest(claim,'/api/v1/dashboard/entities/reset'"))
+        assertTrue(handler.indexOf("confirm(t('entities.reset.confirm'") < handler.indexOf("mutationRequest(claim,'/api/v1/dashboard/entities/reset'"))
         assertTrue(handler.contains("JSON.stringify({confirm:true,clear_filter:false})"))
         assertFalse(handler.contains("clear_filter:true"))
         assertTrue(handler.contains("entity-discovery safety ignore decisions"))
-        assertTrue(handler.contains("resultMessage='Reset failed: '"))
+        assertTrue(handler.contains("resultMessage=t('entities.reset.failed'"))
         assertTrue(handler.contains("resultKind='ok'"))
         assertTrue(handler.contains("Promise.all([loadStatus(),loadIssues(),resetAll()])"))
         assertTrue(handler.contains("current live subscription remains in place until that scan succeeds"))
@@ -85,7 +85,7 @@ class EntityResetUiContractTest {
             "'/api/v1/dashboard/entities/reset'",
         ).forEach { endpoint -> assertTrue("missing guarded mutation $endpoint", "mutationRequest(claim,$endpoint" in script) }
         assertTrue(script.contains("refreshMutationControls();return d"))
-        assertTrue(script.contains("selectedMsg.textContent=state.selected.size+' selected';refreshMutationControls()"))
+        assertTrue(script.contains("selectedMsg.textContent=state.selected.size?t('entities.selection.count'"))
         assertTrue(script.contains(".entity-list select[data-id],.entity-list button[data-bulk],.entity-list button[data-all-candidates],.entity-issue-toggle"))
     }
 

@@ -22,7 +22,7 @@ class EntityTableAssetTest {
         assertTrue(source.contains("state.offset=0;load(activeGeneration)"))
         assertFalse("client-side page sorting must not return", source.contains("state.items.slice().sort"))
         assertFalse("selection must survive sort/search refresh", source.contains("state.selected.clear();state.offset=0"))
-        assertTrue("pin-all confirmation must use the global suggested count", source.contains("'all '+suggestedCount+' suggested entities'"))
+        assertTrue("pin-all confirmation must use the global suggested count", source.contains("count=allCandidates?suggestedCount:ids.length"))
         assertFalse("pin-all must not describe only the searched/page count", source.contains("'all '+state.total+' suggested entities'"))
     }
 

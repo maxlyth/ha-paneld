@@ -9,7 +9,7 @@ class PanelNavigationSourceTest {
     fun unfinishedTabsAreWithheldAndInstallRemainsInPrimaryNavigation() {
         val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
         val nav = source.substringAfter("private fun navBar(active: String, strings: AppStrings)")
-            .substringBefore("private fun entitiesBody()")
+            .substringBefore("private fun entitiesBody(strings: AppStrings)")
         val install = nav.indexOf("tab(\"install\", \"/install\", strings.get(\"shell.nav.install\"))")
         val profiles = nav.indexOf("tab(\"profiles\", \"/profiles\", strings.get(\"shell.nav.profile\"))")
         assertTrue(install >= 0, "Install navigation entry is missing")
@@ -34,7 +34,7 @@ class PanelNavigationSourceTest {
     @Test
     fun entitiesPageAcceptsAutoWhenItResolvesToTheBuiltInRenderer() {
         val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
-        val entities = source.substringAfter("private fun entitiesBody()")
+        val entities = source.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun entityTableHtml")
         assertTrue(
             "!effectiveDashboardIsBuiltin()" in entities,

@@ -21,7 +21,7 @@ class EntitySearchFeedbackUiContractTest {
     private val css = source("src/main/assets/info.css", "app/src/main/assets/info.css")
 
     @Test fun `the search box is paired with an adjacent live status line`() {
-        val page = server.substringAfter("private fun entitiesBody()")
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
             .substringBefore("private fun entityTableHtml")
         val searchRow = page.substringAfter("<div class=\"entity-search-row\">").substringBefore("</div>\n")
 
@@ -39,12 +39,12 @@ class EntitySearchFeedbackUiContractTest {
     }
 
     @Test fun `each section carries the short label the counts line uses`() {
-        val page = server.substringAfter("private fun entitiesBody()")
-        assertTrue(server.contains("data-table=\"\$id\" data-short=\"\$shortTitle\""))
-        listOf("\"Current\"", "\"Suggested\"", "\"Stale or noisy\"").forEach {
+        val page = server.substringAfter("private fun entitiesBody(strings: AppStrings)")
+        assertTrue(server.contains("data-table=\"\$id\""))
+        listOf("entities.table.current.short", "entities.table.suggested.short", "entities.table.review.short").forEach {
             assertTrue("missing short label $it", page.substringBefore("private fun ghLink").contains(it))
         }
-        assertTrue(script.contains("card.dataset.short||card.dataset.table"))
+        assertTrue(script.contains("sectionLabel=t(card.dataset.shortKey||'entities.table.'+sectionTable+'.short',sectionFallback)"))
     }
 
     @Test fun `the status line reserves its height so appearing text shifts nothing`() {
@@ -71,7 +71,7 @@ class EntitySearchFeedbackUiContractTest {
         assertTrue(script.contains("if(++generationSettled<tables.length)return"))
         // The per-table request token is what discards a superseded answer before it can claim a slot.
         assertTrue(script.contains("if(request!==state.request)return;state.items=d.items||[]"))
-        assertTrue(script.contains("if(request!==state.request)return;msg.textContent='Entity list unavailable'"))
+        assertTrue(script.contains("if(request!==state.request)return;msg.textContent=t('entities.row.list_unavailable'"))
         // Sorting or paging supersedes that section's pending request, so it adopts the pending
         // generation; otherwise the section could never answer and the line would stay on "Searching…".
         assertEquals(3, Regex("load\\(activeGeneration\\)").findAll(script).count())

@@ -149,7 +149,7 @@ assert.equal(scrolls.length, 0, 'no scroll before results exist');
 await debounce();
 assert.equal(
   searchStatus.textContent,
-  'Matches: Current 1 · Suggested 3 · Stale or noisy 0',
+  'Matches: Current: 1, Suggested: 3, Stale or noisy: 0',
   'counts must name every section from one settled generation',
 );
 
@@ -164,7 +164,7 @@ const afterSearch = scrolls.length;
 for (const poll of polls) await poll();
 await settle();
 assert.equal(scrolls.length, afterSearch, 'a poll tick must not move the page');
-assert.equal(searchStatus.textContent, 'Matches: Current 1 · Suggested 3 · Stale or noisy 0');
+assert.equal(searchStatus.textContent, 'Matches: Current: 1, Suggested: 3, Stale or noisy: 0');
 
 // --- 5. a mutation refresh never scrolls ------------------------------------------------------------
 await ids['entity-auto-static'].fire('change');
@@ -222,7 +222,7 @@ assert.equal(releaseHeld((entry) => entry.query === 'bedroom'), 1);
 await settle();
 assert.equal(
   searchStatus.textContent,
-  'Matches: Current 9 · Suggested 9 · Stale or noisy 9',
+  'Matches: Current: 9, Suggested: 9, Stale or noisy: 9',
   'the settled line reports one generation only',
 );
 assert.equal(scrolls.length, beforeStale + 1, 'the fresh generation reveals once');
@@ -243,7 +243,7 @@ releaseHeld((entry) => entry.query === 'landing');
 await settle();
 assert.equal(
   searchStatus.textContent,
-  'Matches: Current 2 · Suggested 2 · Stale or noisy 2',
+  'Matches: Current: 2, Suggested: 2, Stale or noisy: 2',
   'a section paged mid-search must still report into the pending generation',
 );
 
@@ -271,7 +271,7 @@ for (const { parts } of sections) {
 }
 holdKeys = new Set();
 await debounce();
-assert.equal(searchStatus.textContent, 'Matches: Current 2 · Suggested 2 · Stale or noisy 2', 'the query the user settled on reports');
+assert.equal(searchStatus.textContent, 'Matches: Current: 2, Suggested: 2, Stale or noisy: 2', 'the query the user settled on reports');
 assert.equal(scrolls.length, beforeKeystroke + 1, 'and reveals exactly once');
 for (const { parts } of sections) assert.ok(parts['.entity-msg'].textContent.includes('of 2'));
 
@@ -280,7 +280,7 @@ const beforeFallback = scrolls.length;
 totals.subscribed = 0; totals.candidate = 0; totals.review = 4;
 await type('stale');
 await debounce();
-assert.equal(searchStatus.textContent, 'Matches: Current 0 · Suggested 0 · Stale or noisy 4');
+assert.equal(searchStatus.textContent, 'Matches: Current: 0, Suggested: 0, Stale or noisy: 4');
 assert.equal(scrolls.length, beforeFallback + 1);
 assert.equal(scrolls[scrolls.length - 1].name, 'review', 'falls back to the first section with matches');
 
