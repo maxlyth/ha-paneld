@@ -6,10 +6,19 @@ import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisoryAction
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
 import io.github.maxlyth.hapaneld.control.PowerSafetyPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyRepairResult
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import org.json.JSONArray
 import org.json.JSONObject
 
 internal object PowerSafetyPresentation {
+    /** Typed metadata for the exact warning emitted by [statusWarningHtml]. */
+    fun warningPresentation(advisory: PowerSafetyAdvisory): InstallPresentation? = when (advisory.assessment.level) {
+        PowerRiskLevel.AT_RISK -> InstallPresentation("status-power-at-risk")
+        PowerRiskLevel.CAUTION -> InstallPresentation("status-power-caution")
+        PowerRiskLevel.UNKNOWN -> InstallPresentation("status-power-unknown")
+        PowerRiskLevel.SAFE -> null
+    }
+
     fun json(advisory: PowerSafetyAdvisory): String = jsonObject(advisory).toString()
 
     fun repairJson(result: PowerSafetyRepairResult, advisory: PowerSafetyAdvisory): String = JSONObject()

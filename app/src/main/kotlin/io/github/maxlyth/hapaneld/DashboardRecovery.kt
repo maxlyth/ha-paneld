@@ -5,8 +5,20 @@ import io.github.maxlyth.hapaneld.dashboard.EntityBootstrapProblem
 import io.github.maxlyth.hapaneld.dashboard.EntityFilterProtocol
 import io.github.maxlyth.hapaneld.http.HA_OAUTH_CALLBACK_PATH
 import io.github.maxlyth.hapaneld.util.ProfileRestartCoordinator
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import java.net.URI
 import java.net.URLEncoder
+
+/** Locale-neutral counterpart of the renderer-specific warning rendered by the HTTP server. */
+internal fun dashboardRecoveryPresentation(
+    state: PanelStatus.DashboardRecoveryState,
+): InstallPresentation? = when (state) {
+    PanelStatus.DashboardRecoveryState.NONE -> null
+    PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER ->
+        InstallPresentation("status-builtin-renderer-retries-stopped")
+    PanelStatus.DashboardRecoveryState.EXTERNAL_RENDERER ->
+        InstallPresentation("status-external-renderer-crash-loop")
+}
 
 /**
  * Owns callbacks from one replaceable WebView generation. Opening or invalidating a generation makes

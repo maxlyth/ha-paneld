@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.http
 import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
 import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import org.json.JSONObject
 
@@ -53,6 +54,49 @@ object HealthAudit {
     }
 
     /**
+     * Locale-neutral metadata for one finding. Values which are structured only at the call site are
+     * supplied explicitly; neither the schema rollback detail nor any English label is parsed to recover
+     * semantics. Invalid or incomplete dynamic values deliberately return null so the legacy English
+     * warning remains the exact fallback.
+     */
+    fun presentation(
+        finding: Finding,
+        targetChromium: Int? = null,
+        fromSchema: Int? = null,
+        toSchema: Int? = null,
+        /** Pass [UpdateChecker.UpdateInfo.component] for an update finding after the producer resolves it. */
+        updateComponent: String? = null,
+    ): InstallPresentation? = when (finding.kind) {
+        Kind.SCHEMA_ROLLED_BACK -> {
+            if (fromSchema == null || toSchema == null) null else InstallPresentation.create(
+                "status-schema-rollback",
+                mapOf("from_schema" to fromSchema.toString(), "to_schema" to toSchema.toString()),
+            )
+        }
+        Kind.WEBVIEW_OLD -> {
+            if (targetChromium == null) null else InstallPresentation.create(
+                "status-webview-old",
+                mapOf(
+                    "current_engine" to finding.detail,
+                    "target_chromium" to targetChromium.toString(),
+                ),
+            )
+        }
+        Kind.NO_RENDERER -> InstallPresentation("status-no-renderer")
+        Kind.UPDATE -> finding.update?.let { update ->
+            InstallPresentation.create(
+                "status-update-available",
+                mapOf(
+                    "component" to (updateComponent ?: return@let null),
+                    "current" to update.currentVersion,
+                    "latest" to update.latestVersion,
+                    "release_url" to update.releaseUrl,
+                ),
+            )
+        }
+    }
+
+    /**
      * Public-safe projection of one storage observation. HTTP, HTML and copy-paste diagnostics all
      * render this same value so severity and remediation cannot drift between surfaces. Paths and raw
      * exception text deliberately never enter this type.
@@ -77,6 +121,8 @@ object HealthAudit {
         val failureOperation: String?,
         val summary: String,
         val action: String,
+        /** Additive typed metadata for [warningHtml], absent when this state has no warning. */
+        val warningPresentation: InstallPresentation?,
     ) {
         /** Stable flat JSON contract for `/api/v1/status`; state stays first for small shell clients. */
         fun statusJson(): String = buildString {
@@ -238,7 +284,57 @@ object HealthAudit {
             failureOperation = failureOperation,
             summary = summary,
             action = action,
+            warningPresentation = storageWarningPresentation(
+                severity = snapshot.severity,
+                failureKind = snapshot.databaseFailureKind,
+                failureOperation = failureOperation,
+                usableBytes = usableBytes,
+                totalBytes = totalBytes,
+                usedPercent = used,
+                databaseBytes = measured(snapshot.mainDatabaseBytes),
+                walBytes = measured(snapshot.walBytes),
+            ),
         )
+    }
+
+    private fun storageWarningPresentation(
+        severity: StorageHealthSeverity,
+        failureKind: StorageDatabaseFailureKind?,
+        failureOperation: String?,
+        usableBytes: Long?,
+        totalBytes: Long?,
+        usedPercent: Double?,
+        databaseBytes: Long?,
+        walBytes: Long?,
+    ): InstallPresentation? {
+        val metrics = buildMap {
+            usableBytes?.let { put("usable_bytes", it.toString()) }
+            totalBytes?.let { put("total_bytes", it.toString()) }
+            usedPercent?.let { put("used_percent", it.toString()) }
+            databaseBytes?.let { put("database_bytes", it.toString()) }
+            walBytes?.let { put("wal_bytes", it.toString()) }
+        }
+        return when (severity) {
+            StorageHealthSeverity.WARNING -> InstallPresentation.create("status-storage-warning", metrics)
+            StorageHealthSeverity.CRITICAL -> InstallPresentation.create("status-storage-critical", metrics)
+            StorageHealthSeverity.DATABASE_FAILURE -> {
+                val failure = when (failureKind) {
+                    StorageDatabaseFailureKind.STORAGE_FULL -> "storage-full"
+                    StorageDatabaseFailureKind.IO -> "io"
+                    StorageDatabaseFailureKind.CORRUPTION -> "corruption"
+                    StorageDatabaseFailureKind.BUSY -> "busy"
+                    StorageDatabaseFailureKind.UNKNOWN,
+                    null -> return null
+                }
+                val operation = failureOperation ?: return null
+                InstallPresentation.create(
+                    "status-storage-database-failure",
+                    metrics + mapOf("failure" to failure, "operation" to operation),
+                )
+            }
+            StorageHealthSeverity.UNCHECKED,
+            StorageHealthSeverity.HEALTHY -> null
+        }
     }
 
     private fun storageFailureWireValue(kind: StorageDatabaseFailureKind): String = when (kind) {

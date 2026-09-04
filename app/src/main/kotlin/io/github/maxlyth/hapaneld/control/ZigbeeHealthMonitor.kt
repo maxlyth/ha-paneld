@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.HelperClient
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.SystemProps
 import org.json.JSONObject
 import java.util.ArrayDeque
@@ -109,6 +110,22 @@ data class ZigbeeHealthSnapshot(
         if (containment != ZigbeeContainmentResult.NONE) details += "containment ${containment.wireValue}"
         return details.joinToString(" · ")
     }
+}
+
+/** Typed counterpart of the server's ordered Zigbee warning projection. */
+internal fun zigbeeHealthPresentation(
+    snapshot: ZigbeeHealthSnapshot,
+    configuredOn: Boolean,
+): InstallPresentation? = when {
+    snapshot.state == ZigbeeHealthState.CONTAINED -> InstallPresentation("status-zigbee-contained")
+    snapshot.state == ZigbeeHealthState.CONTAINMENT_FAILED ->
+        InstallPresentation("status-zigbee-containment-incomplete")
+    snapshot.state == ZigbeeHealthState.RUNAWAY -> InstallPresentation("status-zigbee-runaway")
+    snapshot.state == ZigbeeHealthState.DEGRADED_HIGH_CPU -> InstallPresentation("status-zigbee-high-cpu")
+    snapshot.state == ZigbeeHealthState.DEGRADED_UNJOINED && configuredOn ->
+        InstallPresentation("status-zigbee-not-joined")
+    snapshot.recursiveWatchdogAssignment -> InstallPresentation("status-zigbee-legacy-watchdog")
+    else -> null
 }
 
 internal object ZigbeeNetInfoParser {

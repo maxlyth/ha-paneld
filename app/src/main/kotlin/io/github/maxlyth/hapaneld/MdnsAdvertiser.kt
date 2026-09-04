@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.wifi.WifiManager
 import android.util.Log
 import io.github.maxlyth.hapaneld.util.Json
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.RetirableMutationGate
 import io.github.maxlyth.hapaneld.util.interruptAndJoin
@@ -194,7 +195,12 @@ class MdnsAdvertiser(
                 val addr = InetAddress.getByName(lanIp)
                 val dns = JmDNS.create(addr, runtimePanelId)
                 dns.setDelegate { failedDns, _ ->
-                    requestRecovery(failedDns, "JmDNS could not recover its multicast socket", terminal = true)
+                    requestRecovery(
+                        failedDns,
+                        "JmDNS could not recover its multicast socket",
+                        MdnsReasonCode.MULTICAST_SOCKET_FAILED,
+                        terminal = true,
+                    )
                 }
                 val generationProbeToken = UUID.randomUUID().toString()
                 val props = mapOf(
@@ -282,10 +288,15 @@ class MdnsAdvertiser(
         }
 
     /** Queue recovery off JmDNS and refresh threads; neither may tear down a responder it owns. */
-    private fun requestRecovery(dns: JmDNS, reason: String, terminal: Boolean) {
+    private fun requestRecovery(
+        dns: JmDNS,
+        reason: String,
+        reasonCode: MdnsReasonCode,
+        terminal: Boolean,
+    ) {
         if (dns !== jmdns || !browsing) return
         if (!terminal) return
-        liveness.observeTerminalFailure(monotonicMs(), reason)?.let { submitRecovery(dns, reason, it) }
+        liveness.observeTerminalFailure(monotonicMs(), reason, reasonCode)?.let { submitRecovery(dns, reason, it) }
     }
 
     private fun submitRecovery(
@@ -347,13 +358,20 @@ class MdnsAdvertiser(
             },
         )
         val failure = when (outcome) {
-            MdnsRecoveryOutcome.TEARDOWN_FAILED -> "responder teardown did not drain"
-            MdnsRecoveryOutcome.RESTART_FAILED -> "responder recreation failed"
+            MdnsRecoveryOutcome.TEARDOWN_FAILED ->
+                "responder teardown did not drain" to MdnsReasonCode.TEARDOWN_FAILED
+            MdnsRecoveryOutcome.RESTART_FAILED ->
+                "responder recreation failed" to MdnsReasonCode.RECREATION_FAILED
             else -> null
         }
         if (failure != null && topology.matches(request.epoch, request.boundIp)) {
-            liveness.recoveryFailed(request.reservation.token, monotonicMs(), failure)?.let { delay ->
-                submitRecovery(jmdns, failure, delay, request.epoch, request.boundIp)
+            liveness.recoveryFailed(
+                request.reservation.token,
+                monotonicMs(),
+                failure.first,
+                failure.second,
+            )?.let { delay ->
+                submitRecovery(jmdns, failure.first, delay, request.epoch, request.boundIp)
             }
         } else liveness.recoveryFinished(request.reservation.token)
     }
@@ -646,6 +664,39 @@ data class MdnsHealth(
     val liveness: MdnsLivenessSnapshot = MdnsLivenessSnapshot(),
 )
 
+/** Closed reason vocabulary for localized recovery warnings; [lastReason] remains exact diagnostic evidence. */
+enum class MdnsReasonCode(val wireValue: String) {
+    OWN_ADVERTISEMENT_ABSENT("own-advertisement-absent"),
+    MULTICAST_SOCKET_FAILED("multicast-socket-failed"),
+    TEARDOWN_FAILED("teardown-failed"),
+    RECREATION_FAILED("recreation-failed"),
+    NO_RESPONSE("no-response"),
+}
+
+/** Typed counterpart of [mdnsHealthWarning], preserving its exact precedence and null behavior. */
+internal fun mdnsHealthPresentation(health: MdnsHealth): InstallPresentation? = when {
+    health.lanIp == null -> null
+    !health.advertising -> InstallPresentation("status-mdns-not-running")
+    health.boundIp != health.lanIp -> health.boundIp?.let { boundIp ->
+        InstallPresentation.create(
+            "status-mdns-stale-address",
+            mapOf("bound_ip" to boundIp, "lan_ip" to health.lanIp),
+        )
+    }
+    health.liveness.state == MdnsLivenessState.EXHAUSTED -> InstallPresentation.create(
+        "status-mdns-unresponsive",
+        mapOf(
+            "attempts" to health.liveness.recoveryAttempts.toString(),
+            "reason_code" to (health.liveness.reasonCode ?: MdnsReasonCode.NO_RESPONSE).wireValue,
+        ),
+    )
+    health.liveness.state == MdnsLivenessState.RECOVERING -> InstallPresentation.create(
+        "status-mdns-recovering",
+        mapOf("reason_code" to (health.liveness.reasonCode ?: MdnsReasonCode.NO_RESPONSE).wireValue),
+    )
+    else -> null
+}
+
 /** A concise status warning for an advertiser that is absent or bound to an obsolete LAN address. */
 internal fun mdnsHealthWarning(health: MdnsHealth): String? = when {
     // Before DHCP there is nothing useful to advertise; the network cards already explain that state.
@@ -673,6 +724,7 @@ data class MdnsLivenessSnapshot(
     val recoveryAttempts: Int = 0,
     val lastReason: String? = null,
     val retryAfterMs: Long = 0L,
+    val reasonCode: MdnsReasonCode? = null,
 )
 
 internal data class MdnsRecoveryReservation(val delayMs: Long, val token: Long)
@@ -692,6 +744,7 @@ internal class MdnsLivenessPolicy(
     private var retryAtMs = 0L
     private var state = MdnsLivenessState.HEALTHY
     private var reason: String? = null
+    private var reasonCode: MdnsReasonCode? = null
     private var recoveryPending = false
     private var reservationToken = 0L
 
@@ -712,11 +765,18 @@ internal class MdnsLivenessPolicy(
         }
         misses++
         if (misses < deadSweeps) return null
-        return reserveRecovery(nowMs, "own advertisement missing from $misses active queries")
+        return reserveRecovery(
+            nowMs,
+            "own advertisement missing from $misses active queries",
+            MdnsReasonCode.OWN_ADVERTISEMENT_ABSENT,
+        )
     }
 
-    @Synchronized fun observeTerminalFailure(nowMs: Long, failure: String): MdnsRecoveryReservation? =
-        reserveRecovery(nowMs, failure)
+    @Synchronized fun observeTerminalFailure(
+        nowMs: Long,
+        failure: String,
+        code: MdnsReasonCode = MdnsReasonCode.NO_RESPONSE,
+    ): MdnsRecoveryReservation? = reserveRecovery(nowMs, failure, code)
 
     @Synchronized fun isCurrent(token: Long): Boolean = recoveryPending && reservationToken == token
 
@@ -729,10 +789,11 @@ internal class MdnsLivenessPolicy(
         token: Long,
         nowMs: Long,
         failure: String,
+        code: MdnsReasonCode = MdnsReasonCode.NO_RESPONSE,
     ): MdnsRecoveryReservation? {
         if (!recoveryPending || reservationToken != token) return null
         recoveryPending = false
-        return reserveRecovery(nowMs, failure)
+        return reserveRecovery(nowMs, failure, code)
     }
 
     @Synchronized fun cancelPending(token: Long? = null) {
@@ -747,10 +808,16 @@ internal class MdnsLivenessPolicy(
         recoveryAttempts = attempts,
         lastReason = reason,
         retryAfterMs = (retryAtMs - nowMs).coerceAtLeast(0L),
+        reasonCode = reasonCode,
     )
 
-    private fun reserveRecovery(nowMs: Long, failure: String): MdnsRecoveryReservation? {
+    private fun reserveRecovery(
+        nowMs: Long,
+        failure: String,
+        code: MdnsReasonCode,
+    ): MdnsRecoveryReservation? {
         reason = failure
+        reasonCode = code
         if (recoveryPending) return null
         if (attempts >= maxAttempts) {
             state = MdnsLivenessState.EXHAUSTED
@@ -772,6 +839,7 @@ internal class MdnsLivenessPolicy(
         retryAtMs = 0L
         state = MdnsLivenessState.HEALTHY
         reason = null
+        reasonCode = null
         recoveryPending = false
         reservationToken++
     }
