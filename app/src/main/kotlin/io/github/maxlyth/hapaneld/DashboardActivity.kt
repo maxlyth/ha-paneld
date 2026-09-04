@@ -416,8 +416,7 @@ class DashboardActivity : AppCompatActivity() {
         runCatching {
             android.widget.Toast.makeText(
                 this,
-                "ha-paneld is restarting the dashboard — " +
-                    reason.ifBlank { "applying your changes" },
+                getString(R.string.dashboard_restart_announcement, reason.ifBlank { getString(R.string.applying_changes) }),
                 android.widget.Toast.LENGTH_LONG,
             ).show()
         }
@@ -474,12 +473,12 @@ class DashboardActivity : AppCompatActivity() {
             val elapsed = SystemClock.elapsedRealtime() - waitingStartedAt
             val expected = ((waitingEstimateMs + 2_500L) / 5_000L) * 5L
             waitingStatus?.text = if (waitingEstimateLearned) {
-                "${elapsed / 1_000L}s elapsed  ·  usually about ${expected}s"
+                getString(R.string.elapsed_usually, elapsed / 1_000L, expected)
             } else {
-                "${elapsed / 1_000L}s elapsed  ·  learning this panel's timing"
+                getString(R.string.elapsed_learning, elapsed / 1_000L)
             }
             waitingProgress?.progress = networkWaitProgress(elapsed, waitingEstimateMs)
-            waitingStage?.text = startupNetworkStage(startupNetworkSnapshot())
+            waitingStage?.text = localizedStartupNetworkStage(startupNetworkSnapshot())
             main.postDelayed(this, 1_000L)
         }
     }
@@ -552,7 +551,7 @@ class DashboardActivity : AppCompatActivity() {
                 }
                 // Live milestone tick — the count climbing is the trust signal a spinner never was.
                 entityBootstrapMilestoneView?.takeIf { it.isAttachedToWindow }?.let {
-                    val milestone = EntityLearningRuntime.bootstrapMilestone()
+                    val milestone = localizedBootstrapMilestone()
                     if (milestone.isNotBlank() && it.text != milestone) it.text = milestone
                 }
                 main.postDelayed(this, ENTITY_BOOTSTRAP_CHECK_MS)
@@ -787,9 +786,8 @@ class DashboardActivity : AppCompatActivity() {
     } catch (error: ExternalV2BridgeUnavailable) {
         Log.e(TAG, "secure V2 listener attachment failed", error)
         showBlockedAdmissionScreen(
-            "Home Assistant stopped loading",
-            "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
-                "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
+            getString(R.string.home_assistant_stopped_loading),
+            getString(R.string.home_assistant_stopped_loading_detail),
             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
         )
         false
@@ -1391,9 +1389,7 @@ class DashboardActivity : AppCompatActivity() {
         val nextFilterSignature = entityFilterSignature(config)
         if (nextFilterSignature != entityFilterSignature) {
             Log.i(TAG, "entity instrumentation changed — rebuilding dashboard WebView")
-            announceDeliberateRestart(
-                "optimising which entities it uses (it may reload again as the panel learns)",
-            )
+            announceDeliberateRestart(getString(R.string.optimizing_entities_restart))
             unlatchAuth("entity-filter change")
             retryPolicy.reset()
             interstitialShown = false
@@ -1409,7 +1405,7 @@ class DashboardActivity : AppCompatActivity() {
         val nextThemeSignature = config.dashboardTheme
         if (nextThemeSignature != dashboardThemeSignature) {
             Log.i(TAG, "dashboard theme policy changed — rebuilding dashboard WebView")
-            announceDeliberateRestart("applying your dashboard theme")
+            announceDeliberateRestart(getString(R.string.applying_dashboard_theme))
             unlatchAuth("theme policy change")
             retryPolicy.reset()
             interstitialShown = false
@@ -1497,9 +1493,8 @@ class DashboardActivity : AppCompatActivity() {
         val session = externalBusSession
         if (session != null && v2Handshake.onTimeout(session)) {
             showBlockedAdmissionScreen(
-                "Home Assistant opened but will not respond",
-                "The page loaded, but the panel cannot control it, so nothing on the dashboard would work. " +
-                    "The panel keeps trying. If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
+                getString(R.string.home_assistant_unresponsive),
+                getString(R.string.home_assistant_unresponsive_detail),
                 AdmissionOutcome.BRIDGE_HANDSHAKE_MISSED,
             )
             return
@@ -1639,6 +1634,9 @@ class DashboardActivity : AppCompatActivity() {
         // and the decision being reported — stop retrying — is entirely ha-paneld's.
         val dark = StatusSurface.darkFor(this, Config(this))
         val palette = statusPalette(dark)
+        val rejectedTitle = android.text.TextUtils.htmlEncode(getString(R.string.sign_in_rejected_title))
+        val rejectedDetail = android.text.TextUtils.htmlEncode(getString(R.string.sign_in_rejected_terminal_detail))
+        val rejectedFix = android.text.TextUtils.htmlEncode(getString(R.string.sign_in_rejected_fix, cfg))
         web?.loadDataWithBaseURL(
             null,
             """<!doctype html><html><body style="background:${palette.background};color:${palette.body};
@@ -1646,11 +1644,9 @@ class DashboardActivity : AppCompatActivity() {
                min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
                ${statusBrandHtmlHeader(this, dark, palette)}
-               <h1 style="color:${palette.error}">Home Assistant sign-in rejected</h1>
-               <p style="font-size:1.3em">The saved Home Assistant login stopped working, so the panel has
-               stopped retrying it.</p>
-               <p style="font-size:1.3em"><b>Fix:</b> open <b>$cfg</b> &rarr; Home Assistant connection,
-               then use Browser sign-in. The dashboard reloads automatically when the login changes.</p>
+               <h1 style="color:${palette.error}">$rejectedTitle</h1>
+               <p style="font-size:1.3em">$rejectedDetail</p>
+               <p style="font-size:1.3em">$rejectedFix</p>
                </div></body></html>""",
             "text/html", "utf-8", null,
         )
@@ -1892,15 +1888,15 @@ class DashboardActivity : AppCompatActivity() {
         waitingEstimateLearned = config.lastNetworkWaitMs > 0L
         waitingEstimateMs = config.lastNetworkWaitMs.takeIf { it > 0L } ?: DEFAULT_NETWORK_WAIT_MS
         val surface = statusSurface(config)
-        surface.setBrandCaption("running")
-        val stage = surface.heading(startupNetworkStage(startupNetworkSnapshot()))
+        surface.setBrandCaption(getString(R.string.service_running_caption))
+        val stage = surface.heading(localizedStartupNetworkStage(startupNetworkSnapshot()))
         val progress = surface.progress()
         val status = surface.caption("")
         surface.setBody(
-            surface.caption("The panel service is running."),
+            surface.caption(getString(R.string.panel_service_running)),
             stage,
             progress,
-            surface.detail("Home Assistant will open automatically", accent = true),
+            surface.detail(getString(R.string.ha_opens_automatically), accent = true),
             status,
         )
         showStatusSurface(surface) { showWaitingForNetwork() }
@@ -1944,6 +1940,16 @@ class DashboardActivity : AppCompatActivity() {
             defaultNetwork = conn?.activeNetwork != null,
         )
     }
+
+    private fun localizedStartupNetworkStage(snapshot: StartupNetworkSnapshot): String = getString(
+        when {
+            !snapshot.interfacePresent -> R.string.network_starting_android
+            !snapshot.linkUp -> R.string.network_waiting_link
+            !snapshot.addressAssigned -> R.string.network_waiting_address
+            !snapshot.defaultNetwork -> R.string.network_preparing_connection
+            else -> R.string.network_opening_ha
+        },
+    )
 
     /** Re-load the dashboard: a plain reload normally, but a fresh loadUrl of the real dashboard when
      *  the WebView is currently showing the "Reconnecting…" interstitial (reloading THAT would just
@@ -1996,6 +2002,8 @@ class DashboardActivity : AppCompatActivity() {
         Log.w(TAG, "main-frame load error ($detail) — showing reconnecting page; watchdog retries continue")
         val dark = StatusSurface.darkFor(this, Config(this))
         val palette = statusPalette(dark)
+        val reconnecting = android.text.TextUtils.htmlEncode(getString(R.string.dashboard_reconnecting))
+        val retrying = android.text.TextUtils.htmlEncode(getString(R.string.dashboard_unreachable_retry))
         web?.let(::suspendBusDocument)
         web?.loadDataWithBaseURL(
             null,
@@ -2004,9 +2012,8 @@ class DashboardActivity : AppCompatActivity() {
                min-height:100vh;margin:0;padding:6vh 0;box-sizing:border-box">
                <div style="max-width:80%;text-align:center">
                ${statusBrandHtmlHeader(this, dark, palette)}
-               <h1>Reconnecting to Home Assistant&hellip;</h1>
-               <p style="font-size:1.2em;color:${palette.subtle}">The dashboard couldn't be reached and will keep
-               retrying automatically.</p>
+               <h1>$reconnecting</h1>
+               <p style="font-size:1.2em;color:${palette.subtle}">$retrying</p>
                <p style="color:${palette.subtle}"><small>$detail</small></p>
                </div></body></html>""",
             "text/html", "utf-8", null,
@@ -2041,6 +2048,7 @@ class DashboardActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (maintenanceFence.stop(this)) return
+        NativeLocale.apply(Config(this).uiLanguage)
         // Below API 29 onTopResumedActivityChanged is never delivered, so resume owns visibility there.
         if (resumeOwnsAdmissionVisibility(android.os.Build.VERSION.SDK_INT)) onAdmissionVisibilityChanged(true)
         BuiltinDashboard.setActivityForeground(activityOwner, true)
@@ -2263,7 +2271,7 @@ class DashboardActivity : AppCompatActivity() {
             outcome = outcome,
             evidence = evidence,
         )
-        showV2CompatibilityScreen(title, detail, "Retry", admissionRetryClass(outcome), outcome)
+        showV2CompatibilityScreen(title, detail, getString(R.string.retry), admissionRetryClass(outcome), outcome)
     }
 
     /** A screen that reports work in flight; it is replaced by that work's outcome, so it never arms. */
@@ -2320,7 +2328,7 @@ class DashboardActivity : AppCompatActivity() {
         val phoneAddress = phoneUrl?.takeIf { qr != null }?.let { surface.caption(it, accent = true) }
         // A code replaces the explanation as well as the button, because at this size it cannot sit
         // under the full one without pushing the action off the panel. Measured, not assumed.
-        val shown = (if (qr != null) configureQrDetail(outcome) else null) ?: detail
+        val shown = (if (qr != null) localizedConfigureQrDetail(outcome) else null) ?: detail
         val buttons = buildList {
             retryLabel?.let { label ->
                 add(surface.action(label) {
@@ -2328,14 +2336,14 @@ class DashboardActivity : AppCompatActivity() {
                 })
             }
             if (repair == WebViewRepairOffer.OFFER) {
-                add(surface.action(WEB_VIEW_REPAIR_LABEL, primary = true) { button ->
+                add(surface.action(getString(R.string.update_web_viewer), primary = true) { button ->
                     startWebViewRepair(button, repairNote)
                 })
             }
             // The code replaces Configure rather than joining it: both open the same page, and the
             // whole reason the code is here is that this page is the one worth doing on a phone.
             if (qr == null) {
-                add(surface.action("Configure") {
+                add(surface.action(getString(R.string.configure)) {
                     startActivity(Intent(this@DashboardActivity, ConfigActivity::class.java).putExtra("path", "/configure"))
                 })
             }
@@ -2378,21 +2386,24 @@ class DashboardActivity : AppCompatActivity() {
      */
     private fun webViewRepairNote(offer: WebViewRepairOffer): String? = when (offer) {
         WebViewRepairOffer.OFFER ->
-            "This panel has a known-good version and can install it now. It restarts once when it finishes."
+            getString(R.string.web_view_repair_known_good)
         WebViewRepairOffer.NEEDS_PRIVILEGE ->
-            "This panel has a known-good version but is not allowed to install it, so this one has to be " +
-                "done by hand. Update it, then tap Retry."
+            getString(R.string.web_view_repair_needs_privilege)
         WebViewRepairOffer.NO_KNOWN_GOOD_BUILD ->
-            "No known-good version is bundled for this panel, so this one has to be updated by hand. " +
-                "Reinstalling the same version repairs a damaged one. Tap Retry afterwards."
+            getString(R.string.web_view_repair_no_build)
         WebViewRepairOffer.MANAGED_ELSEWHERE ->
-            "This panel gets its Android System WebView from a store, which will replace it more safely " +
-                "than this would. Update it there, then tap Retry."
+            getString(R.string.web_view_repair_managed_elsewhere)
         // Nothing extra to say in either case: one is a screen about something else, and the other
         // is a screen whose panel has not finished working out what it can do.
         WebViewRepairOffer.NOT_REPAIRABLE,
         WebViewRepairOffer.UNKNOWN_CAPABILITY,
         -> null
+    }
+
+    private fun localizedConfigureQrDetail(outcome: AdmissionOutcome?): String? = when (outcome) {
+        AdmissionOutcome.SIGN_IN_REQUIRED -> getString(R.string.ha_sign_in_needed_qr)
+        AdmissionOutcome.CREDENTIAL_REFUSED -> getString(R.string.ha_sign_in_rejected_qr)
+        else -> null
     }
 
     /**
@@ -2407,10 +2418,10 @@ class DashboardActivity : AppCompatActivity() {
      */
     private fun startWebViewRepair(button: Button, note: TextView?) {
         button.isEnabled = false
-        button.text = "Installing…"
+        button.setText(R.string.installing)
         when (WebViewRepairRuntime.request()) {
             WebViewRepairRequest.STARTED -> {
-                note?.text = "Downloading and installing. On a slow network this takes a few minutes."
+                note?.setText(R.string.downloading_installing)
                 pollWebViewRepair(button, note)
             }
             // Both refusals hand the button back, because both are states that lapse: another install
@@ -2419,12 +2430,12 @@ class DashboardActivity : AppCompatActivity() {
             WebViewRepairRequest.BUSY -> releaseWebViewRepair(
                 button,
                 note,
-                "The panel is already installing something else. Try again when it has finished.",
+                getString(R.string.install_busy),
             )
             WebViewRepairRequest.UNAVAILABLE -> releaseWebViewRepair(
                 button,
                 note,
-                "The panel's own service is not ready yet, so nothing was installed. Try again shortly.",
+                getString(R.string.panel_service_not_ready_install),
             )
         }
     }
@@ -2432,7 +2443,7 @@ class DashboardActivity : AppCompatActivity() {
     /** Hand the offer back after an attempt that installed nothing, saying why. */
     private fun releaseWebViewRepair(button: Button, note: TextView?, reason: String) {
         button.isEnabled = true
-        button.text = WEB_VIEW_REPAIR_LABEL
+        button.setText(R.string.update_web_viewer)
         note?.text = reason
     }
 
@@ -2466,7 +2477,7 @@ class DashboardActivity : AppCompatActivity() {
                 button,
                 note,
                 progress.message.takeIf { it.isNotBlank() }
-                    ?: "The update stopped without saying why, and nothing on this panel was changed.",
+                    ?: getString(R.string.update_stopped_unknown),
             )
         }, WEB_VIEW_REPAIR_POLL_MS)
     }
@@ -2510,9 +2521,8 @@ class DashboardActivity : AppCompatActivity() {
             !WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
         ) {
             showBlockedAdmissionScreen(
-                "This panel's web viewer is too old",
-                "The built-in dashboard needs a newer Android System WebView than this panel has. " +
-                    "Another dashboard app on the panel may still work.",
+                getString(R.string.web_viewer_too_old_title),
+                getString(R.string.web_viewer_too_old_detail),
                 AdmissionOutcome.BRIDGE_UNAVAILABLE,
             )
             return
@@ -2526,8 +2536,8 @@ class DashboardActivity : AppCompatActivity() {
         val compatibilityTicket = compatibilityAttempts.start(owner)
         compatibilityCheckingOwner = owner
         showAdmissionProgressScreen(
-            "Checking Home Assistant compatibility",
-            "Making sure this version of Home Assistant works with the panel's dashboard before opening it.",
+            getString(R.string.checking_ha_compatibility),
+            getString(R.string.checking_ha_compatibility_detail),
         )
         compatibilityJob = activityScope.launch {
             val result = DashboardV2CompatibilityProbe(
@@ -2571,22 +2581,16 @@ class DashboardActivity : AppCompatActivity() {
                     is DashboardV2ProbeResult.UnsupportedHa -> {
                         config.setHaServerVersionIfOwned(url, blocked.version)
                         showBlockedAdmissionScreen(
-                            "Home Assistant upgrade required",
-                            "The panel's built-in dashboard needs Home Assistant 2026.4.2 or newer, and this " +
-                                "server reports ${blocked.version}. Update Home Assistant, then tap Retry. " +
-                                "Only the built-in dashboard needs that version, so another dashboard app on " +
-                                "the panel may still work.",
+                            getString(R.string.ha_upgrade_required),
+                            getString(R.string.ha_upgrade_required_detail, blocked.version),
                             AdmissionOutcome.UNSUPPORTED_HA,
                         )
                     }
                     // A degraded proxy or captive-portal response lands here too, so probe again at
                     // the ceiling cadence rather than never.
                     is DashboardV2ProbeResult.Unverifiable -> showBlockedAdmissionScreen(
-                        "Home Assistant version unverifiable",
-                        "The panel checks the version before it opens a dashboard, and the answer" +
-                            blocked.version?.let { " (“$it”)" }.orEmpty() +
-                            " was not one it recognises. A proxy or a captive portal answering in Home " +
-                            "Assistant's place is the usual cause. The panel keeps checking.",
+                        getString(R.string.ha_version_unverifiable),
+                        getString(R.string.ha_version_unverifiable_detail, blocked.version?.let { " (“$it”)" }.orEmpty()),
                         AdmissionOutcome.VERSION_UNVERIFIABLE,
                     )
                     // Two different situations, kept as separate outcomes so a diagnostic surface can
@@ -2610,19 +2614,14 @@ class DashboardActivity : AppCompatActivity() {
                         )
                         showBlockedAdmissionScreen(
                             if (neverSignedIn) {
-                                "Home Assistant sign-in needed"
+                                getString(R.string.ha_sign_in_needed)
                             } else {
-                                "Home Assistant sign-in rejected"
+                                getString(R.string.ha_sign_in_rejected)
                             },
                             if (neverSignedIn) {
-                                "Nothing can load until the panel has a Home Assistant login. The " +
-                                    "sign-in lives in this panel's settings, under Home Assistant " +
-                                    "connection. The dashboard opens on its own once the sign-in works."
+                                getString(R.string.ha_sign_in_needed_detail)
                             } else {
-                                "The saved sign-in stopped working, so the dashboard has not opened. " +
-                                    "Sign in again in this panel's settings, under Home Assistant " +
-                                    "connection, and the dashboard returns on its own. Tap Retry instead " +
-                                    "if the account has been restored on the Home Assistant server."
+                                getString(R.string.ha_sign_in_rejected_detail)
                             },
                             if (neverSignedIn) {
                                 AdmissionOutcome.SIGN_IN_REQUIRED
@@ -2632,10 +2631,8 @@ class DashboardActivity : AppCompatActivity() {
                         )
                     }
                     is DashboardV2ProbeResult.Unavailable -> showBlockedAdmissionScreen(
-                        "The panel cannot reach Home Assistant",
-                        "The panel could not read the Home Assistant version, so it has not opened a " +
-                            "dashboard. Check that Home Assistant is running and that this panel is on the " +
-                            "network. The panel keeps trying. ${blocked.detail}",
+                        getString(R.string.cannot_reach_ha),
+                        getString(R.string.cannot_reach_ha_detail, blocked.detail),
                         AdmissionOutcome.TRANSPORT_FAILED,
                         blocked.evidence,
                     )
@@ -2711,9 +2708,8 @@ class DashboardActivity : AppCompatActivity() {
                         return
                     }
                     showBlockedAdmissionScreen(
-                        "The Home Assistant sign-in page would not load",
-                        "Configure opens this panel's settings. Check the Home Assistant address there, " +
-                            "or use Browser sign-in on the same page.",
+                        getString(R.string.ha_sign_in_page_failed),
+                        getString(R.string.ha_sign_in_page_failed_detail),
                         AdmissionOutcome.SIGN_IN_PAGE_UNREACHABLE,
                     )
                 }
@@ -2806,7 +2802,16 @@ class DashboardActivity : AppCompatActivity() {
     private fun applyAdmissionPaint(paint: AdmissionCountdownOwner.Paint) {
         main.removeCallbacks(admissionCountdownTick)
         val view = admissionCountdownView?.takeIf { it.isAttachedToWindow } ?: return
-        paint.text?.let { view.text = it }
+        paint.remainingMs?.let { remaining ->
+            val totalSec = (remaining.coerceAtLeast(0L) + 999L) / 1_000L
+            val minutes = totalSec / 60L
+            val seconds = totalSec % 60L
+            view.text = if (minutes > 0L) {
+                getString(R.string.retrying_minutes_seconds, minutes, seconds)
+            } else {
+                getString(R.string.retrying_seconds, seconds)
+            }
+        } ?: paint.text?.let { view.text = it }
         paint.scheduleNextTickMs?.let { main.postDelayed(admissionCountdownTick, it) }
     }
 
@@ -2832,10 +2837,8 @@ class DashboardActivity : AppCompatActivity() {
         if (owned != null && owned.confirmed) {
             if (owned.resolution.path == null) {
                 showBlockedAdmissionScreen(
-                    "This account has no dashboard to open",
-                    "Home Assistant lists no dashboard that the panel's account is allowed to open. Create " +
-                        "one in Home Assistant, or give the account access to an existing one. The panel " +
-                        "keeps checking.",
+                    getString(R.string.no_dashboard_title),
+                    getString(R.string.no_dashboard_detail),
                     AdmissionOutcome.NO_LEGAL_DASHBOARD,
                 )
             } else {
@@ -2908,8 +2911,8 @@ class DashboardActivity : AppCompatActivity() {
         }
         if (provisionalPath == null) {
             showAdmissionProgressScreen(
-                "Selecting the Home Assistant dashboard",
-                "Reading which dashboards this Home Assistant account can open, and which one it starts on.",
+                getString(R.string.selecting_ha_dashboard),
+                getString(R.string.selecting_ha_dashboard_detail),
             )
         }
         homeDashboardJob = activityScope.launch {
@@ -2941,17 +2944,15 @@ class DashboardActivity : AppCompatActivity() {
                 // admitted: with the provisional dashboard rendering, retry quietly behind it.
                 if (shownPath == null || web == null) {
                     showBlockedAdmissionScreen(
-                        "Home Assistant dashboard list unavailable",
-                        "Home Assistant did not answer when the panel asked which dashboards its account " +
-                            "can open. Check that Home Assistant is running and that the panel is still " +
-                            "signed in. The panel keeps trying.",
+                        getString(R.string.dashboard_list_unavailable),
+                        getString(R.string.dashboard_list_unavailable_detail),
                         AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
                     )
                 } else {
                     cancelAdmissionAutoRetry()
                     admissionRetryPolicy.nextDelayMs(
                         admissionRetryClass(AdmissionOutcome.DASHBOARD_LIST_UNREADABLE),
-                    )?.let { armAdmissionAutoRetry(it, "Home Assistant dashboard list unavailable") }
+                    )?.let { armAdmissionAutoRetry(it, getString(R.string.dashboard_list_unavailable)) }
                 }
                 return@launch
             }
@@ -2971,19 +2972,15 @@ class DashboardActivity : AppCompatActivity() {
                     // the invalidation is attempted again.
                     Log.e(TAG, "home dashboard cache invalidation did not commit — retrying before settling")
                     showBlockedAdmissionScreen(
-                        "This account has no dashboard to open",
-                        "Home Assistant lists no dashboard that the panel's account is allowed to open. The " +
-                            "panel also could not clear the dashboard it had saved. Create one in Home " +
-                            "Assistant, or give the account access to an existing one. The panel keeps trying.",
+                        getString(R.string.no_dashboard_title),
+                        getString(R.string.no_dashboard_cache_clear_detail),
                         AdmissionOutcome.DASHBOARD_LIST_UNREADABLE,
                     )
                     return@launch
                 }
                 showBlockedAdmissionScreen(
-                    "This account has no dashboard to open",
-                    "Home Assistant lists no dashboard that the panel's account is allowed to open. Create " +
-                        "one in Home Assistant, or give the account access to an existing one. The panel " +
-                        "keeps checking.",
+                    getString(R.string.no_dashboard_title),
+                    getString(R.string.no_dashboard_detail),
                     AdmissionOutcome.NO_LEGAL_DASHBOARD,
                 )
                 return@launch
@@ -3106,9 +3103,8 @@ class DashboardActivity : AppCompatActivity() {
             }
             if (e is ExternalV2BridgeUnavailable) {
                 showBlockedAdmissionScreen(
-                    "Home Assistant could not open",
-                    "The panel's web viewer would not start Home Assistant. The panel keeps trying. " +
-                        "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
+                    getString(R.string.home_assistant_could_not_open),
+                    getString(R.string.home_assistant_could_not_open_detail),
                     AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                 )
                 return
@@ -3209,19 +3205,13 @@ class DashboardActivity : AppCompatActivity() {
         val setupUrl = LocalAdminEndpoint.externalUrl(localIpv4(), localIpv6(), config.httpPort, "/setup")
         val surface = statusSurface(config)
         surface.setBody(
-            surface.heading(
-                "You need to finish the last important questions in your browser to optimise the " +
-                    "performance of your dashboards",
-            ),
+            surface.heading(getString(R.string.finish_questions_browser)),
             surface.detail(setupUrl, accent = true),
             // Escape hatch. The hold exists to protect the first impression, not to trap anyone: someone at
             // the panel with no browser to hand must be able to get a dashboard. Says what it costs, because
             // skipping is the unfiltered load this screen exists to avoid.
-            surface.action("Skip and load the dashboard now") { skipEntityFilterQuestion() },
-            surface.caption(
-                "Skipping loads every entity Home Assistant has, which is slower on this panel. " +
-                    "You can turn filtering on later under Configure → Dashboard.",
-            ),
+            surface.action(getString(R.string.skip_load_dashboard)) { skipEntityFilterQuestion() },
+            surface.caption(getString(R.string.skip_entity_filter_detail)),
         )
         showStatusSurface(surface) { showWaitingForEntityFilterAnswer() }
         main.postDelayed(entityFilterAnswerCheck, ENTITY_FILTER_ANSWER_CHECK_MS)
@@ -3231,6 +3221,22 @@ class DashboardActivity : AppCompatActivity() {
     private fun entitiesPageAddress(): String {
         val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
         return if (ip != null) "http://$ip:8888/entities" else "port 8888 of this panel's IP address"
+    }
+
+    private fun localizedBootstrapMilestone(): String {
+        val milestone = EntityLearningRuntime.bootstrapMilestoneState() ?: return ""
+        return when (milestone.stage) {
+            1 -> milestone.count?.let { getString(R.string.entity_scan_step_reading_count, it) }
+                ?: getString(R.string.entity_scan_step_reading)
+            else -> getString(R.string.entity_scan_step_building, milestone.count ?: 0)
+        }
+    }
+
+    private fun localizedEntityFilterHoldDetail(hold: EntityFilterNativeHold): String = when (hold.error) {
+        "invalid_configuration" -> getString(R.string.entity_filter_invalid_config)
+        "document_start_unsupported" -> getString(R.string.entity_filter_webview_too_old)
+        "document_start_install" -> getString(R.string.entity_filter_setup_failed)
+        else -> hold.detail
     }
 
     private fun showWaitingForEntityBootstrap() {
@@ -3253,39 +3259,39 @@ class DashboardActivity : AppCompatActivity() {
                 // Deterministic milestones, not a spinner: nobody trusts the circle (hardware review),
                 // and this text updates with the live scan count on every bootstrap poll tick.
                 entityBootstrapMilestoneView = surface.detail(
-                    EntityLearningRuntime.bootstrapMilestone(),
+                    localizedBootstrapMilestone(),
                     accent = true,
                 )
                 rows += entityBootstrapMilestoneView!!
             }
             rows += surface.heading(
                 if (filterHold != null) {
-                    "Optimized dashboard subscription unavailable"
+                    getString(R.string.optimized_subscription_unavailable)
                 } else if (blockingIssues > 0) {
-                    "Entity filter needs attention"
+                    getString(R.string.entity_filter_attention)
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
-                    "Home Assistant refused the entity scan"
+                    getString(R.string.ha_refused_entity_scan)
                 } else if (bootstrapProblem != null) {
-                    "Dashboard scan could not finish"
+                    getString(R.string.dashboard_scan_failed)
                 } else {
-                    "Preparing optimized dashboard subscription"
+                    getString(R.string.preparing_optimized_subscription)
                 },
             )
             val bootstrapHint = surface.detail(
                 if (filterHold != null) {
-                    "${filterHold.detail} Home Assistant has not been opened, because loading every entity would make this panel slow. Try again, or turn the entity filter off under Configure, in the Dashboard settings."
+                    getString(R.string.entity_filter_hold_detail, localizedEntityFilterHoldDetail(filterHold))
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
-                        entityFilterAttentionDetail(blockingIssues, entitiesPageAddress())
+                        getString(R.string.entity_filter_attention_remote, blockingIssues, entitiesPageAddress())
                     } else {
-                        "Nothing is wrong with Home Assistant. Too many entities were flagged to review on the panel. Open entity settings to simplify the dashboard, or tap Disable entity filter."
+                        getString(R.string.too_many_flagged_entities)
                     }
                 } else if (bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
-                    "Home Assistant rejected this panel's sign-in when the panel asked which entities to show. The dashboard has not been opened. Configure opens this panel's settings, where Home Assistant connection holds the sign-in; the dashboard returns on its own once it works."
+                    getString(R.string.entity_scan_auth_rejected)
                 } else if (bootstrapProblem != null) {
-                    "The scan of your entities did not finish, so the dashboard has not been opened. Check that Home Assistant is running and that the panel is on the network, then try again."
+                    getString(R.string.entity_scan_failed_detail)
                 } else {
-                    "Home Assistant will open when the first filtered entity set is ready."
+                    getString(R.string.entity_scan_preparing_detail)
                 },
             )
             rows += bootstrapHint
@@ -3296,15 +3302,14 @@ class DashboardActivity : AppCompatActivity() {
                 // slow path appears. Text only — the settings escape below is already on screen.
                 main.postDelayed({
                     if (!destroyed && bootstrapHint.isAttachedToWindow) {
-                        bootstrapHint.text = "Taking longer than usual \u2014 the panel is still working on it. " +
-                            "If this doesn\u2019t finish, the entity filter can be turned off from panel settings."
+                        bootstrapHint.setText(R.string.entity_scan_taking_longer)
                     }
                 }, BOOTSTRAP_HOLD_HONESTY_MS)
             }
-            if (filterHold != null) rows += surface.action("Try again") {
+            if (filterHold != null) rows += surface.action(getString(R.string.try_again)) {
                 retryEntityFilter(Config(this@DashboardActivity))
             }
-            if (filterHold == null && bootstrapProblem != null) rows += surface.action("Try again") {
+            if (filterHold == null && bootstrapProblem != null) rows += surface.action(getString(R.string.try_again)) {
                 // A user-driven retry restores hope: the watchdog clock restarts and the screen
                 // returns to the progress presentation until the new deadline.
                 entityBootstrapWatchdog.restart(SystemClock.elapsedRealtime())
@@ -3313,28 +3318,28 @@ class DashboardActivity : AppCompatActivity() {
             if (filterHold == null && blockingIssues > 0) {
                 if (canIgnoreBlockingIssues) {
                     rows += surface.action(
-                        "Ignore flagged entities and continue",
+                        getString(R.string.ignore_flagged_entities),
                         primary = true,
                         fullWidth = true,
                     ) { button ->
                         button.isEnabled = false
-                        button.text = "Preparing dashboard…"
+                        button.setText(R.string.preparing_dashboard)
                         if (!EntityLearningRuntime.ignoreBlockingIssues()) {
                             button.isEnabled = true
-                            button.text = "Ignore flagged entities and continue"
+                            button.setText(R.string.ignore_flagged_entities)
                         }
                     }
                 }
-                rows += surface.action("Disable entity filter", fullWidth = true) { button ->
+                rows += surface.action(getString(R.string.disable_entity_filter), fullWidth = true) { button ->
                     button.isEnabled = false
                     if (!EntityLearningRuntime.disableAutomaticFilter()) button.isEnabled = true
                 }
             }
             rows += surface.action(
                 if (filterHold != null || bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {
-                    "Configure"
+                    getString(R.string.configure)
                 } else {
-                    "Open entity settings"
+                    getString(R.string.open_entity_settings)
                 },
                 fullWidth = blockingIssues > 0,
             ) {
@@ -3577,9 +3582,8 @@ class DashboardActivity : AppCompatActivity() {
                     .onFailure {
                         Log.e(TAG, "secure V2 document rotation failed", it)
                         showBlockedAdmissionScreen(
-                            "Home Assistant stopped loading",
-                            "The panel's web viewer dropped Home Assistant during a page change. The panel keeps trying. " +
-                                "If it keeps failing, the web viewer needs updating or repairing; it is called Android System WebView, and reinstalling the same build repairs a damaged one.",
+                            getString(R.string.home_assistant_stopped_loading),
+                            getString(R.string.home_assistant_stopped_loading_detail),
                             AdmissionOutcome.BRIDGE_ATTACH_FAILED,
                         )
                     }
@@ -3709,7 +3713,6 @@ class DashboardActivity : AppCompatActivity() {
         private const val BOOTSTRAP_HOLD_HONESTY_MS = 20_000L
         /** Named once so the button that offers the repair and the button that is handed back
          *  after a refusal cannot drift apart. */
-        private const val WEB_VIEW_REPAIR_LABEL = "Update the web viewer"
         /** Slow on purpose: the installer publishes a string, not an event, and a download that
          *  runs for minutes gains nothing from being asked about more often than the person
          *  watching would notice. */

@@ -10,8 +10,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.maxlyth.hapaneld.sensors.HaLifecycle
-import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
+import io.github.maxlyth.hapaneld.sensors.HaLifecycleSource
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleState
 
 /** The two text sizes the notice renders at, in pixels. */
@@ -96,7 +96,14 @@ internal class HaLifecycleBar private constructor(
     /** Render one atomic snapshot; null means no service owns lifecycle tracking, so show nothing. */
     fun update(snap: HaLifecycle.Snapshot?) {
         view.removeCallbacks(hide)
-        val text = snap?.let { HaLifecycleMessage.panelText(it.state, it.source) }
+        val text = snap?.let {
+            view.context.getString(when (it.state) {
+                HaLifecycleState.SHUTTING_DOWN -> if (it.source == HaLifecycleSource.SOCKET) R.string.ha_shutting_down else R.string.ha_offline
+                HaLifecycleState.STARTING -> R.string.ha_starting
+                HaLifecycleState.BACK_ONLINE -> R.string.ha_back_online
+                HaLifecycleState.NORMAL, HaLifecycleState.CONNECTION_LOST -> return@let null
+            })
+        }
         if (snap == null || text == null) {
             view.visibility = View.GONE
             return
@@ -106,7 +113,12 @@ internal class HaLifecycleBar private constructor(
         card.setStroke((BORDER_DP * view.resources.displayMetrics.density).toInt(), colours.border)
         label.setTextColor(colours.label)
         label.text = text
-        val supporting = HaLifecycleMessage.panelDetail(snap.state)
+        val supporting = when (snap.state) {
+            HaLifecycleState.SHUTTING_DOWN -> view.context.getString(R.string.controls_unavailable_reconnect)
+            HaLifecycleState.STARTING -> view.context.getString(R.string.controls_return_shortly)
+            HaLifecycleState.BACK_ONLINE -> view.context.getString(R.string.controls_returned)
+            HaLifecycleState.NORMAL, HaLifecycleState.CONNECTION_LOST -> null
+        }
         detail.setTextColor(colours.label)
         detail.text = supporting.orEmpty()
         detail.visibility = if (supporting == null) View.GONE else View.VISIBLE
@@ -239,7 +251,7 @@ internal class HaLifecycleBar private constructor(
                 ImageView(context).apply {
                     HaBrandIcon.drawable(context)?.let(::setImageDrawable)
                     // Attributive, not informative: the wording carries the meaning on its own.
-                    contentDescription = "Home Assistant"
+                    contentDescription = context.getString(R.string.home_assistant)
                 },
                 LinearLayout.LayoutParams(iconSize, iconSize).apply {
                     gravity = Gravity.CENTER_HORIZONTAL

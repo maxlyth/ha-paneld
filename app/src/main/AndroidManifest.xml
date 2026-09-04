@@ -86,12 +86,12 @@
         <activity
             android:name=".ConfigActivity"
             android:exported="false"
-            android:label="ha-paneld configuration" />
+            android:label="@string/config_activity_label" />
 
         <activity
             android:name=".GuardDbMaintenanceActivity"
             android:exported="false"
-            android:label="Database recovery maintenance" />
+            android:label="@string/guard_db_activity_label" />
 
         <!-- Built-in dashboard renderer (experimental). exported so the privileged am start path can
              open it; singleTask so a repeat launch reaches the running instance (onNewIntent = reload)
@@ -102,7 +102,7 @@
         <activity
             android:name=".DashboardActivity"
             android:exported="true"
-            android:label="HA dashboard"
+            android:label="@string/dashboard_activity_label"
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode">
             <!-- configChanges: handle rotation + day/night (uiMode) in-place instead of letting Android
@@ -128,7 +128,7 @@
         <activity
             android:name=".AdminLauncherActivity"
             android:exported="true"
-            android:label="Panel admin"
+            android:label="@string/admin_launcher_activity_label"
             android:excludeFromRecents="true"
             android:theme="@style/Theme.AppCompat.DayNight">
             <!-- Selectable / last-resort HOME. Companion remains the default home app. -->

@@ -657,7 +657,7 @@ internal class AdmissionCountdownOwner(private val nowMs: () -> Long) {
     private var visible = false
 
     /** What the caller should do after any state change. */
-    data class Paint(val text: String?, val scheduleNextTickMs: Long?)
+    data class Paint(val text: String?, val scheduleNextTickMs: Long?, val remainingMs: Long? = null)
 
     val armed: Boolean get() = deadlineMs != 0L
 
@@ -700,7 +700,7 @@ internal class AdmissionCountdownOwner(private val nowMs: () -> Long) {
     private fun paint(): Paint {
         if (!armed || !visible) return Paint(null, null)
         val remaining = deadlineMs - nowMs()
-        return Paint(admissionRetryCountdown(remaining), if (remaining > 0L) COUNTDOWN_TICK_MS else null)
+        return Paint(admissionRetryCountdown(remaining), if (remaining > 0L) COUNTDOWN_TICK_MS else null, remaining)
     }
 
     private companion object { const val COUNTDOWN_TICK_MS = 1_000L }

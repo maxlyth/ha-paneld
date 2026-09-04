@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.shizuku
 import android.content.Intent
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import io.github.maxlyth.hapaneld.R
 
 /** On-panel-only opt-in surface. ConfigActivity is not exported and there is no remote equivalent. */
 object ShizukuSetupDialog {
@@ -24,45 +25,66 @@ object ShizukuSetupDialog {
         val consented = ShizukuConsent.enabled(activity)
         val state = ShizukuBridge.state
         val managerRunning = ShizukuBridge.managerRunning()
-        val message = buildString {
-            append(description(state))
-            append("\n\nThis grants only signer-verified ha-paneld and minimal Companion updates, screenshots, key/tap input, density, and text-size operations. ")
-            append("It does not allow arbitrary APK uploads, WebView replacement, a general shell, root app data, reboot, logs, or vendor-app controls.")
-            append("\n\nOnce enabled, the supported operations can be invoked through ha-paneld's existing trusted-LAN controls on this panel.")
-        }
+        val message = activity.getString(
+            R.string.shizuku_grant_scope,
+            activity.getString(R.string.shizuku_scope),
+        ).let { "${localizedDescription(activity, state)}\n\n$it" }
         val dialog = AlertDialog.Builder(activity)
-            .setTitle("Enhanced access (Shizuku)")
+            .setTitle(R.string.shizuku_title)
             .setMessage(message)
-            .setNegativeButton("Close", null)
+            .setNegativeButton(R.string.close, null)
 
         val primaryAction = primaryAction(consented, state, managerRunning)
         when {
             state == ShizukuState.MANAGER_MISSING || state == ShizukuState.MANAGER_UNTRUSTED -> {
                 if (disableAvailable(consented, state)) {
-                    dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
+                    dialog.setNeutralButton(R.string.disable) { _, _ -> ShizukuBridge.disable() }
                 }
             }
             else -> {
                 when (primaryAction) {
                     PrimaryAction.ENABLE,
-                    PrimaryAction.REQUEST_PERMISSION -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                    PrimaryAction.REQUEST_PERMISSION -> dialog.setPositiveButton(primaryAction.labelId()) { _, _ ->
                         ShizukuBridge.enable(activity)
                     }
-                    PrimaryAction.OPEN_MANAGER -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                    PrimaryAction.OPEN_MANAGER -> dialog.setPositiveButton(primaryAction.labelId()) { _, _ ->
                         launchManager(activity)
                     }
-                    PrimaryAction.DISABLE -> dialog.setPositiveButton(primaryAction.label) { _, _ ->
+                    PrimaryAction.DISABLE -> dialog.setPositiveButton(primaryAction.labelId()) { _, _ ->
                         ShizukuBridge.disable()
                     }
                     PrimaryAction.NONE -> Unit
                 }
                 if (consented && primaryAction != PrimaryAction.DISABLE) {
-                    dialog.setNeutralButton("Disable") { _, _ -> ShizukuBridge.disable() }
+                    dialog.setNeutralButton(R.string.disable) { _, _ -> ShizukuBridge.disable() }
                 }
             }
         }
         dialog.show()
     }
+
+    private fun PrimaryAction.labelId(): Int = when (this) {
+        PrimaryAction.ENABLE -> R.string.shizuku_enable
+        PrimaryAction.REQUEST_PERMISSION -> R.string.shizuku_request_permission
+        PrimaryAction.OPEN_MANAGER -> R.string.shizuku_open
+        PrimaryAction.DISABLE -> R.string.disable
+        PrimaryAction.NONE -> error("NONE has no action label")
+    }
+
+    private fun localizedDescription(activity: AppCompatActivity, state: ShizukuState): String = activity.getString(
+        when (state) {
+            ShizukuState.MANAGER_MISSING -> R.string.shizuku_not_installed
+            ShizukuState.MANAGER_UNTRUSTED -> R.string.shizuku_untrusted
+            ShizukuState.DISABLED -> R.string.shizuku_disabled
+            ShizukuState.STOPPED -> R.string.shizuku_stopped
+            ShizukuState.PERMISSION_REQUIRED -> R.string.shizuku_permission_needed
+            ShizukuState.MANUAL_GRANT_REQUIRED -> R.string.shizuku_permission_denied
+            ShizukuState.BINDING -> R.string.shizuku_connecting
+            ShizukuState.READY -> R.string.shizuku_ready
+            ShizukuState.INCOMPATIBLE -> R.string.shizuku_incompatible
+            ShizukuState.ERROR -> R.string.shizuku_error
+        },
+    )
 
     internal fun description(state: ShizukuState): String = when (state) {
         ShizukuState.MANAGER_MISSING ->

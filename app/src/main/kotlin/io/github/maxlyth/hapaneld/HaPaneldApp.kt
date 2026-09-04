@@ -41,6 +41,7 @@ class HaPaneldApp : Application() {
         // Registers only the official Binder lifecycle listeners. No service is bound and no permission
         // is requested until the user opts in locally through the on-panel setup surface.
         ShizukuBridge.initialize(this)
+        NativeLocale.apply(Config(this).uiLanguage)
         if (Build.VERSION.SDK_INT < 29) {
             AppCompatDelegate.setDefaultNightMode(
                 if (Config(this).darkMode) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO,

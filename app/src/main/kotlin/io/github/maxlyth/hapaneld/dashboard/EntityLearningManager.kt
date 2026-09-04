@@ -3233,12 +3233,23 @@ object EntityLearningRuntime {
     fun probeDashboardChange(): Boolean = current?.probeDashboardChange("dashboard-hold") ?: false
 
     /** Live bring-up milestones for the panel's hold screen — real signals, never a bare spinner. */
-    fun bootstrapMilestone(): String {
-        val manager = current ?: return ""
+    data class BootstrapMilestone(val stage: Int, val count: Int?)
+
+    fun bootstrapMilestoneState(): BootstrapMilestone? {
+        val manager = current ?: return null
         val scanned = manager.scanProgress()
-        if (scanned != null) return "Step 1 of 3 · Reading your entities — $scanned so far"
-        val catalog = manager.catalogCount() ?: return "Step 1 of 3 · Reading your entities…"
-        return "Step 2 of 3 · Building the filtered set from $catalog entities"
+        if (scanned != null) return BootstrapMilestone(1, scanned)
+        val catalog = manager.catalogCount() ?: return BootstrapMilestone(1, null)
+        return BootstrapMilestone(2, catalog)
+    }
+
+    fun bootstrapMilestone(): String {
+        val milestone = bootstrapMilestoneState() ?: return ""
+        return when (milestone.stage) {
+            1 -> milestone.count?.let { "Step 1 of 3 · Reading your entities — $it so far" }
+                ?: "Step 1 of 3 · Reading your entities…"
+            else -> "Step 2 of 3 · Building the filtered set from ${milestone.count} entities"
+        }
     }
     /** Await service attachment, then perform a scan-independent authenticated dashboard resolution. */
     suspend fun resolveHomeDashboard(

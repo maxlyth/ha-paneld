@@ -542,15 +542,15 @@ class NavbarController(
         row.addView(spacer(edge))
         row.addView(separator())
         row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_bright_down, autoHide) { stepBrightness(-BRIGHT_STEP); updateBrightLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_bright_down, R.string.nav_brightness_down, autoHide) { stepBrightness(-BRIGHT_STEP); updateBrightLabel() })
         valueLabel().also { brightLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_bright_up, autoHide) { stepBrightness(+BRIGHT_STEP); updateBrightLabel() })
+        row.addView(repeatButton(R.drawable.ic_nav_bright_up, R.string.nav_brightness_up, autoHide) { stepBrightness(+BRIGHT_STEP); updateBrightLabel() })
         row.addView(spacer(side))
         row.addView(separator())
         row.addView(spacer(side))
-        row.addView(repeatButton(R.drawable.ic_nav_vol_down, autoHide) { volume.step(up = false); updateVolLabel(); onVolumeChanged() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_down, R.string.nav_volume_down, autoHide) { volume.step(up = false); updateVolLabel(); onVolumeChanged() })
         valueLabel().also { volLabel = it; row.addView(it) }
-        row.addView(repeatButton(R.drawable.ic_nav_vol_up, autoHide) { volume.step(up = true); updateVolLabel(); onVolumeChanged() })
+        row.addView(repeatButton(R.drawable.ic_nav_vol_up, R.string.nav_volume_up, autoHide) { volume.step(up = true); updateVolLabel(); onVolumeChanged() })
         row.addView(spacer(side))
         updateBrightLabel(); updateVolLabel()
     }
@@ -561,9 +561,9 @@ class NavbarController(
     private fun buildNarrowRow(row: LinearLayout, autoHide: Boolean) {
         addNavGroup(row, autoHide)
         row.addView(separator())
-        row.addView(sliderButton(R.drawable.ic_nav_bright_up, Slider.BRIGHTNESS, autoHide))
+        row.addView(sliderButton(R.drawable.ic_nav_bright_up, R.string.nav_brightness, Slider.BRIGHTNESS, autoHide))
         row.addView(separator())
-        row.addView(sliderButton(R.drawable.ic_nav_vol_up, Slider.VOLUME, autoHide))
+        row.addView(sliderButton(R.drawable.ic_nav_vol_up, R.string.nav_volume, Slider.VOLUME, autoHide))
     }
 
     /** Back · Launcher · Dashboard · [Recents] · Reload — the navigation cluster shared by both layouts. Back/Recents/
@@ -571,17 +571,17 @@ class NavbarController(
      *  it completes. Dashboard foregrounds the resolved renderer without reloading; Reload remains the
      *  explicit force-stop/relaunch recovery action. */
     private fun addNavGroup(row: LinearLayout, autoHide: Boolean) {
-        row.addView(navButton(R.drawable.ic_nav_back, autoHide) { NavActions.back(appCanSu) })
-        row.addView(navButton(R.drawable.ic_nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
-        row.addView(navButton(R.drawable.ic_nav_dashboard, autoHide) { system.launchHome(dashboardPkg()) })
-        if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, autoHide) { NavActions.recents(appCanSu) })
-        row.addView(navButton(R.drawable.ic_nav_reload, autoHide) { system.reloadDashboard(dashboardPkg()) })
+        row.addView(navButton(R.drawable.ic_nav_back, R.string.nav_back, autoHide) { NavActions.back(appCanSu) })
+        row.addView(navButton(R.drawable.ic_nav_launcher, R.string.nav_launcher, autoHide) { system.launchLauncher(launcherPkg()) })
+        row.addView(navButton(R.drawable.ic_nav_dashboard, R.string.nav_dashboard, autoHide) { system.launchHome(dashboardPkg()) })
+        if (hasRecents) row.addView(navButton(R.drawable.ic_nav_recents, R.string.nav_recents, autoHide) { NavActions.recents(appCanSu) })
+        row.addView(navButton(R.drawable.ic_nav_reload, R.string.nav_reload, autoHide) { system.reloadDashboard(dashboardPkg()) })
     }
 
     /** Narrow-panel control button: a single weight-1.0 icon that toggles a vertical pop-up slider for
      *  [kind] above it. Tap to open (re-tap to close); the slider drives brightness/volume live. */
-    private fun sliderButton(icon: Int, kind: Slider, autoHide: Boolean): View {
-        val cell = iconCell(icon, 1f)
+    private fun sliderButton(icon: Int, description: Int, kind: Slider, autoHide: Boolean): View {
+        val cell = iconCell(icon, description, 1f)
         cell.isClickable = true
         cell.setOnClickListener {
             if (autoHide) main.removeCallbacks(hideRunnable)   // keep the bar up while adjusting
@@ -835,7 +835,7 @@ class NavbarController(
      *  baseline; triple members = [TIGHTEN] → narrower cells, tighter spacing), but the icon itself is a
      *  constant [ICON_SIZE_DP] regardless of cell width — so triple icons render the same size as nav
      *  icons even when their cells are narrow (otherwise FIT_CENTER shrinks them on narrow panels). */
-    private fun iconCell(icon: Int, weight: Float): FrameLayout {
+    private fun iconCell(icon: Int, description: Int, weight: Float): FrameLayout {
         val iv = ImageView(context).apply {
             setImageResource(icon)
             setColorFilter(Color.WHITE)
@@ -843,6 +843,7 @@ class NavbarController(
             layoutParams = FrameLayout.LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP), Gravity.CENTER)
         }
         return FrameLayout(context).apply {
+            contentDescription = context.getString(description)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight)
             // Instant press highlight on touch-down — the action itself (esp. Back/Recents via su) can
             // lag ~200-300ms, so without this a tap reads as "nothing happened". Shows on touch-down for
@@ -867,8 +868,8 @@ class NavbarController(
     /** Single-tap nav button — weight 1.0, spread evenly across the bar (unchanged baseline). The press
      *  highlight is held from touch-down until [action] (a slow su / activity call, run off the UI
      *  thread) completes, with a [FEEDBACK_MIN_MS] floor, so the tap stays acknowledged during the lag. */
-    private fun navButton(icon: Int, autoHide: Boolean, action: () -> Unit): View {
-        val iv = iconCell(icon, 1f)
+    private fun navButton(icon: Int, description: Int, autoHide: Boolean, action: () -> Unit): View {
+        val iv = iconCell(icon, description, 1f)
         val pressToken = AtomicLong()
         iv.setOnTouchListener { _, e ->
             when (e.actionMasked) {
@@ -899,8 +900,8 @@ class NavbarController(
 
     /** Press-and-hold triple button (weight [TIGHTEN]): [step] fires on touch-down, then repeats while
      *  held (volume / brightness ramping). Pauses auto-hide for the duration of the press. */
-    private fun repeatButton(icon: Int, autoHide: Boolean, step: () -> Unit): View {
-        val iv = iconCell(icon, TIGHTEN)
+    private fun repeatButton(icon: Int, description: Int, autoHide: Boolean, step: () -> Unit): View {
+        val iv = iconCell(icon, description, TIGHTEN)
         val repeater = object : Runnable {
             override fun run() {
                 if (isClosed() || !iv.isPressed || !iv.isAttachedToWindow) {

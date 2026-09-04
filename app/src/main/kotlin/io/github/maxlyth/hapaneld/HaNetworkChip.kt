@@ -15,7 +15,6 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.TextView
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPath
-import io.github.maxlyth.hapaneld.sensors.HaNetworkPathPresentation
 import io.github.maxlyth.hapaneld.sensors.HaNetworkPathSeverity
 
 /**
@@ -67,8 +66,9 @@ internal class HaNetworkChip private constructor(
         card.setStroke((BORDER_DP * view.resources.displayMetrics.density).toInt(), colours.border)
         icon.colour = colours.border
         view.setTextColor(colours.label)
-        view.text = HaNetworkPathPresentation.PANEL_TEXT
-        view.contentDescription = HaNetworkPathPresentation.PANEL_TEXT
+        val description = view.context.getString(R.string.ha_network_unreliable)
+        view.text = description
+        view.contentDescription = description
         view.visibility = View.VISIBLE
     }
 

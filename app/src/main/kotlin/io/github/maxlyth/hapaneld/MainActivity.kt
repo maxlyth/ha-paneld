@@ -103,7 +103,7 @@ class MainActivity : AppCompatActivity() {
     /** The admin button's label, matching where it actually goes. Kept beside [adminPath] so the two
      *  can never drift — the hint text tells the user which button to tap, by name. */
     private fun configButtonLabel(compact: Boolean, complete: Boolean = config.setupEverCompleted): String =
-        if (!complete) "Set up" else if (compact) "Configure" else "Open configuration"
+        getString(if (!complete) R.string.set_up else if (compact) R.string.configure else R.string.open_configuration)
 
     /** Map the journey to the standing screen's one bold line + one hint. The rule: a passer-by always
      *  learns what stage the panel is at AND whether they need to act — "nothing to do here" matters as
@@ -129,40 +129,36 @@ class MainActivity : AppCompatActivity() {
         lastStageKey = key
         val stage: Pair<String, String>? = when {
             complete -> null // the launcher's own auto-return takes over; show the pre-wizard screen
-            next == "identity" -> "This panel isn’t set up yet." to
-                "Scan the code or open the address below on your phone or laptop — it takes about two " +
-                "minutes. Or tap ${configButtonLabel(configButtonCompact, complete = false)} to do it on this screen."
+            next == "identity" -> getString(R.string.panel_not_set_up) to
+                getString(R.string.panel_not_set_up_hint, configButtonLabel(configButtonCompact, complete = false))
             next == "mqtt_broker" || next == "mqtt_credentials" ->
                 if (connectionDetail == "auth_failed") {
-                    "MQTT couldn’t connect." to "The broker rejected the username and password — fix them on the setup page in a browser."
+                    getString(R.string.mqtt_could_not_connect) to getString(R.string.mqtt_credentials_rejected_hint)
                 } else {
-                    "Waiting for MQTT details." to "Someone’s setting this up in a browser. Nothing to do here."
+                    getString(R.string.waiting_for_mqtt_details) to getString(R.string.someone_configuring_hint)
                 }
             next == "mqtt_connection" ->
                 if (connectionDetail == "unreachable" || connectionDetail == "config_error") {
-                    "MQTT couldn’t connect." to "Check the broker address on the setup page in a browser."
+                    getString(R.string.mqtt_could_not_connect) to getString(R.string.mqtt_address_check_hint)
                 } else {
-                    "Checking the MQTT connection…" to "This takes a few seconds. Nothing to do here."
+                    getString(R.string.checking_mqtt_connection) to getString(R.string.takes_few_seconds_hint)
                 }
             // A too-old engine is the one renderer problem a passer-by cannot act on here, so name it as the
             // panel's own fault rather than asking for a choice that would not help.
             next == "renderer" && rendererDetail.startsWith("webview_too_old") ->
-                "This panel's browser engine is too old." to
-                    "Home Assistant dashboards need a newer one. Fix it on the setup page in a browser."
-            next == "renderer" -> "Choose a dashboard app." to "Continue on the setup page in a browser."
-            next == "ha_url" -> "Connected. Next: the Home Assistant address." to "Continue on the setup page in a browser."
-            next == "ha_credentials" -> "Almost there — one sign-in left." to
-                "Continue in the browser, or tap the button below to sign in on this screen."
+                getString(R.string.browser_engine_too_old) to getString(R.string.browser_engine_too_old_hint)
+            next == "renderer" -> getString(R.string.choose_dashboard_app) to getString(R.string.continue_setup_browser)
+            next == "ha_url" -> getString(R.string.connected_next_ha_address) to getString(R.string.continue_setup_browser)
+            next == "ha_credentials" -> getString(R.string.almost_there_sign_in) to getString(R.string.continue_or_sign_in_here)
             // The panel is deliberately holding its first load here, so it must say that rather than look
             // stalled — and say the wait ends in a browser, since nothing on this screen can end it.
-            next == "entity_filter" -> "One important question left." to
-                "Finish it in your browser to optimise the performance of your dashboards."
-            next == "render_proof" -> "Loading your dashboard…" to "Nothing to do here."
+            next == "entity_filter" -> getString(R.string.one_important_question_left) to getString(R.string.finish_browser_optimize)
+            next == "render_proof" -> getString(R.string.loading_dashboard) to getString(R.string.nothing_to_do_here)
             else -> null
         }
         stageView?.visibility = if (stage == null) View.GONE else View.VISIBLE
         stageView?.text = stage?.first ?: ""
-        hintView?.text = stage?.second ?: GENERIC_DESCRIPTION
+        hintView?.text = stage?.second ?: getString(R.string.panel_generic_description)
         signInButton?.visibility = if (!complete && next == "ha_credentials") View.VISIBLE else View.GONE
         configButton?.text = configButtonLabel(configButtonCompact, complete)
     }
@@ -194,6 +190,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (maintenanceFence.stop(this)) return
+        NativeLocale.apply(config.uiLanguage)
         supportActionBar?.hide()
         restoredIntroState = savedInstanceState?.takeIf { it.getBoolean(STATE_INTRO_PRESENTED, false) }?.let {
             SavedLaunchIntroState(
@@ -544,7 +541,7 @@ class MainActivity : AppCompatActivity() {
         // slightly smaller + tighter on compact so it still fits without scrolling. Doubles as the
         // stage HINT once the journey poll reports (the generic text returns when setup completes).
         hintView = text(
-            GENERIC_DESCRIPTION,
+            getString(R.string.panel_generic_description),
             if (compact) 12.5f else 14f, pal.body, padBottom = if (compact) 10 else 22,
         ).also { root.addView(it) }
         // The full URL — tappable here, and readable so it can be typed on another device.
@@ -556,7 +553,7 @@ class MainActivity : AppCompatActivity() {
             setOnClickListener { openConfig() }
             setPadding(0, 0, 0, dp(if (compact) 6 else 0))
         })
-        if (!compact) root.addView(text("Open this address in a browser to configure the panel", 12f, pal.subtle, padTop = 4, padBottom = 16))
+        if (!compact) root.addView(text(getString(R.string.open_address_browser), 12f, pal.subtle, padTop = 4, padBottom = 16))
         // QR of the config URL — scan with a phone instead of typing it.
         qrBitmap(url, dp(qrDp))?.let { qr ->
             root.addView(ImageView(this).apply {
@@ -564,7 +561,7 @@ class MainActivity : AppCompatActivity() {
                 contentDescription = getString(R.string.config_qr_description, url)
                 layoutParams = LinearLayout.LayoutParams(dp(qrDp), dp(qrDp)).apply { topMargin = dp(6); bottomMargin = dp(4) }
             })
-            if (!compact) root.addView(text("Scan to open the config page on your phone", 12f, pal.subtle, padBottom = 24))
+            if (!compact) root.addView(text(getString(R.string.scan_config_phone), 12f, pal.subtle, padBottom = 24))
         }
         // Buttons: side-by-side when vertical space is tight (shorter labels), stacked otherwise.
         // The label follows the journey for the same reason the URL does — on an unfinished panel this
@@ -575,11 +572,11 @@ class MainActivity : AppCompatActivity() {
         configButtonCompact = compact
         val recovery = dashboardRecoveryState()
         val dashboardLabel = if (recovery == PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER) {
-            "Retry dashboard"
+            getString(R.string.retry_dashboard)
         } else if (compact) {
-            "Dashboard"
+            getString(R.string.dashboard)
         } else {
-            "Open dashboard"
+            getString(R.string.open_dashboard)
         }
         val haBtn = dashboardIntent()?.let { button(dashboardLabel) { openDashboard() } }
         if (compact && haBtn != null) {
@@ -597,7 +594,7 @@ class MainActivity : AppCompatActivity() {
         // this button is the same action under the user's finger, so the handoff never depends on the
         // automatic relaunch having fired. DashboardActivity's readiness gate routes a URL-without-
         // credentials start to the on-panel Home Assistant login rather than bouncing here.
-        signInButton = button("Sign in to Home Assistant") {
+        signInButton = button(getString(R.string.sign_in_home_assistant)) {
             runCatching {
                 startActivity(Intent(this, DashboardActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             }
@@ -609,7 +606,7 @@ class MainActivity : AppCompatActivity() {
         // status phase, and it has to keep fitting a 480x480 panel without scrolling.
         val surface = statusSurface()
         // The build number belongs on this screen — it is the one a bug report quotes.
-        surface.setBrandCaption("build ${BuildConfig.VERSION_CODE}")
+        surface.setBrandCaption(getString(R.string.build_number, BuildConfig.VERSION_CODE))
         surface.setBody(root)
         return surface.root
     }
@@ -716,10 +713,5 @@ class MainActivity : AppCompatActivity() {
         const val AUTO_RETURN_POLL_MS = 2_000L    // re-check cadence while waiting for MQTT to reconnect
         const val AUTO_RETURN_WINDOW_MS = 90_000L // give up after this (genuinely unconfigured panel)
         const val SETUP_POLL_MS = 3_000L          // standing-screen stage refresh (loopback, in-memory read)
-        val GENERIC_DESCRIPTION =
-            "This device is a Home Assistant wall panel powered by ha-paneld. It provides the on-panel " +
-                "dashboard, app launcher and panel controls, while exposing the screen, LED, buttons, " +
-                "speaker and sensors to Home Assistant over your local network. Configure the panel from " +
-                "a browser using the address below."
     }
 }

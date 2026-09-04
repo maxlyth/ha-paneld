@@ -1009,7 +1009,7 @@ class PaneldService : Service() {
             // A stale START_STICKY or explicit component intent may still name PaneldService after a
             // package replacement. Promote promptly, hand off to the narrow writer-free service, and
             // return before Config/AppState/profile/controller construction.
-            startForegroundCompat("Database recovery maintenance", silent = true)
+            startForegroundCompat(getString(R.string.guard_db_activity_label), silent = true)
             guardDbRedirect = true
             GuardDbMaintenanceService.start(this)
             stopSelf()
@@ -1018,7 +1018,7 @@ class PaneldService : Service() {
         // Android starts the foreground-service deadline before onCreate. Promote before profile/DB/
         // controller construction: slow root-backed initialization must never consume that deadline.
         // The bootstrap notification is deliberately silent until persisted notification policy is read.
-        startForegroundCompat("Starting…", silent = true)
+        startForegroundCompat(getString(R.string.starting), silent = true)
         // stopSelf() clears START_STICKY, so an app-internal boundary has to re-arm its own start
         // request before exiting, and Android delivers that request into the still-live process. The
         // generation it creates here cannot outlive the exit: it could only claim the staged profile
@@ -1037,7 +1037,7 @@ class PaneldService : Service() {
         config.migrateLogShipTcpDefault()
         config.migrateSetupQuestionsForExistingInstall()
         config.ensurePanelId()      // materialize the generated identity before MQTT/mDNS snapshot it
-        updateForegroundStatus("Starting…")
+        updateForegroundStatus(getString(R.string.starting))
         liveSettingAuthority = LiveSettingAuthority.persistent(this, MqttBridge.APPLY_SETTING_KEYS)
         // Resolve one immutable profile revision before constructing any hardware owner. Activations are
         // restart-bound, so every controller below observes this exact object for the service lifetime.
@@ -3314,15 +3314,15 @@ class PaneldService : Service() {
                     // borrow a runtime observation. Replay their latest topology after RUNNING is published.
                     mdnsRuntimeReconciler.runtimeRunning()
                     startupRecoveryPrefs.edit().clear().commit()
-                    updateForegroundStatus("Listening on :${config.httpPort}")
+                    updateForegroundStatus(getString(R.string.listening_on_port, config.httpPort))
                 }
                 ServiceStartupDisposition.PROFILE_ACTIVATION_ROLLBACK -> {
-                    updateForegroundStatus("Degraded · profile startup failed")
+                    updateForegroundStatus(getString(R.string.degraded_profile_startup))
                     Log.e(TAG, "profile activation startup failed; scheduling rollback restart")
                     profileRestart.request()
                 }
                 ServiceStartupDisposition.DEGRADED -> {
-                    updateForegroundStatus("Degraded · startup failed")
+                    updateForegroundStatus(getString(R.string.degraded_startup))
                     val now = android.os.SystemClock.elapsedRealtime()
                     val decision = startupRecoveryDecision(
                         startupRecoveryPrefs.getInt("attempts", 0),
@@ -3786,10 +3786,10 @@ class PaneldService : Service() {
                     mgr.createNotificationChannel(
                         NotificationChannel(
                             STORAGE_HEALTH_CHANNEL_ID,
-                            "Storage health",
+                            getString(R.string.storage_health_channel),
                             NotificationManager.IMPORTANCE_HIGH,
                         ).apply {
-                            description = "Critical panel storage and SQLite failures"
+                            description = getString(R.string.storage_health_channel_description)
                             setSound(null, null)
                             enableVibration(false)
                         },
@@ -3806,10 +3806,11 @@ class PaneldService : Service() {
                     storageHealthDestination,
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
                 )
+                val (title, body) = localizedStorageHealthNotification(snapshot)
                 val notification = NotificationCompat.Builder(this, STORAGE_HEALTH_CHANNEL_ID)
-                    .setContentTitle(decision.title)
-                    .setContentText(decision.body)
-                    .setStyle(NotificationCompat.BigTextStyle().bigText(decision.body))
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                     .setSmallIcon(android.R.drawable.stat_notify_error)
                     .setCategory(NotificationCompat.CATEGORY_ERROR)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -3824,13 +3825,33 @@ class PaneldService : Service() {
         }
     }
 
+    private fun localizedStorageHealthNotification(snapshot: StorageHealthSnapshot): Pair<String, String> {
+        if (snapshot.severity == StorageHealthSeverity.CRITICAL) {
+            val capacity = if (snapshot.totalBytes > 0L) {
+                getString(R.string.storage_capacity_suffix, snapshot.usableBytes.coerceAtLeast(0L) / (1024L * 1024L))
+            } else ""
+            return getString(R.string.storage_pressure_title) to getString(R.string.storage_pressure_body, capacity)
+        }
+        val during = snapshot.databaseFailureOperationLabel
+            ?.let { getString(R.string.database_during_suffix, it) }
+            .orEmpty()
+        val body = when (snapshot.databaseFailureKind) {
+            StorageDatabaseFailureKind.STORAGE_FULL -> R.string.database_full_body
+            StorageDatabaseFailureKind.IO -> R.string.database_io_body
+            StorageDatabaseFailureKind.CORRUPTION -> R.string.database_corruption_body
+            StorageDatabaseFailureKind.BUSY -> R.string.database_busy_body
+            StorageDatabaseFailureKind.UNKNOWN, null -> R.string.database_failure_body
+        }
+        return getString(R.string.database_attention_title) to getString(body, during)
+    }
+
     private fun notificationChannel(silent: Boolean): Pair<NotificationManager, String> {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val channelId = if (silent) SILENT_CHANNEL_ID else CHANNEL_ID
         if (mgr.getNotificationChannel(channelId) == null) {
             mgr.createNotificationChannel(
                 NotificationChannel(channelId, "ha-paneld", NotificationManager.IMPORTANCE_MIN).apply {
-                    description = "Panel hardware agent for Home Assistant"
+                    description = getString(R.string.panel_agent_channel_description)
                     if (silent) {
                         setSound(null, null)
                         enableVibration(false)
@@ -3915,7 +3936,7 @@ class PaneldService : Service() {
 
     private fun foregroundNotification(channelId: String, silent: Boolean, statusText: String): Notification =
         NotificationCompat.Builder(this, channelId)
-            .setContentTitle("ha-paneld")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
             .setOngoing(true)

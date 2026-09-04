@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import io.github.maxlyth.hapaneld.R
 
 /**
  * How the camera owner asks Android for camera-typed foreground standing before it opens the device.
@@ -88,14 +89,14 @@ class CameraForegroundService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Camera", NotificationManager.IMPORTANCE_MIN),
+                NotificationChannel(CHANNEL_ID, getString(R.string.camera_channel), NotificationManager.IMPORTANCE_MIN),
             )
         }
         // The notification is a platform requirement, not the indication: a kiosk panel has no
         // reachable shade, so the room is told by the overlay and the LED.
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("ha-paneld")
-            .setContentText("Camera in use")
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.camera_in_use))
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)

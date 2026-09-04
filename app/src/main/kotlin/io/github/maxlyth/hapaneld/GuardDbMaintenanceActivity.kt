@@ -78,16 +78,15 @@ class GuardDbMaintenanceActivity : AppCompatActivity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(20))
             addView(TextView(this@GuardDbMaintenanceActivity).apply {
-                text = "Database recovery maintenance"
+                setText(R.string.guard_db_activity_label)
                 textSize = 22f
             })
             addView(TextView(this@GuardDbMaintenanceActivity).apply {
-                text = "Normal panel services and database writers are paused. Keep this panel powered on; " +
-                    "recovery is guaranteed only for this boot. Approve only the exact next step you requested."
+                setText(R.string.guard_db_intro)
                 textSize = 15f
                 setPadding(0, dp(12), 0, dp(12))
             })
-            status = TextView(this@GuardDbMaintenanceActivity).apply { text = "Reading root journal…" }
+            status = TextView(this@GuardDbMaintenanceActivity).apply { setText(R.string.guard_db_reading_journal) }
             addView(status)
             approvals = LinearLayout(this@GuardDbMaintenanceActivity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -121,16 +120,16 @@ class GuardDbMaintenanceActivity : AppCompatActivity() {
                 status.text = when (probe) {
                     is GuardDbMaintenanceClient.StatusProbe.Valid ->
                         buildString {
-                            append("Root journal: ${probe.status.phase} · generation ${probe.status.generation}")
-                            probe.status.outcome?.let { append(" · outcome $it") }
+                            append(getString(R.string.guard_db_journal_status, probe.status.phase, probe.status.generation))
+                            probe.status.outcome?.let { append(getString(R.string.guard_db_outcome, it)) }
                             if (probe.status.overallDeadlineElapsedMs > 0L) {
-                                append("\nHard deadline: ${probe.status.overallDeadlineElapsedMs} elapsed-ms")
-                                append(" · forward: ${probe.status.forwardDeadlineElapsedMs}")
+                                append('\n').append(getString(R.string.guard_db_deadline, probe.status.overallDeadlineElapsedMs))
+                                append(getString(R.string.guard_db_forward_deadline, probe.status.forwardDeadlineElapsedMs))
                             }
                         }
-                    GuardDbMaintenanceClient.StatusProbe.Unreachable -> "Root helper is restarting or unreachable. No mutation is allowed."
-                    GuardDbMaintenanceClient.StatusProbe.Malformed -> "Root journal response is malformed. Recovery is held."
-                    GuardDbMaintenanceClient.StatusProbe.Unsupported -> "Installed helper cannot run this recovery. Recovery is held."
+                    GuardDbMaintenanceClient.StatusProbe.Unreachable -> getString(R.string.guard_db_unreachable)
+                    GuardDbMaintenanceClient.StatusProbe.Malformed -> getString(R.string.guard_db_malformed)
+                    GuardDbMaintenanceClient.StatusProbe.Unsupported -> getString(R.string.guard_db_unsupported)
                 }
             }
         }
@@ -139,14 +138,14 @@ class GuardDbMaintenanceActivity : AppCompatActivity() {
     private fun renderApprovals(pending: List<PendingApproval>) {
         approvals.removeAllViews()
         approvals.addView(TextView(this).apply {
-            text = if (pending.isEmpty()) "No pending physical approval." else "Pending physical approval"
+            setText(if (pending.isEmpty()) R.string.no_pending_physical_approval else R.string.pending_physical_approval)
             textSize = 17f
         })
         pending.forEach { approval ->
             approvals.addView(Button(this).apply {
                 isAllCaps = false
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                text = "${approval.operation.label}\n${approval.summary}\nFrom ${approval.peer}"
+                text = getString(R.string.approval_list_item, localizedLabel(approval.operation), approval.summary, approval.peer)
                 setOnClickListener { confirm(approval) }
             })
         }
@@ -154,11 +153,11 @@ class GuardDbMaintenanceActivity : AppCompatActivity() {
 
     private fun confirm(approval: PendingApproval) {
         AlertDialog.Builder(this)
-            .setTitle(approval.operation.label)
-            .setMessage("${approval.summary}\n\nExact request from ${approval.peer}. Approval is one-shot and expires.")
-            .setPositiveButton("Approve") { _, _ -> LocalApprovalBroker.instance.approve(approval.id) }
-            .setNegativeButton("Deny") { _, _ -> LocalApprovalBroker.instance.deny(approval.id) }
-            .setNeutralButton("Cancel", null)
+            .setTitle(localizedLabel(approval.operation))
+            .setMessage(getString(R.string.approval_exact_detail, approval.summary, approval.peer))
+            .setPositiveButton(R.string.approve) { _, _ -> LocalApprovalBroker.instance.approve(approval.id) }
+            .setNegativeButton(R.string.deny) { _, _ -> LocalApprovalBroker.instance.deny(approval.id) }
+            .setNeutralButton(R.string.cancel, null)
             .show()
     }
 

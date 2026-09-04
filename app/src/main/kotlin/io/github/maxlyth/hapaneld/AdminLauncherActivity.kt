@@ -90,6 +90,7 @@ class AdminLauncherActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (maintenanceFence.stop(this)) return
+        NativeLocale.apply(Config(this).uiLanguage)
         setContentView(buildUi())
     }
 
@@ -112,19 +113,19 @@ class AdminLauncherActivity : AppCompatActivity() {
                 bottomMargin = dp(10)
             },
         )
-        root.addView(text("Panel admin", 20f, body, bold = true, padBottom = 2))
+        root.addView(text(getString(R.string.panel_admin), 20f, body, bold = true, padBottom = 2))
         root.addView(text(
-            "Quick access for administering this panel. The dashboard is the panel's home screen.",
+            getString(R.string.panel_admin_summary),
             12.5f, subtle, padBottom = 14,
         ))
 
         // Admin shortcuts — the things you open a drawer to reach but that aren't ordinary app icons.
         root.addView(grid(adminTiles(dashboardTarget)))
 
-        root.addView(text("Apps", 14f, subtle, bold = true, padTop = 18, padBottom = 8))
+        root.addView(text(getString(R.string.apps), 14f, subtle, bold = true, padTop = 18, padBottom = 8))
         val apps = installedApps(dashboardTarget)
         if (apps.isEmpty()) {
-            root.addView(text("No launchable apps found.", 13f, subtle))
+            root.addView(text(getString(R.string.no_launchable_apps), 13f, subtle))
         } else {
             root.addView(grid(apps.map { ri ->
                 Tile(
@@ -152,15 +153,15 @@ class AdminLauncherActivity : AppCompatActivity() {
 
     private fun adminTiles(dashboardTarget: RendererTarget?): List<Tile> = buildList {
         when (dashboardTarget) {
-            RendererTarget.Builtin -> add(Tile("Dashboard", appIcon(packageName), "HA") {
+            RendererTarget.Builtin -> add(Tile(getString(R.string.dashboard), appIcon(packageName), "HA") {
                 startSafely(Intent(this@AdminLauncherActivity, DashboardActivity::class.java))
             })
-            is RendererTarget.Foreign -> add(Tile("Dashboard", appIcon(dashboardTarget.packageName), "HA") {
+            is RendererTarget.Foreign -> add(Tile(getString(R.string.dashboard), appIcon(dashboardTarget.packageName), "HA") {
                 packageManager.getLaunchIntentForPackage(dashboardTarget.packageName)?.let(::startSafely)
             })
             null -> Unit
         }
-        add(Tile("Settings", appIcon("com.android.settings"), "⚙") {
+        add(Tile(getString(R.string.settings), appIcon("com.android.settings"), "⚙") {
             startSafely(Intent(Settings.ACTION_SETTINGS))
         })
         // ha-paneld's own front-door screen (wordmark + config URL/QR + dashboard/config buttons).

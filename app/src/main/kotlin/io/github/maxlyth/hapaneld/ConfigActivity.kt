@@ -80,7 +80,12 @@ class ConfigActivity : AppCompatActivity() {
             settings.domStorageEnabled = true
             settings.allowContentAccess = false
             settings.allowFileAccess = false
-            webViewClient = WebViewClient() // keep links + the config-form POST inside this WebView
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String) {
+                    super.onPageFinished(view, url)
+                    NativeLocale.apply(Config(this@ConfigActivity).uiLanguage)
+                }
+            } // keep links + the config-form POST inside this WebView
         }
         readinessMessage = TextView(this).apply {
             setText(R.string.config_service_starting)
@@ -115,18 +120,18 @@ class ConfigActivity : AppCompatActivity() {
         // is no obvious way off the config page on a kiosk panel with no visible system nav.
         val bar = Toolbar(this).apply {
             title = getString(applicationInfo.labelRes).ifBlank { "ha-paneld" }
-            subtitle = "Settings"
+            subtitle = getString(R.string.settings)
             navigationIcon = androidx.appcompat.content.res.AppCompatResources.getDrawable(
                 this@ConfigActivity, R.drawable.ic_toolbar_back,
             )
-            navigationContentDescription = "Back to dashboard"
+            navigationContentDescription = getString(R.string.back_to_dashboard)
             setNavigationOnClickListener { finish() }
             if (ShizukuSetupDialog.entryVisible(
                     consented = ShizukuConsent.enabled(this@ConfigActivity),
                     managerStatus = ShizukuManagerIdentity.status(this@ConfigActivity),
                 )
             ) {
-                menu.add("Enhanced access").apply {
+                menu.add(R.string.enhanced_access).apply {
                     setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
                     setOnMenuItemClickListener {
                         ShizukuSetupDialog.show(this@ConfigActivity)
@@ -134,7 +139,7 @@ class ConfigActivity : AppCompatActivity() {
                     }
                 }
             }
-            menu.add("Security mode").apply {
+            menu.add(R.string.security_mode).apply {
                 setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_NEVER)
                 setOnMenuItemClickListener {
                     showSecurityModeDialog()
@@ -169,15 +174,15 @@ class ConfigActivity : AppCompatActivity() {
         val hardened = config.hardenedSecurityEnabled
         val pending = LocalApprovalBroker.instance.pending().size
         AlertDialog.Builder(this)
-            .setTitle("Security mode")
+            .setTitle(R.string.security_mode)
             .setMessage(
                 if (hardened) {
-                    "Hardened mode is on. High-impact requests from the network need approval on this panel. Pending: $pending."
+                    getString(R.string.security_mode_hardened_summary, pending)
                 } else {
-                    "Relaxed mode is on. Trusted-LAN features work without on-panel approval. Hardened mode is optional."
+                    getString(R.string.security_mode_relaxed_summary)
                 },
             )
-            .setPositiveButton(if (hardened) "Use Relaxed mode" else "Enable Hardened mode") { _, _ ->
+            .setPositiveButton(if (hardened) R.string.use_relaxed_mode else R.string.enable_hardened_mode) { _, _ ->
                 if (hardened) {
                     RemoteDebugSecurityTransitionGate.mutate {
                         config.setSecurityMode(Config.SecurityMode.RELAXED)
@@ -187,8 +192,8 @@ class ConfigActivity : AppCompatActivity() {
                     enableHardenedMode(config)
                 }
             }
-            .setNeutralButton("Review approvals") { _, _ -> showPendingApprovals() }
-            .setNegativeButton("Cancel", null)
+            .setNeutralButton(R.string.review_approvals) { _, _ -> showPendingApprovals() }
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
@@ -214,52 +219,37 @@ class ConfigActivity : AppCompatActivity() {
             }
             if (transition == VerifiedRelayTransition.VERIFICATION_FAILED) {
                 AlertDialog.Builder(this@ConfigActivity)
-                    .setTitle("Unable to stop remote debugging")
-                    .setMessage(
-                        "Hardened mode was not enabled because the panel could not verify that the LAN " +
-                            "DevTools relay and its listener are stopped. Restart the panel, then try again.",
-                    )
-                    .setPositiveButton("OK", null)
+                    .setTitle(R.string.unable_stop_remote_debugging)
+                    .setMessage(R.string.unable_stop_remote_debugging_detail)
+                    .setPositiveButton(R.string.ok, null)
                     .show()
             } else when (networkAdbAdmission) {
                 HardenedNetworkAdbAdmission.DISABLE_FAILED -> {
                     AlertDialog.Builder(this@ConfigActivity)
-                        .setTitle("Unable to stop remote ADB")
-                        .setMessage(
-                            "Hardened mode was not enabled because ha-paneld could not durably clear and " +
-                                "verify all owned classic/TLS network ADB state. The disable transition " +
-                                "remains pending so startup will retry it; check Developer options, then try again.",
-                        )
-                        .setPositiveButton("OK", null)
+                        .setTitle(R.string.unable_stop_remote_adb)
+                        .setMessage(R.string.unable_stop_remote_adb_detail)
+                        .setPositiveButton(R.string.ok, null)
                         .show()
                 }
                 HardenedNetworkAdbAdmission.UNVERIFIED -> {
                     AlertDialog.Builder(this@ConfigActivity)
-                        .setTitle("Unable to verify remote ADB")
-                        .setMessage(
-                            "Hardened mode was not enabled because the panel could not verify that classic " +
-                                "network ADB and Android Wireless debugging are off. Turn off both remote-control " +
-                                "paths in Android's developer settings, then try again.",
-                        )
-                        .setPositiveButton("OK", null)
+                        .setTitle(R.string.unable_verify_remote_adb)
+                        .setMessage(R.string.unable_verify_remote_adb_detail)
+                        .setPositiveButton(R.string.ok, null)
                         .show()
                 }
                 HardenedNetworkAdbAdmission.ACTIVE -> {
                     AlertDialog.Builder(this@ConfigActivity)
-                        .setTitle("Turn off remote ADB first")
-                        .setMessage(
-                            "Hardened mode cannot protect physical approvals while classic network ADB or Android " +
-                                "Wireless debugging is active. Turn off both in Android's developer settings, then " +
-                                "enable Hardened mode again.",
-                        )
-                        .setPositiveButton("OK", null)
+                        .setTitle(R.string.turn_off_remote_adb_first)
+                        .setMessage(R.string.turn_off_remote_adb_first_detail)
+                        .setPositiveButton(R.string.ok, null)
                         .show()
                 }
                 HardenedNetworkAdbAdmission.COMMIT_FAILED -> {
                     AlertDialog.Builder(this@ConfigActivity)
-                        .setTitle("Unable to enable Hardened mode")
-                        .setMessage("The security-mode change could not be saved. Relaxed mode remains active.")
-                        .setPositiveButton("OK", null)
+                        .setTitle(R.string.unable_enable_hardened_mode)
+                        .setMessage(R.string.unable_enable_hardened_mode_detail)
+                        .setPositiveButton(R.string.ok, null)
                         .show()
                 }
                 HardenedNetworkAdbAdmission.APPLIED -> Unit
@@ -270,25 +260,25 @@ class ConfigActivity : AppCompatActivity() {
     private fun showPendingApprovals() {
         val pending = LocalApprovalBroker.instance.pending()
         if (pending.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("Pending approvals").setMessage("There are no pending requests.")
-                .setPositiveButton("OK", null).show()
+            AlertDialog.Builder(this).setTitle(R.string.pending_approvals).setMessage(R.string.no_pending_requests)
+                .setPositiveButton(R.string.ok, null).show()
             return
         }
-        val labels = pending.map { "${it.operation.label}\n${it.summary}\nFrom ${it.peer}" }.toTypedArray()
+        val labels = pending.map { getString(R.string.approval_list_item, localizedLabel(it.operation), it.summary, it.peer) }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("Approve one request")
+            .setTitle(R.string.approve_one_request)
             .setItems(labels) { _, which -> confirmApproval(pending[which]) }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton(R.string.cancel, null)
             .show()
     }
 
     private fun confirmApproval(pending: io.github.maxlyth.hapaneld.security.PendingApproval) {
         AlertDialog.Builder(this)
-            .setTitle(pending.operation.label)
-            .setMessage("${pending.summary}\n\nRequest from ${pending.peer}. Approval expires and can be used once.")
-            .setPositiveButton("Approve") { _, _ -> LocalApprovalBroker.instance.approve(pending.id) }
-            .setNegativeButton("Deny") { _, _ -> LocalApprovalBroker.instance.deny(pending.id) }
-            .setNeutralButton("Cancel", null)
+            .setTitle(localizedLabel(pending.operation))
+            .setMessage(getString(R.string.approval_request_detail, pending.summary, pending.peer))
+            .setPositiveButton(R.string.approve) { _, _ -> LocalApprovalBroker.instance.approve(pending.id) }
+            .setNegativeButton(R.string.deny) { _, _ -> LocalApprovalBroker.instance.deny(pending.id) }
+            .setNeutralButton(R.string.cancel, null)
             .show()
     }
 
