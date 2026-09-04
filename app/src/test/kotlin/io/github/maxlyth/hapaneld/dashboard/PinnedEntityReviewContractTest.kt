@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.dashboard
 
 import java.io.File
+import org.json.JSONObject
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,6 +18,7 @@ import org.junit.Test
 class PinnedEntityReviewContractTest {
     private val store = File("src/main/kotlin/io/github/maxlyth/hapaneld/dashboard/EntityCatalogStore.kt").readText()
     private val server = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+    private val catalogue = JSONObject(File("src/main/assets/i18n/en.json").readText()).getJSONObject("strings")
 
     private val reviewPredicate = store.lineSequence()
         .first { it.trimStart().startsWith("\"review\" -> where +=") }
@@ -41,7 +43,9 @@ class PinnedEntityReviewContractTest {
     @Test fun `the page promises that nothing is removed automatically`() {
         // The table is the ONLY place a stale pin becomes visible, so the copy has to say both that it
         // is review-only and where to act. If this drifts, the feature silently becomes a dead end.
-        val note = server.lineSequence().first { it.contains("Stale or noisy entities") }
+        assertTrue("the page must render the reviewed note through its catalogue key",
+            server.contains("\"entities.table.review.note\""))
+        val note = catalogue.getJSONObject("entities.table.review.note").getString("text")
         assertTrue("the note must say a manual override is never auto-removed: $note",
             note.contains("never removed automatically") || note.contains("is never removed automatically"))
         assertTrue("the note must name the pinned-but-unused case: $note", note.contains("pinned by hand"))
