@@ -27,6 +27,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import io.github.maxlyth.hapaneld.R
+import io.github.maxlyth.hapaneld.nativeString
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
@@ -843,7 +844,7 @@ class NavbarController(
             layoutParams = FrameLayout.LayoutParams(dp(ICON_SIZE_DP), dp(ICON_SIZE_DP), Gravity.CENTER)
         }
         return FrameLayout(context).apply {
-            contentDescription = context.getString(description)
+            contentDescription = context.nativeString(description)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight)
             // Instant press highlight on touch-down — the action itself (esp. Back/Recents via su) can
             // lag ~200-300ms, so without this a tap reads as "nothing happened". Shows on touch-down for

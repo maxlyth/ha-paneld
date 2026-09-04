@@ -116,7 +116,8 @@ class NativeLocalizationContractTest {
         assertEquals(5, Regex("navButton\\(R\\.drawable\\.[^,]+, R\\.string\\.nav_").findAll(navbar).count())
         assertEquals(4, Regex("repeatButton\\(R\\.drawable\\.[^,]+, R\\.string\\.nav_").findAll(navbar).count())
         assertEquals(2, Regex("sliderButton\\(R\\.drawable\\.[^,]+, R\\.string\\.nav_").findAll(navbar).count())
-        assertTrue(navbar.contains("contentDescription = context.getString(description)"))
+        assertTrue(navbar.contains("contentDescription = context.nativeString(description)"))
+        assertTrue(!navbar.contains("contentDescription = context.getString(description)"))
     }
 
     @Test fun everyNotificationSurfaceResolvesUserCopyFromResources() {
