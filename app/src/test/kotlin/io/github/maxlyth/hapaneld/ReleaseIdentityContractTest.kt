@@ -4,8 +4,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class ReleaseIdentityContractTest {
-    @Test fun stableReleaseOwnsVersionCode688() {
+    @Test fun stableReleaseOwnsVersionCode689() {
         assertEquals("0.9.7", BuildConfig.VERSION_NAME)
-        assertEquals(688, BuildConfig.VERSION_CODE)
+        assertEquals(689, BuildConfig.VERSION_CODE)
     }
 }
