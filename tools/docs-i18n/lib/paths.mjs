@@ -100,16 +100,37 @@ export function bindSourceRevision(repository, sourceRevision, head = "HEAD") {
 export function readTreeSource(repository, sourceRevision, sourcePath) {
   const root = normalizeRepository(repository);
   const relative = normalizeSourcePath(sourcePath);
-  const entry = git(root, ["ls-tree", sourceRevision, "--", relative]).trim();
-  if (!entry) throw new Error(`source document is absent from sourceRevision: ${relative}`);
+  return readTreeMarkdownBlob(root, sourceRevision, relative, "source document", "sourceRevision");
+}
+
+export function readTreeMarkdownLinkTarget(repository, revision, targetPath) {
+  const root = normalizeRepository(repository);
+  if (
+    typeof targetPath !== "string" ||
+    !targetPath.endsWith(".md") ||
+    targetPath.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(targetPath) ||
+    path.posix.isAbsolute(targetPath) ||
+    path.posix.normalize(targetPath) !== targetPath ||
+    targetPath === ".." ||
+    targetPath.startsWith("../")
+  ) {
+    throw new Error(`unsafe Markdown link target: ${String(targetPath)}`);
+  }
+  return readTreeMarkdownBlob(root, revision, targetPath, "Markdown link target");
+}
+
+function readTreeMarkdownBlob(root, revision, relative, kind, revisionName = revision) {
+  const entry = git(root, ["ls-tree", revision, "--", relative]).trim();
+  if (!entry) throw new Error(`${kind} is absent from ${revisionName}: ${relative}`);
   const [mode, type] = entry.split(/\s+/, 2);
   if (mode === "120000" || type !== "blob") {
-    throw new Error(`source document must be a regular Git blob: ${relative}`);
+    throw new Error(`${kind} must be a regular Git blob: ${relative}`);
   }
-  const bytes = git(root, ["show", `${sourceRevision}:${relative}`], { encoding: null });
+  const bytes = git(root, ["show", `${revision}:${relative}`], { encoding: null });
   const decoded = bytes.toString("utf8");
   if (!Buffer.from(decoded, "utf8").equals(bytes) || decoded.includes("\r")) {
-    throw new Error(`source document must be canonical UTF-8 with LF endings: ${relative}`);
+    throw new Error(`${kind} must be canonical UTF-8 with LF endings: ${relative}`);
   }
   return { path: relative, bytes, source: decoded };
 }

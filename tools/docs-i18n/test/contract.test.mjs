@@ -29,6 +29,7 @@ import {
   confinedOutputPath,
   localizedOutputPath,
   normalizeSourcePath,
+  readTreeMarkdownLinkTarget,
 } from "../lib/paths.mjs";
 
 const PRIVATE_PROVIDER_NAMES = ["Open" + "AI", "Anth" + "ropic", "Deep" + "L"];
@@ -543,6 +544,90 @@ test("an unselected Markdown fragment must still exist at the selected HEAD", ()
       repository: current.repository,
     }),
     /fragment is absent from selected HEAD/,
+  );
+});
+
+test("root Markdown link fragments are checked at sourceRevision and selected HEAD without source admission", () => {
+  const current = fixture();
+  const readmePath = path.join(current.repository, "README.md");
+  fs.appendFileSync(readmePath, "\nRead the [security policy](SECURITY.md#reporting-a-vulnerability).\n");
+  write(current.repository, "SECURITY.md", "# Reporting a vulnerability\n");
+  command(current.repository, ["git", "add", "README.md", "SECURITY.md"]);
+  command(current.repository, ["git", "commit", "-qm", "link root policy"]);
+  const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+  const manifest = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md"],
+  });
+
+  assert.throws(() => normalizeSourcePath("SECURITY.md"), /outside the admitted Markdown roots/);
+  const built = buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
+    repository: current.repository,
+  });
+  assert.match(
+    built.outputs[0].content,
+    /\[security policy\]\(\.\.\/\.\.\/SECURITY\.md#reporting-a-vulnerability\)/,
+  );
+
+  write(current.repository, "SECURITY.md", "# Security\n");
+  command(current.repository, ["git", "add", "SECURITY.md"]);
+  command(current.repository, ["git", "commit", "-qm", "rename policy heading"]);
+  assert.throws(
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
+      repository: current.repository,
+    }),
+    /fragment is absent from selected HEAD/,
+  );
+});
+
+test("root Markdown fragment checks cannot be satisfied only by selected HEAD", () => {
+  const current = fixture();
+  const readmePath = path.join(current.repository, "README.md");
+  fs.appendFileSync(readmePath, "\nRead the [security policy](SECURITY.md#reporting-a-vulnerability).\n");
+  write(current.repository, "SECURITY.md", "# Security\n");
+  command(current.repository, ["git", "add", "README.md", "SECURITY.md"]);
+  command(current.repository, ["git", "commit", "-qm", "link missing root policy heading"]);
+  const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+  const manifest = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md"],
+  });
+  write(current.repository, "SECURITY.md", "# Reporting a vulnerability\n");
+  command(current.repository, ["git", "add", "SECURITY.md"]);
+  command(current.repository, ["git", "commit", "-qm", "add policy heading at head"]);
+
+  assert.throws(
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
+      repository: current.repository,
+    }),
+    /fragment is absent from sourceRevision/,
+  );
+});
+
+test("Markdown link-target reads reject traversal, non-Markdown files, and symlinks", () => {
+  const current = fixture();
+  fs.symlinkSync("README.md", path.join(current.repository, "SECURITY.md"));
+  command(current.repository, ["git", "add", "SECURITY.md"]);
+  command(current.repository, ["git", "commit", "-qm", "symlink policy"]);
+  const revision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+
+  assert.throws(
+    () => readTreeMarkdownLinkTarget(current.repository, revision, "../SECURITY.md"),
+    /unsafe Markdown link target/,
+  );
+  assert.throws(
+    () => readTreeMarkdownLinkTarget(current.repository, revision, "SECURITY\n.md"),
+    /unsafe Markdown link target/,
+  );
+  assert.throws(
+    () => readTreeMarkdownLinkTarget(current.repository, revision, "asset.txt"),
+    /unsafe Markdown link target/,
+  );
+  assert.throws(
+    () => readTreeMarkdownLinkTarget(current.repository, revision, "SECURITY.md"),
+    /must be a regular Git blob/,
   );
 });
 

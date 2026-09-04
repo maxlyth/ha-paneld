@@ -26,6 +26,7 @@ import {
   normalizeLocale,
   normalizeRepository,
   normalizeSourcePath,
+  readTreeMarkdownLinkTarget,
   readTreeSource,
 } from "./paths.mjs";
 
@@ -384,7 +385,7 @@ function relocateDocumentLinks(item, allItems, manifest, locale, repository) {
         ["sourceRevision", manifest.sourceRevision],
         ["selected HEAD", headRevision],
       ]) {
-        const targetSource = readTreeSource(repository, revision, sourceTarget).source;
+        const targetSource = readTreeMarkdownLinkTarget(repository, revision, sourceTarget).source;
         if (
           !headingAnchors(targetSource).some((heading) => heading.anchor === decoded) &&
           !htmlAnchors(targetSource).some((anchor) => anchor.anchor === decoded)
