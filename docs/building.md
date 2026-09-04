@@ -26,7 +26,7 @@ When provisioning a local APK onto a rooted panel, also run `./helper/build.sh` 
 
 ## Toolchain note
 
-The build uses AGP 9.1.1 with built-in Kotlin 2.4 and Gradle 9.6.1. Kotlin's compatibility table names AGP 9.1.0 and Gradle 9.5 as its upper tested versions. AGP 9.1.1 supplies Android API 37 support, while Gradle 9.6.1 reduces CI filesystem overhead. Both exceptions are guarded by the project's debug, release and oldest-Android test gates. Dependency versions live in [`gradle/libs.versions.toml`](../gradle/libs.versions.toml).
+The build uses AGP 9.3.2 with built-in Kotlin 2.4 and Gradle 9.7.1. Kotlin's compatibility table names AGP 9.1.0 and Gradle 9.5 as its upper tested versions. The newer AGP supplies Android API 37 support, while the newer Gradle reduces CI filesystem overhead. Both exceptions are guarded by the project's debug, release and oldest-Android test gates. Dependency versions live in [`gradle/libs.versions.toml`](../gradle/libs.versions.toml).
 
 ## Signing — what forkers need to know
 

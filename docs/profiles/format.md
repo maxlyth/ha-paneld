@@ -132,6 +132,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `hardware.camera` | Optional; default `false` | Boolean; declares the board has a usable camera. |
 | `hardware.microphone` | Optional; default `false` | Boolean; declares the board has a usable microphone. Independent of `hardware.camera`; some hardware has one without the other. |
 | `hardware.camera_lens_offset_px` | Optional | Integer; screen pixels from the top of the active display area up to the centre of the camera lens. The camera-in-use light is drawn as an arc centred on the lens, so this is what positions it; it is a bezel measurement and differs between boards. Omit it if you have not measured it and the light falls back to a default. |
+| `hardware.touch_click_gain` | Optional; default `0.2` | Number from 0.05 through 1.0; scales the touch-click feedback volume for a board whose click is too loud or too quiet at the system default. |
 
 ### `sensors` and `identity`
 
@@ -140,6 +141,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `sensors.proximity_technology` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls. When present it declares Android proximity sensor use. |
 | `sensors.proximity_gpio` | Optional; default absent | Integer 0–4095 for the supported root-backed binary GPIO route. |
 | `sensors.light_technology` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls. When present it declares Android ambient-light sensor use. |
+| `sensors.vi530x` | Optional; default `false` | Boolean; exposes a helper-started VI530x time-of-flight range source, started over ioctl and then polled. Requires the authenticated helper. |
 | `sensors.cht8305` | Optional; default `false` | Boolean; enables an exact core-supported CHT8305-compatible room-climate input through the authenticated helper/Shizuku routes. |
 | `sensors.room_temp_offset_c` | Optional; default `0.0` | Finite number from -30 through 30 °C. |
 | `identity.manufacturer` | Optional; default absent | Non-blank string, 1–100 characters, without C0 or DEL controls; absence means infer at runtime. |
@@ -212,6 +214,7 @@ Every driver selected by populated fields must appear in `requires.drivers`. All
 | `sensors.proximity_technology` or `sensors.light_technology` is present | `sensor.android` |
 | `sensors.proximity_gpio` is present | `sensor.gpio-proximity` |
 | `sensors.cht8305: true` | `sensor.cht8305-daemon` |
+| `sensors.vi530x: true` | `sensor.vi530x-daemon` |
 | `input.evdev_buttons` is non-empty | `input.evdev` |
 | `provisioning.software.webview.artifact` is present | `update.webview` |
 

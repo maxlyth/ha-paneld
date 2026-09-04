@@ -140,7 +140,7 @@ The web interface marks unavailable controls with a lock and explains what the p
 
 **Root or the authenticated helper may be needed:** physical backlight-off, Android sleep where the profile selects it, RGB LED control on some panels, vendor-app control, reboot and CPU governor. If the active profile has no safe way to turn the screen fully off, ha-paneld dims it instead.
 
-**Direct `su` inside ha-paneld is still needed:** Lock Android to dashboard, complete system logs, relay control where the profile requires it, and the legacy Companion-session import path. A full backup can include an existing Companion login when direct root or the authenticated helper is available.
+**Direct `su` inside ha-paneld is still needed:** Lock Android to dashboard, complete system logs, relay control where the profile requires it, and the legacy Companion-session import path. A full backup can include an existing Companion login, which always goes through the authenticated helper: the descriptor-confined protocol is the only path, on direct-root panels too.
 
 A limited [advanced fallback](docs/provisioning.md#shizuku-fallback-for-unrooted-panels) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
 

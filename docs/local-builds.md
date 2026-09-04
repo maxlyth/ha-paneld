@@ -4,7 +4,7 @@ Build ha-paneld off-CI — on a laptop, ideally in the VS Code **devcontainer** 
 
 ## Devcontainer (VS Code)
 
-[`.devcontainer/`](../.devcontainer/) pins the same toolchain as CI (JDK 17, compileSdk 37, Build-Tools 36.0.0, NDK 27.0.12077973, CMake 3.22.1). Open the repo in VS Code → **Reopen in Container**, then:
+[`.devcontainer/`](../.devcontainer/) pins the Android toolchain CI uses (compileSdk 37, Build-Tools 36.0.0, NDK 27.0.12077973, CMake 3.22.1). Its JDK is newer than the JDK 17 CI runs on, so treat CI as the authority on Java-version behaviour. Open the repo in VS Code → **Reopen in Container**, then:
 
 ```bash
 ./gradlew assembleDebug      # installable development APK using the public debug signer
