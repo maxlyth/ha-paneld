@@ -101,6 +101,39 @@
       node.appendChild(document.createTextNode(parts.join(releaseUrl)));
     } else node.textContent = value.text;
   }
+  function appendEnglishEvidence(node, text, separator) {
+    if (!node || text == null || text === '' || typeof document.createElement !== 'function') return;
+    if (separator) node.appendChild(document.createTextNode(separator));
+    var evidence = document.createElement('span');
+    evidence.className = 'install-raw-evidence'; evidence.setAttribute('lang', 'en'); evidence.textContent = String(text);
+    node.appendChild(evidence);
+  }
+  function renderPresentedEvidence(node, envelope, compatibility, labelKey, labelFallback) {
+    if (!node) return;
+    var exact = String(compatibility == null ? '' : compatibility), value = presentation(envelope, exact);
+    node.removeAttribute('lang'); node.textContent = '';
+    if (labelKey) {
+      var label = document.createElement('span'); label.textContent = t(labelKey, labelFallback); node.appendChild(label);
+      node.appendChild(document.createTextNode(' '));
+    }
+    if (value.fallback) appendEnglishEvidence(node, exact, '');
+    else {
+      var controlled = document.createElement('span'); controlled.textContent = value.text; node.appendChild(controlled);
+      if (exact && exact !== value.text) appendEnglishEvidence(node, exact, ' — ');
+    }
+  }
+  function renderFailure(node, key, fallback, diagnostic) {
+    if (!node) return;
+    node.removeAttribute('lang'); node.textContent = '';
+    var controlled = document.createElement('span'); controlled.textContent = t(key, fallback); node.appendChild(controlled);
+    appendEnglishEvidence(node, String(diagnostic == null || diagnostic === '' ? 'request failed' : diagnostic), ' ');
+  }
+  function installCardHref(fragment) {
+    var params = new URLSearchParams(location.search), supported = ['en', 'de', 'es', 'fr', 'it', 'zh-Hans', 'en-XA'];
+    var explicit = params.get('lang');
+    if (supported.indexOf(explicit) < 0) return '/install' + fragment;
+    return '/install?lang=' + encodeURIComponent(explicit) + fragment;
+  }
   function renderWarnings(node, warnings, overlays) {
     var validOverlay = Array.isArray(overlays) && overlays.length === warnings.length && overlays.length <= 11;
     node.textContent = '';
@@ -556,7 +589,8 @@
   function pollApk(n) {
     fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
       if (d.running) { apkMsg(t('install.apk.dynamic.installing', 'Installing…')); setTimeout(function () { pollApk(n + 1); }, 2000); return; }
-      var result = presentation(d.presentation, d.message || 'done'); apkMsg(t('install.apk.dynamic.result', 'Result: {result}', { result: result.text }));
+      var node = document.getElementById('apk-msg');
+      if (node) { renderPresentedEvidence(node, d.presentation, d.message || 'done', 'install.apk.dynamic.result_label', 'Result:'); scheduleInstallColumnAlignment(); }
     }).catch(function () { if (n < 20) setTimeout(function () { pollApk(n + 1); }, 2500); else apkMsg(t('install.apk.dynamic.lost_contact', 'Lost contact.')); });
   }
 
@@ -580,8 +614,8 @@
     fetch('/api/v1/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'pkg=' + encodeURIComponent(pkg) })
       .then(approvalAwareJson).then(function (d) {
         if (msg) {
-          var compatibility = d.ok ? t('install.uninstall.dynamic.succeeded', 'Uninstalled {package}', { package: pkg }) : t('install.uninstall.dynamic.failed', 'Failed: {result}', { result: d.result || d.error || 'error' });
-          setPresented(msg, d.presentation, compatibility);
+          var compatibility = d.ok ? ('Uninstalled ' + pkg) : ('Failed: ' + (d.result || d.error || 'error'));
+          renderPresentedEvidence(msg, d.presentation, compatibility);
         }
         btn.disabled = false; if (d.ok) loadPackages();
       }).catch(function (error) { if (msg) msg.textContent = requestFailure(error, t('install.uninstall.dynamic.request_failed', 'Failed.')); btn.disabled = false; });
@@ -648,7 +682,11 @@
         a.href = url; a.download = (panelName || document.title.split('·')[0] || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'zip');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
         bkMsg(pw ? t('install.backup.dynamic.downloaded_encrypted', 'Backup downloaded (encrypted) — keep the passphrase.') : t('install.backup.dynamic.downloaded_plain', 'Backup downloaded (unencrypted ZIP).')); btn.disabled = false;
-      }).catch(function (e) { bkMsg(e && e.approvalRequired ? e.message : 'Backup failed: ' + (e.message || 'request failed')); btn.disabled = false; });
+      }).catch(function (e) {
+        if (e && e.approvalRequired) bkMsg(e.message);
+        else { renderFailure(document.getElementById('bk-msg'), 'install.backup.dynamic.backup_failed_prefix', 'Backup failed:', e && e.message); scheduleInstallColumnAlignment(); }
+        btn.disabled = false;
+      });
   };
 
   // Secret-inclusive config export is approval-gated in Hardened mode. Keep the request in-page so
@@ -675,7 +713,8 @@
       if (out) out.textContent = includeSecrets ? t('install.backup.dynamic.export_downloaded_secrets', 'Configuration export downloaded with stored credentials.') : t('install.backup.dynamic.export_downloaded', 'Configuration export downloaded.');
       if (btn) btn.disabled = false;
     }).catch(function (error) {
-      if (out) out.textContent = requestFailure(error, 'Export failed: ' + (error.message || 'request failed'));
+      if (error && error.approvalRequired) { if (out) out.textContent = error.message; }
+      else renderFailure(out, 'install.backup.dynamic.export_failed_prefix', 'Export failed:', error && error.message);
       if (btn) btn.disabled = false;
     });
   };
@@ -764,7 +803,10 @@
               setTimeout(function () { location.reload(); }, 1800);
             });
         });
-    }).catch(function (e) { if (out) { out.textContent = e && e.approvalRequired ? e.message : 'Import failed: ' + e; if (locale !== 'en') out.setAttribute('lang', 'en'); } });
+    }).catch(function (e) {
+      if (e && e.approvalRequired) { if (out) out.textContent = e.message; }
+      else renderFailure(out, 'install.backup.dynamic.import_failed_prefix', 'Import failed:', String(e == null ? 'request failed' : e));
+    });
     input.value = '';
   };
 
@@ -800,7 +842,7 @@
     }).then(function (result) {
       var applied = presentation(result.presentation, result.message || t('install.backup.dynamic.form_applied', 'Applied.'));
       note.textContent = applied.text + ' ' + t('install.backup.dynamic.form_returning', 'Returning to this card…');
-      var target = path === '/api/v1/tame' ? '/install#cfg-tame' : '/install#cfg-display';
+      var target = installCardHref(path === '/api/v1/tame' ? '#cfg-tame' : '#cfg-display');
       setTimeout(function () { location.href = target; }, path === '/api/v1/tame' ? 1800 : 900);
     }).catch(function (error) {
       note.textContent = error && error.message ? error.message : t('install.backup.dynamic.form_failed', 'Could not apply this change.');
