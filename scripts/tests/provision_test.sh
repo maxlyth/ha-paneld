@@ -8213,7 +8213,8 @@ unset LEGACY_FIXTURE_ROOT LEGACY_FIXTURE_C LEGACY_FIXTURE_CANDIDATE LEGACY_FIXTU
 # dispatch immediately after acquisition so TERM deterministically reaches a live lock owner.
 INTERRUPT_DISPATCH_SCRIPT="$TMP/device-dispatch-interrupt.sh"
 sed '/^transaction_id=${2:-}$/i\
-sleep 2
+printf %s armed > "${SWEEP_ROOT}/interrupt-ready"\
+/bin/sleep 2
 ' "$DISPATCH_SCRIPT" > "$INTERRUPT_DISPATCH_SCRIPT"
 mk_sweep_tree
 mkdir -p "$SWEEP_TREE/dev" "$SWEEP_TREE/vendor"
@@ -8223,14 +8224,15 @@ SWEEP_ROOT="$SWEEP_TREE" /bin/sh -u "$INTERRUPT_DISPATCH_SCRIPT" \
   > "$interrupt_output" 2>&1 &
 interrupt_pid=$!
 interrupt_lock="$SWEEP_TREE/dev/.hapaneld-helper-transaction.lock"
+interrupt_ready="$SWEEP_TREE/interrupt-ready"
 interrupt_wait=0
-while [ "$interrupt_wait" -lt 200 ]; do
-  [ ! -d "$interrupt_lock" ] || break
+while [ "$interrupt_wait" -lt 1000 ]; do
+  if [ -s "$interrupt_ready" ] && [ -d "$interrupt_lock" ]; then break; fi
   kill -0 "$interrupt_pid" 2>/dev/null || break
-  sleep 0.01
+  /bin/sleep 0.01
   interrupt_wait=$((interrupt_wait + 1))
 done
-if [ -d "$interrupt_lock" ]; then
+if [ -s "$interrupt_ready" ] && [ -d "$interrupt_lock" ]; then
   pass "interruption fixture reaches a live production transaction lock"
 else
   LAST_OUTPUT="$interrupt_output"
@@ -8245,7 +8247,7 @@ else
   fail_test "TERM cleanup exits the production transaction with a signal-derived failure (got $interrupt_status)"
 fi
 assert_swept "dev/.hapaneld-helper-transaction.lock" "TERM cleanup releases the production transaction lock"
-unset INTERRUPT_DISPATCH_SCRIPT interrupt_output interrupt_pid interrupt_lock interrupt_wait interrupt_status
+unset INTERRUPT_DISPATCH_SCRIPT interrupt_output interrupt_pid interrupt_lock interrupt_ready interrupt_wait interrupt_status
 
 # A live owner must reject before the sweep. This proves the top-level order, not merely that the
 # successful path eventually leaves no lock directory behind.
