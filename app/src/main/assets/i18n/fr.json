@@ -5393,6 +5393,1296 @@
       "sourceHash": "90a0e533f9a804dc15a95e46a99ad3e186250b1066fdbf749e1c7dfd048f72d7",
       "state": "machine-cross-checked"
     },
+    "install.apk.dynamic.cancel": {
+      "text": "Annuler",
+      "sourceHash": "19766ed6ccb2f4a32778eed80d1928d2c87a18d7c275ccb163ec6709d3eb2e27",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.cancelling": {
+      "text": "Annulation…",
+      "sourceHash": "91b104db05da1b2d48c57a5aa60128f660e6572f89835ec858f6eb25b8f4af0f",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.discard_failed": {
+      "text": "Échec de la suppression.",
+      "sourceHash": "9fd6b197d4bf01eed95b3dc9a3e75eb929d40bf3ce6dfccae02808acb5a7f5c3",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.discard_pending": {
+      "text": "Supprimer le téléversement en attente",
+      "sourceHash": "7e418bd26163de3929663bc7076084f33eb7a2164af949269e5ec656d690c725",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.discarded": {
+      "text": "APK en attente supprimé.",
+      "sourceHash": "143171ae08dadd852e0bdf13743ec6719fd75da928b61a9ba6b0c14ed329eb3e",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.download_cancelled": {
+      "text": "Téléchargement annulé — le panneau l’a interrompu.",
+      "sourceHash": "6f2ee2f67be132054bfdbc436d286109b8caa118e50dafbe8b97b5558120566c",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.download_failed": {
+      "text": "Échec du téléchargement",
+      "sourceHash": "eae34ccbc4432c1358da668b091e7c952fe8be24b02dd4f8ec5ea2edef5ca1a4",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.download_failed_sentence": {
+      "text": "Échec du téléchargement.",
+      "sourceHash": "22edbe1fbf1555f3bd4988fa3997c0c314bc37e3926880d29c0e10cc025b71b8",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.downloading": {
+      "text": "Téléchargement et inspection…",
+      "sourceHash": "3a4d6387f37f52631588dceddb25788886863b68401e0946f50a5b95306ccdbb",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.install": {
+      "text": "Installer {package}",
+      "sourceHash": "5c4b130ef23462a8a2a79d7025971e93ba0e5f07908818d2aa65e4d34863dd0a",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.install_busy": {
+      "text": "Une autre installation est en cours — réessayez dans un instant.",
+      "sourceHash": "33b83e4f2627947770b393b6f31fa2e53c4290e7f2c0ec230cbb7adbb54e0ce8",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.installing": {
+      "text": "Installation…",
+      "sourceHash": "530bcc355f0a3cd6a75a5216f1648e3dc48da5615ee41f56e033f4732982a3df",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.lost_contact": {
+      "text": "Contact perdu.",
+      "sourceHash": "6ed92f015c9f66208d73644d23dde3805b1fba342e9b16d9a59a99b661b77fa1",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.none_pending": {
+      "text": "Aucun APK préparé n’est en attente.",
+      "sourceHash": "5eadb2898fb66bfac121a23c126473caba72911542310786e7b655dc562be2b7",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.package": {
+      "text": "Paquet",
+      "sourceHash": "59de121db1b8145e4c974543653fd48e1d6667b41160f5a393270c9c0f7852c3",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.paste_url": {
+      "text": "Collez d’abord un lien https:// vers un APK.",
+      "sourceHash": "118e4fa6a3fece92f59bdac05efe677b58adf658a3bc11ada8d92e7ef9831f11",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.pending": {
+      "text": "Le panneau conserve un APK déjà inspecté : {package} {version}. Le téléversement ou le téléchargement d’un nouvel APK le remplacera.",
+      "sourceHash": "1bc476509cdca006dccba0b9436a26cab15739166effe31f1f936bd01a350cfa",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.pending_changed": {
+      "text": "Le téléversement en attente a changé — vérification de ce que conserve le panneau…",
+      "sourceHash": "94b29c22f81a4fb058f97e6a2ed88e332f6575e69035634cc878135c1b53ad6c",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.signer": {
+      "text": "Signataire SHA-256",
+      "sourceHash": "6f7e8eaa608ae1f8bb4345f53479c3e7c4cd93a1f9e21ee9be94414af1ec3fb3",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.stale": {
+      "text": "Cet APK a été remplacé ou a expiré — sélectionnez-le ou téléchargez-le de nouveau.",
+      "sourceHash": "3af6c7bf18bf62cb45bc6d3b0edfb340dc24f09ab9a89263156556259e24dbb1",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.start_failed": {
+      "text": "Échec du démarrage.",
+      "sourceHash": "dc0f7e1538e7e57b8ca4f6f0955123148d7d27999fb76ffbfd197f6d2f10c1f0",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.upload_failed": {
+      "text": "Échec du téléversement",
+      "sourceHash": "6efc5d27f30b20c103ca1a855bfc65cdbdf9de98c3f8ac93a3df3f319c3388bd",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.upload_failed_sentence": {
+      "text": "Échec du téléversement.",
+      "sourceHash": "3d209f4648d487b456bcd3690b347fdbab9818502d677d52ff6fa2af90d4267f",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.uploading": {
+      "text": "Téléversement et inspection de {filename}…",
+      "sourceHash": "5727da239c993127833964b85b8214889e2f283193aa2bae87c83787efae9ed7",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.dynamic.wrong_apk": {
+      "text": "Mauvais APK ? Annuler le supprime du panneau — vous pouvez aussi choisir un autre fichier ou lien, ce qui le remplacera.",
+      "sourceHash": "4fcb877bd56da08219bc3b758587ad70704501ae995ea2147f9e299584ee642f",
+      "state": "machine-cross-checked"
+    },
+    "install.apk.error.too_large": {
+      "text": "ce fichier dépasse la taille acceptée par le panneau",
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.busy": {
+      "text": "occupé",
+      "sourceHash": "c9bc072f4fa8189466c2a8f2c36a56a4ef1e60a2ffa4986ba2f155cd176c128b",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.cancelled": {
+      "text": "le téléchargement a été annulé",
+      "sourceHash": "b1279fd2e6b6d172f68fb16222e030261d7805d626edad4acb8c9b14aa9d2a2c",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.disabled": {
+      "text": "l’installation d’APK est désactivée sur ce panneau",
+      "sourceHash": "ac71df7a441ae1e93ecb9f50564974dfb9cb65d8a3cd6d0e26a216cdd3421dfd",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.fetch_failed": {
+      "text": "le panneau n’a pas pu télécharger ce lien",
+      "sourceHash": "f42498880844fec60487847c9df29ce4b684942fef96f3f8a925cfd39ae30ccd",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.fetch_timeout": {
+      "text": "le téléchargement s’est bloqué ou a pris trop de temps",
+      "sourceHash": "a41e7468c133d4eb92e87951ad0f5eb4a54d45d775581477f16c06b0b9b71475",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.fetch_too_large": {
+      "text": "ce fichier dépasse la taille acceptée par le panneau",
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.insufficient_storage": {
+      "text": "espace libre insuffisant sur le panneau",
+      "sourceHash": "a9d8dac2dbe2160ac02672638f7124a4112818a490e996faa3911ff689a2b404",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.invalid_request": {
+      "text": "le panneau a refusé cet identifiant de requête",
+      "sourceHash": "cb02224edc3532d5ea6d2e153b58680eab7ebbac49bef09f76ea50682774307e",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.invalid_url": {
+      "text": "ce lien https:// n’est pas valide",
+      "sourceHash": "5eb237ea5f1be950341465cf5f0c7314d0464884c3b95bdafb75124d48949a51",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.no_root": {
+      "text": "ce panneau n’a ni accès root ni démon auxiliaire",
+      "sourceHash": "ccacf47c8e35732eeb3c5a32f4bb40643b3bcaf95b27c22a8e5b39134e10412d",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.not_an_apk": {
+      "text": "ce fichier n’est pas un APK lisible",
+      "sourceHash": "207a2e014af320b15e04f7c05aa0b5843f6e4befe37f20164ae10154dc09e916",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.stale_or_missing": {
+      "text": "cet APK a été remplacé ou a expiré",
+      "sourceHash": "c712c03387730b25eeeae4f474ab54675661abf49b6d40de44ddab004ee829b2",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.started": {
+      "text": "démarré",
+      "sourceHash": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.stopping": {
+      "text": "le panneau est en cours d’arrêt",
+      "sourceHash": "c8dd0b5133b020fe13449d8fd6485a23e30845b6b1f9c55b0ae6b7b696717b5b",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.upload_busy": {
+      "text": "le panneau traite encore un autre APK — réessayez dans un instant",
+      "sourceHash": "57f6dab19faac726963f491fb5b283fd48cf46f145942394343250a1979560db",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.upload_staging_failed": {
+      "text": "le panneau n’a pas pu ouvrir de fichier de préparation",
+      "sourceHash": "8a4ea06166f3cb0dcbf9309b3cf9646c9e030f1f472326e2257d88227c5eb2e0",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.upload_timeout": {
+      "text": "le téléversement a pris trop de temps",
+      "sourceHash": "9f6766e89a507d7be8719e9dc7d3b399435583e862aa8bfe6172f5d2f3656dd6",
+      "state": "machine-cross-checked"
+    },
+    "install.apk_status.upload_too_large": {
+      "text": "ce fichier dépasse la taille acceptée par le panneau",
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.accepted_without_archive": {
+      "text": "La sauvegarde a été acceptée sans archive.",
+      "sourceHash": "dfeabb50516e6c317db6cb96c74c6bceab73a7fc964a6b627944cad2ca26ba38",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.building_encrypted": {
+      "text": "Création de la sauvegarde chiffrée…",
+      "sourceHash": "0d04c198eae05f56fda1e16ba30d99f4d20fb60414510cae03c83efa8393bc27",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.building_plain": {
+      "text": "Création du ZIP non chiffré…",
+      "sourceHash": "a8f8b4d61714d0a462abeed68075150268a8faa15bc4abed725528eaac396229",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.downloaded_encrypted": {
+      "text": "Sauvegarde téléchargée (chiffrée) — conservez la phrase secrète.",
+      "sourceHash": "273aa9b4b0de3263dd02476c261e8834dc306ebf2c1ef30b92fa6d6590b92084",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.downloaded_plain": {
+      "text": "Sauvegarde téléchargée (ZIP non chiffré).",
+      "sourceHash": "e81e8548da1ae25cffa032446ba64ad700212ac82122619a7e882a30decafb4e",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.export_accepted_without_download": {
+      "text": "L’exportation a été acceptée sans téléchargement.",
+      "sourceHash": "db4d7593a4cbf55f25e70f703b5f19105b1af3ca49595b4990923628cf931eed",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.export_building": {
+      "text": "Création de l’exportation de configuration…",
+      "sourceHash": "18c648d89c4832afd1d6c1980df829e7afd5c13068afbc609fe84c95d93c46fb",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.export_downloaded": {
+      "text": "Exportation de configuration téléchargée.",
+      "sourceHash": "d39e3499af450ebb89d47781282f5cc4023a546b4a66161b2f8ca5345584a21b",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.export_downloaded_secrets": {
+      "text": "Exportation de configuration téléchargée avec les identifiants enregistrés.",
+      "sourceHash": "ae37ceaa873c24a5a3c68d5b18cab8d6eee930d43ef2d924224163f1dc31a3b3",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.export_requesting_secrets": {
+      "text": "Demande d’une exportation incluant les identifiants…",
+      "sourceHash": "843a71b0f54a7194f7030e2e5c6e29ddcb32b974545e285354570e285873c871",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.form_applied": {
+      "text": "Appliqué.",
+      "sourceHash": "954b4955ec92e5dac836a857210035a657cb96763e5e3c60a12c8ea8a8784bad",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.form_applying": {
+      "text": "Application…",
+      "sourceHash": "3329a9bb48b9c8d4a5e6182042ea9737427233c72b853b93d0a6365050ae476d",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.form_failed": {
+      "text": "Impossible d’appliquer cette modification.",
+      "sourceHash": "0f9e7ca0d08107ef88aedb80e715ab09e5dda9b112b46c38465003c2f23f3aa1",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.form_returning": {
+      "text": "Retour à cette carte…",
+      "sourceHash": "8a11fdd7da7f22cf100a40819b071ccca25462c66f617aac977d01fc0ecb4eff",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.import_cancelled": {
+      "text": "Importation annulée.",
+      "sourceHash": "33ffe414fe4ec20dcbb6c1225f1d681933ba989a0c4d1345095f91e1e0172572",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.import_changed": {
+      "text": "Importation non appliquée : les réglages du panneau ont changé depuis l’aperçu. Prévisualisez de nouveau le fichier.",
+      "sourceHash": "32278e4a67374659ec954df5b64136502a99a4b380bc0af724744f9233f11b1b",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.import_reloading": {
+      "text": "Rechargement pour afficher les réglages importés…",
+      "sourceHash": "46da33cca444867c597c3c3aca9966107a8c42fd187e8a5ddf9468ddc948a66f",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.import_summary": {
+      "text": "Importation {status} · {applied} appliqués, {skipped} ignorés",
+      "sourceHash": "8874d556b53bc527d77eb5b2d74f22038b2907ebf044efa961a5e96428a10190",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.passphrase_required": {
+      "text": "Saisissez une phrase secrète ou confirmez explicitement le ZIP en texte clair non chiffré.",
+      "sourceHash": "21fa937d903a62786539fd74490cc60a541ca8c8bb1154f7eeb5f6b204847dc6",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_companion": {
+      "text": "Connexion Companion",
+      "sourceHash": "a3fc55b59be7ed4d1208fe616ca1405b7326170db3d881d724f9c8c52e583327",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_config_keys": {
+      "text": "Clés de configuration",
+      "sourceHash": "361f87bb7c897517e80d6140d0e91e9a57893b3366d7a94533f63ba019293a8f",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_failed": {
+      "text": "Échec de l’aperçu.",
+      "sourceHash": "8f5998bb6b151246d07b8bf1d00d532ab20bcae6061618957364613eccaa560e",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_none": {
+      "text": "aucun",
+      "sourceHash": "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_panel": {
+      "text": "Panneau",
+      "sourceHash": "d0d91173008b6f839a8380e77582a9072bef1d0971459683f35ca072792818f5",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.request_failed": {
+      "text": "échec de la requête",
+      "sourceHash": "fbbc1b5ba8644e5c54c2af5b1616eeb8644446465dfaae001bf9167a2ed30567",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_confirm": {
+      "text": "La restauration écrase la configuration et la connexion Companion de ce panneau. Continuer ?",
+      "sourceHash": "45131b43ed2624f4dac0513d95c29edae28819f5ac6f090403b48ee5befa8927",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_now": {
+      "text": "Restaurer ce paquet maintenant",
+      "sourceHash": "983de6dbc369f41533a600215dd40dee2eaf2504071f7a7e9653650213ee4aa4",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_reading": {
+      "text": "Lecture de l’aperçu…",
+      "sourceHash": "3093c9a02caea7f5069c829a24f15ed3d74c906fbee986dbf7f4c95d1de106b5",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_result": {
+      "text": "Restauration : {result}",
+      "sourceHash": "8a69ab0a626be15ce1407d1cf12c93c23d136ac4f7edd60d58d695e42f254fe9",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_start_failed": {
+      "text": "Échec du démarrage de la restauration.",
+      "sourceHash": "d4a3fc81ca2d38a5e54bd5775b77cfc85b11a8749f42befac9de38c9e68f9bd6",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restore_unreadable": {
+      "text": "impossible de lire le paquet",
+      "sourceHash": "23e1af7a9c50f5f0a0af66bf21f67abcc1ea651606abe83db9f7ae30314effb6",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.restoring": {
+      "text": "Restauration…",
+      "sourceHash": "5a4918e0201c877c92430c346267ddf24b93853b918784cccc2190f7a4472144",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.preview_files.one": {
+      "text": "{package} ({count} fichier)",
+      "sourceHash": "9ff7fb9b7b88fc94010ff7fd055dd1d1efd32b34a26f466917f9cfc447513a65",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.preview_files.other": {
+      "text": "{package} ({count} fichiers)",
+      "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
+      "state": "machine-cross-checked"
+    },
+    "install.companion.error.helper_busy": {
+      "text": "L’auxiliaire Companion est occupé",
+      "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
+      "state": "machine-cross-checked"
+    },
+    "install.companion.error.helper_unavailable": {
+      "text": "L’auxiliaire Companion est indisponible",
+      "sourceHash": "7ff8ce015e30889d9cc37648e0f3cf6e03b100156bed873f69993b5339e18cca",
+      "state": "machine-cross-checked"
+    },
+    "install.companion.error.marker_failed": {
+      "text": "Le marqueur de sécurité de l’opération Companion n’a pas pu être conservé",
+      "sourceHash": "bcf33daf2b195cd0bf26848ff1e14f60bc1cd537f618bd3eaa1e09d924d4b855",
+      "state": "machine-cross-checked"
+    },
+    "install.companion.urls_repaired.one": {
+      "text": "{count} serveur réparé — URL interne définie sur l’URL externe ; Companion relancé",
+      "sourceHash": "ab1dad8519985db12bf5a67459819495c00a3fc6d14958d1454977458327e3c3",
+      "state": "machine-cross-checked"
+    },
+    "install.companion.urls_repaired.other": {
+      "text": "{count} serveurs réparés — URL interne définie sur l’URL externe ; Companion relancé",
+      "sourceHash": "f0c7a86e0f56af0cd82b7ffdd47cbb1e27911edb1baa1328a9871a394ca35353",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.bad_action": {
+      "text": "action inconnue",
+      "sourceHash": "04852b17ebf0a245cab7804ced1f31f6934a67a857db347e3db44c13c9bac1ed",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.bad_component": {
+      "text": "composant inconnu",
+      "sourceHash": "dc883dcda18e319e5e3401682c844005123642bba2cc6b9a6bfdf0e1d50d95d9",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.bad_version": {
+      "text": "version non valide",
+      "sourceHash": "abb0efe95296c1a5009db15d861e7e5c48fc96b5bcfa34f465d2cf94cdf9b4e2",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.busy": {
+      "text": "occupé",
+      "sourceHash": "c9bc072f4fa8189466c2a8f2c36a56a4ef1e60a2ffa4986ba2f155cd176c128b",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.downgrade_refused": {
+      "text": "retour à une version antérieure refusé",
+      "sourceHash": "a754df63eaa7f7814ff5e348e8bb16435ff438309235a3fbf3ea4759122738d0",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.started": {
+      "text": "démarré",
+      "sourceHash": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8",
+      "state": "machine-cross-checked"
+    },
+    "install.component_status.uncomparable_version": {
+      "text": "versions incomparables",
+      "sourceHash": "fdbbeb38fe4b530a6707d3344310b643c9aaac25ca20cfecebce6bffd61861fd",
+      "state": "machine-cross-checked"
+    },
+    "install.components.install": {
+      "text": "Installer",
+      "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.applied": {
+      "text": "appliquée",
+      "sourceHash": "b4267ce93cbba4e415504feb895f662dcced5d7aa406f27e8447c8fd5f0d48c8",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.bad_bundle": {
+      "text": "paquet non valide",
+      "sourceHash": "433fac887a5132324d675b401decfdc8ad6765067e549d95027ef197ddb7b11e",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.bad_expected_cfg": {
+      "text": "configuration attendue non valide",
+      "sourceHash": "2d52814276499238e2ca67fe4515f3908670e12688f6a6240b30fdc88d9ef8bd",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.database_compatibility_refused": {
+      "text": "le contrôle de compatibilité de la base de données a refusé l’importation",
+      "sourceHash": "20a539acc8bf064780369707ca97f27d6c613a8f87503bbdc4dca72a55d3379a",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.dry_run": {
+      "text": "prévisualisée",
+      "sourceHash": "e77dd7def5c403c2fa0e7bc5e9d1204157d5551a1b3600b376ad54869cbfd4d4",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.error": {
+      "text": "erreur",
+      "sourceHash": "ca00fccfb408989eddc401062c4d1219a6aceb6b9b55412357f1790862e8f178",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.no_op": {
+      "text": "aucune modification",
+      "sourceHash": "44f9161c3a252925f55022d60f68918abf8fdc1a9a3fadbf5ab766549f6b3461",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.partial": {
+      "text": "partiellement appliquée",
+      "sourceHash": "1a58081342fabfaf5ca9e185bb6a7a05d1c61c321daf98a7ba78a8ad3ad01964",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.rejected": {
+      "text": "refusée",
+      "sourceHash": "20cd938a2ea64f612b3523bc9219130c6fc66cd09b394ea38437488c0b8898b2",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.restored": {
+      "text": "restaurée",
+      "sourceHash": "eb00bf0aba491c620ddf47bf68068be4cc52c39bf3b8b554e2c51ff74e5e915e",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.stale_preview": {
+      "text": "l’aperçu n’est plus à jour",
+      "sourceHash": "128a2589910b546cff344f57cb79852a579cdceef9c12f58853166878910f6c8",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.timeout": {
+      "text": "délai de la requête dépassé",
+      "sourceHash": "93deb3798f1b6a3ee1a01f97dd9a20c5c28a42a29504b25612525876c282bf4a",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.too_large": {
+      "text": "le paquet est trop volumineux",
+      "sourceHash": "323f05efa912718108ba219e1e7929be22eba6980e18b91ee51769b0d9166fd7",
+      "state": "machine-cross-checked"
+    },
+    "install.config_import_status.wrong_kind_or_schema": {
+      "text": "type ou schéma de paquet incorrect",
+      "sourceHash": "1c21c6d03f0d44225159a00471cbcdf0692fe355be05f6282fd8aaa78c4c0460",
+      "state": "machine-cross-checked"
+    },
+    "install.import.apply_question": {
+      "text": "Appliquer maintenant ?",
+      "sourceHash": "3681133a75776a670ae87e94396cd9789687fd91aab68352223285603b6cdf3e",
+      "state": "machine-cross-checked"
+    },
+    "install.import.changed.one": {
+      "text": "L’importation modifiera {count} réglage :",
+      "sourceHash": "526f8b685ef0423fe8d4ab2fad93c35d538506d2f1ae8ff3f868e9a46d6dc433",
+      "state": "machine-cross-checked"
+    },
+    "install.import.changed.other": {
+      "text": "L’importation modifiera {count} réglages :",
+      "sourceHash": "f64d6122a6863eeb7e92750b10ec10aa95bbd839ce976fe59ee4ec41fec7aca7",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.apk_pending_lost": {
+      "text": "Cet APK a été remplacé ou a expiré — sélectionnez-le ou téléchargez-le de nouveau.",
+      "sourceHash": "3af6c7bf18bf62cb45bc6d3b0edfb340dc24f09ab9a89263156556259e24dbb1",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_cancelled": {
+      "text": "sauvegarde annulée",
+      "sourceHash": "c9efd4041c2aa5376169a7d76fee3e12c44045d6357dc8e83212c233e215651f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_companion_too_large": {
+      "text": "la sauvegarde Companion est trop volumineuse",
+      "sourceHash": "1101a9bdfc4798f20675bddb2bde0326be3a47b3035848445781a030277a641c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_import_partial_selection_unchanged": {
+      "text": "Certaines révisions de profil ont été importées sans être activées ; la sélection n’a pas changé.",
+      "sourceHash": "8c2d8345bac7bca850fcd9063cdbffe13692632792b6e6b666e1a12f12cbee8f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_import_selection_stage_failed": {
+      "text": "Les révisions de profil ont été importées sans être activées, mais la sélection n’a pas pu être préparée.",
+      "sourceHash": "f14487fd769331c313b786fc7750c13494039dc58f0f0fc7c5c8b0b6ba46b735",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_ready": {
+      "text": "sauvegarde prête",
+      "sourceHash": "ef14eeec6bfca04b0f3fb1a9788521edc9411618116b69c7434c5f133534da93",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_restore_rejected_before_mutation": {
+      "text": "La restauration du catalogue de profils a été refusée avant toute modification.",
+      "sourceHash": "b80876accead761400633dffbe6c55e0dbe94e01678dabf741467ad8b18c7f3d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_restored_selection_staged": {
+      "text": "Catalogue de profils restauré ; sélection préparée pour un redémarrage conditionné par un contrôle de bon fonctionnement.",
+      "sourceHash": "71d179990d3bdbab24c8dc55c8ab5a9cd6af24ed3707703477c00ea94c59c9f7",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_restored_selection_unchanged": {
+      "text": "Catalogue de profils restauré ; la sélection est inchangée.",
+      "sourceHash": "785d68796453312b3f246617dd55d45a7cafb201ade8aa0eb89657a2b5b4a270",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_selection_restore_failed": {
+      "text": "La sélection de profils n’a pas pu être restaurée.",
+      "sourceHash": "da5f008eb582e2ffe71c82bd960c0b56ddae151f9cdc697f7a864798f4390c15",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_staging_retained": {
+      "text": "Les données temporaires sensibles de la sauvegarde n’ont pas pu être supprimées. Vérifiez le stockage du panneau, puis réessayez ; aucune sauvegarde n’a été téléchargée.",
+      "sourceHash": "ac442bd0592e6dc5bdd5116ed7abb908d496d12e7cd1ae6a15ff94234dfb7945",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_helper_busy": {
+      "text": "L’auxiliaire Companion est occupé",
+      "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_helper_unavailable": {
+      "text": "L’auxiliaire Companion est indisponible",
+      "sourceHash": "7ff8ce015e30889d9cc37648e0f3cf6e03b100156bed873f69993b5339e18cca",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_indeterminate": {
+      "text": "l’état terminal de la restauration est indéterminé",
+      "sourceHash": "9b1e2f162c2e00bd2b1f0b1152ea24aa7973fc62cb928e00ede3060041fc364d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_marker_failed": {
+      "text": "Le marqueur de sécurité de l’opération Companion n’a pas pu être conservé",
+      "sourceHash": "bcf33daf2b195cd0bf26848ff1e14f60bc1cd537f618bd3eaa1e09d924d4b855",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_owner_restored": {
+      "text": "propriétaire et contexte restaurés",
+      "sourceHash": "dd290669fb84a7635003840fd45c717b4690214efdca0cd936c089ee4bb43167",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_payload_invalid": {
+      "text": "Échec de la validation de la charge utile Companion",
+      "sourceHash": "e921cb252399b43f1034764e7813cd35f2021189756bb024424571971c4795ee",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_prior_files_retained": {
+      "text": "échec de la restauration ; anciens fichiers Companion conservés",
+      "sourceHash": "6b6e401a8b46b3e9556a57b4cbe9914906f00c1b53282c1c5aa0819ef3c38b08",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_rejected_before_commit": {
+      "text": "restauration refusée avant l’enregistrement",
+      "sourceHash": "d5a6ebcb9867def3e5afd89d8d608f6690e7e298c6c89490a1f5139e9ec93d7e",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_relaunch_unconfirmed": {
+      "text": "fichiers restaurés, mais relance de Companion non confirmée",
+      "sourceHash": "bb4c8ff5ebb62321b03ea41dbf1aa8b94324e3b5738861fc414a2605c4db3665",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_rollback_failed": {
+      "text": "échec de la restauration et du retour arrière ; l’état de Companion peut être partiel",
+      "sourceHash": "186bdcdc3b12e49ed3dfee4d0de307d39e938bb6956fe4c994be65d273082b56",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.companion_unsupported_package": {
+      "text": "le paquet Companion installé n’est pas pris en charge",
+      "sourceHash": "f37ecf7b506b23384678259f098be2cf28acdcaf24d6309331b8c892657b2152",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.component_not_present": {
+      "text": "absent",
+      "sourceHash": "4a6080efcc757a04f1d2d851d48ddd1495ed3587fb4b18fc2ff167660393cab2",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.guard_db_arm_not_started": {
+      "text": "Guard DB ARM n’a pas démarré",
+      "sourceHash": "a291427c80abacc4b3f1eb8c4c4b1477597b45979461dc6d91e741dd9f45fe25",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.guard_db_candidate_discard_finished": {
+      "text": "Suppression du candidat Guard DB terminée",
+      "sourceHash": "a5135e9bfba5fb1aabde5e25cbf51d8ae93fab7998c95e6243ee6f2a6bdc10e1",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.guard_db_candidate_staging_finished": {
+      "text": "Préparation du candidat Guard DB terminée",
+      "sourceHash": "a45137aa2884b762272a1f6b3e176e53fbed31567ad34626b78549307e79ba69",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.guard_db_retirement_settled": {
+      "text": "Retrait de Guard DB terminé",
+      "sourceHash": "09ab0bf09da7c61e6c34a98873d977a6cfe4489189b47bfde7d3988968f3d9d3",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_deferred_saving_state": {
+      "text": "L’installation de {component} a été différée pendant l’enregistrement de l’état du panneau.",
+      "sourceHash": "f5e5e68129e50b951c9ec4f983c516610ef233d5f5db66615f14277dea5e225a",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_download_failed": {
+      "text": "Le panneau n’a pas pu télécharger {component}.",
+      "sourceHash": "cb932d29dd04d858898bf01ab1cb53a43030b941b2a3ddc39cc0497b0c2cdc92",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_download_too_large": {
+      "text": "Le téléchargement de {component} dépasse la taille acceptée par le panneau.",
+      "sourceHash": "8457679bc05fc56b2d4f981d49d1ab1d3b1991223a3a416572369a62b6758ccf",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_durable_rejection": {
+      "text": "L’installation de {component} a été refusée par un contrôle de sécurité persistant.",
+      "sourceHash": "9db26fbbcef40ecc31fdf592e4bc29ffc05ab027fb642ce568ab02f9a7805b07",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_guard_db_owned": {
+      "text": "L’installation de {component} est bloquée tant que Guard DB contrôle le processus de mise à jour.",
+      "sourceHash": "e3c6a60060e2c3e9defd463280b50063329de1fb528dc2cec6ec257e99556b6a",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_insufficient_storage": {
+      "text": "Le stockage du panneau est insuffisant pour installer {component}.",
+      "sourceHash": "d8d8d9490bdfee5fb1e8ebacf9fd25a5777d3d7b2649a06ca855cafb294df271",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_no_permitted_route": {
+      "text": "Aucune méthode d’installation autorisée n’est disponible pour {component}.",
+      "sourceHash": "e7f5a12fb98044cb05cf0fcd264736b641fd4f187355e5d58656dcd2c2d30092",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_retryable_failure": {
+      "text": "L’installation de {component} a échoué et peut être réessayée.",
+      "sourceHash": "5985a879d82b24f59582a258f4ecb2ee3d198b07e01972d4479098da336e1c49",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.install_staging_failed": {
+      "text": "Le panneau n’a pas pu préparer le paquet {component}.",
+      "sourceHash": "8e4e3db918995f4ac0f5cdfc19ef4d9f3b8a63a68979105b432f89e9d47dd85c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_apk_missing": {
+      "text": "La version {version} de {component} ne fournit aucun APK installable.",
+      "sourceHash": "cd41f0caa468f58d054916f98e2f3e83a51a6ba6d60cb2bbe7380617a61a561f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_attempt_recorded": {
+      "text": "La tentative pour {component} {version} a déjà été enregistrée pour la version {current} installée.",
+      "sourceHash": "a6f21db34260241e20331a4677549009928105b1e2306d7f59e5f90320afdf6d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_downgrade_committed": {
+      "text": "{component} ramené à la version {version}.",
+      "sourceHash": "8ddf713c3cd4968cf1aa1e57607cd5fd4304e1f3d53a58f2b0673bb72a57bf95",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_install_committed": {
+      "text": "{component} {version} installé.",
+      "sourceHash": "0ad50770d4d5dee91572dd9cc8f52047068a423caf050a51cd369d723c0bd3b2",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_manual_downgrade_required": {
+      "text": "{component} {current} dépasse la limite de sécurité {cap} ; revenez manuellement à une version antérieure.",
+      "sourceHash": "f126e8ba3cafc78828fb66b1497115f75fe472895f3386f6f15393d4c20cf3f3",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_no_newer": {
+      "text": "Aucune version de {component} plus récente que {current} n’est disponible.",
+      "sourceHash": "9ab5109b5b1c32835f225bb075f701cf5552e1aae250501e1a3c6b4732bd501d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_no_recommendation": {
+      "text": "Aucune version gérée de {component} n’est configurée.",
+      "sourceHash": "ec4d429ec067b2c8f7838d14801bfc40e69d9338b9ac4f1036418826a1400c38",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_pinned": {
+      "text": "{component} {current} est conservé : la dernière version {latest} dépasse la limite de sécurité {cap}.",
+      "sourceHash": "8dafa5f01a9280676db9a176ee408063035cfbb9aca0e44f6bffbbc713e795a3",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_play_managed": {
+      "text": "{component} est géré par Google Play.",
+      "sourceHash": "1a67a430d5b56d2561f87eec7b009bc1d3dbc1c90238bbf03752e916b1869ccb",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_release_unresolved": {
+      "text": "Impossible de déterminer la dernière version de {component} sur le canal {channel}.",
+      "sourceHash": "d7d978ffeb2560a6dcdf1b41e6b7348a85f42065b35aa63331415399581f1b6c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_safety_cap_refused": {
+      "text": "{component} {version} refusé : cette version dépasse la limite de sécurité {cap}.",
+      "sourceHash": "518954f003781646821416208b463d905318b789f4a35dd793550505847830e7",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_up_to_date": {
+      "text": "{component} {current} est déjà à jour.",
+      "sourceHash": "5edf6e5b58865569fb9e26fba5cb6fcbc5e7cb1295941aac7dec6aa1c236c657",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.managed_update_committed": {
+      "text": "{component} mis à jour vers la version {version}.",
+      "sourceHash": "61b7a7b9f1e30456ad5a276f37c7760ed51e608d2e93482a6af5992105607866",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.operation_cancelled": {
+      "text": "annulée",
+      "sourceHash": "8b47045eb7b8ca42aa967f33ee1d014ba89f8d1ac207426b482d34b5c0d90935",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.operation_working": {
+      "text": "Traitement…",
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.package_uninstall_failed": {
+      "text": "échec de la désinstallation : {package}",
+      "sourceHash": "50f8872b441716c5d1cee3fdd6eaad56c75c0509cdf18f1da16110795a15f1ae",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.package_uninstalled": {
+      "text": "{package} désinstallé",
+      "sourceHash": "764b9132371477aefbe7b9f4dce1c5b9cb9116c1dae3d541623b4ea9069636a8",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.profile_catalog_restore_unavailable": {
+      "text": "La restauration du catalogue de profils est indisponible.",
+      "sourceHash": "2539623e45bed0f96a08c068a4e9c2788015eb68c8c746e303ad2d7adc580c62",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_app_state_invalid": {
+      "text": "charge utile app_state non valide",
+      "sourceHash": "ebe236ea5430ffd9de73f7ff34091f03da5ab8502f86ff15c5a8ef97b82d1b1f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_archive_entries_invalid": {
+      "text": "l’archive de sauvegarde contient des fichiers manquants ou inattendus",
+      "sourceHash": "05160b8fa6ac6f7af161dc55f176491aae6c19ec889c921e906f10882782e671",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_archive_metadata_invalid": {
+      "text": "métadonnées de l’archive de sauvegarde non valides",
+      "sourceHash": "6ffe50cd9f252c5ebcd3e6fa40b1e28cffed6aa320fb0c86d2a9a71ea914abbd",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_companion_helper_required": {
+      "text": "la restauration de Companion nécessite l’auxiliaire ha-paneld actuel",
+      "sourceHash": "ae7af3902c71c032bdb03fb0bb6e76424a7a9c29bc377a28c275fed1ebccf702",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_companion_section_invalid": {
+      "text": "section de restauration Companion non valide",
+      "sourceHash": "92ffed6f90cd1201a409dab6021ac415ef2910d8d9760e68e9c27597483b472a",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_completed": {
+      "text": "Restauration terminée",
+      "sourceHash": "d054b6105189ae7b6f3f87b3a6ce564bc8c3d3c2ebe6a441b23c46f071ce4030",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_config_invalid": {
+      "text": "configuration de sauvegarde non valide",
+      "sourceHash": "dcd891bdf459f53bf7457d82777ce818c15000e0a4b0e3cce1be201fc5e0484c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_config_missing": {
+      "text": "la sauvegarde ne contient aucun objet de configuration",
+      "sourceHash": "962d91f91c159609946bea90a455438cb41c4f84438b0d3236d20b83fc83a74d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_entity_object_invalid": {
+      "text": "objet entity_state non valide",
+      "sourceHash": "77e8c96b9b8843a8d9dbcbda9e8422437bef98c7b05d1ee8074d6ad9b61423d9",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_entity_owner_missing": {
+      "text": "il manque l’espace de noms du propriétaire dans l’état de l’entité",
+      "sourceHash": "096f93b1f5118c353e29476ce665665086492a82560caf94b3cfeeedd10f9886",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_entity_state_invalid": {
+      "text": "état d’entité limité au propriétaire non valide",
+      "sourceHash": "d37884f1c791f1128fdbe31f512a5d10e331e465210528177c89a65440e23fa9",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_failed": {
+      "text": "Échec de la restauration",
+      "sourceHash": "b8476ceedfdd95b004d8b76a5a5d72c71686fe7e232d1b595bc0dc6941fe093b",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_legacy_too_large": {
+      "text": "la sauvegarde héritée est trop volumineuse ; créez une nouvelle sauvegarde avant de restaurer",
+      "sourceHash": "ebf134ca6c3afdbecf848bbce058c27770f8f3a4513ddd22f6f5d4652b52e72b",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_not_panel_backup": {
+      "text": "ceci n’est pas une sauvegarde ha-paneld",
+      "sourceHash": "15c0f21ad749e2da90a94c485eb9fc8e11d8bc60b1338784eb687caed026901c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_partial": {
+      "text": "Restauration partiellement terminée",
+      "sourceHash": "010d07c111632fb5a6625202ca7f1606c3e0d4070fd5e8003893d1cac9bb6339",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_passphrase_or_bundle_invalid": {
+      "text": "phrase secrète incorrecte ou paquet endommagé",
+      "sourceHash": "f5e093d1a2d72e397d77e02e1264afc864939df6842fd0c26a616c3d02f71fe5",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_passphrase_required": {
+      "text": "ce paquet est chiffré — saisissez sa phrase secrète",
+      "sourceHash": "65e1c3cbcb8bae55b95b030ed102d523f4fc2a4ae008f701101eaf2790e3952a",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_preview_complete": {
+      "text": "Aperçu de la restauration terminé",
+      "sourceHash": "2ad8296900534435c3f354df4c2e22e90d06c3488000a061c13dd92995b53d6c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_profile_archive_invalid": {
+      "text": "entrée d’archive de profil non valide",
+      "sourceHash": "10cab69571e1de516046ca2faeb84bf84f3fb1e2f2340b3e6e7fe5b9d94a747f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_profile_catalog_invalid": {
+      "text": "catalogue de profils non valide",
+      "sourceHash": "2479d8b3ef477da64a34f23ab4ede579ca5528d651738b2380681a0542ae7d83",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_profile_catalog_not_restorable": {
+      "text": "le catalogue de profils ne peut pas être restauré",
+      "sourceHash": "f272d4d8cc71526b31360136440db1e9bbe7628fb0290d9e96e536920bbc8bbe",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_profile_restore_unavailable": {
+      "text": "la restauration du catalogue de profils est indisponible",
+      "sourceHash": "f33793bc261a630ee064e9732add72ea1615005739d81224186cf9307d633c9f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_profiles_object_invalid": {
+      "text": "objet profiles non valide",
+      "sourceHash": "d78738aebcd5ea1dfc4defcd4d0993450538457477490c07f5b2bad23b8ffe5f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_request_rejected": {
+      "text": "Requête de restauration refusée",
+      "sourceHash": "64ddbd6fc50543ab1864168d8cc4d9b31651a7398a21b69e5bb35c4edf0ae07f",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_schema_missing": {
+      "text": "la sauvegarde ne contient aucun schéma valide",
+      "sourceHash": "8e0d25c2cf57c5e07a14e064064dffda3a3ea6259565727744cf1fb42fe78086",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_state_object_invalid": {
+      "text": "objet d’état non valide",
+      "sourceHash": "4d8d22f9fa4bd06a614b3f860d8b2bf582cefb5f80aafa2ede6e0344c45478a0",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_builtin_renderer_retries_stopped": {
+      "text": "⛔ Le moteur de rendu intégré a cessé de réessayer après plusieurs échecs de WebView. Mettez à jour ou réparez System WebView, puis utilisez Recharger le tableau de bord dans la barre de navigation du panneau ou l’onglet Tableau de bord.",
+      "sourceHash": "1b5418807f2f485ae2f516c802d5e0801c94630d573966d230b92d877e08417e",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_companion_probe_failed": {
+      "text": "⚠ Les réglages de Home Assistant Companion n’ont pas pu être inspectés ; ha-paneld conservera le dernier résultat connu et réessaiera automatiquement.",
+      "sourceHash": "83c7c52039d25735ee5aeee671408b86ec8086c5373cb90639510e03eb1f5c9e",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_external_renderer_crash_loop": {
+      "text": "⛔ L’application du tableau de bord plante en boucle — le chien de garde a cessé de la relancer pour éviter une tempête de redémarrages. Réinstallez l’application de tableau de bord/Companion, revenez à une version antérieure ou redémarrez le panneau.",
+      "sourceHash": "42858bae496ba84d6e265afb20e07fe3adedbe091111df9daa5cc5537be88c5a",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_no_renderer": {
+      "text": "ℹ MQTT est configuré. Étape suivante : choisissez un moteur de rendu du tableau de bord. Sélectionnez le moteur intégré de ha-paneld, installez l’application Home Assistant Companion ou configurez un autre paquet de tableau de bord.",
+      "sourceHash": "5f1d7770181d47b58470733464108f40b48294488714774fa4aa9407d8d2e136",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_power_at_risk": {
+      "text": "⛔ Gestion de l’alimentation du panneau : risque élevé — le panneau peut se mettre en veille ou passer en mode Doze après l’extinction de l’écran, rendant HTTP, MQTT et les tâches en arrière-plan inaccessibles.",
+      "sourceHash": "a74da057925352acddd3dd33fbb3024de2c565cbcb5410079024512fbe9ad1ab",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_power_caution": {
+      "text": "⚠ Gestion de l’alimentation du panneau : attention — la disponibilité du panneau ne repose actuellement que sur un seul mécanisme observé empêchant la mise en veille.",
+      "sourceHash": "273989e72a98d72372d95ba1d2feaf622938b7d790190778fe97601d39eb31f2",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_power_unknown": {
+      "text": "⚠ Gestion de l’alimentation du panneau : état inconnu — impossible de l’établir, car une ou plusieurs vérifications de la gestion de l’alimentation Android étaient indisponibles ou ambiguës.",
+      "sourceHash": "4860f8deecc3d0e600a76ea9939ee63a388c57f725018c5fdcef7e2a4d102a94",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_schema_rollback": {
+      "text": "⚠ Base de données plus récente conservée après un retour à une version antérieure ({from_schema} → {to_schema}) — cette version a ouvert un nouveau magasin d’état, car son schéma est plus ancien ; certains réglages ont pu être réinitialisés. La base précédente est conservée sur le panneau pour récupération. Vérifiez Configurer ou restaurez une sauvegarde.",
+      "sourceHash": "ff545e82f7b3e9d88e6e9660d1be124df64ff521098d5cbfe7290f766b84be88",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_storage_critical": {
+      "text": "⛔ Pression sur le stockage : critique — la pression sur le stockage ou les fichiers de base de données est critique. Libérez de l’espace ou corrigez immédiatement la croissance du WAL, et évitez les mises à jour ou modifications de réglages jusqu’au rétablissement.",
+      "sourceHash": "295fe783455c31f34bc6b768f65d3186ddd758063b80d481ff37778dcf1b096d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_storage_database_failure": {
+      "text": "⛔ Défaillance de stockage de la base de données — une défaillance {failure} s’est produite pendant {operation} ; la récupération n’est pas encore vérifiée. Préservez la base de données, corrigez le problème de stockage et attendez un contrôle d’intégrité réussi avant de réessayer.",
+      "sourceHash": "083234acb19d795bc53258a435bc2da8d7461c6cae434d8c50439f545a26eca8",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_storage_warning": {
+      "text": "⚠ Pression sur le stockage : avertissement — la pression sur le stockage ou les fichiers de base de données est élevée. Vérifiez l’espace libre et la croissance du WAL ou des fichiers de base avant la prochaine mise à jour ou modification des réglages.",
+      "sourceHash": "39871e542befdb986c95c290b2a6ba66c318d7dcdf7ca65f15480d49200c5b69",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_update_available": {
+      "text": "⬆ {component} {latest} est disponible (version installée : {current}) — téléchargement : {release_url}",
+      "sourceHash": "109e7a98b964b60067ff03fa7416d4a17cbb4584970ccf60fdc9fb66a564d4ce",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_webview_old": {
+      "text": "⚠ System WebView est trop ancien ({current_engine}) — le tableau de bord Home Assistant peut rester vide. Comment et pourquoi le mettre à jour (cible : Chromium {target_chromium}+).",
+      "sourceHash": "7059a4b3c081fbba7034c06238f4bd8e43158f6258078ac03f3f1a30a8740f83",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_contained": {
+      "text": "⛔ L’emballement de la passerelle Zigbee a été contenu — le commutateur du routeur a été désactivé après une utilisation élevée et prolongée du CPU sans association ou des redémarrages répétés.",
+      "sourceHash": "927191599be07c441b61433ce2c9b4abed9d77c01da01bd861df7ac5cc5b84f3",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_containment_incomplete": {
+      "text": "⛔ Le confinement de la passerelle Zigbee est incomplet — le processus de relance a été arrêté lorsque cela était possible et les tâches restantes ont été rétrogradées. Consultez les diagnostics avant de réessayer.",
+      "sourceHash": "d905a90accb9cb4861e2e1d676e0f0865201e2a7f15272754ddd9d2044347e38",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_high_cpu": {
+      "text": "⚠ La passerelle Zigbee associée utilise durablement beaucoup de CPU — elle reste active, car les routeurs associés ne génèrent qu’un avertissement.",
+      "sourceHash": "fb0d9f1ae1e44847a3da28752f6aae197cb7932443060bb89d57cd90e25e9f7e",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_legacy_watchdog": {
+      "text": "⚠ Défaut détecté dans l’ancien chien de garde Zigbee — l’affectation récursive exacte de LD_LIBRARY_PATH est présente. ha-paneld ne modifiera pas automatiquement le script du fabricant.",
+      "sourceHash": "7211ac7681f7033251f8698db5451150506de603c9df900e0d11e33f30455e7c",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_not_joined": {
+      "text": "⚠ Le routeur Zigbee est activé, mais pas associé — les tentatives répétées d’association peuvent consommer beaucoup de CPU. Associez ce panneau à votre coordinateur Zigbee ou désactivez le commutateur du routeur Zigbee. Corriger la configuration Zigbee →",
+      "sourceHash": "756f12ad96609cfe381d71d0132cd7dcd400cdb9d2aa499bcb86de8aad7fba04",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.status_zigbee_runaway": {
+      "text": "⛔ La passerelle Zigbee s’emballe — le confinement automatique est en cours.",
+      "sourceHash": "3e0c7c80a21f56afec7ff637b568ab1aaaf3548356d9e0cc4da584ba6b058bd2",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.version_downgrade": {
+      "text": "Rétrograder",
+      "sourceHash": "d955b7e8fdb14a071c0eebd39f710dd252254d0966eee5ce6addcde4b294063d",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.version_install": {
+      "text": "Installer",
+      "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.version_upgrade": {
+      "text": "Mettre à niveau",
+      "sourceHash": "7ec0261b8e8aa3e0b1affde5f18ca1930ae73d81a5303d667aae9ffd2803cbc7",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.approval_retry": {
+      "text": "Approuvez cette demande sur le panneau, puis réessayez.",
+      "sourceHash": "be7545a353d7b786a59ce8893679e105d9fe23794cee284b5127c4037408f353",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.audit_checking": {
+      "text": "Vérification…",
+      "sourceHash": "ec963ffc911b840134fc738b41a8bb0493489c402a4a761efd36c16dea7d984b",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.audit_clean": {
+      "text": "Aucun problème détecté — ce panneau semble prêt.",
+      "sourceHash": "0c308ba34530d02ab24532c6ef364b5996f244ed20c14a57e469a58eff0d4b3e",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.audit_failed": {
+      "text": "Échec de l’audit — réessayez.",
+      "sourceHash": "92ef48b5511c479ba16193ca379cba613c8d42a19e5d7b321601097492611d96",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.busy": {
+      "text": "Une autre installation est déjà en cours — réessayez dans un instant.",
+      "sourceHash": "19e8c5aca9efddb205589b314c3f685b38ed8955e53d4f4f4b9c7b16726da5d9",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.check_failed": {
+      "text": "échec de la vérification",
+      "sourceHash": "b0282ea36d3d4e4c457498ab4297a4d379d88c464be4016d5703fa0d8db3af30",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.companion_repair_failed": {
+      "text": "Échec du démarrage — vérifiez l’accès root.",
+      "sourceHash": "92a679238687c0cdd237e2ff98b2d869b1548ab549cbc8fe7af648513d75a598",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.companion_repair_started": {
+      "text": "Réparation lancée — Companion va redémarrer ; actualisez cette page dans quelques secondes pour confirmer.",
+      "sourceHash": "6db6488f412ce5c7b5e9353b5f34fddec5274099e864d9a9736bdde78024903c",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.companion_repairing": {
+      "text": "Réparation et relance de Companion…",
+      "sourceHash": "e271aaa4deb6e2242b996ff77fa63b136152af72d0a26aad09e400ad3f977b53",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.could_not_start": {
+      "text": "Démarrage impossible : {status}",
+      "sourceHash": "18e2e48d4bb00852505658c6a8a0d721c59cb8beb133864c6b32c1be6177d54b",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.done_reload": {
+      "text": "{component} : {result} — rechargement…",
+      "sourceHash": "a229b17b07a8cbc45162c5a3fa9eea4af1797a0c23ba5447198a8443ef519620",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.lost_contact_reload": {
+      "text": "Contact perdu — rechargez pour vérifier.",
+      "sourceHash": "01a4ff5d87ed48050e644839b4a4f605a5e38cb16e9efd286fe4aa633e68618e",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.no_apk": {
+      "text": "(aucun APK)",
+      "sourceHash": "0f10f590a397a5a0da926e9bfcd1fef3ccfadeba12684a9a0ad08eb0dc6b8814",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.no_versions": {
+      "text": "aucune version trouvée",
+      "sourceHash": "9951218352e8274cb230343e99f457c76b845f808b2679eb52dc5e51f808a4c1",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.operation_busy": {
+      "text": "Une autre opération est en cours — réessayez dans un instant.",
+      "sourceHash": "37739a5845b8ab44c9f11e50d380019019c911e9a10795db8ade5dc90d7678b2",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.start_failed": {
+      "text": "Échec du démarrage — vérifiez l’accès root ou le démon.",
+      "sourceHash": "9103311cc720bc97d955427612ff27b35a1f903804906cd576e5bd7155170d8d",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.starting": {
+      "text": "Démarrage de {component}…",
+      "sourceHash": "ca256bf73937fc7875b0920ff33652ea6c36b66cdefef1012b3a4d2eb09b6b72",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.webview_installing": {
+      "text": "Téléchargement et installation… cela prend une minute.",
+      "sourceHash": "5050d01630df63bb3f9698161feb000f5c01842de55bae1e5ff0daaf1b70501a",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.webview_started": {
+      "text": "Installation de WebView — rechargez le tableau de bord, puis actualisez cette page pour confirmer la nouvelle version.",
+      "sourceHash": "1ba2a713c79ac4d74904c59b80a3191b16e97dd3240a3b06ef9df9e3288a65ea",
+      "state": "machine-cross-checked"
+    },
+    "install.progress.working": {
+      "text": "{component} : traitement…",
+      "sourceHash": "a99604834124e176f8c1dae30419f4a3fa9b1f3ce5b3481533166e789bb85275",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.contained": {
+      "text": "contenu",
+      "sourceHash": "8a935a27dcc2a56a25459a31cdeb129213c65465ec2391afef3d5f9e763d3a25",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.containment_failed": {
+      "text": "échec du confinement",
+      "sourceHash": "4c2cf2f68277a6118288743110b3037146bc0cc1c54c95b96c2fc30ac3669e91",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.degraded_high_cpu": {
+      "text": "utilisation élevée du CPU",
+      "sourceHash": "546617ee99cf849e7a990e080e605c0017480c802f98194767be7e7545cf35e8",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.degraded_unjoined": {
+      "text": "activé, mais non associé",
+      "sourceHash": "288c8641f2299933fa852a4aff2015132ed34f3eae489bbc9e8905aa7b1c619d",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.healthy": {
+      "text": "sain",
+      "sourceHash": "87695fdac81728b9d7f2d4a1335c2632bb5e6ba1bed21d2dff0254fba31c7d5b",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.off": {
+      "text": "désactivé",
+      "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.runaway": {
+      "text": "boucle de redémarrage",
+      "sourceHash": "cebe099203265a88890654d4cea269afa605e5f780a8d33c0da1bb8d9bcf9a0f",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.starting": {
+      "text": "démarrage",
+      "sourceHash": "59dbf36d9930a99bfc1e13a10518cd5cf42d29ef9b21993c424b4146a81aa30e",
+      "state": "machine-cross-checked"
+    },
+    "install.radio_state.unknown": {
+      "text": "inconnu",
+      "sourceHash": "b23a6a8439c0dde5515893e7c90c1e3233b8616e634470f20dc4928bcf3609bc",
+      "state": "machine-cross-checked"
+    },
+    "install.restore.state_values.one": {
+      "text": "Restauration terminée ({count} valeur d’état du panneau restaurée)",
+      "sourceHash": "706097a0c28ba85557497af9ba9f404cf40d5f38c7e2511c977c0ff3c9e6bf53",
+      "state": "machine-cross-checked"
+    },
+    "install.restore.state_values.other": {
+      "text": "Restauration terminée ({count} valeurs d’état du panneau restaurées)",
+      "sourceHash": "882f5a25b20ebede1a5e18886df93e4d9568aa19ab67e4d21b8e5cc443aa6070",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.failed": {
+      "text": "échec",
+      "sourceHash": "5d28a90f4498a81461efbaf6f628a19d9778390bb5c81a393dd936181cc3d826",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.partial": {
+      "text": "partiellement terminé",
+      "sourceHash": "acebff93c35f899bbdf85fa7803de8bd87d2c48e53a4bcfcd513cf0c1de6cd3f",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.rollback_failed": {
+      "text": "échec du retour arrière",
+      "sourceHash": "67a01f103707765d98805b52ae1f65d91466f93d89bf4b6b23045a724de4ef4e",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.rolled_back": {
+      "text": "retour arrière effectué",
+      "sourceHash": "d17977b7ecfc6018ea268ad1988199c54e59239386430f2b90c258a2f90a260a",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.skipped": {
+      "text": "ignoré",
+      "sourceHash": "389595a44dc9dce7dee673f243e805244bae603d6a65a536ad493340ec99ced3",
+      "state": "machine-cross-checked"
+    },
+    "install.restore_outcome.succeeded": {
+      "text": "réussi",
+      "sourceHash": "5dceaeceb6d8a49d3665594710ace68dfbc1800e2d663d7febb302b4dbee3d27",
+      "state": "machine-cross-checked"
+    },
+    "install.shared.loading": {
+      "text": "chargement…",
+      "sourceHash": "fbc6d752fe528706966cdcf8fce5d3d46999313ffd6098308efb6306972d6b44",
+      "state": "machine-cross-checked"
+    },
+    "install.shared.not_installed": {
+      "text": "non installé",
+      "sourceHash": "e9363f76e1145505f670e682d00a8497f163aa9aa81034d513260edf155923c9",
+      "state": "machine-cross-checked"
+    },
+    "install.shared.operation_busy": {
+      "text": "Une autre opération est en cours.",
+      "sourceHash": "2f3ade1aef148c86c17bce8fa9a7ef17a6f1faa35db5cea5966f69dd03544349",
+      "state": "machine-cross-checked"
+    },
+    "install.shared.version": {
+      "text": "Version",
+      "sourceHash": "dd167905de0defcaf72de673ee44c07431770d129ccffab286bd2edfdaf62396",
+      "state": "machine-cross-checked"
+    },
+    "install.status.companion_url_missing.one": {
+      "text": "⚠ Home Assistant Companion n’a pas d’URL interne pour {count} serveur — le tableau de bord peut échouer avec « Missing 'Host' header ». Réparez-la dans l’onglet Installer.",
+      "sourceHash": "6ec34cbc2c652fbcf870b2d71fb669d7d4ae9e8d53a769d7d775816ce539c94b",
+      "state": "machine-cross-checked"
+    },
+    "install.status.companion_url_missing.other": {
+      "text": "⚠ Home Assistant Companion n’a pas d’URL interne pour {count} serveurs — le tableau de bord peut échouer avec « Missing 'Host' header ». Corrigez leurs URL internes dans l’onglet Installer.",
+      "sourceHash": "0e438c28f54290449d21614ea11cf55a5fee35079ca10181de7174535f670dc5",
+      "state": "machine-cross-checked"
+    },
+    "install.uninstall.dynamic.confirm": {
+      "text": "Désinstaller {package} ? L’application et ses données seront supprimées.",
+      "sourceHash": "7a0a791ef3c4ca2a78a7daadfbc80fb864e90f34ddd590d076f7100f6f122e77",
+      "state": "machine-cross-checked"
+    },
+    "install.uninstall.dynamic.load_failed": {
+      "text": "échec du chargement",
+      "sourceHash": "f318eb3d47fba6e3eb24eed98dcd21023cd2e9a67e25563666aa55611dde0c2f",
+      "state": "machine-cross-checked"
+    },
+    "install.uninstall.dynamic.none": {
+      "text": "aucune application amovible",
+      "sourceHash": "857e324e486859a8fb02806020847f3d341f0f40d2c0732f0912947f19a064ce",
+      "state": "machine-cross-checked"
+    },
+    "install.uninstall.dynamic.request_failed": {
+      "text": "Échec.",
+      "sourceHash": "794548f29d319b9d3ed5f813f3af7385c7844e8226ff9db9f440fa992a21f08f",
+      "state": "machine-cross-checked"
+    },
+    "install.uninstall.dynamic.working": {
+      "text": "Désinstallation de {package}…",
+      "sourceHash": "d90138c373e0ee5a8b1249c57bcc66f76217a346e162667b8751646c6ea16a3c",
+      "state": "machine-cross-checked"
+    },
     "logs.action.clear": {
       "text": "Effacer",
       "sourceHash": "83b12c2216efb4fdc924e1deb5182e905e4926ed0c1c324d467107f46d5a26a9",
@@ -7311,6 +8601,76 @@
     "profiles.validation.none": {
       "text": "Aucun problème de validation.",
       "sourceHash": "21d05437fb5bf4d6620ad3feb0a477b311e4fe078083dd371c526972feaeef5c",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.attempts.one": {
+      "text": "{attempts} tentative de récupération",
+      "sourceHash": "ae389f31914ab8bdb2d6e1105a60446aab9793e605e54f41742eea4de1e288ed",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.attempts.other": {
+      "text": "{attempts} tentatives de récupération",
+      "sourceHash": "6de553f3ae5b9afd0c2a996801834dfce7e3e828a7ff89c44966dccc22161a56",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.not_running": {
+      "text": "⚠ La découverte des panneaux (mDNS) ne fonctionne pas — ce panneau n’apparaîtra pas dans le menu de changement de panneau des autres panneaux ni dans la découverte Home Assistant. Reconnectez le panneau au réseau ou redémarrez ha-paneld.",
+      "sourceHash": "8675c52511c0fbb2209793d8ce5a0e2e97d2f86b18a51e3817bab6abae120d0b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.recovering": {
+      "text": "⚠ La découverte des panneaux (mDNS) se rétablit — {reason_code}.",
+      "sourceHash": "c61385635cb7cd2cbbdaf2053f4333441ac1969d38e3d0b91d869aafc2d732e9",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.stale_address": {
+      "text": "⚠ La découverte des panneaux (mDNS) utilise une ancienne adresse ({bound_ip}, maintenant {lan_ip}) — les autres panneaux ne pourront pas joindre celui-ci depuis leur sélecteur tant que mDNS n’utilisera pas la nouvelle adresse.",
+      "sourceHash": "8677f10a52a47c0e7df96907de1da8b86cd875d30bb03b25092a3d63c725157c",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.unresponsive.one": {
+      "text": "⚠ La découverte des panneaux (mDNS) ne répond pas — la récupération automatique s’est arrêtée après {attempts} tentative ({reason_code}). Reconnectez le panneau au réseau ou redémarrez ha-paneld.",
+      "sourceHash": "289dcccea3d8553fd62952feace3548ef6d933d11a2667263bd88d66db965b8a",
+      "state": "machine-cross-checked"
+    },
+    "runtime.mdns.unresponsive.other": {
+      "text": "⚠ La découverte des panneaux (mDNS) ne répond pas — la récupération automatique s’est arrêtée après {attempts} tentatives ({reason_code}). Reconnectez le panneau au réseau ou redémarrez ha-paneld.",
+      "sourceHash": "ba82d4d04f4d477b6e648db2fb3d6cb4a11e3945c9ca77e601983fb3ba14c726",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.ack.endpoint_failed": {
+      "text": "Impossible d’enregistrer l’accusé de réception ; l’avertissement reste visible.",
+      "sourceHash": "8db0a9affb0f9ccc6412f17d2e0e8a38c47fd0f4ba8e7692b3031b628a68a4e2",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.ack.saving": {
+      "text": "Enregistrement de l’accusé de réception…",
+      "sourceHash": "05360a57b87a18b1c7fc61b5d81158ccbfc3f953c2e8c6f3f353c003eff79499",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.hide": {
+      "text": "Masquer cet avertissement",
+      "sourceHash": "65150e117bf29d5f27999ac819fbee19c26f1709364a6873d7a8519e4c4fe04c",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.hide_title": {
+      "text": "Masquer cet avertissement inchangé dans les pages web du panneau ; le mode Hardened nécessite une approbation physique",
+      "sourceHash": "b813ee640e36ac9f14fe39e0c557cae18c1b9fbc1daed8a0d5aea590d20c1a84",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.applying": {
+      "text": "Application et vérification…",
+      "sourceHash": "0a4d00786291e3748e44cb8c56ceb349eda167603ba5e2bc79779a6c46ee8447",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.endpoint_failed": {
+      "text": "Impossible de joindre le point de terminaison de réparation ; aucune réparation n’a été confirmée.",
+      "sourceHash": "00806a21056ce5e3b5faab1e9e31ac1d324b0fef358891ee76b07f9dbfca386c",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.refreshing": {
+      "text": "Actualisation…",
+      "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
       "state": "machine-cross-checked"
     },
     "settings.auto_brightness.help": {
