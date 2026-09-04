@@ -7,6 +7,8 @@
 [![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?include_prereleases&sort=semver&style=flat-square&color=blue)](https://github.com/maxlyth/ha-paneld/releases)
 [![License](https://assets.ha-paneld.com/docs/badge/license-apache-2-0-8aa187e4.svg)](LICENSE)
 
+**English** · [Deutsch](docs/de/README.md) · [Français](docs/fr/README.md) · [Italiano](docs/it/README.md) · [Español](docs/es/README.md) · [简体中文](docs/zh-Hans/README.md)
+
 **The universal Home Assistant dashboard app for Android wall panels.**
 
 ha-paneld makes Home Assistant dashboards practical on panels that otherwise feel too slow or awkward to use. Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. **ha-paneld's built-in renderer can learn which entities the dashboard uses and ask Home Assistant to send only those states**. In the real world, this can reduce entity load by 10–100×, making that dashboard finally usable.
@@ -85,6 +87,8 @@ Use the built-in renderer when you want dashboard entity filtering. It also supp
 The official [Home Assistant Companion app](https://github.com/home-assistant/android) is also supported. Use it when the panel needs more than one Home Assistant server, Assist voice control or native notifications. On a panel without Google Play and with a supported install method, use ha-paneld's Install tab. The picker applies the compatibility limit for that panel instead of assuming the newest Companion release will run on it.
 
 Both choices remain supported. Dashboard entity filtering only works with ha-paneld's built-in renderer.
+
+<a id="panels-and-support-status"></a>
 
 ## Panels and support status
 
