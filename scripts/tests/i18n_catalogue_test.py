@@ -884,6 +884,35 @@ class CatalogueTest(unittest.TestCase):
                 with self.subTest(locale=locale, mutation="removed"), self.assertRaises(i18n.CatalogueError):
                     i18n.validate_target_language(key, text, locale, source_record)
 
+    def test_install_chinese_diagnostic_literals_are_exact_and_key_scoped(self):
+        cases = {
+            "install.apk.dynamic.paste_url": (
+                "Paste an https:// URL.",
+                "请粘贴 https:// 网址。",
+                "https://",
+            ),
+            "install.apk_status.invalid_url": (
+                "The URL must use https://.",
+                "网址必须使用 https://。",
+                "https://",
+            ),
+            "install.presentation.status_zigbee_legacy_watchdog": (
+                "LD_LIBRARY_PATH still selects old libraries.",
+                "LD_LIBRARY_PATH 仍在选择旧版库。",
+                "LD_LIBRARY_PATH",
+            ),
+        }
+        for key, (source_text, target_text, literal) in cases.items():
+            pair = ("zh-Hans", key)
+            source_record = {"text": source_text, "placeholders": [], "frozen": []}
+            self.assertEqual((literal,), i18n.TARGET_LITERAL_EXCEPTIONS.get(pair))
+            i18n.validate_target_language(key, target_text, "zh-Hans", source_record)
+            with self.subTest(key=key, mutation="other-key"), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_language(f"{key}.other", target_text, "zh-Hans", source_record)
+            with mock.patch.dict(i18n.TARGET_LITERAL_EXCEPTIONS, {pair: ()}):
+                with self.subTest(key=key, mutation="removed"), self.assertRaises(i18n.CatalogueError):
+                    i18n.validate_target_language(key, target_text, "zh-Hans", source_record)
+
     def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
