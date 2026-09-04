@@ -209,6 +209,12 @@ class CameraMqttSurfaceTest {
         val discovery = slice(mqtt, "private fun publishDiscovery", "private fun jsonEsc")
         assertTrue(discovery.contains("""registryExposable("camera_enabled")"""))
         assertTrue(discovery.contains("cameraSnapshotDiscoveryJson(panel, cameraSnapshotAvail, device)"))
+
+        // The switch is opt-in by the assertion above, so the image has to follow the same decision.
+        // Announcing it on `hasCamera` alone left a fresh camera panel showing Home Assistant a
+        // permanently unavailable image entity and no switch able to arm it.
+        val announce = slice(discovery, "cameraSnapshotAnnounced =", "if (cameraSnapshotAnnounced)")
+        assertTrue(announce.contains("""config.haExposed("camera_enabled", false)"""))
     }
 
     @Test fun cameraOffNeverNeedsApprovalEvenWhenTheProfileHasNoCamera() {

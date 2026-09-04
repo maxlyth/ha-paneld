@@ -3754,7 +3754,10 @@ internal class MqttBridge(
         // — and no frame is parked on the broker, which the camera contract forbids outright. Its own
         // availability topic carries the master switch, so an off camera reads `unavailable` instead of
         // showing a stale frame that would imply the panel is still watching.
-        cameraSnapshotAnnounced = capabilitySnapshot?.hasCamera == true
+        // The master switch is opt-in, so the image follows it rather than the hardware. Announcing on
+        // capability alone published a permanently unavailable image beside no control able to arm it.
+        cameraSnapshotAnnounced = capabilitySnapshot?.hasCamera == true &&
+            config.haExposed("camera_enabled", false)
         if (cameraSnapshotAnnounced) {
             publishConfig(
                 "image", "${panel}_camera_snapshot",
