@@ -1141,7 +1141,17 @@ class PaneldService : Service() {
         // The layer-3 probe is constructed before the transport so the transport can report the
         // address each route connects on straight to it. It measures the path the dashboard is
         // actually using; a fresh resolution could name a family the connect race already rejected.
-        haPathProbe = PathProbeMonitor(source = IcmpEchoSource())
+        haPathProbe = PathProbeMonitor(
+            source = IcmpEchoSource(),
+            // The layer-3 verdict goes straight to the one owner of the prominent warning, so a
+            // measured path fault raises the banner and the panel chip rather than sitting in a
+            // diagnostics line nobody reads until they are already debugging.
+            // Guarded: the probe is constructed first, and a diagnostic must never be the thing
+            // that crashes the service it is diagnosing.
+            onVerdict = { severity, cause ->
+                if (::haNetworkPath.isInitialized) haNetworkPath.onPathProbeVerdict(severity, cause)
+            },
+        )
         haExactEntityStream = HaExactEntityStreamOwner(
             scope = scope,
             auth = haSessionAuthority,

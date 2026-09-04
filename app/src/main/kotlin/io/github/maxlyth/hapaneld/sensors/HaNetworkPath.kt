@@ -101,6 +101,16 @@ internal class HaNetworkPath(
     private var lastRoundTripAtMs = -1L
 
     /**
+     * The layer-3 verdict, when the echo probe has one.
+     *
+     * A genuine path measurement outranks anything this class can derive from a WebSocket, so when
+     * it is present it IS the path verdict. The socket-derived loss rules remain for panels whose
+     * platform denies the probe, which is the only reason they are still here.
+     */
+    private var probeSeverity: HaNetworkPathSeverity? = null
+    private var probeCause: PathProbeCause = PathProbeCause.NONE
+
+    /**
      * Follow the shared socket's own state. Measurement is owned by an AUTHENTICATED socket, not by
      * the demand for one: until the stream has actually reached [HaSocketState.LIVE] there is no
      * Home Assistant application path to describe, so a panel that is still authenticating — or one
@@ -137,6 +147,16 @@ internal class HaNetworkPath(
      */
     private fun settling(nowMs: Long): Boolean =
         processStartElapsedMs != NO_STARTUP_GATE && nowMs < processStartElapsedMs + settleMs
+
+    /**
+     * Publish the layer-3 verdict, or null when the probe cannot speak — unsupported, unproven, or
+     * with nothing measured yet. Null restores the socket-derived rules rather than clearing the
+     * verdict, so a panel that loses its probe is no worse off than one that never had it.
+     */
+    fun onPathProbeVerdict(severity: HaNetworkPathSeverity?, cause: PathProbeCause) {
+        probeSeverity = severity
+        probeCause = if (severity == null) PathProbeCause.NONE else cause
+    }
 
     /** One probe answered: [rttMs] is the send-to-decode round trip on the monotonic clock. */
     fun onRoundTrip(nowMs: Long, rttMs: Long) {
@@ -197,11 +217,21 @@ internal class HaNetworkPath(
         // yields HEALTHY. A `|| settling` branch here survived its own mutant — nothing could tell the
         // two apart — so it is left out rather than kept as protection no test can reach. What the
         // period IS reported as comes from [Snapshot.settling], which every surface reads.
-        val severity = when {
-            !measuring -> HaNetworkPathSeverity.HEALTHY
+        // A layer-3 measurement outranks anything derivable from the socket, so when the echo probe
+        // has a verdict it IS the path verdict — including a latency one, because an echo carries no
+        // server time and no scheduling of ours. The socket rules below survive only for panels
+        // whose platform refuses the probe.
+        val fromProbe = probeSeverity.takeIf { measuring && !settling }
+        val severity = fromProbe ?: when {
+            !measuring || settling -> HaNetworkPathSeverity.HEALTHY
             consecutive >= severeConsecutiveFailures -> HaNetworkPathSeverity.SEVERE
             exceedsShare(networkFailures, probes) -> HaNetworkPathSeverity.WARNING
             else -> HaNetworkPathSeverity.HEALTHY
+        }
+        val cause = when {
+            fromProbe != null -> probeCause
+            severity == HaNetworkPathSeverity.HEALTHY -> PathProbeCause.NONE
+            else -> PathProbeCause.LOSS
         }
         // How quickly Home Assistant answers on a socket that is demonstrably up. A useful performance
         // number and never a network claim: it is reported, but it never raises the banner, the panel
@@ -217,6 +247,7 @@ internal class HaNetworkPath(
             settling = settling,
             socketLive = socketLive,
             severity = severity,
+            cause = cause,
             responsiveness = responsiveness,
             windowMs = windowMs,
             probes = probes,
@@ -246,6 +277,8 @@ internal class HaNetworkPath(
         val socketLive: Boolean,
         /** The path verdict, and the ONLY thing entitled to a prominent warning. */
         val severity: HaNetworkPathSeverity,
+        /** What raised [severity], so the wording can name the right thing to go and look at. */
+        val cause: PathProbeCause,
         /** How fast Home Assistant answers. A performance metric; never a network claim. */
         val responsiveness: HaNetworkPathSeverity,
         val windowMs: Long,
@@ -300,7 +333,15 @@ internal class HaNetworkPath(
          */
         const val PROBE_INTERVAL_MS = 10_000L
 
-        const val WARN_P95_MS = 100L
+        /**
+         * The APPLICATION-layer warning line, raised from 100 ms to 250 ms.
+         *
+         * This figure contains the server's own answer time and this panel's thread
+         * scheduling as well as the path, so on the weakest hardware it sits in the low hundreds
+         * while nothing is wrong; 100 ms produced a warning on panels that were simply slow.
+         * Reported, never prominent — the prominent warning belongs to layer 3.
+         */
+        const val WARN_P95_MS = 250L
         const val SEVERE_P95_MS = 1_000L
         const val SEVERE_LOSS_PERCENT = 5.0
         const val SEVERE_CONSECUTIVE_FAILURES = 2
@@ -369,7 +410,12 @@ internal object HaNetworkPathPresentation {
         // ha_net is the PATH verdict; ha_resp is how fast Home Assistant answers. ha_net_p95 keeps its
         // name because it is documented wire, but it has only ever been the round trip, which is now
         // classified by ha_resp rather than by ha_net.
-        return " ha_net=${snap.severity.wireValue} ha_resp=${snap.responsiveness.wireValue} " +
+        val cause = when (snap.cause) {
+            PathProbeCause.LATENCY -> " ha_net_cause=latency"
+            PathProbeCause.LOSS -> " ha_net_cause=loss"
+            PathProbeCause.NONE -> ""
+        }
+        return " ha_net=${snap.severity.wireValue}$cause ha_resp=${snap.responsiveness.wireValue} " +
             "ha_net_p95=${snap.p95Ms} ha_net_n=${snap.probes} " +
             "ha_net_miss=${snap.networkFailures} ha_net_age=${snap.lastRoundTripAgeMs}"
     }
@@ -386,10 +432,12 @@ internal object HaNetworkPathPresentation {
         if (snap == null) return null
         if (!snap.measuring) return NOT_MEASURED
         if (snap.settling) return SETTLING
-        val path = when (snap.severity) {
-            HaNetworkPathSeverity.HEALTHY -> "healthy"
-            HaNetworkPathSeverity.WARNING -> "losing probes"
-            HaNetworkPathSeverity.SEVERE -> "failing"
+        val path = when {
+            snap.severity == HaNetworkPathSeverity.HEALTHY -> "healthy"
+            snap.cause == PathProbeCause.LATENCY && snap.severity == HaNetworkPathSeverity.WARNING -> "slow"
+            snap.cause == PathProbeCause.LATENCY -> "very slow"
+            snap.severity == HaNetworkPathSeverity.WARNING -> "losing probes"
+            else -> "failing"
         }
         return "$path; ${responsivenessClause(snap)}${evidence(snap)}"
     }
@@ -441,6 +489,13 @@ internal object HaNetworkPathPresentation {
      * script against, so the two cannot drift.
      */
     const val BANNER_WARNING_PREFIX = "⚠ Probes to Home Assistant are going missing"
+
+    /** Latency-raised copy. The path itself is slow, which is a different thing to go and check. */
+    const val BANNER_WARNING_SLOW_PREFIX = "⚠ The network path to Home Assistant is slow"
+    const val BANNER_SEVERE_SLOW_PREFIX = "⚠ The network path to Home Assistant is very slow"
+    const val BANNER_SLOW_ADVICE =
+        "Every action waits on this path. It is measured at the network level, so this is not the panel " +
+            "or Home Assistant being slow — check the Wi-Fi or the link between them."
     const val BANNER_SEVERE_PREFIX = "⚠ The network path to Home Assistant is failing"
     const val BANNER_ADVICE =
         "Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel."
@@ -450,7 +505,8 @@ internal object HaNetworkPathPresentation {
         if (snap == null) return "[ha-network] state=unowned"
         if (!snap.measuring) return "[ha-network] state=idle measuring=false"
         if (snap.settling) return "[ha-network] state=settling measuring=true"
-        return "[ha-network] state=${snap.severity.wireValue} responsiveness=${snap.responsiveness.wireValue} " +
+        return "[ha-network] state=${snap.severity.wireValue} cause=${snap.cause.name.lowercase()} " +
+            "responsiveness=${snap.responsiveness.wireValue} " +
             "measuring=true " +
             "socket=${if (snap.socketLive) "live" else "reconnecting"} window=${snap.windowMs / 60_000L}m " +
             "probes=${snap.probes} round_trips=${snap.roundTrips} p50=${snap.p50Ms} p95=${snap.p95Ms} " +

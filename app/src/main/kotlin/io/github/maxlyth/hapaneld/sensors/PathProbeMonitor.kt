@@ -16,6 +16,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class PathProbeMonitor(
     private val source: PathEchoSource,
+    /**
+     * Publishes each new layer-3 verdict to the one owner of the prominent path warning. A layer-3
+     * measurement outranks anything derivable from the socket, so this is what makes the echo probe
+     * the path verdict rather than a second opinion beside it.
+     */
+    private val onVerdict: (HaNetworkPathSeverity?, PathProbeCause) -> Unit = { _, _ -> },
     private val schedule: PathProbeSchedule = PathProbeSchedule(),
     private val history: PathProbeHistory = PathProbeHistory(),
     private val echoesPerBurst: Int = PathProbeHistory.ECHOES_PER_BURST,
@@ -62,6 +68,7 @@ internal class PathProbeMonitor(
                 // Any burst still in flight belongs to the session that just ended; advancing the
                 // generation is what makes its result discardable when it returns.
                 generation++
+                publishVerdict()
             }
         }
     }
@@ -113,10 +120,12 @@ internal class PathProbeMonitor(
                     // The platform withholds the capability. Nothing here will ever be measured, and
                     // the panel keeps the verdict its WebSocket can support.
                     history.markUnsupported()
+                    publishVerdict()
                 } else {
                     history.record(burst)
                     schedule.completed(nowMs(), clean = burst.clean)
                 }
+                publishVerdict()
             }
         } catch (cancellation: kotlin.coroutines.cancellation.CancellationException) {
             throw cancellation
@@ -125,6 +134,12 @@ internal class PathProbeMonitor(
         } finally {
             bursting.set(false)
         }
+    }
+
+    /** Hand the current layer-3 verdict to the prominent owner. Called under the lock. */
+    private fun publishVerdict() {
+        val verdict = history.verdict()
+        onVerdict(verdict?.severity, verdict?.cause ?: PathProbeCause.NONE)
     }
 
     /** One atomic reading for the surfaces, or null when there is nothing to describe. */

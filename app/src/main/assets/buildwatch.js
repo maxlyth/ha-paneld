@@ -115,8 +115,16 @@
     warning: "⚠ Probes to Home Assistant are going missing",
     severe: "⚠ The network path to Home Assistant is failing"
   };
+  // Latency-raised copy. The path itself is slow, which sends a person somewhere different to look
+  // than lost packets do, so the two are never worded the same.
+  var HA_NET_TEXT_SLOW = {
+    warning: "⚠ The network path to Home Assistant is slow",
+    severe: "⚠ The network path to Home Assistant is very slow"
+  };
+  var HA_NET_SLOW_ADVICE = "Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them.";
   var HA_NET_ADVICE = "Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.";
   var HA_NET_ROW = { healthy: "healthy", warning: "losing probes", severe: "failing", settling: "settling after startup; no verdict yet" };
+  var HA_NET_ROW_SLOW = { warning: "slow", severe: "very slow" };
   // The other half of the same measurement: how fast Home Assistant answers on a path that is intact.
   // It becomes a CLAUSE in the same row and can NEVER raise the banner — latency alone is a performance
   // observation, not a reason to interrupt anyone, and treating it as one told a wired panel its
@@ -159,18 +167,30 @@
     }
     return i18nText(keyPrefix + "p95_no_misses", "p95 {p95Ms} ms, no misses in the last 5 min", values);
   }
-  function haNetBanner(state, resp, p95, n, miss, age) {
+  function haNetBanner(state, resp, p95, n, miss, age, cause) {
+    // A latency verdict is owned by the layer-3 probe. Every number on this line — p95, probe count,
+    // misses, reply age — comes from the WebSocket instead, so presenting them here would offer one
+    // instrument's evidence as proof of another's verdict, and a severe path verdict could read
+    // "very slow; p95 9 ms". They are omitted rather than borrowed. An absent cause keeps the
+    // legacy loss wording, so an older panel answering this poll is unaffected.
+    var slow = cause === "latency";
     var b = document.getElementById("hanetbar");
     if (b) {
-      var text = ownValue(HA_NET_TEXT, state);
+      var text = ownValue(slow ? HA_NET_TEXT_SLOW : HA_NET_TEXT, state);
       if (!text) { b.style.display = "none"; } else {
-        var bannerEvidence = haNetEvidence(p95, n, miss, age);
-        var bannerKey = state === "severe"
-          ? "shell.runtime.ha_network.banner_severe"
-          : "shell.runtime.ha_network.banner_warning";
-        var bannerFallback = text.substring(2) + ": {evidence}. " + HA_NET_ADVICE;
-        text = "⚠ " + i18nText(bannerKey, bannerFallback, { evidence: bannerEvidence });
-        b.textContent = text;
+        if (slow) {
+          // Not routed through i18nText: new copy needs a catalogue key, and that catalogue is a
+          // reviewed translation contract owned by another lane. Recorded for adoption rather than
+          // faked, so this reads English everywhere until that lane takes it.
+          b.textContent = text + ". " + HA_NET_SLOW_ADVICE;
+        } else {
+          var bannerEvidence = haNetEvidence(p95, n, miss, age);
+          var bannerKey = state === "severe"
+            ? "shell.runtime.ha_network.banner_severe"
+            : "shell.runtime.ha_network.banner_warning";
+          var bannerFallback = text.substring(2) + ": {evidence}. " + HA_NET_ADVICE;
+          b.textContent = "⚠ " + i18nText(bannerKey, bannerFallback, { evidence: bannerEvidence });
+        }
         b.className = state === "severe" ? "setup crit" : "setup";
         b.style.display = "";
       }
@@ -182,12 +202,20 @@
       row.textContent = i18nText("dashboard.runtime.ha_network_settling", HA_NET_ROW.settling);
       return;
     }
-    if (!Object.prototype.hasOwnProperty.call(HA_NET_ROW, state) || !Object.prototype.hasOwnProperty.call(HA_RESP_CLAUSE, resp)) {
+    if ((slow && !Object.prototype.hasOwnProperty.call(HA_NET_ROW_SLOW, state)) ||
+        !Object.prototype.hasOwnProperty.call(HA_NET_ROW, state) ||
+        !Object.prototype.hasOwnProperty.call(HA_RESP_CLAUSE, resp)) {
       row.textContent = "";
       return;
     }
-    var evidence = haNetEvidence(p95, n, miss, age);
     var clause = HA_RESP_CLAUSE[resp] || "";
+    if (slow) {
+      // Same rule as the banner: the verdict is the probe's, so the socket's numbers stay off it.
+      // The responsiveness clause is kept because it names its own instrument out loud.
+      row.textContent = (ownValue(HA_NET_ROW_SLOW, state) || state) + "; " + clause;
+      return;
+    }
+    var evidence = haNetEvidence(p95, n, miss, age);
     var suffix = clause ? (resp === "severe" ? "_very_slow" : "_slow") : "";
     var rowStem = { healthy: "healthy", warning: "losing_probes", severe: "failing" }[state];
     var rowKey = state === "healthy" && !suffix
@@ -204,11 +232,12 @@
       haBanner(mh ? mh[1] : "", ms ? ms[1] : "", !!mr);
       var mn = t.match(/ha_net=(\S+)/);
       var mrs = t.match(/ha_resp=(\S+)/);
+      var mcz = t.match(/ha_net_cause=(\S+)/);
       var mp = t.match(/ha_net_p95=(-?\d+)/);
       var mc = t.match(/ha_net_n=(\d+)/);
       var mm = t.match(/ha_net_miss=(\d+)/);
       var ma = t.match(/ha_net_age=(-?\d+)/);
-      haNetBanner(mn ? mn[1] : "", mrs ? mrs[1] : "", mp ? parseInt(mp[1], 10) : -1, mc ? parseInt(mc[1], 10) : 0, mm ? parseInt(mm[1], 10) : 0, ma ? parseInt(ma[1], 10) : -1);
+      haNetBanner(mn ? mn[1] : "", mrs ? mrs[1] : "", mp ? parseInt(mp[1], 10) : -1, mc ? parseInt(mc[1], 10) : 0, mm ? parseInt(mm[1], 10) : 0, ma ? parseInt(ma[1], 10) : -1, mcz ? mcz[1] : "");
       var mb = t.match(/build=(\S+)/);
       if (mb && LB && mb[1] !== LB) {
         if (dirty()) banner("shell.new_version.installed", "A newer ha-paneld is installed"); else location.reload();

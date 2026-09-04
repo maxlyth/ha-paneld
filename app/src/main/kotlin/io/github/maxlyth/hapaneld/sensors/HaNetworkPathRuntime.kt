@@ -41,6 +41,13 @@ internal class HaNetworkPathMonitor(
 
     override fun onSocketState(state: HaSocketState) = mutate { path.onSocketState(state) }
 
+    /**
+     * Hand the layer-3 verdict to the classifier, serialised like every other observation and poking
+     * the surfaces when it changes what they would render.
+     */
+    fun onPathProbeVerdict(severity: HaNetworkPathSeverity?, cause: PathProbeCause) =
+        mutate { path.onPathProbeVerdict(severity, cause) }
+
     override fun onRoundTrip(rttMs: Long) {
         val now = nowMs()
         mutate { path.onRoundTrip(now, rttMs) }

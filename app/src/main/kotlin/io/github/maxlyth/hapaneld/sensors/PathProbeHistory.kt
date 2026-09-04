@@ -26,6 +26,15 @@ internal data class PathBurst(
  * denies `untrusted_app` an ICMP socket, which the kernel's `ping_group_range` does not settle — the
  * probe reports [UNSUPPORTED] and the panel keeps the WebSocket-derived verdict it shipped with.
  */
+/**
+ * What raised a layer-3 verdict.
+ *
+ * The wording a user sees has to match the evidence: "packets are going missing" and "the path is
+ * slow" call for different checks at the other end, and reporting one as the other is how a person
+ * is sent looking in the wrong place.
+ */
+internal enum class PathProbeCause { NONE, LOSS, LATENCY }
+
 internal enum class PathProbeAvailability {
     /** No socket could be opened on this platform. Nothing here will ever be measured. */
     UNSUPPORTED,
@@ -51,6 +60,8 @@ internal class PathProbeHistory(
     private val warnLossPercent: Double = WARN_LOSS_PERCENT,
     private val severeLossPercent: Double = SEVERE_LOSS_PERCENT,
     private val severeConsecutiveDead: Int = SEVERE_CONSECUTIVE_DEAD,
+    private val warnLatencyMs: Long = WARN_LATENCY_MS,
+    private val severeLatencyMs: Long = SEVERE_LATENCY_MS,
 ) {
     private val bursts = ArrayDeque<PathBurst>()
     private var availability = PathProbeAvailability.UNPROVEN
@@ -86,18 +97,32 @@ internal class PathProbeHistory(
     }
 
     /** The verdict, or null when this probe has nothing it is entitled to say. */
-    fun severity(): HaNetworkPathSeverity? {
+    fun severity(): HaNetworkPathSeverity? = verdict()?.severity
+
+    /** What the verdict is and what raised it, or null when the probe may not speak. */
+    fun verdict(): Verdict? {
         if (availability != PathProbeAvailability.PROVEN) return null
         if (bursts.isEmpty()) return null
         val sent = bursts.sumOf { it.sent }
         val lost = bursts.sumOf { it.lost }
         if (sent == 0) return null
         val lossPercent = lost * 100.0 / sent
+        val rtts = bursts.flatMap { it.rttsMs }
+        // Latency is genuine PATH evidence here in a way the WebSocket round trip never was: an echo
+        // is answered by the target's kernel, so nothing of the server's own response time or this
+        // panel's thread scheduling is in the figure. The same two-event floor as everywhere else
+        // keeps a single spike diagnostic rather than alarming.
+        val overSevere = rtts.count { it > severeLatencyMs }
+        val overWarn = rtts.count { it > warnLatencyMs }
         return when {
-            consecutiveDead >= severeConsecutiveDead -> HaNetworkPathSeverity.SEVERE
-            lossPercent > severeLossPercent -> HaNetworkPathSeverity.SEVERE
-            lossPercent > warnLossPercent -> HaNetworkPathSeverity.WARNING
-            else -> HaNetworkPathSeverity.HEALTHY
+            consecutiveDead >= severeConsecutiveDead -> Verdict(HaNetworkPathSeverity.SEVERE, PathProbeCause.LOSS)
+            lossPercent > severeLossPercent -> Verdict(HaNetworkPathSeverity.SEVERE, PathProbeCause.LOSS)
+            HaNetworkPath.exceedsShare(overSevere, rtts.size) ->
+                Verdict(HaNetworkPathSeverity.SEVERE, PathProbeCause.LATENCY)
+            lossPercent > warnLossPercent -> Verdict(HaNetworkPathSeverity.WARNING, PathProbeCause.LOSS)
+            HaNetworkPath.exceedsShare(overWarn, rtts.size) ->
+                Verdict(HaNetworkPathSeverity.WARNING, PathProbeCause.LATENCY)
+            else -> Verdict(HaNetworkPathSeverity.HEALTHY, PathProbeCause.NONE)
         }
     }
 
@@ -119,6 +144,9 @@ internal class PathProbeHistory(
             consecutiveDeadBursts = consecutiveDead,
         )
     }
+
+    /** A layer-3 verdict and the evidence class that raised it. */
+    data class Verdict(val severity: HaNetworkPathSeverity, val cause: PathProbeCause)
 
     data class Aggregate(
         val availability: PathProbeAvailability,
@@ -146,6 +174,23 @@ internal class PathProbeHistory(
          */
         const val WARN_LOSS_PERCENT = 5.0
         const val SEVERE_LOSS_PERCENT = 20.0
+
+        /**
+         * Layer-3 round-trip lines.
+         *
+         * These are round trips to the Home Assistant host with no server and no application in
+         * them: an echo is answered by the target's kernel. A healthy wired path on a local network
+         * answers in a fraction of a millisecond, ordinary Wi-Fi in single-digit milliseconds, a
+         * weak or busy wireless link in the low tens, and even a tunnelled remote site typically in
+         * the low tens. A hundred milliseconds on such a path is therefore genuinely wrong rather
+         * than merely unlucky, and four hundred is far beyond anything a working link produces.
+         *
+         * A panel on powerline, a congested mesh or a long-haul tunnel may sit above the warning
+         * line legitimately. Telling that user their path is slow is the point of the feature rather
+         * than a defect in it: every server-backed action on the panel waits for exactly this.
+         */
+        const val WARN_LATENCY_MS = 100L
+        const val SEVERE_LATENCY_MS = 400L
 
         /** Bursts where NOTHING came back, in a row, before the path is called failing. */
         const val SEVERE_CONSECUTIVE_DEAD = 2
