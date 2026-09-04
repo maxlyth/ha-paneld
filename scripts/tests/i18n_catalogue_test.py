@@ -746,6 +746,7 @@ class CatalogueTest(unittest.TestCase):
             ("de", "setup.progress.server"): "Server",
             ("de", "entities.dynamic.default_dashboard"): "Dashboard",
             ("de", "entities.issue.default_dashboard"): "Dashboard",
+            ("es", "configure.proximity.experimental"): "experimental",
             ("es", "shell.runtime.duration_minutes"): "{count} min",
             ("es", "shell.runtime.duration_seconds"): "{count} s",
             ("fr", "entities.dynamic.source"): "Source",

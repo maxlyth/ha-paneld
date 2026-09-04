@@ -76,6 +76,7 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "setup.progress.name"): "Name",
     ("de", "setup.progress.server"): "Server",
     ("de", "shell.nav.dashboard"): "Dashboard",
+    ("es", "configure.proximity.experimental"): "experimental",
     ("es", "logs.level.error"): "Error+",
     ("es", "logs.level.info"): "Info+",
     ("es", "shell.runtime.duration_minutes"): "{count} min",

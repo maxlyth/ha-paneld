@@ -1094,7 +1094,7 @@
       "state": "machine-cross-checked"
     },
     "configure.proximity.confirm.forget": {
-      "text": "Allontanati dal pannello, quindi eliminare la cronologia di prossimità appresa per questo sensore? Il tocco per riattivare resta disponibile durante il nuovo apprendimento.",
+      "text": "Allontanati dal pannello, quindi conferma l’eliminazione della cronologia di prossimità appresa per questo sensore. Il tocco per riattivare resta disponibile durante il nuovo apprendimento.",
       "sourceHash": "e4ed73da8434174e02d6aa4413c24c088aad8fc6b39f214146bc5f74813288e5",
       "state": "machine-cross-checked"
     },

@@ -1094,7 +1094,7 @@
       "state": "machine-cross-checked"
     },
     "configure.proximity.confirm.forget": {
-      "text": "Éloignez-vous du panneau, puis supprimer l’historique de proximité appris pour ce capteur ? Le toucher pour réveiller reste disponible pendant le réapprentissage.",
+      "text": "Éloignez-vous du panneau, puis confirmez la suppression de l’historique de proximité appris pour ce capteur. Le toucher pour réveiller reste disponible pendant le réapprentissage.",
       "sourceHash": "e4ed73da8434174e02d6aa4413c24c088aad8fc6b39f214146bc5f74813288e5",
       "state": "machine-cross-checked"
     },
