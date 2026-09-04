@@ -27,12 +27,25 @@ object SelfUpdater {
         ReleaseCatalog.list(REPO, channel, limit, APK_MATCH) { it.removePrefix("v") }
 
     internal sealed interface ChannelPreparation {
-        data class Unresolved(val message: String) : ChannelPreparation
-        data class UpToDate(val message: String) : ChannelPreparation
-        data class Refused(val message: String) : ChannelPreparation
+        val message: String
+        val presentation: InstallPresentation?
+
+        data class Unresolved(
+            override val message: String,
+            override val presentation: InstallPresentation? = null,
+        ) : ChannelPreparation
+        data class UpToDate(
+            override val message: String,
+            override val presentation: InstallPresentation? = null,
+        ) : ChannelPreparation
+        data class Refused(
+            override val message: String,
+            override val presentation: InstallPresentation? = null,
+        ) : ChannelPreparation
         data class Ready(
             val prepared: AppInstaller.PreparedSelfInstall,
-            val message: String,
+            override val message: String,
+            override val presentation: InstallPresentation? = null,
         ) : ChannelPreparation {
             val databaseDisposition: AppInstaller.SelfInstallDatabaseDisposition
                 get() = prepared.databaseDisposition
@@ -41,19 +54,31 @@ object SelfUpdater {
 
     /** Install a specific ha-paneld release by its [tag]. The tag is validated and resolved back through
      *  the fixed repository before the package/signer-pinned installer sees its asset. */
-    suspend fun installVersion(context: Context, tag: String): String = withContext(Dispatchers.IO) {
-        val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no APK asset for $tag"
-        Log.i(TAG, "self-install ha-paneld tag $tag")
-        when (val preparation = AppInstaller.prepareSelfInstall(context, url)) {
-            is AppInstaller.SelfInstallPreparation.Failed -> preparation.outcome.message
-            is AppInstaller.SelfInstallPreparation.Ready -> preparation.prepared.use { prepared ->
-                when (val outcome = AppInstaller.installPrepared(context, prepared)) {
-                    InstallOutcome.Succeeded -> "installing ha-paneld $tag"
-                    is InstallOutcome.Failure -> outcome.message
+    suspend fun installVersion(context: Context, tag: String): String = installVersionResult(context, tag).message
+
+    internal suspend fun installVersionResult(context: Context, tag: String): InstallOperationResult =
+        withContext(Dispatchers.IO) {
+            val version = tag.removePrefix("v")
+            val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext managed(
+                "no APK asset for $tag",
+                "managed-apk-missing",
+                "version" to version,
+            )
+            Log.i(TAG, "self-install ha-paneld tag $tag")
+            when (val preparation = AppInstaller.prepareSelfInstall(context, url)) {
+                is AppInstaller.SelfInstallPreparation.Failed -> preparation.outcome.asOperationResult()
+                is AppInstaller.SelfInstallPreparation.Ready -> preparation.prepared.use { prepared ->
+                    when (val outcome = AppInstaller.installPrepared(context, prepared)) {
+                        InstallOutcome.Succeeded -> managed(
+                            "installing ha-paneld $tag",
+                            committedCode(version),
+                            "version" to version,
+                        )
+                        is InstallOutcome.Failure -> outcome.asOperationResult()
+                    }
                 }
             }
         }
-    }
 
     /** The newest release for [channel] as one coherent target (version + APK URL + release-notes URL), or
      *  null. Feeds the shared [ComponentUpdater] resolve -> compare -> decide pipeline. */
@@ -73,13 +98,25 @@ object SelfUpdater {
     ): ChannelPreparation = withContext(Dispatchers.IO) {
         val current = BuildConfig.VERSION_NAME
         when (val outcome = ComponentUpdater.resolveUpdate(current, force) { resolveTarget(channel) }) {
-            ComponentUpdater.Outcome.Unresolved -> ChannelPreparation.Unresolved("no release found ($channel)")
-            ComponentUpdater.Outcome.UpToDate -> ChannelPreparation.UpToDate("up to date ($current, $channel)")
+            ComponentUpdater.Outcome.Unresolved -> ChannelPreparation.Unresolved(
+                "no release found ($channel)",
+                presentation(
+                    "managed-release-unresolved",
+                    "channel" to channel,
+                ),
+            )
+            ComponentUpdater.Outcome.UpToDate -> ChannelPreparation.UpToDate(
+                "up to date ($current, $channel)",
+                presentation("managed-up-to-date", "current" to current),
+            )
             is ComponentUpdater.Outcome.Update -> {
                 val target = outcome.target
                 when (val preparation = AppInstaller.prepareSelfInstall(context, target.apkUrl)) {
                     is AppInstaller.SelfInstallPreparation.Failed ->
-                        ChannelPreparation.Refused(preparation.outcome.message)
+                        ChannelPreparation.Refused(
+                            preparation.outcome.message,
+                            preparation.outcome.presentation,
+                        )
                     is AppInstaller.SelfInstallPreparation.Ready -> ChannelPreparation.Ready(
                         preparation.prepared,
                         "updating ha-paneld -> ${target.version}",
@@ -103,12 +140,17 @@ object SelfUpdater {
             preparation.prepared.close()
             ChannelPreparation.Refused(
                 "An update-channel change cannot recover an older database snapshot.",
+                presentation("install-durable-rejection"),
             )
         } else preparation.also {
             if (it is ChannelPreparation.Ready) it.prepared.restrictToDirectConsumption()
         }
 
-    internal data class PreparedInstallOutcome(val message: String, val installed: Boolean)
+    internal data class PreparedInstallOutcome(
+        val message: String,
+        val installed: Boolean,
+        val presentation: InstallPresentation? = null,
+    )
 
     internal suspend fun installPreparedOutcome(
         context: Context,
@@ -117,8 +159,16 @@ object SelfUpdater {
         InstallOutcome.Succeeded -> PreparedInstallOutcome(
             "updating ha-paneld -> ${prepared.version}",
             installed = true,
+            presentation = presentation(
+                committedCode(prepared.version),
+                "version" to prepared.version,
+            ),
         )
-        is InstallOutcome.Failure -> PreparedInstallOutcome(outcome.message, installed = false)
+        is InstallOutcome.Failure -> PreparedInstallOutcome(
+            outcome.message,
+            installed = false,
+            presentation = outcome.presentation,
+        )
     }
 
     /** Consume a previously admitted exact channel candidate without resolving or observing it again. */
@@ -130,15 +180,50 @@ object SelfUpdater {
     /** Update ha-paneld to the newest build on [channel] if it is newer. [force] installs the channel's
      *  newest even when equal or older, which is the deliberate manual/channel-switch downgrade path. */
     suspend fun checkAndUpdate(context: Context, channel: String, force: Boolean = false): String =
+        checkAndUpdateResult(context, channel, force).message
+
+    internal suspend fun checkAndUpdateResult(
+        context: Context,
+        channel: String,
+        force: Boolean = false,
+    ): InstallOperationResult =
         withContext(Dispatchers.IO) {
             when (val preparation = prepareChannelUpdate(context, channel, force)) {
-                is ChannelPreparation.Unresolved -> preparation.message
-                is ChannelPreparation.UpToDate -> preparation.message
-                is ChannelPreparation.Refused -> preparation.message
+                is ChannelPreparation.Unresolved -> InstallOperationResult(
+                    preparation.message,
+                    preparation.presentation,
+                )
+                is ChannelPreparation.UpToDate -> InstallOperationResult(
+                    preparation.message,
+                    preparation.presentation,
+                )
+                is ChannelPreparation.Refused -> InstallOperationResult(
+                    preparation.message,
+                    preparation.presentation,
+                )
                 is ChannelPreparation.Ready -> preparation.prepared.use { prepared ->
                     Log.i(TAG, "self-update ${BuildConfig.VERSION_NAME} -> ${prepared.version} ($channel)")
-                    installPrepared(context, prepared)
+                    installPreparedOutcome(context, prepared).let {
+                        InstallOperationResult(it.message, it.presentation)
+                    }
                 }
             }
         }
+
+    private fun committedCode(version: String): String =
+        if (UpdateChecker.compareVersions(version, BuildConfig.VERSION_NAME)?.let { it < 0 } == true)
+            "managed-downgrade-committed"
+        else "managed-update-committed"
+
+    private fun presentation(code: String, vararg params: Pair<String, String>): InstallPresentation? =
+        InstallPresentation.create(code, mapOf("component" to "paneld", *params))
+
+    private fun managed(
+        message: String,
+        code: String,
+        vararg params: Pair<String, String>,
+    ): InstallOperationResult = InstallOperationResult(message, presentation(code, *params))
+
+    private fun InstallOutcome.Failure.asOperationResult(): InstallOperationResult =
+        InstallOperationResult(message, presentation)
 }

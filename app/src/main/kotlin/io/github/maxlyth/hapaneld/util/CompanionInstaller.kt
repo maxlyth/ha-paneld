@@ -140,18 +140,44 @@ object CompanionInstaller {
         context: Context,
         tag: String,
         maxVersion: String?,
-    ): String = withContext(Dispatchers.IO) {
-        if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
-            return@withContext "skipped: full Companion present (Play-managed)"
+    ): String = installVersionResult(context, tag, maxVersion).message
+
+    internal suspend fun installVersionResult(
+        context: Context,
+        tag: String,
+        maxVersion: String?,
+    ): InstallOperationResult = withContext(Dispatchers.IO) {
+        if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank()) return@withContext managed(
+            "skipped: full Companion present (Play-managed)",
+            "managed-play-managed",
+        )
         val version = UpdateChecker.stripVariant(tag.removePrefix("v"))
-        exactVersionRefusal(tag, maxVersion)?.let { return@withContext it }
-        val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext "no minimal APK for $tag"
+        exactVersionRefusal(tag, maxVersion)?.let { refusal ->
+            return@withContext managed(
+                refusal,
+                "managed-safety-cap-refused",
+                "version" to version,
+                "cap" to requireNotNull(maxVersion),
+            )
+        }
+        val url = ReleaseCatalog.apkUrl(REPO, tag, APK_MATCH) ?: return@withContext managed(
+            "no minimal APK for $tag",
+            "managed-apk-missing",
+            "version" to version,
+        )
         Log.i(TAG, "install Companion tag $tag")
         when (val outcome = AppInstaller.install(context, url, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)) {
-            is InstallOutcome.Failure -> return@withContext outcome.message
+            is InstallOutcome.Failure -> return@withContext InstallOperationResult(
+                outcome.message,
+                outcome.presentation,
+            )
             InstallOutcome.Succeeded -> Unit
         }
-        "installing HA Companion $version"
+        managed(
+            "installing HA Companion $version",
+            "managed-install-committed",
+            "version" to version,
+        )
     }
 
     /** True when [latestVersion] cannot prove it is at or below [maxVersion]. Null cap = no ceiling. */
@@ -183,27 +209,56 @@ object CompanionInstaller {
         force: Boolean = false,
         channel: String = "stable",
         maxVersion: String?,
-    ): String = withContext(Dispatchers.IO) {
-        if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank())
-            return@withContext "skipped: full Companion present (Play-managed)"
+    ): String = installOrUpdateResult(context, force, channel, maxVersion).message
+
+    internal suspend fun installOrUpdateResult(
+        context: Context,
+        force: Boolean = false,
+        channel: String = "stable",
+        maxVersion: String?,
+    ): InstallOperationResult = withContext(Dispatchers.IO) {
+        if (AppInstaller.installedVersion(context, FULL_PKG).isNotBlank()) return@withContext managed(
+            "skipped: full Companion present (Play-managed)",
+            "managed-play-managed",
+        )
 
         val installed = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val missing = installed.isBlank()
-        val target = target(channel, maxVersion) ?: return@withContext "no installable release found ($channel)"
+        val target = target(channel, maxVersion) ?: return@withContext managed(
+            "no installable release found ($channel)",
+            "managed-release-unresolved",
+            "channel" to channel,
+        )
         val installedAboveCap = !missing && exceedsCap(installed, maxVersion)
 
         if (installedAboveCap && !force) {
-            return@withContext "refused: installed HA Companion $installed exceeds this panel's $maxVersion safety cap; use the manual reinstall action to approve a downgrade"
+            return@withContext managed(
+                "refused: installed HA Companion $installed exceeds this panel's $maxVersion safety cap; use the manual reinstall action to approve a downgrade",
+                "managed-manual-downgrade-required",
+                "current" to installed,
+                "cap" to requireNotNull(maxVersion),
+            )
         }
 
         if (!shouldInstallTarget(installed, target.version, force, maxVersion)) {
-            return@withContext if (target.capped)
-                "pinned at $installed (latest ${target.newestVersion} exceeds this panel's $maxVersion cap)"
-            else "up to date ($installed)"
+            return@withContext if (target.capped) managed(
+                "pinned at $installed (latest ${target.newestVersion} exceeds this panel's $maxVersion cap)",
+                "managed-pinned",
+                "current" to installed,
+                "latest" to target.newestVersion,
+                "cap" to requireNotNull(maxVersion),
+            ) else managed(
+                "up to date ($installed)",
+                "managed-up-to-date",
+                "current" to installed,
+            )
         }
 
         when (val outcome = AppInstaller.install(context, target.apkUrl, AppInstaller.COMPANION_MINIMAL, allowShizuku = true)) {
-            is InstallOutcome.Failure -> return@withContext outcome.message
+            is InstallOutcome.Failure -> return@withContext InstallOperationResult(
+                outcome.message,
+                outcome.presentation,
+            )
             InstallOutcome.Succeeded -> Unit
         }
         val now = AppInstaller.installedVersion(context, MINIMAL_PKG).ifBlank { target.version }
@@ -214,6 +269,23 @@ object CompanionInstaller {
         }
         val capApplied = target.capped || installedAboveCap
         Log.i(TAG, "Companion $verb -> $now${if (capApplied) " (capped at $maxVersion)" else ""}")
-        "$verb HA Companion app ($now)${if (capApplied) " — pinned to the $maxVersion cap for this panel" else ""}"
+        managed(
+            "$verb HA Companion app ($now)${if (capApplied) " — pinned to the $maxVersion cap for this panel" else ""}",
+            when (verb) {
+                "installed" -> "managed-install-committed"
+                "downgraded" -> "managed-downgrade-committed"
+                else -> "managed-update-committed"
+            },
+            "version" to now,
+        )
     }
+
+    private fun presentation(code: String, vararg params: Pair<String, String>): InstallPresentation? =
+        InstallPresentation.create(code, mapOf("component" to "companion", *params))
+
+    private fun managed(
+        message: String,
+        code: String,
+        vararg params: Pair<String, String>,
+    ): InstallOperationResult = InstallOperationResult(message, presentation(code, *params))
 }

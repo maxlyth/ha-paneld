@@ -98,14 +98,15 @@ object AppInstaller {
         pin: Pin,
         allowShizuku: Boolean = false,
     ): InstallOutcome = withContext(Dispatchers.IO) {
+        val component = componentForPin(pin)
         if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
-            return@withContext guardDbInstallBlocked()
+            return@withContext guardDbInstallBlocked(component)
         }
         val hasSu = Su.available()
         val hasDaemon = HelperClient.available()
         val hasShizuku = ShizukuBridge.available()
         if (selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku) == InstallRoute.NONE)
-            return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
+            return@withContext retryable("skipped: no permitted installer", "install-no-permitted-route", component)
 
         // Preflight free space BEFORE downloading, so a large APK (a WebView build is ~250 MB) can't
         // fill /data or fail half-written on a low-storage panel. We need room for the download only —
@@ -113,7 +114,11 @@ object AppInstaller {
         val size = contentLength(url)
         if (size > MAX_APK_DOWNLOAD_BYTES) {
             Log.w(TAG, "refusing oversized APK download: $size bytes")
-            return@withContext InstallOutcome.Retryable("download too large (${size / 1048576} MB)")
+            return@withContext retryable(
+                "download too large (${size / 1048576} MB)",
+                "install-download-too-large",
+                component,
+            )
         }
         val free = context.cacheDir.usableSpace
         val downloadLimit = downloadCeiling(size, free)
@@ -122,20 +127,22 @@ object AppInstaller {
                 "insufficient storage (need ${size / 1048576} MB, ${free / 1048576} MB free)"
             else "insufficient storage (no free space)"
             Log.w(TAG, why)
-            return@withContext InstallOutcome.Retryable(why)
+            return@withContext retryable(why, "install-insufficient-storage", component)
         }
         val apk = runCatching { File.createTempFile("hapaneld-dl-", ".apk", context.cacheDir) }
-            .getOrElse { return@withContext InstallOutcome.Retryable("download staging failed") }
+            .getOrElse {
+                return@withContext retryable("download staging failed", "install-staging-failed", component)
+            }
         withStagedFiles { staged ->
             staged.stage(apk)
             if (download(url, apk, downloadLimit) != DownloadResult.Succeeded)
-                return@withStagedFiles InstallOutcome.Retryable("download failed")
+                return@withStagedFiles retryable("download failed", "install-download-failed", component)
             val why = verifyApk(context, apk.absolutePath, pin)
             if (why != null) {
                 Log.w(TAG, "refused install: $why")
-                return@withStagedFiles InstallOutcome.Rejected("refused ($why)")
+                return@withStagedFiles rejected("refused ($why)", component)
             }
-            installLocalApk(context, apk, allowShizuku)
+            installLocalApkAdmitted(context, apk, allowShizuku, component = component)
         }
     }
 
@@ -150,39 +157,43 @@ object AppInstaller {
         allowShizuku: Boolean = true,
     ): SelfInstallPreparation = withContext(Dispatchers.IO) {
         if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
-            return@withContext SelfInstallPreparation.Failed(guardDbInstallBlocked())
+            return@withContext SelfInstallPreparation.Failed(guardDbInstallBlocked("paneld"))
         }
         if (selectInstallRoute(Su.available(), HelperClient.available(), ShizukuBridge.available(), allowShizuku) ==
             InstallRoute.NONE
         ) {
             return@withContext SelfInstallPreparation.Failed(
-                InstallOutcome.Retryable("skipped: no permitted installer"),
+                retryable("skipped: no permitted installer", "install-no-permitted-route", "paneld"),
             )
         }
         val size = contentLength(url)
         if (size > MAX_APK_DOWNLOAD_BYTES) {
-            return@withContext SelfInstallPreparation.Failed(InstallOutcome.Retryable("download too large"))
+            return@withContext SelfInstallPreparation.Failed(
+                retryable("download too large", "install-download-too-large", "paneld"),
+            )
         }
         val limit = downloadCeiling(size, context.cacheDir.usableSpace)
         if (limit <= 0L) {
-            return@withContext SelfInstallPreparation.Failed(InstallOutcome.Retryable("insufficient storage"))
+            return@withContext SelfInstallPreparation.Failed(
+                retryable("insufficient storage", "install-insufficient-storage", "paneld"),
+            )
         }
         val apk = runCatching { File.createTempFile("hapaneld-prepared-", ".apk", context.cacheDir) }
             .getOrElse {
                 return@withContext SelfInstallPreparation.Failed(
-                    InstallOutcome.Retryable("download staging failed"),
+                    retryable("download staging failed", "install-staging-failed", "paneld"),
                 )
             }
         withStagedFiles { staged ->
             staged.stage(apk)
             if (download(url, apk, limit) != DownloadResult.Succeeded) {
                 return@withStagedFiles SelfInstallPreparation.Failed(
-                    InstallOutcome.Retryable("download failed"),
+                    retryable("download failed", "install-download-failed", "paneld"),
                 )
             }
             verifyApk(context, apk.absolutePath, HA_PANELD)?.let { why ->
                 return@withStagedFiles SelfInstallPreparation.Failed(
-                    InstallOutcome.Rejected("refused ($why)"),
+                    rejected("refused ($why)", "paneld"),
                 )
             }
             val info = inspect(context, apk.absolutePath)
@@ -203,7 +214,10 @@ object AppInstaller {
             }
             if (refusal != null || admittedBoundary == null || admittedDisposition == null) {
                 return@withStagedFiles SelfInstallPreparation.Failed(
-                    InstallOutcome.Rejected("refused (${refusal ?: "database compatibility could not be proven"})"),
+                    rejected(
+                        "refused (${refusal ?: "database compatibility could not be proven"})",
+                        "paneld",
+                    ),
                 )
             }
             val prepared = PreparedSelfInstall(
@@ -225,13 +239,13 @@ object AppInstaller {
         prepared: PreparedSelfInstall,
     ): InstallOutcome = withContext(Dispatchers.IO) {
         if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
-            return@withContext guardDbInstallBlocked()
+            return@withContext guardDbInstallBlocked("paneld")
         }
         val apk = prepared.consume()
-            ?: return@withContext InstallOutcome.Rejected("refused (prepared install already consumed)")
+            ?: return@withContext rejected("refused (prepared install already consumed)", "paneld")
         try {
             if (!prepared.bytesUnchanged()) {
-                return@withContext InstallOutcome.Rejected("refused (prepared APK changed after admission)")
+                return@withContext rejected("refused (prepared APK changed after admission)", "paneld")
             }
             installLocalApkAdmitted(
                 context = context,
@@ -239,6 +253,7 @@ object AppInstaller {
                 allowShizuku = prepared.allowShizuku,
                 admittedBoundary = prepared.boundary,
                 requireDirectDatabase = prepared.requiresDirectAtConsumption(),
+                component = "paneld",
             )
         } finally {
             // The capability is already consumed, so close() cannot own exceptional cleanup now.
@@ -453,9 +468,9 @@ object AppInstaller {
         apk: File,
         allowShizuku: Boolean = false,
     ): InstallOutcome = if (GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
-        installLocalApkAdmitted(context, apk, allowShizuku, admittedBoundary = null)
+        installLocalApkAdmitted(context, apk, allowShizuku, admittedBoundary = null, component = "apk")
     } else {
-        guardDbInstallBlocked()
+        guardDbInstallBlocked("apk")
     }
 
     private suspend fun installLocalApkAdmitted(
@@ -464,9 +479,10 @@ object AppInstaller {
         allowShizuku: Boolean,
         admittedBoundary: DatabaseCompatibilityApkContract.Boundary? = null,
         requireDirectDatabase: Boolean = false,
+        component: String,
     ): InstallOutcome = withContext(Dispatchers.IO) {
         if (!GuardDbProcessAdmission.ordinaryMutationsAllowed()) {
-            return@withContext guardDbInstallBlocked()
+            return@withContext guardDbInstallBlocked(component)
         }
         val info = inspect(context, apk.absolutePath)
         // DB_COMPAT_MUTATION_ANCHOR: IN_APP_GATE
@@ -487,7 +503,7 @@ object AppInstaller {
         if (refusal != null) {
             apk.delete()
             Log.w(TAG, "refused local install: $refusal")
-            return@withContext InstallOutcome.Rejected("refused ($refusal)")
+            return@withContext rejected("refused ($refusal)", component)
         }
         val replacingSelf = requireNotNull(info).pkg == context.packageName
         val hasSu = Su.available()
@@ -496,7 +512,7 @@ object AppInstaller {
         val route = selectInstallRoute(hasSu, hasDaemon, hasShizuku, allowShizuku)
         if (route == InstallRoute.NONE) {
             apk.delete()
-            return@withContext InstallOutcome.Retryable("skipped: no permitted installer")
+            return@withContext retryable("skipped: no permitted installer", "install-no-permitted-route", component)
         }
         // DB_COMPAT_MUTATION_ANCHOR: IN_APP_FIRST_MUTATION
         val stateQuiescence = if (replacingSelf) {
@@ -508,7 +524,11 @@ object AppInstaller {
         } else null
         if (replacingSelf && stateQuiescence == null) {
             apk.delete()
-            return@withContext InstallOutcome.Retryable("install deferred: application state is still being saved")
+            return@withContext retryable(
+                "install deferred: application state is still being saved",
+                "install-deferred-saving-state",
+                component,
+            )
         }
         var installSucceeded = false
         try {
@@ -529,7 +549,7 @@ object AppInstaller {
                     return@withContext InstallOutcome.Succeeded
                 }
                 Log.w(TAG, "install failed: $out")
-                return@withContext installFailure(out)
+                return@withContext installFailure(out).withFailurePresentation(component)
             }
 
             val outcome: InstallOutcome = if (route == InstallRoute.DAEMON) {
@@ -548,11 +568,12 @@ object AppInstaller {
                 else installFailure(out.ifBlank { "Shizuku installer unavailable" })
             } else {
                 apk.delete()
-                InstallOutcome.Retryable("skipped: no permitted installer")
+                retryable("skipped: no permitted installer", "install-no-permitted-route", component)
             }
-            if (outcome is InstallOutcome.Failure) Log.w(TAG, outcome.message)
-            installSucceeded = outcome is InstallOutcome.Succeeded
-            outcome
+            val presentedOutcome = outcome.withFailurePresentation(component)
+            if (presentedOutcome is InstallOutcome.Failure) Log.w(TAG, presentedOutcome.message)
+            installSucceeded = presentedOutcome is InstallOutcome.Succeeded
+            presentedOutcome
         } finally {
             // Package-manager success may return before process replacement. Keep state mutation
             // admission quiesced across that lag; only a failed install reopens writes.
@@ -560,8 +581,37 @@ object AppInstaller {
         }
     }
 
-    private fun guardDbInstallBlocked(): InstallOutcome.Retryable =
-        InstallOutcome.Retryable("blocked: Guard DB maintenance owns package mutations")
+    private fun guardDbInstallBlocked(component: String): InstallOutcome.Retryable = retryable(
+        "blocked: Guard DB maintenance owns package mutations",
+        "install-guard-db-owned",
+        component,
+    )
+
+    private fun componentForPin(pin: Pin): String = when (pin.pkg) {
+        HA_PANELD.pkg -> "paneld"
+        COMPANION_MINIMAL.pkg -> "companion"
+        WebViewInstaller.WEBVIEW_PKG -> "webview"
+        else -> "apk"
+    }
+
+    private fun presentation(code: String, component: String): InstallPresentation =
+        InstallPresentation(code, mapOf("component" to component))
+
+    private fun retryable(message: String, code: String, component: String) =
+        InstallOutcome.Retryable(message, presentation(code, component))
+
+    private fun rejected(message: String, component: String) =
+        InstallOutcome.Rejected(message, presentation("install-durable-rejection", component))
+
+    private fun InstallOutcome.withFailurePresentation(component: String): InstallOutcome = when (this) {
+        InstallOutcome.Succeeded -> this
+        is InstallOutcome.Rejected -> if (presentation != null) this else copy(
+            presentation = AppInstaller.presentation("install-durable-rejection", component),
+        )
+        is InstallOutcome.Retryable -> if (presentation != null) this else copy(
+            presentation = AppInstaller.presentation("install-retryable-failure", component),
+        )
+    }
 
     /**
      * Classify a `pm install` failure [output] line into a typed [InstallOutcome.Failure]. A

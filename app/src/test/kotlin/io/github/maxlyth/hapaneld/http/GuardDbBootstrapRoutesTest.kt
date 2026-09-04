@@ -31,6 +31,7 @@ import io.ktor.server.testing.testApplication
 import java.io.File
 import java.security.MessageDigest
 import java.security.SecureRandom
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -56,6 +57,10 @@ class GuardDbBootstrapRoutesTest {
         assertTrue(accepted.bodyAsText().contains("\"role\":\"A\""))
         assertTrue(fixture.staging.load(GuardDbMaintenanceProtocol.Role.A) != null)
         assertTrue(fixture.broker.pending().isEmpty())
+        assertEquals(
+            "guard-db-candidate-staging-finished",
+            JSONObject(InstallProgress.json()).getJSONObject("presentation").getString("code"),
+        )
 
         val consumed = postStage(fixture.token, "A", DIRECT_PEER)
         assertEquals(HttpStatusCode.Conflict, consumed.status)

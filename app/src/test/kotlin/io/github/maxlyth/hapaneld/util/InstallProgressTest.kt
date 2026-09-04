@@ -25,6 +25,10 @@ class InstallProgressTest {
         testScheduler.runCurrent()
         assertFalse(InstallProgress.running)
         assertEquals("cancelled", InstallProgress.message)
+        assertEquals(
+            "operation-cancelled",
+            JSONObject(InstallProgress.json()).getJSONObject("presentation").getString("code"),
+        )
 
         val second = InstallProgress.start("second")!!
         InstallProgress.finish(first, "stale")

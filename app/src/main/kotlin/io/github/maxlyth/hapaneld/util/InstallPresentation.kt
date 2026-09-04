@@ -302,3 +302,9 @@ class InstallPresentation(
         }
     }
 }
+
+/** Exact compatibility prose plus optional locale-neutral metadata selected by its semantic producer. */
+data class InstallOperationResult(
+    val message: String,
+    val presentation: InstallPresentation? = null,
+)

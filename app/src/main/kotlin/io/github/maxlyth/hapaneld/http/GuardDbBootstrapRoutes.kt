@@ -21,6 +21,7 @@ import io.github.maxlyth.hapaneld.util.GuardDbTerminalRetirementLoad
 import io.github.maxlyth.hapaneld.util.GuardDbTerminalRetirementState
 import io.github.maxlyth.hapaneld.util.GuardDbTerminalRetirementStore
 import io.github.maxlyth.hapaneld.util.InstallProgress
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.isLocalSource
 import io.github.maxlyth.hapaneld.util.isLoopbackPeer
@@ -72,6 +73,11 @@ internal sealed interface GuardDbSentinelCommit {
 
 internal fun guardDbDirectLanPeer(peer: String): Boolean =
     isLocalSource(peer) && !isLoopbackPeer(peer)
+
+private fun guardDbWorkingPresentation() = InstallPresentation(
+    "operation-working",
+    mapOf("owner" to "guard-db"),
+)
 
 internal fun Route.guardDbBootstrapRoutes(dependencies: GuardDbBootstrapRouteDependencies) {
     route("/api/v1/guard-db") {
@@ -173,7 +179,10 @@ private object GuardDbTerminalRetirementOperationLane {
         val current = ticket
         if (owner == key && current != null && InstallProgress.owns(current)) return true
         if (current != null || owner != null) return false
-        val claimed = InstallProgress.start("Guard DB terminal evidence retirement") ?: return false
+        val claimed = InstallProgress.start(
+            "Guard DB terminal evidence retirement",
+            guardDbWorkingPresentation(),
+        ) ?: return false
         owner = key
         ticket = claimed
         return true
@@ -182,7 +191,13 @@ private object GuardDbTerminalRetirementOperationLane {
     @Synchronized
     fun release(key: String, result: String) {
         if (owner != key) return
-        ticket?.let { InstallProgress.finish(it, result) }
+        ticket?.let {
+            InstallProgress.finish(
+                it,
+                result,
+                presentation = InstallPresentation("guard-db-retirement-settled"),
+            )
+        }
         ticket = null
         owner = null
     }
@@ -676,7 +691,7 @@ private suspend fun discardGuardDbCandidate(
             "Discard exact $role candidate vc${current.versionCode} ${current.sha256.take(12)}",
         )
     ) return
-    val ticket = InstallProgress.start("Guard DB $role discard")
+    val ticket = InstallProgress.start("Guard DB $role discard", guardDbWorkingPresentation())
         ?: return call.guardDbError(HttpStatusCode.Conflict, "operation-busy")
     try {
         val cleared = RemoteDebugSecurityTransitionGate.withEpoch(securityEpoch) {
@@ -693,7 +708,11 @@ private suspend fun discardGuardDbCandidate(
             }
         }
     } finally {
-        InstallProgress.finish(ticket, "Guard DB candidate discard finished")
+        InstallProgress.finish(
+            ticket,
+            "Guard DB candidate discard finished",
+            presentation = InstallPresentation("guard-db-candidate-discard-finished"),
+        )
     }
 }
 
@@ -729,7 +748,10 @@ private suspend fun stageGuardDbCandidate(
             "Claim exact ${request.role} candidate vc${inspection.versionCode} ${inspection.sha256.take(12)}",
         )
     ) return
-    val ticket = InstallProgress.start("Guard DB ${request.role} staging")
+    val ticket = InstallProgress.start(
+        "Guard DB ${request.role} staging",
+        guardDbWorkingPresentation(),
+    )
         ?: return call.guardDbError(HttpStatusCode.Conflict, "operation-busy")
     try {
         val claim = RemoteDebugSecurityTransitionGate.withEpoch(securityEpoch) {
@@ -756,7 +778,11 @@ private suspend fun stageGuardDbCandidate(
             ContentType.Application.Json,
         )
     } finally {
-        InstallProgress.finish(ticket, "Guard DB candidate staging finished")
+        InstallProgress.finish(
+            ticket,
+            "Guard DB candidate staging finished",
+            presentation = InstallPresentation("guard-db-candidate-staging-finished"),
+        )
     }
 }
 
@@ -803,7 +829,7 @@ private suspend fun armGuardDbCanary(
             "ARM exact A/B database canary ${preview.a.versionCode}→${preview.b.versionCode} ${request.session.take(12)}",
         )
     ) return
-    val ticket = InstallProgress.start("Guard DB ARM")
+    val ticket = InstallProgress.start("Guard DB ARM", guardDbWorkingPresentation())
         ?: return call.guardDbError(HttpStatusCode.Conflict, "operation-busy")
     var handedOff = false
     var shutdown: (() -> Unit)? = null
@@ -878,7 +904,11 @@ private suspend fun armGuardDbCanary(
             requireNotNull(shutdown).invoke()
         }
     } finally {
-        if (!handedOff) InstallProgress.finish(ticket, "Guard DB ARM did not start")
+        if (!handedOff) InstallProgress.finish(
+            ticket,
+            "Guard DB ARM did not start",
+            presentation = InstallPresentation("guard-db-arm-not-started"),
+        )
         // On success the one-way CAPTURE/INSTALL_B handoff kills this process. The ticket deliberately
         // remains occupied until then; the durable sentinel gates every successor and mutation path.
     }

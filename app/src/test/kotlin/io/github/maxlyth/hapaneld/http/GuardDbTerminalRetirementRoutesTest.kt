@@ -30,6 +30,7 @@ import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
 import java.io.File
 import java.security.SecureRandom
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -59,6 +60,10 @@ class GuardDbTerminalRetirementRoutesTest {
             assertTrue(accepted.bodyAsText().contains("\"state\":\"empty\""))
             assertEquals(listOf(fixture.retireCommand), fixture.transport.longCommands)
             assertFalse(InstallProgress.running)
+            assertEquals(
+                "guard-db-retirement-settled",
+                JSONObject(InstallProgress.json()).getJSONObject("presentation").getString("code"),
+            )
             assertEquals(
                 GuardDbTerminalRetirementState.COMPLETE,
                 (fixture.store.load() as GuardDbTerminalRetirementLoad.Valid).retirement.state,

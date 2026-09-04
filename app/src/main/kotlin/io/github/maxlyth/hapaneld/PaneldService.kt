@@ -180,6 +180,8 @@ import io.github.maxlyth.hapaneld.util.CompanionInstaller
 import io.github.maxlyth.hapaneld.util.CompanionOperationStatus
 import io.github.maxlyth.hapaneld.util.AppInstaller
 import io.github.maxlyth.hapaneld.util.InstallProgress
+import io.github.maxlyth.hapaneld.util.InstallOperationResult
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.GuardDbProcessAdmission
 import io.github.maxlyth.hapaneld.util.GuardDbSentinelLoad
@@ -2702,40 +2704,47 @@ class PaneldService : Service() {
     private suspend fun completeOperation(
         progress: InstallProgress.Ticket,
         logLabel: String,
-        operation: suspend () -> String,
+        operation: suspend () -> InstallOperationResult,
         after: suspend (String) -> Unit = {},
     ): String {
         var result = "cancelled"
+        var resultPresentation: InstallPresentation? = InstallPresentation("operation-cancelled")
         try {
-            result = try {
+            val completed = try {
                 operation()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.w(TAG, "$logLabel failed", e)
-                "error: ${e.message}"
+                InstallOperationResult("error: ${e.message}")
             }
+            result = completed.message
+            resultPresentation = completed.presentation
             Log.i(TAG, "$logLabel: $result")
             after(result)
             // Keep the destructive-operation lane until post-install activation is complete. WebView
             // activation deliberately waits before requesting a process boundary; releasing the lane
             // first lets the blocked screen start a second install that the pending restart kills.
-            InstallProgress.finish(progress, result)
+            InstallProgress.finish(progress, result, presentation = resultPresentation)
             return result
         } finally {
             // Covers cancellation, fatal errors, and direct callers; stale tickets cannot clear a successor.
-            InstallProgress.finish(progress, result)
+            InstallProgress.finish(progress, result, presentation = resultPresentation)
         }
     }
 
     /** Start an asynchronous destructive operation only when the shared lane is free. */
     private fun launchOperation(
         component: String,
+        owner: String,
         logLabel: String,
-        operation: suspend () -> String,
+        operation: suspend () -> InstallOperationResult,
         after: suspend (String) -> Unit = {},
     ): Boolean {
-        val progress = InstallProgress.start(component) ?: return false
+        val progress = InstallProgress.start(
+            component,
+            InstallPresentation("operation-working", mapOf("owner" to owner)),
+        ) ?: return false
         val job = scope.launch { completeOperation(progress, logLabel, operation, after) }
         // A cancelled job can complete before its body starts, so the body's finally is not sufficient.
         InstallProgress.finishOnFailure(progress, job)
@@ -2745,11 +2754,15 @@ class PaneldService : Service() {
     /** Run a scheduled destructive operation inline, or skip it when another owner holds the lane. */
     private suspend fun runOperation(
         component: String,
+        owner: String,
         logLabel: String,
-        operation: suspend () -> String,
+        operation: suspend () -> InstallOperationResult,
         after: suspend (String) -> Unit = {},
     ): String? {
-        val progress = InstallProgress.start(component) ?: run {
+        val progress = InstallProgress.start(
+            component,
+            InstallPresentation("operation-working", mapOf("owner" to owner)),
+        ) ?: run {
             Log.i(TAG, "$logLabel skipped: another destructive operation is running")
             return null
         }
@@ -2777,12 +2790,25 @@ class PaneldService : Service() {
      *  that already installed but never became the provider; it clears when the pinned version advances. */
     private suspend fun autoUpdateWebView(): WebViewInstaller.HealResult {
         val rec = profile.recommendedWebView
-            ?: return WebViewInstaller.HealResult.NoAction("skipped: no managed WebView")
+            ?: return WebViewInstaller.HealResult.NoAction(
+                "skipped: no managed WebView",
+                InstallPresentation("managed-no-recommendation", mapOf("component" to "webview")),
+            )
         val engineMajor = io.github.maxlyth.hapaneld.http.PanelInfo.webViewStatus(this@PaneldService).engineMajor
         if (io.github.maxlyth.hapaneld.util.WebViewInstaller.shouldSkipAutoUpdate(config.webViewAutoLastVersion, rec.version, rec.major, engineMajor)) {
             val skipped = "skipped: ${rec.version} already attempted but engine is ${engineMajor ?: "?"}; manual heal may be needed"
             Log.w(TAG, "WebView auto-update: $skipped")
-            return WebViewInstaller.HealResult.NoAction(skipped)
+            return WebViewInstaller.HealResult.NoAction(
+                skipped,
+                InstallPresentation(
+                    "managed-attempt-recorded",
+                    mapOf(
+                        "component" to "webview",
+                        "version" to rec.version,
+                        "current" to (engineMajor?.toString() ?: "?"),
+                    ),
+                ),
+            )
         }
         val r = io.github.maxlyth.hapaneld.util.WebViewInstaller.heal(
             this@PaneldService, profile, engineMajor = engineMajor, force = false, autoUpdate = true,
@@ -2803,11 +2829,14 @@ class PaneldService : Service() {
     private fun repairCompanionUrl(): Boolean {
         return launchOperation(
             component = "Companion URL repair",
+            owner = "companion-url-repair",
             logLabel = "Companion internal_url repair",
             operation = {
-                io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
-                    this@PaneldService,
-                    io.github.maxlyth.hapaneld.control.Su,
+                InstallOperationResult(
+                    io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
+                        this@PaneldService,
+                        io.github.maxlyth.hapaneld.control.Su,
+                    ),
                 )
             },
         )
@@ -2854,15 +2883,22 @@ class PaneldService : Service() {
     /** MQTT channel switches own the install lane from preflight through the exact prepared install. */
     private fun launchSelfUpdateChannelChange(requested: String, previous: String): Boolean = launchOperation(
         component = "ha-paneld",
+        owner = "paneld",
         logLabel = "self-update channel $previous -> $requested",
         operation = {
-            when (val preflight = prepareSelfUpdateChannel(
+            val message = when (val preflight = prepareSelfUpdateChannel(
                 requested,
                 force = previous == "prerelease" && requested == "stable",
             )) {
                 is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Ready -> preflight.use {
                     if (it.requiresRecovery) {
-                        return@launchOperation "refused: an update-channel change cannot recover an older database snapshot"
+                        return@launchOperation InstallOperationResult(
+                            "refused: an update-channel change cannot recover an older database snapshot",
+                            InstallPresentation(
+                                "install-durable-rejection",
+                                mapOf("component" to "paneld"),
+                            ),
+                        )
                     }
                     var commitRefusal: String? = null
                     if (!config.synchronizedTransaction {
@@ -2878,8 +2914,14 @@ class PaneldService : Service() {
                             }
                         }
                     ) {
-                        return@launchOperation commitRefusal?.let { refusal -> "refused: $refusal" }
-                            ?: "refused: update channel changed during compatibility preflight"
+                        return@launchOperation InstallOperationResult(
+                            commitRefusal?.let { refusal -> "refused: $refusal" }
+                                ?: "refused: update channel changed during compatibility preflight",
+                            InstallPresentation(
+                                "install-durable-rejection",
+                                mapOf("component" to "paneld"),
+                            ),
+                        )
                     }
                     mqtt.publishSelfUpdateChannelState()
                     installCommittedSelfUpdateChannel(
@@ -2901,6 +2943,7 @@ class PaneldService : Service() {
                 is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused -> preflight.message
                 is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved -> preflight.message
             }
+            InstallOperationResult(message)
         },
         after = { mqtt.publishSelfUpdateChannelState() },
     )
@@ -2925,13 +2968,14 @@ class PaneldService : Service() {
                 promoted,
                 "self-update committed channel",
                 operation = {
-                    preflight.use { ready ->
+                    val result = preflight.use { ready ->
                         installCommittedSelfUpdateChannel(
                             install = ready.install,
                             rollback = { rollbackSelfUpdateChannel(committed, previous) },
                             onInstalled = { installed.set(true) },
-                        ).message
+                        )
                     }
+                    InstallOperationResult(result.message)
                 },
             )
         }
@@ -2974,26 +3018,33 @@ class PaneldService : Service() {
         var webViewHeal: WebViewInstaller.HealResult? = null
         return launchOperation(
             component = label,
+            owner = when (name) {
+                "paneld" -> "paneld"
+                "companion" -> "companion"
+                "webview" -> "webview"
+                else -> "apk"
+            },
             logLabel = "install $name",
             operation = {
                 when (name) {
                     // A specific picked version installs that exact tag; otherwise the channel's newest.
-                    "paneld" -> if (tag != null) SelfUpdater.installVersion(this@PaneldService, tag)
-                        else SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel, force = force)
-                    "companion" -> if (tag != null) CompanionInstaller.installVersion(
+                    "paneld" -> if (tag != null) SelfUpdater.installVersionResult(this@PaneldService, tag)
+                        else SelfUpdater.checkAndUpdateResult(this@PaneldService, config.updateChannel, force = force)
+                    "companion" -> if (tag != null) CompanionInstaller.installVersionResult(
                         this@PaneldService,
                         tag,
                         profile.companionMaxVersion,
                     )
-                        else CompanionInstaller.installOrUpdate(
+                        else CompanionInstaller.installOrUpdateResult(
                             this@PaneldService,
                             force = force,
                             channel = config.companionUpdateChannel,
                             maxVersion = profile.companionMaxVersion,
                         )
                     "webview" -> WebViewInstaller.heal(this@PaneldService, profile, engineMajor = null, force = true)
-                        .also { webViewHeal = it }.status
-                    else -> "unknown component"
+                        .also { webViewHeal = it }
+                        .let { InstallOperationResult(it.status, it.presentation) }
+                    else -> InstallOperationResult("unknown component")
                 }
             },
             after = {
@@ -3233,9 +3284,10 @@ class PaneldService : Service() {
                 if (config.companionAutoUpdate) {
                     runOperation(
                         component = "HA Companion",
+                        owner = "companion",
                         logLabel = "Companion auto",
                         operation = {
-                            CompanionInstaller.installOrUpdate(
+                            CompanionInstaller.installOrUpdateResult(
                                 this@PaneldService,
                                 channel = config.companionUpdateChannel,
                                 maxVersion = profile.companionMaxVersion,
@@ -3250,8 +3302,12 @@ class PaneldService : Service() {
                     var webViewHeal: WebViewInstaller.HealResult? = null
                     runOperation(
                         component = "System WebView",
+                        owner = "webview",
                         logLabel = "WebView auto-update",
-                        operation = { autoUpdateWebView().also { webViewHeal = it }.status },
+                        operation = {
+                            autoUpdateWebView().also { webViewHeal = it }
+                                .let { InstallOperationResult(it.status, it.presentation) }
+                        },
                         after = { webViewHeal?.let { activateWebView(it, "auto-updated") } },
                     )
                 }
@@ -3261,8 +3317,9 @@ class PaneldService : Service() {
                 if (config.selfUpdate && capabilitiesSnapshot().canInstallVerifiedApps) {
                     runOperation(
                         component = "ha-paneld",
+                        owner = "paneld",
                         logLabel = "self-update auto",
-                        operation = { SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel) },
+                        operation = { SelfUpdater.checkAndUpdateResult(this@PaneldService, config.updateChannel) },
                     )
                 }
             }

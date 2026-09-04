@@ -20,7 +20,16 @@ object UpdateChecker {
         val currentVersion: String,
         val latestVersion: String,
         val releaseUrl: String,
-    )
+        /** Stable locale-neutral identity; [label] remains the exact compatibility and ignore-map key. */
+        val component: String,
+    ) {
+        constructor(
+            label: String,
+            currentVersion: String,
+            latestVersion: String,
+            releaseUrl: String,
+        ) : this(label, currentVersion, latestVersion, releaseUrl, componentToken(label))
+    }
 
     internal data class CompanionPolicy(val channel: String, val maxVersion: String?)
 
@@ -190,6 +199,12 @@ object UpdateChecker {
 
     /** HA Companion version names carry a variant suffix that is not a prerelease marker. */
     internal fun stripVariant(v: String): String = Regex("-(?:full|minimal|wear)$").replace(v.trim(), "")
+
+    internal fun componentToken(label: String): String = when (label) {
+        PANELD_LABEL -> "paneld"
+        COMPANION_LABEL -> "companion"
+        else -> ""
+    }
 
     private data class ParsedVersion(val numeric: List<Int>, val suffix: String)
 

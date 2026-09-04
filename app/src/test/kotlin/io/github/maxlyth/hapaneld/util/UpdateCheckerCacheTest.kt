@@ -13,6 +13,17 @@ class UpdateCheckerCacheTest {
     private val paneldUpdate = UpdateChecker.UpdateInfo("ha-paneld", "0.9.1", "0.9.2", "paneld-url")
     private val companionUpdate = UpdateChecker.UpdateInfo("HA Companion", "2026.5.3", "2026.5.4", "companion-url")
 
+    @Test fun updateInfoAddsStableComponentWithoutChangingLegacyFields() {
+        assertEquals("paneld", paneldUpdate.component)
+        assertEquals("companion", companionUpdate.component)
+        assertEquals("ha-paneld", paneldUpdate.label)
+        assertEquals("HA Companion", companionUpdate.label)
+
+        val unknown = UpdateChecker.UpdateInfo("Future component", "1", "2", "url")
+        assertEquals("", unknown.component)
+        assertEquals("Future component", unknown.label)
+    }
+
     @Test fun bothResolvedReplaceTheCacheAndCompleteTheTransaction() {
         val result = reconcile(
             previous = emptyList(),

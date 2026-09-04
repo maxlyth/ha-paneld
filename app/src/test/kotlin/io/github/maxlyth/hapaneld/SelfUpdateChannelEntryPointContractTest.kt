@@ -18,11 +18,11 @@ class SelfUpdateChannelEntryPointContractTest {
         assertTrue(exact.indexOf("prepareSelfInstall(context, url)") < exact.indexOf("installPrepared(context, prepared)"))
         assertTrue(channel.contains("ComponentUpdater.resolveUpdate(current, force)"))
         assertTrue(channel.indexOf("prepareChannelUpdate(context, channel, force)") <
-            channel.lastIndexOf("installPrepared(context, prepared)"))
+            channel.lastIndexOf("installPreparedOutcome(context, prepared)"))
 
         val service = source("src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt")
         val periodic = service.substring(service.indexOf("name = \"update-check\""), service.indexOf("startMqttWatchdog()"))
-        assertTrue(periodic.contains("SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)"))
+        assertTrue(periodic.contains("SelfUpdater.checkAndUpdateResult(this@PaneldService, config.updateChannel)"))
     }
 
     @Test

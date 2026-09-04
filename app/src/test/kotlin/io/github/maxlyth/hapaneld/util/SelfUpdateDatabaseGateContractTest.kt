@@ -28,13 +28,13 @@ class SelfUpdateDatabaseGateContractTest {
         )
         assertTrue(
             "periodic auto-update must remain behind the same channel preparation gate",
-            service.contains("SelfUpdater.checkAndUpdate(this@PaneldService, config.updateChannel)"),
+            service.contains("SelfUpdater.checkAndUpdateResult(this@PaneldService, config.updateChannel)"),
         )
     }
 
     @Test fun uploadedSelfApkAndDownloadedSelfApkConvergeAtTheLocalGate() {
         assertTrue(server.contains("AppInstaller.installLocalApk(appContext, apk)"))
-        assertTrue(installer.contains("installLocalApk(context, apk, allowShizuku)"))
+        assertTrue(installer.contains("installLocalApkAdmitted(context, apk, allowShizuku, component = component)"))
         assertTrue(installer.contains("val refusal = localInstallCandidateRefusal("))
         assertTrue(
             "prepared installs must re-observe DB state instead of trusting boundary equality alone",
@@ -65,7 +65,7 @@ class SelfUpdateDatabaseGateContractTest {
 
         val localGate = protectedTail.indexOf("localInstallCandidateRefusal(")
         val refusalBranch = protectedTail.indexOf("if (refusal != null)")
-        val refusalReturn = protectedTail.indexOf("return@withContext InstallOutcome.Rejected")
+        val refusalReturn = protectedTail.indexOf("return@withContext rejected(")
 
         assertTrue("every local candidate must enter the common refusal gate", localGate >= 0)
         assertTrue(localGate < refusalBranch)

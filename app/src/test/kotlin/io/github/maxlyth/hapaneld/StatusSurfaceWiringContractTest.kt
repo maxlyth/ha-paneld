@@ -793,7 +793,7 @@ class StatusSurfaceWiringContractTest {
         assertTrue(
             "the destructive lane must remain owned through post-install activation",
             operation.indexOf("after(result)") in 0 until
-                operation.indexOf("InstallProgress.finish(progress, result)"),
+                operation.indexOf("InstallProgress.finish(progress, result, presentation = resultPresentation)"),
         )
         assertTrue(
             "the capability probe must not run on the caller's thread",

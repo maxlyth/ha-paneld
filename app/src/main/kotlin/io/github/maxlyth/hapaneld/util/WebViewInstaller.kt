@@ -30,13 +30,24 @@ object WebViewInstaller {
      */
     sealed interface HealResult {
         val status: String
+        val presentation: InstallPresentation?
         /** A no-op decision (no recommendation, engine already fine, or the pin is not newer). */
-        data class NoAction(override val status: String) : HealResult
+        data class NoAction(
+            override val status: String,
+            override val presentation: InstallPresentation? = null,
+        ) : HealResult
         /** The recommended WebView was installed and the dashboard should be reactivated. */
-        data class Installed(override val status: String) : HealResult
+        data class Installed(
+            override val status: String,
+            override val presentation: InstallPresentation? = null,
+        ) : HealResult
         /** The install was attempted but failed. [terminal] = a durable rejection (retrying the same pin
          *  cannot help), as opposed to a transient failure that a later tick may clear. */
-        data class Failed(override val status: String, val terminal: Boolean) : HealResult
+        data class Failed(
+            override val status: String,
+            val terminal: Boolean,
+            override val presentation: InstallPresentation? = null,
+        ) : HealResult
     }
 
     /** What [heal] should do — a pure decision so the gating logic is unit-testable without a device. */
@@ -97,9 +108,18 @@ object WebViewInstaller {
      *  (advance a working engine to a newer pin). */
     suspend fun heal(context: Context, profile: DeviceProfile, engineMajor: Int?, force: Boolean = false, autoUpdate: Boolean = false): HealResult =
         when (val d = decide(profile.recommendedWebView, engineMajor, PanelHealth.MIN_CHROMIUM, force, autoUpdate)) {
-            is Decision.NoRecommendation -> HealResult.NoAction("no known-good WebView for this panel")
-            is Decision.UpToDate -> HealResult.NoAction("up to date (Chromium ${d.engineMajor ?: "?"})")
-            is Decision.NotNewer -> HealResult.NoAction("already current (${d.version})")
+            is Decision.NoRecommendation -> HealResult.NoAction(
+                "no known-good WebView for this panel",
+                presentation("managed-no-recommendation"),
+            )
+            is Decision.UpToDate -> HealResult.NoAction(
+                "up to date (Chromium ${d.engineMajor ?: "?"})",
+                presentation("managed-up-to-date", "current" to "Chromium ${d.engineMajor ?: "?"}"),
+            )
+            is Decision.NotNewer -> HealResult.NoAction(
+                "already current (${d.version})",
+                presentation("managed-no-newer", "current" to d.version),
+            )
             is Decision.Install -> {
                 Log.i(TAG, "healing WebView → ${d.spec.version} (engine major was $engineMajor)")
                 when (val outcome = AppInstaller.install(
@@ -109,10 +129,27 @@ object WebViewInstaller {
                     allowShizuku = false,
                 )) {
                     InstallOutcome.Succeeded ->
-                        HealResult.Installed("OK: installed WebView ${d.spec.version} — reloading the dashboard")
-                    is InstallOutcome.Rejected -> HealResult.Failed(outcome.message, terminal = true)
-                    is InstallOutcome.Retryable -> HealResult.Failed(outcome.message, terminal = false)
+                        HealResult.Installed(
+                            "OK: installed WebView ${d.spec.version} — reloading the dashboard",
+                            presentation(
+                                "managed-install-committed",
+                                "version" to d.spec.version,
+                            ),
+                        )
+                    is InstallOutcome.Rejected -> HealResult.Failed(
+                        outcome.message,
+                        terminal = true,
+                        presentation = outcome.presentation,
+                    )
+                    is InstallOutcome.Retryable -> HealResult.Failed(
+                        outcome.message,
+                        terminal = false,
+                        presentation = outcome.presentation,
+                    )
                 }
             }
         }
+
+    private fun presentation(code: String, vararg params: Pair<String, String>): InstallPresentation? =
+        InstallPresentation.create(code, mapOf("component" to "webview", *params))
 }
