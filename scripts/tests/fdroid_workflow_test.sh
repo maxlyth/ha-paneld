@@ -331,8 +331,26 @@ else
   response_type="$type"
   [ "${MOCK_PUBLIC_BAD_CACHE_KEY:-}" != "$key" ] || response_cache='public, max-age=60'
   [ "${MOCK_PUBLIC_BAD_TYPE_KEY:-}" != "$key" ] || response_type='text/plain'
-  printf 'HTTP/2 200\r\ncache-control: %s\r\ncontent-type: %s\r\n\r\n' \
-    "$response_cache" "$response_type" > "$headers"
+  : > "$headers"
+  if [ "${MOCK_PUBLIC_RETRY_KEY:-}" = "$key" ]; then
+    retry_cache="$cache"
+    retry_type="$type"
+    if [ "${MOCK_PUBLIC_RETRY_BAD_HEADERS:-false}" = true ]; then
+      retry_cache='public, max-age=60'
+      retry_type='text/plain'
+    fi
+    printf 'HTTP/2 503\r\ncache-control: %s\r\ncontent-type: %s\r\n\r\n' \
+      "$retry_cache" "$retry_type" >> "$headers"
+    printf '%s\n' "$key" >> "$MOCK_R2_STATE/retry-header-responses.log"
+  fi
+  printf 'HTTP/2 200\r\n' >> "$headers"
+  if [ "${MOCK_PUBLIC_MISSING_CACHE_KEY:-}" != "$key" ]; then
+    printf 'cache-control: %s\r\n' "$response_cache" >> "$headers"
+  fi
+  if [ "${MOCK_PUBLIC_MISSING_TYPE_KEY:-}" != "$key" ]; then
+    printf 'content-type: %s\r\n' "$response_type" >> "$headers"
+  fi
+  printf '\r\n' >> "$headers"
   cp "$MOCK_R2_STATE/objects/$key" "$body"
   if [ "${MOCK_PUBLIC_CORRUPT_KEY:-}" = "$key" ]; then
     printf 'corrupt' >> "$body"
@@ -461,6 +479,16 @@ else
 fi
 
 printf 'apk bytes\n' > "$site/fdroid/repo/ha-paneld-v1.0.0.apk"
+if MOCK_PUBLIC_RETRY_KEY=fdroid/repo/index-v2.json MOCK_PUBLIC_RETRY_BAD_HEADERS=true \
+     run_publisher > "$TMP/public-final-headers-valid.log" 2>&1 &&
+   grep -Fq 'F-Droid R2 publication verified at' "$TMP/public-final-headers-valid.log" &&
+   [ "$(grep -Fxc 'fdroid/repo/index-v2.json' "$state/retry-header-responses.log")" -eq 1 ]; then
+  pass "publisher accepts valid final headers after a retry with invalid headers"
+else
+  sed -n '1,120p' "$TMP/public-final-headers-valid.log" >&2
+  fail_test "publisher accepts valid final headers after a retry with invalid headers"
+fi
+
 old_entry_sha="$(sha256sum "$state/objects/fdroid/repo/entry.jar" | awk '{print $1}')"
 old_legacy_index_sha="$(sha256sum "$state/objects/fdroid/repo/index-v1.jar" | awk '{print $1}')"
 old_index_sha="$(sha256sum "$state/objects/fdroid/repo/index-v2.json" | awk '{print $1}')"
@@ -496,6 +524,33 @@ printf 'verification-failure entry\n' > "$site/fdroid/repo/entry.jar"
 printf '{"repo":"verification-failure"}\n' > "$site/fdroid/repo/index-v2.json"
 printf 'verification-failure landing\n' > "$site/index.html"
 printf 'verification-failure icon\n' > "$site/fdroid/repo/icon.png"
+for final_header_case in bad-cache missing-cache bad-type missing-type; do
+  case "$final_header_case" in
+    bad-cache) failure_variable=MOCK_PUBLIC_BAD_CACHE_KEY; expected_failure='wrong cache policy' ;;
+    missing-cache) failure_variable=MOCK_PUBLIC_MISSING_CACHE_KEY; expected_failure='wrong cache policy' ;;
+    bad-type) failure_variable=MOCK_PUBLIC_BAD_TYPE_KEY; expected_failure='wrong content type' ;;
+    missing-type) failure_variable=MOCK_PUBLIC_MISSING_TYPE_KEY; expected_failure='wrong content type' ;;
+  esac
+  header_log="$TMP/public-final-${final_header_case}.log"
+  : > "$state/retry-header-responses.log"
+  export "$failure_variable=fdroid/repo/index-v2.json"
+  MOCK_PUBLIC_RETRY_KEY=fdroid/repo/index-v2.json run_publisher > "$header_log" 2>&1
+  header_status=$?
+  unset "$failure_variable"
+  if [ "$header_status" -eq 1 ] &&
+     grep -Fq "Public F-Droid object has the $expected_failure: fdroid/repo/index-v2.json" "$header_log" &&
+     grep -Fq 'restoring the previous mutable repository state' "$header_log" &&
+     ! grep -Fq 'F-Droid R2 publication verified at' "$header_log" &&
+     [ "$(grep -Fxc 'fdroid/repo/index-v2.json' "$state/retry-header-responses.log")" -eq 1 ] &&
+     [ "$(sha256sum "$state/objects/fdroid/repo/entry.jar" | awk '{print $1}')" = "$old_entry_sha" ] &&
+     [ "$(sha256sum "$state/objects/fdroid/repo/index-v2.json" | awk '{print $1}')" = "$old_index_sha" ]; then
+    pass "publisher rejects final $final_header_case after valid retry headers and restores prior state"
+  else
+    sed -n '1,120p' "$header_log" >&2
+    fail_test "publisher rejects final $final_header_case after valid retry headers and restores prior state"
+  fi
+done
+
 if ! MOCK_PUBLIC_TRANSPORT_FAIL_KEY=fdroid/repo/index-v2.json \
      run_publisher > "$TMP/transport-000-rollback.log" 2>&1 &&
    grep -Fq 'restoring the previous mutable repository state' "$TMP/transport-000-rollback.log" &&

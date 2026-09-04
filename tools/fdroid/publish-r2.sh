@@ -503,6 +503,7 @@ verify_public_file() {
   local file="$1"
   local cache_pattern="$2"
   local key expected_sha expected_size max_body_bytes actual_sha headers body http_status curl_status
+  local actual_type expected_type
 
   key="${file#"$site_dir"/}"
   expected_sha="$(sha256sum "$file" | awk '{print $1}')"
@@ -527,11 +528,13 @@ verify_public_file() {
     echo "Public F-Droid object does not match the publication: $key" >&2
     return 1
   fi
-  tr -d '\r' < "$headers" | grep -Eiq "^cache-control:.*$cache_pattern" || {
+  public_response_header "$headers" cache-control | grep -Eiq "$cache_pattern" || {
     echo "Public F-Droid object has the wrong cache policy: $key" >&2
     return 1
   }
-  tr -d '\r' < "$headers" | grep -Fiq "content-type: $(content_type "$key")" || {
+  actual_type="$(public_response_header "$headers" content-type)"
+  expected_type="$(content_type "$key")"
+  [[ "${actual_type,,}" == "${expected_type,,}"* ]] || {
     echo "Public F-Droid object has the wrong content type: $key" >&2
     return 1
   }
