@@ -5,6 +5,7 @@ import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.DownloadAbort
 import io.github.maxlyth.hapaneld.util.InstallProgress
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.ReleaseCatalog
@@ -35,7 +36,10 @@ import java.io.OutputStream
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
 
-internal class CompanionBackupUnavailable(val reason: String) : Exception(reason)
+internal class CompanionBackupUnavailable(
+    val reason: String,
+    val presentation: InstallPresentation? = null,
+) : Exception(reason)
 
 /**
  * What the caller said about the HA Companion login, kept distinct from what the panel will do about it.
@@ -336,7 +340,10 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
     // to the probe and discardable throughout. The lane is taken after authorize(), never before:
     // Hardened approval can block on a human, and holding the exclusive lane through that would
     // starve every other operation. No suspension point sits between start() and claim().
-    val progress = InstallProgress.start("APK")
+    val progress = InstallProgress.start(
+        "APK",
+        InstallPresentation("operation-working", mapOf("owner" to "apk")),
+    )
     if (progress == null) {
         call.respondText("""{"status":"busy"}""", ContentType.Application.Json)
         return
@@ -345,7 +352,11 @@ private suspend fun handleApkCommit(call: ApplicationCall, routes: ControlPlaneR
     if (claimed == null) {
         // The entry vanished between the approved peek and the lane grant (discarded, replaced or
         // expired). Release the lane with an honest status rather than leaving it stranded busy.
-        InstallProgress.finish(progress, "Nothing installed: the pending APK was discarded, replaced or expired.")
+        InstallProgress.finish(
+            progress,
+            "Nothing installed: the pending APK was discarded, replaced or expired.",
+            presentation = InstallPresentation("apk-pending-lost"),
+        )
         call.respondText(
             """{"status":"stale-or-missing"}""",
             ContentType.Application.Json,
@@ -847,7 +858,10 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
     }
     // Every backup owns the destructive/expensive operation lane. Even config-only encrypted bundles
     // run PBKDF2 + AES and must not be multiplied by concurrent unauthenticated LAN requests.
-    val progress = InstallProgress.start("Backup")
+    val progress = InstallProgress.start(
+        "Backup",
+        InstallPresentation("operation-working", mapOf("owner" to "backup")),
+    )
     if (progress == null) {
         delivery.close()
         call.respondText(
@@ -858,6 +872,7 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         return
     }
     var progressResult = "backup cancelled"
+    var progressPresentation: InstallPresentation? = InstallPresentation("backup-cancelled")
     var progressFinished = false
     var deliveryHandedOff = false
     var artifact: PanelBackup.Artifact? = null
@@ -872,7 +887,8 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         val built = dependencies.buildBackup(companionRequest, passphrase)
         artifact = built
         progressResult = "backup ready"
-        InstallProgress.finish(progress, progressResult)
+        progressPresentation = InstallPresentation("backup-ready")
+        InstallProgress.finish(progress, progressResult, presentation = progressPresentation)
         progressFinished = true
         call.response.headers.append(
             "Content-Disposition",
@@ -893,24 +909,32 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         }
     } catch (_: ByteLimitExceeded) {
         progressResult = "Companion backup is too large"
+        val presentation = InstallPresentation("backup-companion-too-large")
+        progressPresentation = presentation
         call.respondText(
-            """{"ok":false,"error":"companion-backup-too-large"}""",
+            withInstallPresentation("""{"ok":false,"error":"companion-backup-too-large"}""", presentation),
             ContentType.Application.Json,
             HttpStatusCode.PayloadTooLarge,
         )
         return
     } catch (error: CompanionBackupUnavailable) {
         progressResult = error.reason
+        progressPresentation = error.presentation
         call.respondText(
-            """{"ok":false,"error":${Json.str(error.reason)}}""",
+            withInstallPresentation("""{"ok":false,"error":${Json.str(error.reason)}}""", error.presentation),
             ContentType.Application.Json,
             HttpStatusCode.UnprocessableEntity,
         )
         return
     } catch (_: BackupStagingRetainedException) {
         progressResult = "Sensitive backup staging file retained"
+        val presentation = InstallPresentation("backup-staging-retained")
+        progressPresentation = presentation
         call.respondText(
-            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+            withInstallPresentation(
+                """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+                presentation,
+            ),
             ContentType.Application.Json,
             HttpStatusCode.InsufficientStorage,
         )
@@ -919,8 +943,17 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
         if (!deliveryHandedOff) {
             cleanDelivery()
         }
-        if (!progressFinished) InstallProgress.finish(progress, progressResult)
+        if (!progressFinished) {
+            InstallProgress.finish(progress, progressResult, presentation = progressPresentation)
+        }
     }
+}
+
+/** Append optional presentation metadata without rewriting any existing compatibility field. */
+private fun withInstallPresentation(legacyJson: String, presentation: InstallPresentation?): String {
+    if (presentation == null) return legacyJson
+    require(legacyJson.endsWith('}'))
+    return legacyJson.dropLast(1) + ",\"presentation\":" + presentation.json() + "}"
 }
 
 private val PLAY_URL = Regex("""https?://[^\s"']+""")

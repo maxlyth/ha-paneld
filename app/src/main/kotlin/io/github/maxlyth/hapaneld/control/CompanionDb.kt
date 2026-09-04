@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.CompanionInstaller
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -47,6 +48,12 @@ object CompanionDb {
 
     /** Result of a health read: whether any row needs repair and how many. */
     data class UrlStatus(val needsRepair: Boolean, val affected: Int)
+
+    /** Typed repair outcome; [message] remains the exact legacy English status. */
+    data class CompanionUrlRepairResult(
+        val message: String,
+        val presentation: InstallPresentation? = null,
+    )
 
     /** One servers-table read projected for both header fallback and repair health. */
     internal data class ServerObservation(
@@ -246,11 +253,22 @@ object CompanionDb {
      * `-wal`/`-shm` the app can't read, restores the DB owner + SELinux context, then relaunches the
      * Companion. Returns a short human status. Root-only; call OFF the main thread.
      */
-    suspend fun repairInternalUrl(context: Context, root: RootShell): String = withContext(Dispatchers.IO) {
-        val pkg = CompanionInstaller.installedPkg(context) ?: return@withContext "no HA Companion app installed"
-        val before = readServers(context, root) ?: return@withContext "cannot read the Companion database (needs root)"
+    suspend fun repairInternalUrl(context: Context, root: RootShell): String =
+        repairInternalUrlResult(context, root).message
+
+    /** Locale-neutral companion to [repairInternalUrl]; finite success metadata is selected at source. */
+    suspend fun repairInternalUrlResult(
+        context: Context,
+        root: RootShell,
+    ): CompanionUrlRepairResult = withContext(Dispatchers.IO) {
+        val pkg = CompanionInstaller.installedPkg(context)
+            ?: return@withContext CompanionUrlRepairResult("no HA Companion app installed")
+        val before = readServers(context, root)
+            ?: return@withContext CompanionUrlRepairResult("cannot read the Companion database (needs root)")
         val bad = before.count(::needsRepair)
-        if (bad == 0) return@withContext "nothing to repair — every server already has an internal URL"
+        if (bad == 0) {
+            return@withContext CompanionUrlRepairResult("nothing to repair — every server already has an internal URL")
+        }
 
         val db = dbPath(pkg)
         // One privileged operation: stop → repair → checkpoint+drop WAL → restore owner/context → relaunch.
@@ -263,15 +281,19 @@ object CompanionDb {
             append("""[ -n "${'$'}U" ] && { chown "${'$'}U:${'$'}U" "$db" 2>/dev/null; restorecon "$db" 2>/dev/null; }; """)
             append("monkey -p $pkg -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; echo ok")
         }
-        val out = root.runOutput(script) ?: return@withContext "repair command failed (needs root)"
+        val out = root.runOutput(script)
+            ?: return@withContext CompanionUrlRepairResult("repair command failed (needs root)")
         if (!out.contains("ok")) Log.w(TAG, "repair script output: ${out.take(200)}")
 
         val remaining = readServers(context, root)?.count(::needsRepair) ?: -1
         Log.i(TAG, "internal_url repair: $bad row(s) fixed, $remaining remaining")
         when {
-            remaining == 0 -> "repaired $bad server${if (bad == 1) "" else "s"} — internal URL set to the external URL; Companion relaunched"
-            remaining < 0 -> "repair ran ($bad row(s)); could not re-verify the database"
-            else -> "repair incomplete — $remaining server(s) still have no internal URL"
+            remaining == 0 -> CompanionUrlRepairResult(
+                "repaired $bad server${if (bad == 1) "" else "s"} — internal URL set to the external URL; Companion relaunched",
+                InstallPresentation("companion-urls-repaired", mapOf("count" to bad.toString())),
+            )
+            remaining < 0 -> CompanionUrlRepairResult("repair ran ($bad row(s)); could not re-verify the database")
+            else -> CompanionUrlRepairResult("repair incomplete — $remaining server(s) still have no internal URL")
         }
     }
 }

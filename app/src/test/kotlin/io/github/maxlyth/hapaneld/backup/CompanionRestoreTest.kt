@@ -38,16 +38,21 @@ class CompanionRestoreTest {
     }
 
     @Test fun packageAndFileMetadataMustBeSafeSupportedUniqueAndDecodable() {
-        assertTrue(
-            CompanionRestore.plan(
+        val unsafePackage = CompanionRestore.plan(
                 "bad;pkg",
                 listOf(encoded(CompanionRestore.DATABASE_FILE)),
                 setOf("bad;pkg"),
                 temporary.root,
-            ) is CompanionRestore.PlanResult.Invalid,
-        )
+            ) as CompanionRestore.PlanResult.Invalid
+        assertEquals("companion-unsupported-package", unsafePackage.presentation?.code)
         assertTrue(CompanionRestore.plan(pkg, emptyList(), setOf(pkg), temporary.root) is CompanionRestore.PlanResult.Invalid)
-        assertTrue(CompanionRestore.plan(pkg, listOf(encoded("../x")), setOf(pkg), temporary.root) is CompanionRestore.PlanResult.Invalid)
+        val unsafeFile = CompanionRestore.plan(
+            pkg,
+            listOf(encoded("../x")),
+            setOf(pkg),
+            temporary.root,
+        ) as CompanionRestore.PlanResult.Invalid
+        assertEquals("companion-payload-invalid", unsafeFile.presentation?.code)
         assertTrue(
             CompanionRestore.plan(
                 pkg,

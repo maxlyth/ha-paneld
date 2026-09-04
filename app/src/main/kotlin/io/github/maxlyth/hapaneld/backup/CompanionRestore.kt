@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld.backup
 
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BoundedStreams
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import java.io.Closeable
 import java.io.File
 import java.io.InputStream
@@ -32,7 +33,10 @@ object CompanionRestore {
 
     sealed class PlanResult {
         data class Valid(val plan: Plan) : PlanResult()
-        data class Invalid(val reason: String) : PlanResult()
+        data class Invalid(
+            val reason: String,
+            val presentation: InstallPresentation? = null,
+        ) : PlanResult()
     }
 
     /** Validate and stream-decode a legacy base64 plan into private temporary files. */
@@ -42,9 +46,7 @@ object CompanionRestore {
         installedPackages: Set<String>,
         stagingDir: File,
     ): PlanResult {
-        validateMetadata(packageName, files.map { it.relativePath }, installedPackages)?.let {
-            return PlanResult.Invalid(it)
-        }
+        validateMetadata(packageName, files.map { it.relativePath }, installedPackages)?.let { return it }
         val staged = ArrayList<FilePayload>(files.size)
         return try {
             for (encoded in files) {
@@ -81,7 +83,7 @@ object CompanionRestore {
     ): PlanResult {
         validateMetadata(packageName, files.map { it.relativePath }, installedPackages)?.let {
             files.filter { file -> file.deleteOnClose }.forEach { file -> file.file.delete() }
-            return PlanResult.Invalid(it)
+            return it
         }
         var total = 0L
         for (file in files) {
@@ -89,7 +91,7 @@ object CompanionRestore {
             val max = maxBytes(file.relativePath)
             if (!file.file.isFile || size !in 1..max || total > MAX_AGGREGATE_BYTES - size) {
                 files.filter { it.deleteOnClose }.forEach { it.file.delete() }
-                return PlanResult.Invalid("Companion file is empty or too large: ${file.relativePath}")
+                return invalidPayload("Companion file is empty or too large: ${file.relativePath}")
             }
             total += size
         }
@@ -97,15 +99,22 @@ object CompanionRestore {
         return PlanResult.Valid(Plan(packageName, ordered))
     }
 
-    private fun validateMetadata(packageName: String, paths: List<String>, installedPackages: Set<String>): String? {
+    private fun validateMetadata(
+        packageName: String,
+        paths: List<String>,
+        installedPackages: Set<String>,
+    ): PlanResult.Invalid? {
         if (!AndroidInput.isPackage(packageName) || packageName !in installedPackages) {
-            return "Companion package is not a supported installed package"
+            return PlanResult.Invalid(
+                "Companion package is not a supported installed package",
+                InstallPresentation("companion-unsupported-package"),
+            )
         }
-        if (paths.isEmpty()) return "Companion restore contains no files"
+        if (paths.isEmpty()) return invalidPayload("Companion restore contains no files")
         val seen = HashSet<String>()
         for (path in paths) {
-            if (path !in ALLOWED_FILES) return "Unsupported Companion file: $path"
-            if (!seen.add(path)) return "Duplicate Companion file: $path"
+            if (path !in ALLOWED_FILES) return invalidPayload("Unsupported Companion file: $path")
+            if (!seen.add(path)) return invalidPayload("Duplicate Companion file: $path")
         }
         return null
     }
@@ -118,8 +127,13 @@ object CompanionRestore {
 
     private fun invalidAndDelete(files: List<FilePayload>, reason: String): PlanResult.Invalid {
         files.filter { it.deleteOnClose }.forEach { it.file.delete() }
-        return PlanResult.Invalid(reason)
+        return invalidPayload(reason)
     }
+
+    private fun invalidPayload(reason: String) = PlanResult.Invalid(
+        reason,
+        InstallPresentation("companion-payload-invalid"),
+    )
 
     fun maxBytes(relativePath: String): Long =
         if (relativePath == DATABASE_FILE) MAX_DATABASE_BYTES else MAX_PREFERENCE_BYTES

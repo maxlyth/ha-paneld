@@ -176,7 +176,7 @@ class ControlPlaneRoutesTest {
         assertJsonPost(
             "include_companion=1&allow_plaintext=1",
             HttpStatusCode.PayloadTooLarge,
-            """{"ok":false,"error":"companion-backup-too-large"}""",
+            """{"ok":false,"error":"companion-backup-too-large","presentation":{"code":"backup-companion-too-large","params":{}}}""",
             path = "/api/v1/backup",
         )
         assertOperationLaneReleased()
@@ -229,7 +229,7 @@ class ControlPlaneRoutesTest {
         assertJsonPost(
             "include_companion=true&passphrase=protected",
             HttpStatusCode.InsufficientStorage,
-            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded."}""",
+            """{"ok":false,"error":"backup-staging-retained","message":"Sensitive temporary backup data could not be removed. Check panel storage, then retry; no backup was downloaded.","presentation":{"code":"backup-staging-retained","params":{}}}""",
             path = "/api/v1/backup",
         )
         assertTrue(retainedSource.exists())

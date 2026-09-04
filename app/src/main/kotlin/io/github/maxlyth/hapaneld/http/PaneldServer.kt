@@ -28,6 +28,7 @@ import io.github.maxlyth.hapaneld.RendererAdmissionPresentation
 import io.github.maxlyth.hapaneld.RendererAdmissionRuntime
 import io.github.maxlyth.hapaneld.RendererMode
 import io.github.maxlyth.hapaneld.RendererResolver
+import io.github.maxlyth.hapaneld.dashboardRecoveryPresentation
 import io.github.maxlyth.hapaneld.haSignInPending
 import io.github.maxlyth.hapaneld.normalizeDashboardEntityPath
 import io.github.maxlyth.hapaneld.peersJson
@@ -72,6 +73,7 @@ import io.github.maxlyth.hapaneld.control.PrivilegedRouteObservation
 import io.github.maxlyth.hapaneld.control.PowerRepairCapability
 import io.github.maxlyth.hapaneld.control.PowerSafetyAcknowledgementDecision
 import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisory
+import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisoryAction
 import io.github.maxlyth.hapaneld.control.PowerSafetyAdvisoryPolicy
 import io.github.maxlyth.hapaneld.control.PowerSafetyAssessment
 import io.github.maxlyth.hapaneld.control.PowerSafetyMutationPolicy
@@ -83,6 +85,7 @@ import io.github.maxlyth.hapaneld.control.TameReconcileResult
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthSnapshot
 import io.github.maxlyth.hapaneld.control.ZigbeeHealthState
+import io.github.maxlyth.hapaneld.control.zigbeeHealthPresentation
 import io.github.maxlyth.hapaneld.control.observePrivilegedRoutes
 import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
 import io.github.maxlyth.hapaneld.dashboard.readThenClose
@@ -150,6 +153,7 @@ import io.github.maxlyth.hapaneld.util.isLoopbackPeer
 import io.github.maxlyth.hapaneld.util.isRoutable
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
 import io.github.maxlyth.hapaneld.util.InstallOutcome
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 import io.github.maxlyth.hapaneld.util.InstallProgress
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.LatestDispatcher
@@ -294,6 +298,15 @@ internal fun dashboardRecoveryWarning(state: PanelStatus.DashboardRecoveryState)
     PanelStatus.DashboardRecoveryState.EXTERNAL_RENDERER ->
         "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
             "Reinstall or downgrade the dashboard/Companion app (see <a href=\"/install\">updates</a>), or reboot the panel."
+}
+
+/** Same-order nullable overlay for `/status`; invalid cardinality omits the whole additive field. */
+internal fun installWarningPresentationsJson(
+    warnings: List<String>,
+    presentations: List<InstallPresentation?>,
+): String? {
+    if (warnings.size != presentations.size || warnings.size > 11) return null
+    return presentations.joinToString(separator = ",", prefix = "[", postfix = "]") { it?.json() ?: "null" }
 }
 
 internal val PERFORMANCE_WORKLOAD_KEYS = listOf(
@@ -1211,16 +1224,27 @@ internal fun directConfigEffectFailureOwner(entityLearningTransitionIncomplete: 
 /** An exact channel candidate prepared without changing configuration, helper state, or packages. */
 internal sealed interface SelfUpdateChannelPreflight {
     val message: String
+    val presentation: InstallPresentation?
 
-    data class Unresolved(override val message: String) : SelfUpdateChannelPreflight
-    data class UpToDate(override val message: String) : SelfUpdateChannelPreflight
-    data class Refused(override val message: String) : SelfUpdateChannelPreflight
+    data class Unresolved(
+        override val message: String,
+        override val presentation: InstallPresentation? = null,
+    ) : SelfUpdateChannelPreflight
+    data class UpToDate(
+        override val message: String,
+        override val presentation: InstallPresentation? = null,
+    ) : SelfUpdateChannelPreflight
+    data class Refused(
+        override val message: String,
+        override val presentation: InstallPresentation? = null,
+    ) : SelfUpdateChannelPreflight
     class Ready(
         override val message: String,
         val requiresRecovery: Boolean,
         val revalidateForConfigCommit: () -> String?,
         val install: suspend () -> SelfUpdateChannelInstallResult,
         private val discardPrepared: () -> Unit,
+        override val presentation: InstallPresentation? = null,
     ) : SelfUpdateChannelPreflight, AutoCloseable {
         override fun close() = discardPrepared()
     }
@@ -1229,6 +1253,7 @@ internal sealed interface SelfUpdateChannelPreflight {
 internal data class SelfUpdateChannelInstallResult(
     val message: String,
     val installed: Boolean,
+    val presentation: InstallPresentation? = null,
 )
 
 internal data class SelfUpdateChannelMutation(
@@ -1459,6 +1484,8 @@ class PaneldServer internal constructor(
     // mDNS can fail independently of HTTP and MQTT, leaving the panel absent from peer switchers.
     // This supplies a concise operator warning for the status endpoint when that happens.
     private val mdnsWarning: () -> String? = { null },
+    // Typed counterpart supplied by the same mDNS owner; never reconstructed from [mdnsWarning] prose.
+    private val mdnsWarningPresentation: () -> InstallPresentation? = { null },
     // Proposed values for blank MQTT/HA fields. Discovery is blocking, so the route invokes this on IO;
     // values remain unsaved until the user accepts them with the normal Configure Save action.
     private val configDiscoverySuggestions: () -> ConfigDiscoverySuggestions = { ConfigDiscoverySuggestions() },
@@ -2135,7 +2162,15 @@ class PaneldServer internal constructor(
                     call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
                     call.response.headers.append(
                         HttpHeaders.ContentLanguage,
-                        (strings.languages(setOf("shell.")) + AppLocale.ENGLISH)
+                        (strings.languages(
+                            setOf(
+                                "shell.",
+                                "configure.hardened.",
+                                "dashboard.banner.",
+                                "install.",
+                                "runtime.",
+                            ),
+                        ) + AppLocale.ENGLISH)
                             .distinct().sorted().joinToString(", "),
                     )
                     call.respondText(
@@ -3014,12 +3049,15 @@ class PaneldServer internal constructor(
                                 if (name == "companion") UpdateChecker.stripVariant(it) else it
                             }
                             val comparison = installed?.let { UpdateChecker.compareVersions(candidate, it) }
-                            val action = when {
-                                comparison == null || comparison == 0 -> "Install"
-                                comparison > 0 -> "Upgrade"
-                                else -> "Downgrade"
+                            val (action, presentation) = when {
+                                comparison == null || comparison == 0 ->
+                                    "Install" to InstallPresentation("version-install")
+                                comparison > 0 ->
+                                    "Upgrade" to InstallPresentation("version-upgrade")
+                                else ->
+                                    "Downgrade" to InstallPresentation("version-downgrade")
                             }
-                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable},"action":${jsonStr(action)},"apk":${jsonStr(v.apkUrl ?: "")}}"""
+                            """{"version":${jsonStr(v.version)},"tag":${jsonStr(v.tag)},"notes":${jsonStr(v.notesUrl)},"installable":${v.installable},"action":${jsonStr(action)},"apk":${jsonStr(v.apkUrl ?: "")},"presentations":{"action":${presentation.json()}}}"""
                         }
                         call.respondText("""{"channel":${jsonStr(channel)},"versions":[$arr]}""", ContentType.Application.Json)
                     }
@@ -3057,9 +3095,13 @@ class PaneldServer internal constructor(
                                 "Uninstall $pkg",
                             )
                         ) return@post
-                        val progress = InstallProgress.start("Uninstall") ?: return@post call.respondText(
+                        val progress = InstallProgress.start(
+                            "Uninstall",
+                            InstallPresentation("operation-working", mapOf("owner" to "package-uninstall")),
+                        ) ?: return@post call.respondText(
                             """{"ok":false,"error":"busy"}""", ContentType.Application.Json, HttpStatusCode.Conflict)
                         var progressResult = "uninstall cancelled"
+                        var progressPresentation: InstallPresentation? = InstallPresentation("operation-cancelled")
                         try {
                             val (out, path) = withContext(Dispatchers.IO) {
                                 Su.runOutput("pm uninstall $pkg")?.trim() to
@@ -3068,11 +3110,19 @@ class PaneldServer internal constructor(
                             // Empty stdout can be a real persistent-shell success, but null means the probe failed.
                             val ok = uninstallSucceeded(out, path)
                             progressResult = if (ok) "uninstalled $pkg" else "uninstall failed: $pkg"
+                            progressPresentation = InstallPresentation(
+                                if (ok) "package-uninstalled" else "package-uninstall-failed",
+                                mapOf("package" to pkg),
+                            )
                             if (ok) Log.i(TAG, "uninstalled $pkg")
                             val result = out?.ifEmpty { if (ok) "removed" else "uninstall failed" } ?: "uninstall failed"
                             call.respondText("""{"ok":$ok,"result":${jsonStr(result)}}""", ContentType.Application.Json)
                         } finally {
-                            InstallProgress.finish(progress, progressResult)
+                            InstallProgress.finish(
+                                progress,
+                                progressResult,
+                                presentation = progressPresentation,
+                            )
                         }
                     }
                     // EFR32 radio status (Install-tab Radio card). {present, status}. present=false → no radio.
@@ -4212,9 +4262,10 @@ $proximityScript"""
 
     private fun configureSetupBanners(strings: AppStrings): String {
         val management = snapStaleOk()
-        val power = PowerSafetyPresentation.bannerHtml(
+        val power = localizedPowerSafetyBanner(
             powerSafetyAdvisory(management.privilege),
             inlineRepair = true,
+            strings = strings,
         )
         // Someone landing on the full settings wall mid-commissioning (an old bookmark, the QR from a
         // build that pointed here) should learn the guided path exists — once setup completes this line
@@ -4341,7 +4392,7 @@ $proximityScript"""
     /** The schema-version detail to warn about when a downgrade reset config to defaults (the last
      *  reconcile was PRESERVED_FRESH), else null. Stable after boot — the reconcile runs once at store
      *  construction — so the warning clears only on the next start at the current schema. */
-    private fun schemaRollbackDetail(): String? {
+    private fun schemaRollbackVersions(): Pair<Int, Int>? {
         // Suppressed when the config vault refilled the fresh store: this warning exists to tell an owner
         // their settings may have reset and to check them, and once they have been recovered that is both
         // untrue and actionless. A warning demanding no action teaches people to ignore warnings. The
@@ -4349,8 +4400,11 @@ $proximityScript"""
         if (EntityCatalogStore.lastConfigRestore != null) return null
         return EntityCatalogStore.lastSchemaReconcile
             ?.takeIf { it.action == SchemaReconcileAction.PRESERVED_FRESH }
-            ?.let { "schema ${it.fromVersion} → ${it.toVersion}" }
+            ?.let { it.fromVersion to it.toVersion }
     }
+
+    private fun schemaRollbackDetail(): String? = schemaRollbackVersions()
+        ?.let { (from, to) -> "schema $from → $to" }
 
     private fun healthFindings(
         h: HealthInputs,
@@ -4395,9 +4449,10 @@ $proximityScript"""
         // Two warnings not modelled by HealthAudit (crash-looping dashboard, Companion blank internal_url)
         // — shared with the dashboard banner. Here (Install tab, install.js loaded) they get inline buttons.
         val powerAdvisory = powerSafetyAdvisory(management.privilege)
-        val extra = PowerSafetyPresentation.bannerHtml(
+        val extra = localizedPowerSafetyBanner(
             powerAdvisory,
             inlineRepair = true,
+            strings = strings,
         ) +
             adHocWarnings(management, companion, inlineRepair = true, strings = strings)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion, strings) }
@@ -4710,13 +4765,14 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
 <p class="note">${esc(strings.get("fleet.note.direct"))} <code>http://&lt;its-ip&gt;:${esc(config.httpPort.toString())}/</code>.</p></div></div>"""
 
     /** One renderer-aware warning shared by JSON status and the Dashboard/Install banners. */
-    private fun dashboardRecoveryWarning(): String? = dashboardRecoveryWarning(
+    private fun dashboardRecoveryState(): PanelStatus.DashboardRecoveryState =
         PanelStatus.dashboardRecoveryState(
             config.dashboardPackage,
             appContext.packageName,
             SystemClock.elapsedRealtime(),
-        ),
-    )
+        )
+
+    private fun dashboardRecoveryWarning(): String? = dashboardRecoveryWarning(dashboardRecoveryState())
 
     /** Health + capabilities as JSON for the variant UIs. Warnings are ready-to-render HTML fragments. */
     private fun statusJson(): String = statusJson(storageHealth(), databaseObservationNonce = null)
@@ -4737,27 +4793,55 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         val h = healthInputs()
         val findings = healthFindings(h, h.webView.display, UpdateChecker.current(appContext))
         val warns = mutableListOf<String>()
-        dashboardRecoveryWarning()?.let(warns::add)
+        val warningPresentations = mutableListOf<InstallPresentation?>()
+        fun addWarning(warning: String?, presentation: InstallPresentation?) {
+            if (warning == null) return
+            warns += warning
+            warningPresentations += presentation
+        }
+        val recoveryState = dashboardRecoveryState()
+        addWarning(dashboardRecoveryWarning(recoveryState), dashboardRecoveryPresentation(recoveryState))
         // Same companion internal-URL decision as the dashboard/Install banner (CompanionDb.warning); this
         // surface presents it as bare JSON strings (no Ignore/repair buttons), so the copy stays distinct.
         when (val w = CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)) {
-            is CompanionDb.Warning.NeedsRepair -> warns.add(
+            is CompanionDb.Warning.NeedsRepair -> addWarning(
                 "⚠ <b>Home Assistant Companion has no internal URL</b> (${w.affected} server${if (w.affected == 1) "" else "s"}) — " +
                     "the dashboard can fail with \"Missing 'Host' header\". Repair it on the Install tab.",
+                InstallPresentation.create("status-companion-url-missing", mapOf("count" to w.affected.toString())),
             )
-            CompanionDb.Warning.ProbeFailed -> warns.add(
+            CompanionDb.Warning.ProbeFailed -> addWarning(
                 "⚠ <b>Home Assistant Companion settings could not be inspected</b> — " +
                     "ha-paneld will retain any last-known result and retry automatically.",
+                InstallPresentation("status-companion-probe-failed"),
             )
             null -> {}
         }
         radio?.let { z ->
-            zigbeeWarning(z)?.let(warns::add)
+            addWarning(
+                zigbeeWarning(z),
+                zigbeeHealthPresentation(z, config.zigbeeRouterConfigured && config.zigbeeRouterEnabled),
+            )
         }
-        storage.warningHtml()?.let(warns::add)
-        PowerSafetyPresentation.statusWarningHtml(powerAdvisory)?.let(warns::add)
-        runCatching(mdnsWarning).getOrNull()?.let(warns::add)
-        warns.addAll(findings.map { statusWarning(it) })
+        addWarning(storage.warningHtml(), storage.warningPresentation)
+        addWarning(
+            PowerSafetyPresentation.statusWarningHtml(powerAdvisory),
+            PowerSafetyPresentation.warningPresentation(powerAdvisory),
+        )
+        val mdns = runCatching(mdnsWarning).getOrNull()
+        addWarning(mdns, if (mdns == null) null else runCatching(mdnsWarningPresentation).getOrNull())
+        val rollback = schemaRollbackVersions()
+        findings.forEach { finding ->
+            addWarning(
+                statusWarning(finding),
+                HealthAudit.presentation(
+                    finding,
+                    targetChromium = PanelHealth.MIN_CHROMIUM,
+                    fromSchema = rollback?.first,
+                    toSchema = rollback?.second,
+                    updateComponent = finding.update?.component,
+                ),
+            )
+        }
         val capColor = mapOf("ok" to "#48c774", "degraded" to "#d9a528", "none" to "#d04a3b")
         // Stale-while-revalidate keeps status polling fast while ensuring a status-only client still
         // admits one background refresh instead of preserving an old capability view indefinitely.
@@ -4776,7 +4860,11 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         val storageProof = databaseObservationNonce?.let {
             "\"database_observation_nonce\":${jsonStr(it)},"
         }.orEmpty()
-        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}],\"capabilities\":[$caps]," +
+        val presentationOverlay = installWarningPresentationsJson(warns, warningPresentations)
+            ?.let { "\"warning_presentations\":$it," }
+            .orEmpty()
+        return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}]," + presentationOverlay +
+            "\"capabilities\":[$caps]," +
             storageProof +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
             // `ha_network` follows the same unconditional rule: idle with measuring=false when no
@@ -5659,9 +5747,10 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         // ad-hoc warnings link to the Install tab for the fix (their one-tap buttons live there, with install.js).
         // The lifecycle banner leads: while Home Assistant is going away or coming back, that explains
         // most of what else the page is about to report.
-        return storage.bannerHtml() + PowerSafetyPresentation.bannerHtml(
-            powerSafetyAdvisory(s.privilege),
+        return localizedStorageBanner(storage, strings) + localizedPowerSafetyBanner(
+            advisory = powerSafetyAdvisory(s.privilege),
             inlineRepair = true,
+            strings = strings,
         ) +
             adHocWarnings(s, companionServersForRender(), inlineRepair = false, strings = strings) +
             findings.joinToString("") { bannerFor(it, strings) } + proximityLearning + haSetup + mqttProgress + setup
@@ -5694,7 +5783,11 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
     ): String = buildString {
         radioStatus()?.let { z ->
             zigbeeWarning(z)?.let { warning ->
-                append("""<div class="setup${if (z.state in setOf(ZigbeeHealthState.RUNAWAY, ZigbeeHealthState.CONTAINMENT_FAILED)) " crit" else ""}">$warning</div>""")
+                append(
+                    """<div class="setup${if (z.state in setOf(ZigbeeHealthState.RUNAWAY, ZigbeeHealthState.CONTAINMENT_FAILED)) " crit" else ""}">""",
+                )
+                append(localizedZigbeeWarning(z, warning, strings))
+                append("</div>")
             }
         }
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
@@ -5703,7 +5796,10 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
                 """<a href="${localizedHref("/configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.auth_rejected.action"))}</a>; """ +
                 """${esc(strings.get("dashboard.banner.auth_rejected.reload_suffix"))}</div>""",
         )
-        dashboardRecoveryWarning()?.let { append("""<div class="setup crit">$it</div>""") }
+        val recoveryState = dashboardRecoveryState()
+        dashboardRecoveryWarning(recoveryState)?.let { warning ->
+            append("""<div class="setup crit">${localizedRecoveryWarning(recoveryState, warning, strings)}</div>""")
+        }
         // Shared companion internal-URL decision (CompanionDb.warning); this surface renders it as a banner
         // with the one-tap repair button ([inlineRepair], Install tab) or an Install-tab link (dashboard).
         when (val w = CompanionDb.warning(config.dashboardPackage, companion, management.privilege.directSuReady)) {
@@ -5752,6 +5848,132 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         snapshot,
         configuredOn = config.zigbeeRouterConfigured && config.zigbeeRouterEnabled,
     )
+
+    /** Use only a catalogue record actually resolved in the requested locale; otherwise retain exact HTML. */
+    private fun translatedText(strings: AppStrings, key: String): String? = runCatching { strings.resolve(key) }
+        .getOrNull()
+        ?.takeIf { it.language != AppLocale.ENGLISH }
+        ?.text
+
+    private fun localizedRecoveryWarning(
+        state: PanelStatus.DashboardRecoveryState,
+        fallbackHtml: String,
+        strings: AppStrings,
+    ): String {
+        val key = when (state) {
+            PanelStatus.DashboardRecoveryState.NONE -> return fallbackHtml
+            PanelStatus.DashboardRecoveryState.BUILTIN_RENDERER -> "runtime.renderer_recovery.builtin"
+            PanelStatus.DashboardRecoveryState.EXTERNAL_RENDERER -> "runtime.renderer_recovery.external"
+        }
+        return translatedText(strings, key)?.let { "⛔ ${esc(it)}" } ?: fallbackHtml
+    }
+
+    private fun localizedZigbeeWarning(
+        snapshot: ZigbeeHealthSnapshot,
+        fallbackHtml: String,
+        strings: AppStrings,
+    ): String {
+        val presentation = zigbeeHealthPresentation(
+            snapshot,
+            config.zigbeeRouterConfigured && config.zigbeeRouterEnabled,
+        ) ?: return fallbackHtml
+        val key = when (presentation.code) {
+            "status-zigbee-contained" -> "runtime.zigbee.warning.contained"
+            "status-zigbee-containment-incomplete" -> "runtime.zigbee.warning.containment_failed"
+            "status-zigbee-runaway" -> "runtime.zigbee.warning.runaway"
+            "status-zigbee-high-cpu" -> "runtime.zigbee.warning.degraded_high_cpu"
+            "status-zigbee-not-joined" -> "runtime.zigbee.warning.degraded_unjoined"
+            "status-zigbee-legacy-watchdog" -> "runtime.zigbee.warning.legacy_watchdog"
+            else -> return fallbackHtml
+        }
+        val translated = translatedText(strings, key) ?: return fallbackHtml
+        val action = if (presentation.code == "status-zigbee-not-joined") {
+            val label = translatedText(strings, "runtime.zigbee.warning.resolve")
+                ?: strings.get("shell.nav.configure")
+            " <a href=\"${localizedHref("/configure#cfg-zigbee_join", strings)}\">${esc(label)}</a>"
+        } else ""
+        return "${if (presentation.code in setOf("status-zigbee-contained", "status-zigbee-containment-incomplete", "status-zigbee-runaway")) "⛔" else "⚠"} ${esc(translated)}$action"
+    }
+
+    private fun localizedStorageBanner(
+        storage: HealthAudit.StoragePresentation,
+        strings: AppStrings,
+    ): String {
+        val fallback = storage.bannerHtml()
+        val presentation = storage.warningPresentation ?: return fallback
+        val key = when (presentation.code) {
+            "status-storage-warning" -> "install.presentation.status_storage_warning"
+            "status-storage-critical" -> "install.presentation.status_storage_critical"
+            "status-storage-database-failure" -> "install.presentation.status_storage_database_failure"
+            else -> return fallback
+        }
+        val translated = translatedText(strings, key) ?: return fallback
+        val rendered = presentation.params.entries.fold(translated) { text, (name, value) ->
+            text.replace("{$name}", value)
+        }
+        val critical = presentation.code != "status-storage-warning"
+        return "<div class=\"setup${if (critical) " crit" else ""}\">${esc(rendered)}</div>"
+    }
+
+    private fun localizedPowerSafetyBanner(
+        advisory: PowerSafetyAdvisory,
+        inlineRepair: Boolean,
+        strings: AppStrings,
+    ): String {
+        val fallback = PowerSafetyPresentation.bannerHtml(advisory, inlineRepair)
+        if (fallback.isEmpty()) return fallback
+        val presentation = PowerSafetyPresentation.warningPresentation(advisory) ?: return fallback
+        val levelKey = when (presentation.code) {
+            "status-power-at-risk" -> "runtime.power_safety.level.at_risk"
+            "status-power-caution" -> "runtime.power_safety.level.caution"
+            "status-power-unknown" -> "runtime.power_safety.level.unknown"
+            else -> return fallback
+        }
+        val level = translatedText(strings, levelKey) ?: return fallback
+        val summaryKey = when (presentation.code) {
+            "status-power-at-risk" -> "runtime.power_safety.summary.at_risk"
+            "status-power-caution" -> "runtime.power_safety.summary.caution"
+            "status-power-unknown" -> "runtime.power_safety.summary.unknown"
+            else -> return fallback
+        }
+        val summary = translatedText(strings, summaryKey)
+            ?: advisory.assessment.summary
+        val actionKey = when (advisory.action) {
+            PowerSafetyAdvisoryAction.NONE -> "runtime.power_safety.action.review"
+            PowerSafetyAdvisoryAction.REPAIR -> when (advisory.repairCapability.wireValue) {
+                "direct_root" -> "runtime.power_safety.action.repair_direct"
+                "degraded" -> "runtime.power_safety.action.repair_degraded"
+                else -> "runtime.power_safety.action.repair_limited"
+            }
+            PowerSafetyAdvisoryAction.ACKNOWLEDGE -> if (advisory.acknowledged) {
+                "runtime.power_safety.action.acknowledged"
+            } else {
+                "runtime.power_safety.action.acknowledgeable"
+            }
+            PowerSafetyAdvisoryAction.MANUAL_ONLY -> "runtime.power_safety.action.manual"
+        }
+        val actionText = translatedText(strings, actionKey) ?: ""
+        val control = when {
+            !inlineRepair -> " <a href=\"${localizedHref("/configure#cfg-keep_awake", strings)}\">${esc(strings.get("shell.nav.configure"))} →</a>"
+            advisory.action == PowerSafetyAdvisoryAction.REPAIR -> {
+                val label = translatedText(strings, "runtime.power_safety.button.repair") ?: "Repair power safety"
+                val title = translatedText(strings, "runtime.power_safety.button.repair_title")
+                    ?: "Repair is explicit, read-back verified, and never reboots the panel"
+                """ <form method="post" action="/api/v1/power-safety/repair" data-power-safety-repair style="display:inline"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-repair-result" role="status" aria-live="polite"></span></form>"""
+            }
+            advisory.action == PowerSafetyAdvisoryAction.ACKNOWLEDGE -> {
+                val fingerprint = requireNotNull(advisory.acknowledgementFingerprint)
+                val label = translatedText(strings, "runtime.power_safety.button.hide") ?: "Hide this caution"
+                val title = translatedText(strings, "runtime.power_safety.button.hide_title")
+                    ?: "Hide this unchanged caution in panel web pages; Hardened mode requires physical approval"
+                """ <form method="post" action="/api/v1/power-safety/acknowledge" data-power-safety-acknowledge style="display:inline"><input type="hidden" name="fingerprint" value="${esc(fingerprint)}"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-acknowledge-result" role="status" aria-live="polite"></span></form>"""
+            }
+            else -> ""
+        }
+        val critical = presentation.code == "status-power-at-risk"
+        return "<div class=\"setup${if (critical) " crit" else ""}\" data-power-safety-banner>" +
+            "${if (critical) "⛔" else "⚠"} <b>${esc(level)}</b> — ${esc(summary)} ${esc(actionText)}$control</div>"
+    }
 
     /** One dashboard banner for a health finding. Update findings link to the Install tab (where the user
      *  manages versions) and carry an "Ignore this version" button — a per-version dismissal that stays
@@ -7281,7 +7503,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         )
         } finally {
             val promotedChannelTicket = if (committedChannel && preparedChannel != null) {
-                checkNotNull(InstallProgress.promoteConfigMutation(configMutationTicket, "ha-paneld")) {
+                checkNotNull(
+                    InstallProgress.promoteConfigMutation(
+                        configMutationTicket,
+                        "ha-paneld",
+                        InstallPresentation("operation-working", mapOf("owner" to "paneld")),
+                    ),
+                ) {
                     "committed self-update channel lost its configuration owner"
                 }
             } else null
@@ -8589,7 +8817,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         } finally {
             val promotedChannelTicket = if (channelCommitted && preparedChannel != null) {
                 checkNotNull(
-                    InstallProgress.promoteConfigMutation(requireNotNull(configMutationTicket), "ha-paneld"),
+                    InstallProgress.promoteConfigMutation(
+                        requireNotNull(configMutationTicket),
+                        "ha-paneld",
+                        InstallPresentation("operation-working", mapOf("owner" to "paneld")),
+                    ),
                 ) { "committed self-update channel lost its configuration owner" }
             } else null
             configMutationTicket?.let(InstallProgress::finishConfigMutation)
@@ -8934,7 +9166,13 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         // Claim the shared destructive-operation lane before buffering, decrypting, or parsing a bundle.
         // Otherwise several losing requests can each consume 64 MiB and expensive KDF/JSON work before
         // discovering that another restore/install already owns admission.
-        val progress = InstallProgress.start(if (dryRun) "Restore preview" else "Restore")
+        val progress = InstallProgress.start(
+            if (dryRun) "Restore preview" else "Restore",
+            InstallPresentation(
+                "operation-working",
+                mapOf("owner" to if (dryRun) "restore-preview" else "restore"),
+            ),
+        )
             ?: return call.respondText(
                 """{"status":"busy"}""",
                 ContentType.Application.Json,
@@ -8984,7 +9222,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 )
             }
             if (receivedFile.length() <= 0L) return call.respondText(
-                """{"ok":false,"error":"not a ha-paneld backup"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"not a ha-paneld backup"}""",
+                    InstallPresentation("restore-not-panel-backup"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
@@ -8992,7 +9233,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             // any JSON is parsed or a restore plan can be applied.
             val plainFile = if (PanelBackup.isSealed(receivedFile)) {
                 if (pw.isEmpty()) return call.respondText(
-                    """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"this bundle is encrypted — enter its passphrase"}""",
+                        InstallPresentation("restore-passphrase-required"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
@@ -9013,7 +9257,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     )
                 }
                 if (!opened) return call.respondText(
-                    """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"wrong passphrase or corrupt bundle"}""",
+                        InstallPresentation("restore-passphrase-or-bundle-invalid"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
@@ -9025,7 +9272,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             // much smaller semantic ceiling. v2 archives carry large payloads as streamed ZIP entries.
             if (archiveManifest == null && plainFile.length() > MAX_LEGACY_BACKUP_JSON_BYTES) {
                 return call.respondText(
-                    """{"ok":false,"error":"legacy backup is too large; create a new backup before restoring"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"legacy backup is too large; create a new backup before restoring"}""",
+                        InstallPresentation("restore-legacy-too-large"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.PayloadTooLarge,
                 )
@@ -9039,68 +9289,98 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }.getOrNull()
             if (obj == null || obj.optString("kind") != "ha-paneld-backup") {
                 return call.respondText(
-                    """{"ok":false,"error":"not a ha-paneld backup"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"not a ha-paneld backup"}""",
+                        InstallPresentation("restore-not-panel-backup"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
             }
             val cfgObj = obj.optJSONObject("config")
                 ?: return call.respondText(
-                    """{"ok":false,"error":"backup contains no config object"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"backup contains no config object"}""",
+                        InstallPresentation("restore-config-missing"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
             val backupSchema = obj.optInt("schema", -1)
             if (backupSchema < 1) return call.respondText(
-                """{"ok":false,"error":"backup contains no valid schema"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"backup contains no valid schema"}""",
+                    InstallPresentation("restore-schema-missing"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
             val configPlan = planRestoreConfig(cfgObj, backupSchema)
             if (configPlan.errors.isNotEmpty()) {
                 return call.respondText(
-                    """{"ok":false,"error":"invalid backup config","errors":${jarr(configPlan.errors)}}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"invalid backup config","errors":${jarr(configPlan.errors)}}""",
+                        InstallPresentation("restore-config-invalid"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.UnprocessableEntity,
                 )
             }
             val entityObj = obj.optJSONObject("entity_state")
             if (obj.has("entity_state") && entityObj == null) return call.respondText(
-                """{"ok":false,"error":"invalid entity_state object"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid entity_state object"}""",
+                    InstallPresentation("restore-entity-object-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
             val profilesObj = obj.optJSONObject("profiles")
             if (obj.has("profiles") && profilesObj == null) return call.respondText(
-                """{"ok":false,"error":"invalid profiles object"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid profiles object"}""",
+                    InstallPresentation("restore-profiles-object-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
             val comp = obj.optJSONObject("companion")
             if (obj.has("companion") && comp == null) {
                 return call.respondText(
-                    """{"ok":false,"error":"Invalid Companion restore section"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"Invalid Companion restore section"}""",
+                        InstallPresentation("restore-companion-section-invalid"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
             }
             val stateObj = obj.optJSONObject("state")
             if (obj.has("state") && stateObj == null) return call.respondText(
-                """{"ok":false,"error":"invalid state object"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid state object"}""",
+                    InstallPresentation("restore-state-object-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
             val archiveEntries = if (archiveManifest != null) {
                 runCatching { declaredArchiveEntries(entityObj, profilesObj, comp, stateObj) }.getOrNull()
                     ?: return call.respondText(
-                        """{"ok":false,"error":"invalid backup archive metadata"}""",
+                        withInstallPresentation(
+                            """{"ok":false,"error":"invalid backup archive metadata"}""",
+                            InstallPresentation("restore-archive-metadata-invalid"),
+                        ),
                         ContentType.Application.Json,
                         HttpStatusCode.BadRequest,
                     )
             } else emptySet()
             if (archiveManifest != null && !PanelBackup.extractArchive(plainFile, emptyList(), archiveEntries)) {
                 return call.respondText(
-                    """{"ok":false,"error":"backup archive contains missing or unexpected files"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"backup archive contains missing or unexpected files"}""",
+                        InstallPresentation("restore-archive-entries-invalid"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
@@ -9115,7 +9395,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 }.getOrNull()
             }
             if (entityObj != null && entityState == null) return call.respondText(
-                """{"ok":false,"error":"invalid owner-scoped entity state"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid owner-scoped entity state"}""",
+                    InstallPresentation("restore-entity-state-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.UnprocessableEntity,
             )
@@ -9124,7 +9407,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         configPlan.values["dashboard_entity_learning_applied"] == "true"
                     )
             ) return call.respondText(
-                """{"ok":false,"error":"entity state is missing its owner namespace"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"entity state is missing its owner namespace"}""",
+                    InstallPresentation("restore-entity-owner-missing"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.UnprocessableEntity,
             )
@@ -9148,7 +9434,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     ) ?: throw IllegalArgumentException("corrupt app_state payload")
                     StateBackupPolicy.restorableRows(decoded.rows, samePanel)
                 }.getOrNull() ?: return call.respondText(
-                    """{"ok":false,"error":"invalid app_state payload"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"invalid app_state payload"}""",
+                        InstallPresentation("restore-app-state-invalid"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.UnprocessableEntity,
                 )
@@ -9161,23 +9450,35 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 }
             }
             if (profilesObj != null && profilePayload == null) return call.respondText(
-                """{"ok":false,"error":"invalid profile archive entry"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid profile archive entry"}""",
+                    InstallPresentation("restore-profile-archive-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
             if (profilePayload != null && profilePayload.payload == null) return call.respondText(
-                """{"ok":false,"error":"invalid profile catalog","errors":${jarr(profilePayload.issues.map(::profileIssueText))}}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"invalid profile catalog","errors":${jarr(profilePayload.issues.map(::profileIssueText))}}""",
+                    InstallPresentation("restore-profile-catalog-invalid"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.UnprocessableEntity,
             )
             if (profilePayload?.payload != null && profileAdmin == null) return call.respondText(
-                """{"ok":false,"error":"profile catalog restore is unavailable"}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"profile catalog restore is unavailable"}""",
+                    InstallPresentation("restore-profile-restore-unavailable"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.ServiceUnavailable,
             )
             val profilePlan = profilePayload?.payload?.let { requireNotNull(profileAdmin).planBackupRestore(it) }
             if (profilePlan != null && !profilePlan.valid) return call.respondText(
-                """{"ok":false,"error":"profile catalog is not restorable","errors":${jarr(profilePlan.issues.map(::profileIssueText))}}""",
+                withInstallPresentation(
+                    """{"ok":false,"error":"profile catalog is not restorable","errors":${jarr(profilePlan.issues.map(::profileIssueText))}}""",
+                    InstallPresentation("restore-profile-catalog-not-restorable"),
+                ),
                 ContentType.Application.Json,
                 HttpStatusCode.UnprocessableEntity,
             )
@@ -9188,7 +9489,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             }
             if (plannedCompanion is CompanionRestore.PlanResult.Invalid) {
                 return call.respondText(
-                    """{"ok":false,"error":${jsonStr(plannedCompanion.reason)}}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":${jsonStr(plannedCompanion.reason)}}""",
+                        plannedCompanion.presentation,
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.BadRequest,
                 )
@@ -9226,7 +9530,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             ) return
             if (companionPlan != null && !withContext(Dispatchers.IO) { ensureCompanionHelper() }) {
                 return call.respondText(
-                    """{"ok":false,"error":"Companion restore needs the current ha-paneld helper"}""",
+                    withInstallPresentation(
+                        """{"ok":false,"error":"Companion restore needs the current ha-paneld helper"}""",
+                        InstallPresentation("restore-companion-helper-required"),
+                    ),
                     ContentType.Application.Json,
                     HttpStatusCode.ServiceUnavailable,
                 )
@@ -9304,6 +9611,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                             companion = companionResult?.component
                                 ?: skippedComponent("not present"),
                         ),
+                        presentation = if (restoredStateRows > 0) {
+                            InstallPresentation(
+                                "restore-completed-with-state",
+                                mapOf("count" to restoredStateRows.toString()),
+                            )
+                        } else {
+                            InstallPresentation("restore-completed")
+                        },
                     )
                 }.getOrElse { error ->
                     Log.w(TAG, "restore failed", error)
@@ -9346,10 +9661,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                                 else InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0),
                             rollback = rollback,
                         ),
+                        presentation = InstallPresentation(if (partial) "restore-partial" else "restore-failed"),
                     )
                 }
                 Log.i(TAG, "restore: ${operation.message}")
-                InstallProgress.finish(progress, operation.message, operation.structured)
+                InstallProgress.finish(
+                    progress,
+                    operation.message,
+                    operation.structured,
+                    operation.presentation,
+                )
             }
             job.invokeOnCompletion {
                 retainedCompanionPlan?.close()
@@ -9372,6 +9693,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     progress,
                     if (requestAccepted) "Restore preview complete" else "Restore request rejected",
                     result,
+                    InstallPresentation(
+                        if (requestAccepted) "restore-preview-complete" else "restore-request-rejected",
+                    ),
                 )
             }
         }
@@ -9380,6 +9704,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     private data class RestoreOperationResult(
         val message: String,
         val structured: InstallProgress.OperationResult,
+        val presentation: InstallPresentation,
     )
 
     private data class CompanionApplyResult(
@@ -9400,6 +9725,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     private fun skippedComponent(detail: String) = InstallProgress.ComponentResult(
         InstallProgress.Outcome.SKIPPED,
         detail = detail,
+        presentation = InstallPresentation("component-not-present"),
     )
 
     private fun profileComponent(
@@ -9416,6 +9742,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             },
             items = result.imported.size,
             detail = result.message,
+            presentation = result.presentation?.let {
+                InstallPresentation.create(it.code, it.params)
+            },
         )
     }
 
@@ -9430,6 +9759,10 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         },
         items = imported,
         detail = rejection.message,
+        presentation = InstallPresentation.create(
+            rejection.presentation.code,
+            rejection.presentation.params,
+        ),
     )
 
     private fun profileIssueText(issue: io.github.maxlyth.hapaneld.device.profile.ProfileIssue): String =
@@ -9592,11 +9925,11 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
     /** Convert untrusted JSON to a completely validated and decoded plan before any config commit or app stop. */
     private fun planCompanionRestore(comp: org.json.JSONObject): CompanionRestore.PlanResult {
         val files = comp.optJSONArray("files")
-            ?: return CompanionRestore.PlanResult.Invalid("Companion restore contains no files")
+            ?: return invalidCompanionPayload("Companion restore contains no files")
         val encoded = ArrayList<CompanionRestore.EncodedFile>(files.length())
         for (i in 0 until files.length()) {
             val file = files.optJSONObject(i)
-                ?: return CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $i")
+                ?: return invalidCompanionPayload("Invalid Companion file entry at index $i")
             encoded += CompanionRestore.EncodedFile(file.optString("rel"), file.optString("b64"))
         }
         return CompanionRestore.plan(
@@ -9614,22 +9947,22 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         allowedEntries: Set<String>,
     ): CompanionRestore.PlanResult {
         val files = comp.optJSONArray("files")
-            ?: return CompanionRestore.PlanResult.Invalid("Companion restore contains no files")
+            ?: return invalidCompanionPayload("Companion restore contains no files")
         if (files.length() !in 1..CompanionRestore.ALLOWED_FILES.size) {
-            return CompanionRestore.PlanResult.Invalid("Companion restore contains an invalid file count")
+            return invalidCompanionPayload("Companion restore contains an invalid file count")
         }
         data class Pending(val relativePath: String, val entry: String, val size: Long, val target: File)
         return withStagedFiles { staged ->
             val pending = ArrayList<Pending>(files.length())
             for (index in 0 until files.length()) {
                 val file = files.optJSONObject(index)
-                    ?: return@withStagedFiles CompanionRestore.PlanResult.Invalid("Invalid Companion file entry at index $index")
+                    ?: return@withStagedFiles invalidCompanionPayload("Invalid Companion file entry at index $index")
                 val relativePath = file.optString("rel")
                 val entry = file.optString("entry")
                 val declaredSize = file.optLong("size", -1L)
                 if (relativePath !in CompanionRestore.ALLOWED_FILES ||
                     declaredSize !in 1..CompanionRestore.maxBytes(relativePath)
-                ) return@withStagedFiles CompanionRestore.PlanResult.Invalid("Invalid Companion file metadata at index $index")
+                ) return@withStagedFiles invalidCompanionPayload("Invalid Companion file metadata at index $index")
                 pending += Pending(
                     relativePath,
                     entry,
@@ -9640,14 +9973,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             if (pending.map { it.relativePath }.toSet().size != pending.size ||
                 pending.map { it.entry }.toSet().size != pending.size ||
                 pending.sumOf { it.size } > CompanionRestore.MAX_AGGREGATE_BYTES
-            ) return@withStagedFiles CompanionRestore.PlanResult.Invalid("Duplicate or oversized Companion archive metadata")
+            ) return@withStagedFiles invalidCompanionPayload("Duplicate or oversized Companion archive metadata")
             val extracted = PanelBackup.extractArchive(
                 archive,
                 pending.map { PanelBackup.ArchiveTarget(it.entry, it.target, CompanionRestore.maxBytes(it.relativePath)) },
                 allowedEntries,
             )
             if (!extracted || pending.any { it.target.length() != it.size }) {
-                return@withStagedFiles CompanionRestore.PlanResult.Invalid("Companion archive files are missing, corrupt, or too large")
+                return@withStagedFiles invalidCompanionPayload("Companion archive files are missing, corrupt, or too large")
             }
             val result = CompanionRestore.planFiles(
                 packageName = comp.optString("pkg"),
@@ -9658,6 +9991,9 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
             result
         }
     }
+
+    private fun invalidCompanionPayload(reason: String): CompanionRestore.PlanResult.Invalid =
+        CompanionRestore.PlanResult.Invalid(reason, InstallPresentation("companion-payload-invalid"))
 
     /** Validate + apply the config half of a backup (reuses the import apply path). Returns keys applied. */
     private data class RestoreConfigPlan(
@@ -9827,13 +10163,23 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
         if (plan.packageName !in CompanionInstaller.SUPPORTED_PACKAGES || !AndroidInput.isPackage(plan.packageName)) {
             return CompanionApplyResult(
                 false,
-                InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "unsupported Companion package"),
+                InstallProgress.ComponentResult(
+                    InstallProgress.Outcome.FAILED,
+                    0,
+                    "unsupported Companion package",
+                    InstallPresentation("companion-unsupported-package"),
+                ),
             )
         }
         val preparation = io.github.maxlyth.hapaneld.backup.CompanionDatabasePreparation.prepare(plan, cacheDir)
             ?: return CompanionApplyResult(
                 false,
-                InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion payload validation failed"),
+                InstallProgress.ComponentResult(
+                    InstallProgress.Outcome.FAILED,
+                    0,
+                    "Companion payload validation failed",
+                    InstallPresentation("companion-payload-invalid"),
+                ),
             )
         preparation.use { prepared ->
             val lease = when (
@@ -9846,7 +10192,12 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                 is CompanionDataLease.Acquisition.Acquired -> acquisition.lease
                 CompanionDataLease.Acquisition.GateBusy -> return CompanionApplyResult(
                     false,
-                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.FAILED,
+                        0,
+                        "Companion helper is busy",
+                        InstallPresentation("companion-helper-busy"),
+                    ),
                 )
                 CompanionDataLease.Acquisition.MarkerFailed -> return CompanionApplyResult(
                     false,
@@ -9854,6 +10205,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.FAILED,
                         0,
                         "Companion operation safety marker could not be persisted",
+                        InstallPresentation("companion-marker-failed"),
                     ),
                 )
             }
@@ -9892,6 +10244,14 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.SUCCEEDED,
                         plan.files.size,
                         if (repaired > 0) "$repaired blank internal URL(s) repaired" else "owner/context restored",
+                        if (repaired > 0) {
+                            InstallPresentation(
+                                "companion-urls-repaired",
+                                mapOf("count" to repaired.toString()),
+                            )
+                        } else {
+                            InstallPresentation("companion-owner-restored")
+                        },
                     ),
                 )
                 CompanionHelperProtocol.RestoreResult.COMMITTED_RELAUNCH_FAILED -> CompanionApplyResult(
@@ -9900,6 +10260,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.PARTIAL,
                         plan.files.size,
                         "files restored but Companion relaunch was not confirmed",
+                        InstallPresentation("companion-relaunch-unconfirmed"),
                     ),
                 )
                 CompanionHelperProtocol.RestoreResult.ROLLED_BACK,
@@ -9909,6 +10270,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.ROLLED_BACK,
                         0,
                         "restore failed; prior Companion files retained",
+                        InstallPresentation("companion-prior-files-retained"),
                     ),
                 )
                 CompanionHelperProtocol.RestoreResult.ROLLBACK_FAILED,
@@ -9919,19 +10281,35 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.ROLLBACK_FAILED,
                         null,
                         "restore and rollback failed; Companion state may be partial",
+                        InstallPresentation("companion-rollback-failed"),
                     ),
                 )
                 CompanionHelperProtocol.RestoreResult.BUSY -> CompanionApplyResult(
                     false,
-                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is busy"),
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.FAILED,
+                        0,
+                        "Companion helper is busy",
+                        InstallPresentation("companion-helper-busy"),
+                    ),
                 )
                 CompanionHelperProtocol.RestoreResult.NOT_SUBMITTED -> CompanionApplyResult(
                     false,
-                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "Companion helper is unavailable"),
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.FAILED,
+                        0,
+                        "Companion helper is unavailable",
+                        InstallPresentation("companion-helper-unavailable"),
+                    ),
                 )
                 CompanionHelperProtocol.RestoreResult.FAILED -> CompanionApplyResult(
                     false,
-                    InstallProgress.ComponentResult(InstallProgress.Outcome.FAILED, 0, "restore rejected before commit"),
+                    InstallProgress.ComponentResult(
+                        InstallProgress.Outcome.FAILED,
+                        0,
+                        "restore rejected before commit",
+                        InstallPresentation("companion-rejected-before-commit"),
+                    ),
                 )
                 CompanionHelperProtocol.RestoreResult.INDETERMINATE -> CompanionApplyResult(
                     false,
@@ -9939,6 +10317,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                         InstallProgress.Outcome.PARTIAL,
                         null,
                         "restore terminal status was indeterminate",
+                        InstallPresentation("companion-indeterminate"),
                     ),
                 )
             }
@@ -10033,6 +10412,16 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
 
     private fun jarr(items: List<String>): String =
         "[" + items.joinToString(",") { Json.str(it) } + "]"
+
+    /** Add the optional v3 overlay after the legacy object without rewriting its existing fields. */
+    private fun withInstallPresentation(
+        legacyJson: String,
+        presentation: InstallPresentation?,
+    ): String {
+        if (presentation == null) return legacyJson
+        require(legacyJson.endsWith('}'))
+        return legacyJson.dropLast(1) + ",\"presentation\":" + presentation.json() + "}"
+    }
 
     private fun importJson(status: String, applied: List<String>, skipped: List<String>, warnings: List<String>, errors: List<String>): String =
         "{\"status\":\"$status\",\"applied\":${jarr(applied)},\"skipped\":${jarr(skipped)},\"warnings\":${jarr(warnings)},\"errors\":${jarr(errors)}}"
