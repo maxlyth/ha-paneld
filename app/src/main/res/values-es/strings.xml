@@ -126,7 +126,7 @@
     <string name="retrying_minutes_seconds">Reintentando automáticamente en %1$d min %2$d s</string>
     <string name="web_view_repair_known_good">Este panel tiene una versión verificada y puede instalarla ahora. Se reiniciará una vez al terminar.</string>
     <string name="web_view_repair_needs_privilege">Este panel tiene una versión verificada, pero no tiene permiso para instalarla, por lo que tendrás que hacerlo manualmente. Actualízala y toca Reintentar.</string>
-    <string name="web_view_repair_no_build">No se incluye ninguna versión verificada para este panel, por lo que tendrás que actualizarlo manualmente. Reinstalar la misma versión repara una instalación dañada. Después, toca Reintentar.</string>
+    <string name="web_view_repair_no_build">No se incluye ninguna versión verificada para este panel, por lo que tendrás que actualizar el visor web manualmente. Reinstalar la misma versión repara una instalación dañada. Después, toca Reintentar.</string>
     <string name="web_view_repair_managed_elsewhere">Este panel obtiene Android System WebView de una tienda, que lo sustituirá de forma más segura. Actualízalo allí y toca Reintentar.</string>
     <string name="update_web_viewer">Actualizar el visor web</string>
     <string name="installing">Instalando…</string>
