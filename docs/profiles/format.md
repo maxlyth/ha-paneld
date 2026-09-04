@@ -130,7 +130,7 @@ The schema version belongs to ha-paneld. Authors must not increment it to versio
 | `hardware.relay_base_fallbacks` | Optional; default `[]` | List of at most three paths from the same relay allowlist. Entries must be unique and must not repeat `relay_base`. |
 | `hardware.button_led_gpio_base` | Optional; default absent | Integer 0–4092, representing the first GPIO in a four-GPIO block. |
 | `hardware.camera` | Optional; default `false` | Boolean; declares the board has a usable camera. |
-| `hardware.microphone` | Optional; default `false` | Boolean; declares the board has a usable microphone. Independent of `hardware.camera` — some hardware has one without the other. |
+| `hardware.microphone` | Optional; default `false` | Boolean; declares the board has a usable microphone. Independent of `hardware.camera`; some hardware has one without the other. |
 | `hardware.camera_lens_offset_px` | Optional | Integer; screen pixels from the top of the active display area up to the centre of the camera lens. The camera-in-use light is drawn as an arc centred on the lens, so this is what positions it; it is a bezel measurement and differs between boards. Omit it if you have not measured it and the light falls back to a default. |
 
 ### `sensors` and `identity`

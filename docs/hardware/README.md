@@ -5,7 +5,7 @@ Reverse-engineered hardware fact sheets for the wall panels ha-paneld targets �
 | Panel | SoC | LED control | Notable sensors | NFC | Zigbee/IR | Reference |
 |---|---|---|---|---|---|---|
 | Tuya TPA10 | rk3566 | `avsux` sysfs (root daemon) | ToF VI5300, CHT8305 temp+humidity, CG5256 light; **[camera](tpa10.md#camera)** (GC05A2) and ES7202 capture ADC (usable microphone unverified) | no | no | [tpa10.md](tpa10.md) |
-| Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx); **[camera](wf1589t.md#camera)** (GC05A2) and ES7202 microphone | yes — NXP, but Android-NFC disabled | no | [wf1589t.md](wf1589t.md) |
+| Electron WF1589T | rk3576 | `/dev/ledjni` (app-direct) | 6-axis IMU (KXTJ9 + BMA2xx); **[camera](wf1589t.md#camera)** (GC05A2) and ES7202 microphone | yes (NXP, but Android-NFC disabled) | no | [wf1589t.md](wf1589t.md) |
 | Sonoff NSPanel Pro | rk3326 / PX30 | none (no RGB node) | STK3A5x light + proximity (app-direct) | no | **Zigbee** (Silabs EFR32, UART); no IR | [nspanel-pro.md](nspanel-pro.md) |
 | Smatek S9E † | rk3566 | per-button GPIO LEDs (root) | radar proximity, light, temp+humidity; **2 mains relays** (`st_relay`); RS485 + Ethernet | no | **Zigbee** | [s9e.md](s9e.md) |
 | ZHICAI SMT1019 ‡ | rk3576 | root helper on supplier `userdebug`; unavailable on stock firmware | GXHT30 temperature + humidity (accuracy unverified); experimental VI530x proximity | no | no | [smt1019.md](smt1019.md) |
