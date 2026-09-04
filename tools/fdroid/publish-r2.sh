@@ -6,6 +6,31 @@ FORBIDDEN_BUCKET=ha-paneld-assets
 EXPECTED_ORIGIN=https://fdroid.ha-paneld.com
 IMMUTABLE_CACHE='public, max-age=31536000, immutable'
 MUTABLE_CACHE='no-store'
+MIN_PUBLIC_RESPONSE_LIMIT=4096
+MAX_DIAGNOSTIC_HEADER_VALUE_BYTES=256
+PUBLIC_REQUEST_ATTEMPT_MAX_TIME=120
+PUBLIC_REQUEST_RETRY_MAX_TIME=180
+PUBLIC_REQUEST_OPERATION_MAX_TIME=305
+PUBLIC_USER_AGENT_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/public-user-agent.txt"
+
+if [ ! -f "$PUBLIC_USER_AGENT_FILE" ]; then
+  echo "The F-Droid public User-Agent contract could not be read." >&2
+  exit 1
+fi
+public_user_agent_bytes="$(wc -c < "$PUBLIC_USER_AGENT_FILE" | tr -d ' ')"
+public_user_agent_lines="$(wc -l < "$PUBLIC_USER_AGENT_FILE" | tr -d ' ')"
+if [ "$public_user_agent_bytes" -gt 129 ] || [ "$public_user_agent_lines" -ne 1 ] ||
+   ! LC_ALL=C grep -axEq \
+     '^ha-paneld-fdroid-public-verifier/[1-9][0-9]* \(\+https://github\.com/maxlyth/ha-paneld\)$' \
+     "$PUBLIC_USER_AGENT_FILE"; then
+  echo "The F-Droid public User-Agent contract must be one bounded printable ASCII line." >&2
+  exit 1
+fi
+IFS= read -r PUBLIC_USER_AGENT < "$PUBLIC_USER_AGENT_FILE"
+if [ "$public_user_agent_bytes" -ne "$((${#PUBLIC_USER_AGENT} + 1))" ]; then
+  echo "The F-Droid public User-Agent contract is malformed." >&2
+  exit 1
+fi
 
 if [ "$#" -ne 1 ]; then
   echo "Usage: $0 SITE_DIRECTORY" >&2
@@ -28,7 +53,7 @@ if [[ ! "$FDROID_R2_ENDPOINT" =~ ^https://[0-9a-fA-F]{32}\.r2\.cloudflarestorage
   exit 1
 fi
 
-for command in aws curl jq sha256sum; do
+for command in aws curl jq sha256sum timeout; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Required command is unavailable: $command" >&2
     exit 1
@@ -379,17 +404,124 @@ verify_object() {
   fi
 }
 
+public_response_header() {
+  local headers="$1"
+  local wanted="$2"
+
+  awk -v wanted="$wanted" '
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      if (line ~ /^HTTP\/[^ ]+ [0-9][0-9][0-9]([ ]|$)/) {
+        found = ""
+        in_response = 1
+        next
+      }
+      if (in_response && line == "") {
+        in_response = 0
+        next
+      }
+      colon = index(line, ":")
+      if (in_response && colon > 0 && tolower(substr(line, 1, colon - 1)) == wanted) {
+        value = substr(line, colon + 1)
+        sub(/^[ \t]+/, "", value)
+        found = value
+      }
+    }
+    END { if (found != "") print found }
+  ' "$headers"
+}
+
+sanitize_public_diagnostic() {
+  local value="${1:0:$MAX_DIAGNOSTIC_HEADER_VALUE_BYTES}"
+  LC_ALL=C printf '%s' "$value" | tr -c ' -~' '?'
+}
+
+write_public_failure_diagnostics() {
+  local key="$1"
+  local http_status="$2"
+  local curl_status="$3"
+  local headers="$4"
+  local body="$5"
+  local header value body_bytes body_sha256 cloudflare_code has_http_response
+
+  has_http_response=true
+  if [[ ! "$http_status" =~ ^[1-5][0-9]{2}$ ]]; then
+    http_status=transport_error
+    has_http_response=false
+  fi
+  printf 'F-Droid public verification failed: key=%s status=%s curl_status=%s\n' \
+    "$key" "$http_status" "$curl_status" >&2
+  if [ "$has_http_response" = true ] && [ -f "$headers" ]; then
+    for header in content-type content-length cache-control server cf-cache-status cf-mitigated cf-ray retry-after; do
+      value="$(public_response_header "$headers" "$header")"
+      if [ -n "$value" ]; then
+        printf 'F-Droid public verification header: %s=%s\n' \
+          "$header" "$(sanitize_public_diagnostic "$value")" >&2
+      fi
+    done
+  fi
+
+  if [ "$has_http_response" = false ]; then
+    return
+  elif [ -f "$body" ]; then
+    body_bytes="$(wc -c < "$body" | tr -d ' ')"
+    body_sha256="$(sha256sum "$body" | awk '{print $1}')"
+  else
+    body_bytes=0
+    body_sha256="$(printf '' | sha256sum | awk '{print $1}')"
+  fi
+  printf 'F-Droid public verification body: bytes=%s sha256=%s\n' \
+    "$body_bytes" "$body_sha256" >&2
+
+  if [ -f "$body" ] && [ "$body_bytes" -le 64 ]; then
+    cloudflare_code="$(
+      LC_ALL=C sed -nE 's/^error code: ([0-9]{3,6})\r?$/\1/p' "$body" | head -n 1
+    )"
+    if [[ "$cloudflare_code" =~ ^[0-9]{3,6}$ ]]; then
+      printf 'F-Droid public verification body: class=cloudflare_error_%s\n' \
+        "$cloudflare_code" >&2
+    fi
+  fi
+}
+
+public_curl() {
+  local headers="$1"
+  local body="$2"
+  local max_body_bytes="$3"
+  shift 3
+
+  timeout --foreground --signal=KILL "${PUBLIC_REQUEST_OPERATION_MAX_TIME}s" \
+    curl --retry 5 --retry-all-errors --retry-max-time "$PUBLIC_REQUEST_RETRY_MAX_TIME" \
+      --connect-timeout 15 --max-time "$PUBLIC_REQUEST_ATTEMPT_MAX_TIME" \
+      --fail-with-body --silent --show-error \
+      --user-agent "$PUBLIC_USER_AGENT" --max-filesize "$max_body_bytes" \
+      --dump-header "$headers" --output "$body" --write-out '%{http_code}' "$@"
+}
+
 verify_public_file() {
   local file="$1"
   local cache_pattern="$2"
-  local key expected_sha actual_sha headers body
+  local key expected_sha expected_size max_body_bytes actual_sha headers body http_status curl_status
 
   key="${file#"$site_dir"/}"
   expected_sha="$(sha256sum "$file" | awk '{print $1}')"
+  expected_size="$(wc -c < "$file" | tr -d ' ')"
+  max_body_bytes="$expected_size"
+  if [ "$max_body_bytes" -lt "$MIN_PUBLIC_RESPONSE_LIMIT" ]; then
+    max_body_bytes="$MIN_PUBLIC_RESPONSE_LIMIT"
+  fi
   headers="$verify_dir/headers"
   body="$verify_dir/body"
-  curl --retry 5 --retry-all-errors --connect-timeout 15 -fsS \
-    -D "$headers" -o "$body" "$EXPECTED_ORIGIN/$key"
+  if http_status="$(
+    public_curl "$headers" "$body" "$max_body_bytes" "$EXPECTED_ORIGIN/$key"
+  )"; then
+    :
+  else
+    curl_status=$?
+    write_public_failure_diagnostics "$key" "$http_status" "$curl_status" "$headers" "$body"
+    return "$curl_status"
+  fi
   actual_sha="$(sha256sum "$body" | awk '{print $1}')"
   if [ "$actual_sha" != "$expected_sha" ]; then
     echo "Public F-Droid object does not match the publication: $key" >&2
@@ -407,13 +539,21 @@ verify_public_file() {
 
 verify_public_range() {
   local file="$1"
-  local key headers body
+  local key headers body http_status curl_status
 
   key="${file#"$site_dir"/}"
   headers="$verify_dir/range-headers"
   body="$verify_dir/range-body"
-  curl --retry 5 --retry-all-errors --connect-timeout 15 -fsS --range 0-0 \
-    -D "$headers" -o "$body" "$EXPECTED_ORIGIN/$key"
+  if http_status="$(
+    public_curl "$headers" "$body" "$MIN_PUBLIC_RESPONSE_LIMIT" \
+      --range 0-0 "$EXPECTED_ORIGIN/$key"
+  )"; then
+    :
+  else
+    curl_status=$?
+    write_public_failure_diagnostics "$key" "$http_status" "$curl_status" "$headers" "$body"
+    return "$curl_status"
+  fi
   tr -d '\r' < "$headers" | grep -Eq '^HTTP/[^ ]+ 206($| )' || {
     echo "Public F-Droid APK does not support byte ranges: $key" >&2
     return 1

@@ -7,6 +7,7 @@ import importlib.util
 import io
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -106,6 +107,37 @@ class PublicOriginPreflightTest(unittest.TestCase):
         )
         return status, output.getvalue()
 
+    def test_shared_user_agent_contract_is_one_bounded_honest_line(self) -> None:
+        raw = preflight.PUBLIC_USER_AGENT_PATH.read_bytes()
+
+        self.assertEqual(raw.count(b"\n"), 1)
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertLessEqual(len(raw), preflight.MAX_PUBLIC_USER_AGENT_BYTES + 1)
+        self.assertEqual(raw[:-1].decode("ascii"), preflight.PUBLIC_USER_AGENT)
+        self.assertEqual(
+            preflight.PUBLIC_USER_AGENT,
+            "ha-paneld-fdroid-public-verifier/1 "
+            "(+https://github.com/maxlyth/ha-paneld)",
+        )
+
+    def test_user_agent_contract_rejects_header_injection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "public-user-agent.txt"
+            path.write_bytes(
+                b"ha-paneld-fdroid-public-verifier/1 "
+                b"(+https://github.com/maxlyth/ha-paneld)\nInjected: value\n"
+            )
+
+            with self.assertRaises(RuntimeError):
+                preflight._load_public_user_agent(path)
+
+            path.write_bytes(
+                b"ha-paneld-fdroid-public-verifier/1\0 "
+                b"(+https://github.com/maxlyth/ha-paneld)\n"
+            )
+            with self.assertRaises(RuntimeError):
+                preflight._load_public_user_agent(path)
+
     def test_200_accepts_bounded_json_and_logs_only_allowlisted_headers(self) -> None:
         body = b'{"repo":{"name":"ha-paneld"}}'
         response = FakeResponse(
@@ -154,6 +186,41 @@ class PublicOriginPreflightTest(unittest.TestCase):
         self.assertIn(f"body_bytes={len(body)}", output)
         self.assertIn(hashlib.sha256(body).hexdigest(), output)
         self.assertNotIn("secret challenge detail", output)
+
+    def test_cloudflare_error_body_is_logged_only_as_a_sanitized_class(self) -> None:
+        body = b"error code: 1010\n"
+        response = FakeResponse(
+            403,
+            [
+                ("Content-Type", "text/plain; charset=UTF-8"),
+                ("Cache-Control", "private, no-store"),
+                ("CF-Ray", "blocked-LHR"),
+            ],
+            body,
+        )
+        status, output = self.run_probe(ConnectionQueue(FakeConnection(response)))
+
+        self.assertEqual(status, 1)
+        self.assertIn("status=403", output)
+        self.assertIn("cache-control=private, no-store", output)
+        self.assertIn("body_class=cloudflare_error_1010", output)
+        self.assertIn(f"body_bytes={len(body)}", output)
+        self.assertIn(hashlib.sha256(body).hexdigest(), output)
+        self.assertNotIn("error code: 1010", output)
+
+    def test_allowlisted_header_values_are_restricted_to_printable_ascii(self) -> None:
+        body = b"blocked"
+        response = FakeResponse(
+            403,
+            [("Content-Type", "text/plain"), ("CF-Ray", "safe\x1b[31m\u202e-tail")],
+            body,
+        )
+        status, output = self.run_probe(ConnectionQueue(FakeConnection(response)))
+
+        self.assertEqual(status, 1)
+        self.assertIn("cf-ray=safe?[31m?-tail", output)
+        self.assertNotIn("\x1b", output)
+        self.assertNotIn("\u202e", output)
 
     def test_excessive_declared_response_is_rejected_without_reading_its_body(
         self,
@@ -259,6 +326,7 @@ class PublicOriginPreflightTest(unittest.TestCase):
         method, path, request_body, headers = connection.requests[0]
         self.assertEqual((method, path, request_body), ("GET", preflight.PATH, None))
         self.assertEqual(headers, preflight.REQUEST_HEADERS)
+        self.assertEqual(headers["User-Agent"], preflight.PUBLIC_USER_AGENT)
         self.assertNotIn("Authorization", headers)
         self.assertNotIn("Cookie", headers)
         self.assertEqual(factory.calls[0][0][:2], (preflight.HOST, 443))

@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import re
 import socket
 import ssl
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol, TextIO
 
 HOST = "fdroid.ha-paneld.com"
@@ -24,15 +26,49 @@ MAX_BODY_BYTES = 1024 * 1024
 READ_CHUNK_BYTES = 64 * 1024
 MAX_CONTENT_LENGTH_DIGITS = len(str(MAX_BODY_BYTES))
 MAX_DIAGNOSTIC_HEADER_VALUE_CHARS = 256
+MAX_PUBLIC_USER_AGENT_BYTES = 128
+PUBLIC_USER_AGENT_PATH = Path(__file__).with_name("public-user-agent.txt")
+
+
+def _load_public_user_agent(path: Path = PUBLIC_USER_AGENT_PATH) -> str:
+    raw = path.read_bytes()
+    if (
+        not raw.endswith(b"\n")
+        or raw.count(b"\n") != 1
+        or len(raw) > MAX_PUBLIC_USER_AGENT_BYTES + 1
+    ):
+        raise RuntimeError(
+            "The F-Droid public User-Agent contract must be one bounded line."
+        )
+    try:
+        value = raw[:-1].decode("ascii")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(
+            "The F-Droid public User-Agent contract must contain printable ASCII."
+        ) from error
+    if (
+        re.fullmatch(
+            r"ha-paneld-fdroid-public-verifier/[1-9][0-9]* "
+            r"\(\+https://github\.com/maxlyth/ha-paneld\)",
+            value,
+        )
+        is None
+    ):
+        raise RuntimeError("The F-Droid public User-Agent contract is malformed.")
+    return value
+
+
+PUBLIC_USER_AGENT = _load_public_user_agent()
 
 REQUEST_HEADERS = {
     "Accept": "application/json",
     "Connection": "close",
-    "User-Agent": "ha-paneld-fdroid-origin-preflight/1",
+    "User-Agent": PUBLIC_USER_AGENT,
 }
 DIAGNOSTIC_HEADERS = (
     "content-type",
     "content-length",
+    "cache-control",
     "server",
     "cf-cache-status",
     "cf-mitigated",
@@ -77,6 +113,7 @@ class ProbeResult:
     headers: tuple[tuple[str, str], ...] = ()
     body_length: int = 0
     body_sha256: str = hashlib.sha256(b"").hexdigest()
+    body_class: str | None = None
     error_code: str | None = None
 
     @property
@@ -147,6 +184,13 @@ def _body_identity(body: bytes) -> tuple[int, str]:
     return len(body), hashlib.sha256(body).hexdigest()
 
 
+def _body_class(body: bytes) -> str | None:
+    match = re.fullmatch(rb"error code: ([0-9]{3,6})\n?", body)
+    if match is None:
+        return None
+    return f"cloudflare_error_{match.group(1).decode('ascii')}"
+
+
 def probe_once(
     connection_factory: ConnectionFactory = http.client.HTTPSConnection,
     monotonic: Callable[[], float] = time.monotonic,
@@ -178,12 +222,14 @@ def probe_once(
 
         body, excessive = _read_bounded_body(response, connection, deadline, monotonic)
         body_length, body_sha256 = _body_identity(body)
+        body_class = _body_class(body)
         if excessive:
             return ProbeResult(
                 status=status,
                 headers=tuple(headers),
                 body_length=body_length,
                 body_sha256=body_sha256,
+                body_class=body_class,
                 error_code="body_too_large",
             )
         if status != 200:
@@ -192,6 +238,7 @@ def probe_once(
                 headers=tuple(headers),
                 body_length=body_length,
                 body_sha256=body_sha256,
+                body_class=body_class,
                 error_code="http_status",
             )
 
@@ -206,6 +253,7 @@ def probe_once(
                 headers=tuple(headers),
                 body_length=body_length,
                 body_sha256=body_sha256,
+                body_class=body_class,
                 error_code="invalid_content_type",
             )
         try:
@@ -216,6 +264,7 @@ def probe_once(
                 headers=tuple(headers),
                 body_length=body_length,
                 body_sha256=body_sha256,
+                body_class=body_class,
                 error_code="invalid_json",
             )
         if not isinstance(document, dict):
@@ -224,6 +273,7 @@ def probe_once(
                 headers=tuple(headers),
                 body_length=body_length,
                 body_sha256=body_sha256,
+                body_class=body_class,
                 error_code="invalid_json_shape",
             )
         return ProbeResult(
@@ -231,6 +281,7 @@ def probe_once(
             headers=tuple(headers),
             body_length=body_length,
             body_sha256=body_sha256,
+            body_class=body_class,
         )
     finally:
         connection.close()
@@ -239,7 +290,7 @@ def probe_once(
 def _safe_header_value(value: str) -> str:
     normalized = " ".join(value[:MAX_DIAGNOSTIC_HEADER_VALUE_CHARS].split())
     printable = "".join(
-        character if character.isprintable() else "?" for character in normalized
+        character if " " <= character <= "~" else "?" for character in normalized
     )
     return printable
 
@@ -263,6 +314,11 @@ def _write_diagnostics(result: ProbeResult, output: TextIO) -> None:
                 f"body_bytes={result.body_length} body_sha256={result.body_sha256}",
                 file=output,
             )
+            if result.body_class is not None:
+                print(
+                    f"F-Droid public origin error: body_class={result.body_class}",
+                    file=output,
+                )
 
 
 def run_preflight(

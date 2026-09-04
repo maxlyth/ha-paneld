@@ -6,8 +6,19 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WORKFLOW="$ROOT/.github/workflows/fdroid.yml"
 PUBLISHER="$ROOT/tools/fdroid/publish-r2.sh"
 PREFLIGHT="$ROOT/tools/fdroid/public_origin_preflight.py"
+PUBLIC_USER_AGENT_FILE="$ROOT/tools/fdroid/public-user-agent.txt"
+REAL_CURL="$(command -v curl)"
+REAL_TIMEOUT="$(command -v timeout)"
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+retry_server_pid=
+cleanup() {
+  if [ -n "$retry_server_pid" ]; then
+    kill "$retry_server_pid" 2>/dev/null || true
+    wait "$retry_server_pid" 2>/dev/null || true
+  fi
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 passes=0
 failures=0
@@ -24,6 +35,80 @@ if python3 -m py_compile "$PREFLIGHT"; then
   pass "public-origin preflight Python is syntactically valid"
 else
   fail_test "public-origin preflight Python is syntactically valid"
+fi
+
+cat > "$TMP/retry-server.py" <<'PY'
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+import sys
+
+count_path = Path(sys.argv[1])
+port_path = Path(sys.argv[2])
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with count_path.open("a", encoding="ascii") as handle:
+            handle.write("attempt\n")
+        self.send_response(503)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+port_path.write_text(str(server.server_port), encoding="ascii")
+server.serve_forever()
+PY
+python3 "$TMP/retry-server.py" "$TMP/retry-attempts" "$TMP/retry-port" &
+retry_server_pid=$!
+for _ in $(seq 1 100); do
+  [ -s "$TMP/retry-port" ] && break
+  kill -0 "$retry_server_pid" 2>/dev/null || break
+  sleep 0.01
+done
+retry_port="$(cat "$TMP/retry-port" 2>/dev/null || true)"
+retry_started="$(date +%s)"
+if [ -n "$retry_port" ]; then
+  "$REAL_TIMEOUT" --foreground --signal=KILL 2s \
+    "$REAL_CURL" --retry 20 --retry-all-errors --retry-delay 1 \
+      --retry-max-time 20 --max-time 1 --fail --silent \
+      "http://127.0.0.1:$retry_port/always-503" >/dev/null 2>&1
+  retry_status=$?
+else
+  retry_status=1
+fi
+retry_elapsed=$(($(date +%s) - retry_started))
+retry_attempts="$(wc -l < "$TMP/retry-attempts" 2>/dev/null | tr -d ' ' || true)"
+kill "$retry_server_pid" 2>/dev/null || true
+wait "$retry_server_pid" 2>/dev/null || true
+retry_server_pid=
+if [ "$retry_status" -eq 137 ] && [ "$retry_elapsed" -le 4 ] &&
+   [ "${retry_attempts:-0}" -ge 1 ] && [ "${retry_attempts:-0}" -lt 21 ]; then
+  pass "an outer watchdog enforces a hard operation bound across curl retries"
+else
+  fail_test "an outer watchdog enforces a hard operation bound across curl retries"
+fi
+
+expected_public_user_agent='ha-paneld-fdroid-public-verifier/1 (+https://github.com/maxlyth/ha-paneld)'
+if [ "$(wc -l < "$PUBLIC_USER_AGENT_FILE" | tr -d ' ')" -eq 1 ] &&
+   [ "$(< "$PUBLIC_USER_AGENT_FILE")" = "$expected_public_user_agent" ] &&
+   grep -Fq 'PUBLIC_USER_AGENT = _load_public_user_agent()' "$PREFLIGHT" &&
+   grep -Fq -- '--user-agent "$PUBLIC_USER_AGENT"' "$PUBLISHER"; then
+  pass "preflight and publisher share one honest public User-Agent contract"
+else
+  fail_test "preflight and publisher share one honest public User-Agent contract"
+fi
+
+bad_user_agent_dir="$TMP/bad-user-agent"
+mkdir -p "$bad_user_agent_dir"
+cp "$PUBLISHER" "$bad_user_agent_dir/publish-r2.sh"
+printf 'ha-paneld-fdroid-public-verifier/1\0 (+https://github.com/maxlyth/ha-paneld)\n' \
+  > "$bad_user_agent_dir/public-user-agent.txt"
+if ! bash "$bad_user_agent_dir/publish-r2.sh" > "$TMP/bad-user-agent.log" 2>&1 &&
+   grep -Fq 'must be one bounded printable ASCII line' "$TMP/bad-user-agent.log"; then
+  pass "publisher rejects a NUL-injected User-Agent file before Bash captures it"
+else
+  fail_test "publisher rejects a NUL-injected User-Agent file before Bash captures it"
 fi
 
 if [ -x "$ROOT/tools/fdroid/publish-r2.sh" ] &&
@@ -186,30 +271,92 @@ AWS
 cat > "$mock_bin/curl" <<'CURL'
 #!/usr/bin/env bash
 set -eu
-headers= body= url= range=false
+headers= body= url= range=false user_agent= max_filesize= max_time= retry_max_time= retry_count= write_out=
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    -D) headers="$2"; shift 2 ;;
-    -o) body="$2"; shift 2 ;;
+    -D|--dump-header) headers="$2"; shift 2 ;;
+    -o|--output) body="$2"; shift 2 ;;
     --range) range=true; shift 2 ;;
+    --user-agent) user_agent="$2"; shift 2 ;;
+    --max-filesize) max_filesize="$2"; shift 2 ;;
+    --max-time) max_time="$2"; shift 2 ;;
+    --retry-max-time) retry_max_time="$2"; shift 2 ;;
+    --retry) retry_count="$2"; shift 2 ;;
+    --write-out) write_out="$2"; shift 2 ;;
+    --connect-timeout) shift 2 ;;
+    --retry-all-errors|--fail-with-body|--silent|--show-error) shift ;;
     http*) url="$1"; shift ;;
     *) shift ;;
   esac
 done
 key="${url#https://fdroid.ha-paneld.com/}"
 printf '%s\n' "$key" >> "$MOCK_R2_STATE/public-requests.log"
-[ "${MOCK_PUBLIC_FAIL_KEY:-}" != "$key" ] || exit 22
+printf '%s|%s|%s|%s|%s|%s|%s|%s\n' \
+  "$key" "$user_agent" "$max_filesize" "$max_time" "$retry_max_time" \
+  "${MOCK_TIMEOUT_LIMIT:-}" "$retry_count" "$range" \
+  >> "$MOCK_R2_STATE/public-request-contracts.log"
+if [ "${MOCK_PUBLIC_TRANSPORT_FAIL_KEY:-}" = "$key" ]; then
+  : > "$headers"
+  : > "$body"
+  [ "$write_out" = '%{http_code}' ] && printf '000'
+  exit 7
+fi
+if [ "${MOCK_PUBLIC_STALE_THEN_TRANSPORT_KEY:-}" = "$key" ]; then
+  printf 'HTTP/2 503\r\ncontent-type: text/html\r\ncache-control: private\r\ncf-ray: stale-terminal-LHR\r\nretry-after: 999\r\n\r\n' > "$headers"
+  printf 'stale response body\n' > "$body"
+  [ "$write_out" = '%{http_code}' ] && printf '000'
+  exit 28
+fi
+if [ "${MOCK_PUBLIC_FAIL_KEY:-}" = "$key" ]; then
+  long_ray_suffix="$(head -c 300 /dev/zero | tr '\0' x)"
+  printf 'HTTP/2 503\r\ncontent-type: text/html\r\nretry-after: 999\r\ncf-ray: stale-retry-LHR\r\n\r\nHTTP/2 403\r\ncontent-type: text/plain; charset=UTF-8\r\ncontent-length: 17\r\ncache-control: private, no-store\r\nserver: cloudflare\r\ncf-cache-status: DYNAMIC\r\ncf-mitigated: challenge\r\ncf-ray: mock\033-LHR%sray-hidden-suffix\r\nset-cookie: must-not-be-logged\r\nx-private-detail: must-not-be-logged\r\n\r\n' \
+    "$long_ray_suffix" > "$headers"
+  printf 'error code: 1010\n' > "$body"
+  [ "$write_out" = '%{http_code}' ] && printf '403'
+  exit 22
+fi
 [ -f "$MOCK_R2_STATE/objects/$key" ] || exit 22
 IFS='|' read -r sha size cache type < "$MOCK_R2_STATE/meta/$key"
 if [ "$range" = true ]; then
-  printf 'HTTP/2 206\r\ncache-control: %s\r\ncontent-type: %s\r\ncontent-range: bytes 0-0/%s\r\n\r\n' "$cache" "$type" "$size" > "$headers"
-  head -c 1 "$MOCK_R2_STATE/objects/$key" > "$body"
+  range_status=206
+  range_bytes=1
+  [ "${MOCK_PUBLIC_RANGE_STATUS_KEY:-}" != "$key" ] || range_status=200
+  [ "${MOCK_PUBLIC_RANGE_BYTES_KEY:-}" != "$key" ] || range_bytes=2
+  printf 'HTTP/2 %s\r\ncache-control: %s\r\ncontent-type: %s\r\ncontent-range: bytes 0-%s/%s\r\n\r\n' \
+    "$range_status" "$cache" "$type" "$((range_bytes - 1))" "$size" > "$headers"
+  head -c "$range_bytes" "$MOCK_R2_STATE/objects/$key" > "$body"
+  [ "$write_out" = '%{http_code}' ] && printf '%s' "$range_status"
 else
-  printf 'HTTP/2 200\r\ncache-control: %s\r\ncontent-type: %s\r\n\r\n' "$cache" "$type" > "$headers"
+  response_cache="$cache"
+  response_type="$type"
+  [ "${MOCK_PUBLIC_BAD_CACHE_KEY:-}" != "$key" ] || response_cache='public, max-age=60'
+  [ "${MOCK_PUBLIC_BAD_TYPE_KEY:-}" != "$key" ] || response_type='text/plain'
+  printf 'HTTP/2 200\r\ncache-control: %s\r\ncontent-type: %s\r\n\r\n' \
+    "$response_cache" "$response_type" > "$headers"
   cp "$MOCK_R2_STATE/objects/$key" "$body"
+  if [ "${MOCK_PUBLIC_CORRUPT_KEY:-}" = "$key" ]; then
+    printf 'corrupt' >> "$body"
+  fi
+  [ "$write_out" = '%{http_code}' ] && printf '200'
 fi
 CURL
-chmod +x "$mock_bin/aws" "$mock_bin/curl"
+
+cat > "$mock_bin/timeout" <<'TIMEOUT'
+#!/usr/bin/env bash
+set -eu
+limit=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --foreground) shift ;;
+    --signal=KILL) shift ;;
+    *s) limit="${1%s}"; shift; break ;;
+    *) printf 'unexpected timeout option: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$limit" ] || { printf 'missing timeout limit\n' >&2; exit 2; }
+MOCK_TIMEOUT_LIMIT="$limit" exec "$@"
+TIMEOUT
+chmod +x "$mock_bin/aws" "$mock_bin/curl" "$mock_bin/timeout"
 
 run_publisher() {
   PATH="$mock_bin:$PATH" MOCK_R2_STATE="$state" RUNNER_TEMP="$TMP" \
@@ -247,6 +394,62 @@ if grep -Fxq 'fdroid/repo/ha-paneld-v1.0.0.apk' "$state/public-requests.log" &&
   pass "publisher verifies every newly uploaded APK through the public hostname"
 else
   fail_test "publisher verifies every newly uploaded APK through the public hostname"
+fi
+
+if [ -s "$state/public-request-contracts.log" ] &&
+   awk -F '|' -v expected="$expected_public_user_agent" \
+     '$2 != expected || $3 !~ /^[0-9]+$/ || $4 != 120 || $5 != 180 || $6 != 305 || $7 != 5 { exit 1 }' \
+     "$state/public-request-contracts.log" &&
+   grep -Fq "|$expected_public_user_agent|4096|120|180|305|5|false" "$state/public-request-contracts.log" &&
+   grep -Fq "|$expected_public_user_agent|4096|120|180|305|5|true" "$state/public-request-contracts.log"; then
+  pass "full and range verification use the shared identity and bounded retry operation limits"
+else
+  fail_test "full and range verification use the shared identity and bounded retry operation limits"
+fi
+
+if ! MOCK_PUBLIC_CORRUPT_KEY=fdroid/repo/index-v2.json \
+     run_publisher > "$TMP/public-hash-failure.log" 2>&1 &&
+   grep -Fq 'Public F-Droid object does not match the publication: fdroid/repo/index-v2.json' \
+     "$TMP/public-hash-failure.log"; then
+  pass "publisher still rejects a public object with the wrong hash"
+else
+  fail_test "publisher still rejects a public object with the wrong hash"
+fi
+
+if ! MOCK_PUBLIC_BAD_CACHE_KEY=fdroid/repo/index-v2.json \
+     run_publisher > "$TMP/public-cache-failure.log" 2>&1 &&
+   grep -Fq 'Public F-Droid object has the wrong cache policy: fdroid/repo/index-v2.json' \
+     "$TMP/public-cache-failure.log"; then
+  pass "publisher still rejects a public object with the wrong cache policy"
+else
+  fail_test "publisher still rejects a public object with the wrong cache policy"
+fi
+
+if ! MOCK_PUBLIC_BAD_TYPE_KEY=fdroid/repo/index-v2.json \
+     run_publisher > "$TMP/public-type-failure.log" 2>&1 &&
+   grep -Fq 'Public F-Droid object has the wrong content type: fdroid/repo/index-v2.json' \
+     "$TMP/public-type-failure.log"; then
+  pass "publisher still rejects a public object with the wrong content type"
+else
+  fail_test "publisher still rejects a public object with the wrong content type"
+fi
+
+if ! MOCK_PUBLIC_RANGE_STATUS_KEY=fdroid/repo/ha-paneld-v1.1.0.apk \
+     run_publisher > "$TMP/public-range-status-failure.log" 2>&1 &&
+   grep -Fq 'Public F-Droid APK does not support byte ranges' \
+     "$TMP/public-range-status-failure.log"; then
+  pass "publisher still requires HTTP 206 for APK byte ranges"
+else
+  fail_test "publisher still requires HTTP 206 for APK byte ranges"
+fi
+
+if ! MOCK_PUBLIC_RANGE_BYTES_KEY=fdroid/repo/ha-paneld-v1.1.0.apk \
+     run_publisher > "$TMP/public-range-body-failure.log" 2>&1 &&
+   grep -Fq 'Public F-Droid APK returned an invalid byte range' \
+     "$TMP/public-range-body-failure.log"; then
+  pass "publisher still requires a one-byte APK range response"
+else
+  fail_test "publisher still requires a one-byte APK range response"
 fi
 
 printf 'changed apk bytes\n' > "$site/fdroid/repo/ha-paneld-v1.0.0.apk"
@@ -293,8 +496,56 @@ printf 'verification-failure entry\n' > "$site/fdroid/repo/entry.jar"
 printf '{"repo":"verification-failure"}\n' > "$site/fdroid/repo/index-v2.json"
 printf 'verification-failure landing\n' > "$site/index.html"
 printf 'verification-failure icon\n' > "$site/fdroid/repo/icon.png"
+if ! MOCK_PUBLIC_TRANSPORT_FAIL_KEY=fdroid/repo/index-v2.json \
+     run_publisher > "$TMP/transport-000-rollback.log" 2>&1 &&
+   grep -Fq 'restoring the previous mutable repository state' "$TMP/transport-000-rollback.log" &&
+   grep -Fq 'key=fdroid/repo/index-v2.json status=transport_error curl_status=7' \
+     "$TMP/transport-000-rollback.log" &&
+   ! grep -Fq 'status=000' "$TMP/transport-000-rollback.log" &&
+   ! grep -Fq 'F-Droid public verification header:' "$TMP/transport-000-rollback.log" &&
+   ! grep -Fq 'F-Droid public verification body:' "$TMP/transport-000-rollback.log" &&
+   [ "$(sha256sum "$state/objects/fdroid/repo/entry.jar" | awk '{print $1}')" = "$old_entry_sha" ] &&
+   [ "$(sha256sum "$state/objects/fdroid/repo/index-v2.json" | awk '{print $1}')" = "$old_index_sha" ]; then
+  pass "publisher classifies curl status 000 as a transport error without response metadata"
+else
+  sed -n '1,160p' "$TMP/transport-000-rollback.log" >&2
+  fail_test "publisher classifies curl status 000 as a transport error without response metadata"
+fi
+
+if ! MOCK_PUBLIC_STALE_THEN_TRANSPORT_KEY=fdroid/repo/index-v2.json \
+     run_publisher > "$TMP/stale-then-transport-rollback.log" 2>&1 &&
+   grep -Fq 'restoring the previous mutable repository state' "$TMP/stale-then-transport-rollback.log" &&
+   grep -Fq 'key=fdroid/repo/index-v2.json status=transport_error curl_status=28' \
+     "$TMP/stale-then-transport-rollback.log" &&
+   ! grep -Fq 'status=000' "$TMP/stale-then-transport-rollback.log" &&
+   ! grep -Fq 'stale-terminal-LHR' "$TMP/stale-then-transport-rollback.log" &&
+   ! grep -Fq 'retry-after=999' "$TMP/stale-then-transport-rollback.log" &&
+   ! grep -Fq 'F-Droid public verification header:' "$TMP/stale-then-transport-rollback.log" &&
+   ! grep -Fq 'F-Droid public verification body:' "$TMP/stale-then-transport-rollback.log" &&
+   [ "$(sha256sum "$state/objects/fdroid/repo/entry.jar" | awk '{print $1}')" = "$old_entry_sha" ] &&
+   [ "$(sha256sum "$state/objects/fdroid/repo/index-v2.json" | awk '{print $1}')" = "$old_index_sha" ]; then
+  pass "a headerless terminal transport failure cannot retain an earlier retry response"
+else
+  sed -n '1,180p' "$TMP/stale-then-transport-rollback.log" >&2
+  fail_test "a headerless terminal transport failure cannot retain an earlier retry response"
+fi
+
+blocked_body_sha="$(printf 'error code: 1010\n' | sha256sum | awk '{print $1}')"
 if ! MOCK_PUBLIC_FAIL_KEY=fdroid/repo/index-v2.json run_publisher > "$TMP/verification-rollback.log" 2>&1 &&
    grep -Fq 'restoring the previous mutable repository state' "$TMP/verification-rollback.log" &&
+   grep -Fq 'key=fdroid/repo/index-v2.json status=403 curl_status=22' "$TMP/verification-rollback.log" &&
+   grep -Fq 'content-type=text/plain; charset=UTF-8' "$TMP/verification-rollback.log" &&
+   grep -Fq 'cache-control=private, no-store' "$TMP/verification-rollback.log" &&
+   grep -Fq 'cf-cache-status=DYNAMIC' "$TMP/verification-rollback.log" &&
+   grep -Fq 'cf-mitigated=challenge' "$TMP/verification-rollback.log" &&
+   grep -Fq 'cf-ray=mock?-LHR' "$TMP/verification-rollback.log" &&
+   grep -Fq "body: bytes=17 sha256=$blocked_body_sha" "$TMP/verification-rollback.log" &&
+   grep -Fq 'body: class=cloudflare_error_1010' "$TMP/verification-rollback.log" &&
+   ! grep -Fq 'stale-retry-LHR' "$TMP/verification-rollback.log" &&
+   ! grep -Fq 'retry-after=999' "$TMP/verification-rollback.log" &&
+   ! grep -Fq 'must-not-be-logged' "$TMP/verification-rollback.log" &&
+   ! grep -Fq 'ray-hidden-suffix' "$TMP/verification-rollback.log" &&
+   ! grep -Fq 'error code: 1010' "$TMP/verification-rollback.log" &&
    [ "$(sha256sum "$state/objects/fdroid/repo/entry.jar" | awk '{print $1}')" = "$old_entry_sha" ] &&
    [ "$(sha256sum "$state/objects/fdroid/repo/index-v1.jar" | awk '{print $1}')" = "$old_legacy_index_sha" ] &&
    [ "$(sha256sum "$state/objects/fdroid/repo/index-v2.json" | awk '{print $1}')" = "$old_index_sha" ] &&
