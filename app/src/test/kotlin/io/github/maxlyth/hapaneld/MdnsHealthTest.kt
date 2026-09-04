@@ -100,9 +100,12 @@ class MdnsHealthTest {
     @Test fun statusEndpointIncludesLiveMdnsWarning() {
         val server = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
 
-        assertTrue(server.contains("private val mdnsWarning: () -> String? = { null }"))
-        assertTrue(server.contains("runCatching(mdnsWarning).getOrNull()?.let(warns::add)"))
+        assertTrue(server.contains("private val mdnsWarningProjection: () -> Pair<String?, InstallPresentation?>"))
+        assertTrue(server.contains("val mdns = runCatching(mdnsWarningProjection).getOrNull()"))
+        assertTrue(server.contains("addWarning(mdns?.first, mdns?.second)"))
         val service = File("src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt").readText()
+        assertTrue(service.contains("mdnsWarningProjection = {"))
+        assertTrue(service.contains("mdnsHealthWarning(health) to mdnsHealthPresentation(health)"))
         assertTrue(service.contains("\"mDNS\" to mdns.statusPublic()"))
     }
 

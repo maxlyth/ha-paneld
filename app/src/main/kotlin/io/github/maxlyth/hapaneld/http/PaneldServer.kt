@@ -1482,10 +1482,9 @@ class PaneldServer internal constructor(
     // (captures the live MdnsAdvertiser field). Blocking browse; called only through [peersCache] off-thread.
     private val peers: () -> List<io.github.maxlyth.hapaneld.Peer> = { emptyList() },
     // mDNS can fail independently of HTTP and MQTT, leaving the panel absent from peer switchers.
-    // This supplies a concise operator warning for the status endpoint when that happens.
-    private val mdnsWarning: () -> String? = { null },
-    // Typed counterpart supplied by the same mDNS owner; never reconstructed from [mdnsWarning] prose.
-    private val mdnsWarningPresentation: () -> InstallPresentation? = { null },
+    // Legacy text and typed metadata come from one observation so a liveness transition cannot pair
+    // one warning with another warning's presentation envelope.
+    private val mdnsWarningProjection: () -> Pair<String?, InstallPresentation?> = { null to null },
     // Proposed values for blank MQTT/HA fields. Discovery is blocking, so the route invokes this on IO;
     // values remain unsaved until the user accepts them with the normal Configure Save action.
     private val configDiscoverySuggestions: () -> ConfigDiscoverySuggestions = { ConfigDiscoverySuggestions() },
@@ -4827,8 +4826,8 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             PowerSafetyPresentation.statusWarningHtml(powerAdvisory),
             PowerSafetyPresentation.warningPresentation(powerAdvisory),
         )
-        val mdns = runCatching(mdnsWarning).getOrNull()
-        addWarning(mdns, if (mdns == null) null else runCatching(mdnsWarningPresentation).getOrNull())
+        val mdns = runCatching(mdnsWarningProjection).getOrNull()
+        addWarning(mdns?.first, mdns?.second)
         val rollback = schemaRollbackVersions()
         findings.forEach { finding ->
             addWarning(

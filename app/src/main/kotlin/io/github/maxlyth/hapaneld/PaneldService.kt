@@ -1568,8 +1568,10 @@ class PaneldService : Service() {
             peers = { mdns.browsePeers() },
             // Report the current advertiser rather than a startup snapshot: DHCP may not have completed
             // when the service began, and the operator needs to see a later failed/deferred advertisement.
-            mdnsWarning = { mdnsHealthWarning(mdns.health()) },
-            mdnsWarningPresentation = { mdnsHealthPresentation(mdns.health()) },
+            mdnsWarningProjection = {
+                val health = mdns.health()
+                mdnsHealthWarning(health) to mdnsHealthPresentation(health)
+            },
             configDiscoverySuggestions = {
                 val active = runtime.current()
                 val existingOrActiveBroker = config.mqttBroker.ifBlank { active.mqtt.activeBroker }
