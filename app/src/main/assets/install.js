@@ -1,12 +1,133 @@
 // Install tab: managed-component version pickers + install/update, WebView heal, health audit, radio.
 (function () {
-  var hardenedApprovalAttrs = ' data-hardened-approval aria-describedby="hardened-approval-description" title="Requires physical on-panel approval for this action when Hardened mode is enabled."';
-  var hardenedApprovalA11yAttrs = ' aria-describedby="hardened-approval-description" title="Requires physical on-panel approval for this action when Hardened mode is enabled."';
+  "use strict";
+  var own = Object.prototype.hasOwnProperty;
+  var projection = {};
+  try {
+    var projectionNode = document.getElementById('ha-i18n');
+    projection = projectionNode ? JSON.parse(projectionNode.textContent || '{}') : {};
+    if (!projection || typeof projection !== 'object' || Array.isArray(projection)) projection = {};
+  } catch (_) { projection = {}; }
+  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement.lang || 'en');
+  var languages = projection.languages && typeof projection.languages === 'object' && !Array.isArray(projection.languages) ? projection.languages : {};
+  function fallbackText(fallback, values) {
+    return String(fallback == null ? '' : fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (token, name) {
+      return values && own.call(values, name) ? String(values[name]) : token;
+    });
+  }
+  function t(key, fallback, values) {
+    var english = fallbackText(fallback, values);
+    if (!window.HaI18n || typeof window.HaI18n.t !== 'function') return english;
+    try {
+      var translated = window.HaI18n.t(key, fallback, values);
+      return typeof translated === 'string' ? translated : english;
+    } catch (_) { return english; }
+  }
+  function localized(key) { return locale === 'en' || languages[key] === locale; }
+  function pluralText(oneKey, otherKey, count, oneFallback, otherFallback, values) {
+    var category = Number(count) === 1 ? 'one' : 'other';
+    try { category = new Intl.PluralRules(locale).select(Number(count)) === 'one' ? 'one' : 'other'; } catch (_) {}
+    return t(category === 'one' ? oneKey : otherKey, category === 'one' ? oneFallback : otherFallback, values);
+  }
+
+  // This is an explicit copy of the frozen Install v3 code-to-key contract. Never derive a key from
+  // received input: an unknown code must leave the byte-compatible English field untouched.
+  var PRESENTATIONS = Object.freeze({"version-install":"install.presentation.version_install","version-upgrade":"install.presentation.version_upgrade","version-downgrade":"install.presentation.version_downgrade","operation-working":"install.presentation.operation_working","operation-cancelled":"install.presentation.operation_cancelled","apk-pending-lost":"install.presentation.apk_pending_lost","backup-ready":"install.presentation.backup_ready","backup-cancelled":"install.presentation.backup_cancelled","backup-companion-too-large":"install.presentation.backup_companion_too_large","backup-staging-retained":"install.presentation.backup_staging_retained","restore-preview-complete":"install.presentation.restore_preview_complete","restore-request-rejected":"install.presentation.restore_request_rejected","restore-completed":"install.presentation.restore_completed","restore-completed-with-state":{"one":"install.restore.state_values.one","other":"install.restore.state_values.other","selector":"count"},"restore-partial":"install.presentation.restore_partial","restore-failed":"install.presentation.restore_failed","package-uninstalled":"install.presentation.package_uninstalled","package-uninstall-failed":"install.presentation.package_uninstall_failed","guard-db-retirement-settled":"install.presentation.guard_db_retirement_settled","guard-db-candidate-discard-finished":"install.presentation.guard_db_candidate_discard_finished","guard-db-candidate-staging-finished":"install.presentation.guard_db_candidate_staging_finished","guard-db-arm-not-started":"install.presentation.guard_db_arm_not_started","managed-release-unresolved":"install.presentation.managed_release_unresolved","managed-apk-missing":"install.presentation.managed_apk_missing","managed-up-to-date":"install.presentation.managed_up_to_date","managed-install-committed":"install.presentation.managed_install_committed","managed-update-committed":"install.presentation.managed_update_committed","managed-downgrade-committed":"install.presentation.managed_downgrade_committed","managed-pinned":"install.presentation.managed_pinned","managed-safety-cap-refused":"install.presentation.managed_safety_cap_refused","managed-manual-downgrade-required":"install.presentation.managed_manual_downgrade_required","managed-play-managed":"install.presentation.managed_play_managed","managed-no-recommendation":"install.presentation.managed_no_recommendation","managed-no-newer":"install.presentation.managed_no_newer","managed-attempt-recorded":"install.presentation.managed_attempt_recorded","install-no-permitted-route":"install.presentation.install_no_permitted_route","install-download-too-large":"install.presentation.install_download_too_large","install-insufficient-storage":"install.presentation.install_insufficient_storage","install-staging-failed":"install.presentation.install_staging_failed","install-download-failed":"install.presentation.install_download_failed","install-deferred-saving-state":"install.presentation.install_deferred_saving_state","install-guard-db-owned":"install.presentation.install_guard_db_owned","install-durable-rejection":"install.presentation.install_durable_rejection","install-retryable-failure":"install.presentation.install_retryable_failure","component-not-present":"install.presentation.component_not_present","profile-catalog-restore-unavailable":"install.presentation.profile_catalog_restore_unavailable","backup-import-partial-selection-unchanged":"install.presentation.backup_import_partial_selection_unchanged","backup-restored-selection-unchanged":"install.presentation.backup_restored_selection_unchanged","backup-restored-selection-staged":"install.presentation.backup_restored_selection_staged","backup-selection-restore-failed":"install.presentation.backup_selection_restore_failed","backup-import-selection-stage-failed":"install.presentation.backup_import_selection_stage_failed","backup-restore-rejected-before-mutation":"install.presentation.backup_restore_rejected_before_mutation","destructive-operation-in-progress":"profiles.result.destructive-operation-in-progress","profile-restart-unavailable":"profiles.result.profile-restart-unavailable","profile-activation-abort-persist-failed":"profiles.result.profile-activation-abort-persist-failed","companion-unsupported-package":"install.presentation.companion_unsupported_package","companion-payload-invalid":"install.presentation.companion_payload_invalid","companion-helper-busy":"install.presentation.companion_helper_busy","companion-marker-failed":"install.presentation.companion_marker_failed","companion-urls-repaired":{"one":"install.companion.urls_repaired.one","other":"install.companion.urls_repaired.other","selector":"count"},"companion-owner-restored":"install.presentation.companion_owner_restored","companion-relaunch-unconfirmed":"install.presentation.companion_relaunch_unconfirmed","companion-prior-files-retained":"install.presentation.companion_prior_files_retained","companion-rollback-failed":"install.presentation.companion_rollback_failed","companion-helper-unavailable":"install.presentation.companion_helper_unavailable","companion-rejected-before-commit":"install.presentation.companion_rejected_before_commit","companion-indeterminate":"install.presentation.companion_indeterminate","restore-passphrase-required":"install.presentation.restore_passphrase_required","restore-passphrase-or-bundle-invalid":"install.presentation.restore_passphrase_or_bundle_invalid","restore-not-panel-backup":"install.presentation.restore_not_panel_backup","restore-schema-missing":"install.presentation.restore_schema_missing","restore-config-missing":"install.presentation.restore_config_missing","restore-config-invalid":"install.presentation.restore_config_invalid","restore-legacy-too-large":"install.presentation.restore_legacy_too_large","restore-companion-section-invalid":"install.presentation.restore_companion_section_invalid","restore-entity-object-invalid":"install.presentation.restore_entity_object_invalid","restore-profiles-object-invalid":"install.presentation.restore_profiles_object_invalid","restore-state-object-invalid":"install.presentation.restore_state_object_invalid","restore-archive-metadata-invalid":"install.presentation.restore_archive_metadata_invalid","restore-archive-entries-invalid":"install.presentation.restore_archive_entries_invalid","restore-entity-state-invalid":"install.presentation.restore_entity_state_invalid","restore-entity-owner-missing":"install.presentation.restore_entity_owner_missing","restore-app-state-invalid":"install.presentation.restore_app_state_invalid","restore-profile-archive-invalid":"install.presentation.restore_profile_archive_invalid","restore-profile-catalog-invalid":"install.presentation.restore_profile_catalog_invalid","restore-profile-catalog-not-restorable":"install.presentation.restore_profile_catalog_not_restorable","restore-profile-restore-unavailable":"install.presentation.restore_profile_restore_unavailable","restore-companion-helper-required":"install.presentation.restore_companion_helper_required","status-webview-old":"install.presentation.status_webview_old","status-no-renderer":"install.presentation.status_no_renderer","status-update-available":"install.presentation.status_update_available","status-schema-rollback":"install.presentation.status_schema_rollback","status-builtin-renderer-retries-stopped":"install.presentation.status_builtin_renderer_retries_stopped","status-external-renderer-crash-loop":"install.presentation.status_external_renderer_crash_loop","status-companion-url-missing":{"one":"install.status.companion_url_missing.one","other":"install.status.companion_url_missing.other","selector":"count"},"status-companion-probe-failed":"install.presentation.status_companion_probe_failed","status-zigbee-contained":"install.presentation.status_zigbee_contained","status-zigbee-containment-incomplete":"install.presentation.status_zigbee_containment_incomplete","status-zigbee-runaway":"install.presentation.status_zigbee_runaway","status-zigbee-high-cpu":"install.presentation.status_zigbee_high_cpu","status-zigbee-not-joined":"install.presentation.status_zigbee_not_joined","status-zigbee-legacy-watchdog":"install.presentation.status_zigbee_legacy_watchdog","status-storage-warning":"install.presentation.status_storage_warning","status-storage-critical":"install.presentation.status_storage_critical","status-storage-database-failure":"install.presentation.status_storage_database_failure","status-power-at-risk":"install.presentation.status_power_at_risk","status-power-caution":"install.presentation.status_power_caution","status-power-unknown":"install.presentation.status_power_unknown","status-mdns-not-running":"runtime.mdns.not_running","status-mdns-stale-address":"runtime.mdns.stale_address","status-mdns-unresponsive":{"one":"runtime.mdns.unresponsive.one","other":"runtime.mdns.unresponsive.other","selector":"attempts"},"status-mdns-recovering":"runtime.mdns.recovering"});
+  var PARAMS = Object.freeze({"operation-working":{"required":["owner"]},"restore-completed-with-state":{"required":["count"]},"package-uninstalled":{"required":["package"]},"package-uninstall-failed":{"required":["package"],"raw":true},"managed-release-unresolved":{"required":["component","channel"]},"managed-apk-missing":{"required":["component","version"]},"managed-up-to-date":{"required":["component","current"]},"managed-install-committed":{"required":["component","version"]},"managed-update-committed":{"required":["component","version"]},"managed-downgrade-committed":{"required":["component","version"]},"managed-pinned":{"required":["component","current","latest","cap"]},"managed-safety-cap-refused":{"required":["component","version","cap"]},"managed-manual-downgrade-required":{"required":["component","current","cap"]},"managed-play-managed":{"required":["component"]},"managed-no-recommendation":{"required":["component"]},"managed-no-newer":{"required":["component","current"]},"managed-attempt-recorded":{"required":["component","version","current"]},"install-no-permitted-route":{"required":["component"]},"install-download-too-large":{"required":["component"],"raw":true},"install-insufficient-storage":{"required":["component"],"raw":true},"install-staging-failed":{"required":["component"]},"install-download-failed":{"required":["component"]},"install-deferred-saving-state":{"required":["component"]},"install-guard-db-owned":{"required":["component"]},"install-durable-rejection":{"required":["component"],"raw":true},"install-retryable-failure":{"required":["component"],"raw":true},"companion-urls-repaired":{"required":["count"]},"status-webview-old":{"required":["current_engine","target_chromium"]},"status-update-available":{"required":["component","current","latest","release_url"]},"status-schema-rollback":{"required":["from_schema","to_schema"]},"status-companion-url-missing":{"required":["count"]},"status-storage-warning":{"optional":["usable_bytes","total_bytes","used_percent","database_bytes","wal_bytes"]},"status-storage-critical":{"optional":["usable_bytes","total_bytes","used_percent","database_bytes","wal_bytes"]},"status-storage-database-failure":{"required":["failure","operation"],"optional":["usable_bytes","total_bytes","used_percent","database_bytes","wal_bytes"]},"status-mdns-stale-address":{"required":["bound_ip","lan_ip"]},"status-mdns-unresponsive":{"required":["attempts","reason_code"]},"status-mdns-recovering":{"required":["reason_code"]}});
+  var ENUMS = Object.freeze({owner:["paneld","companion","webview","apk","package-uninstall","backup","restore-preview","restore","companion-url-repair","guard-db"],component:["paneld","companion","webview","apk"],channel:["stable","prerelease"],failure:["storage-full","io","corruption","busy"],operation:["app-state-write","ambient-history","ambient-history-reset","ambient-history-seed","catalog-access-history","catalog-issue-override","catalog-maintenance","catalog-metric-history","catalog-overrides","catalog-reset","catalog-scope-migration","catalog-status","catalog-sync","dashboard-performance-history","database-checkpoint","database-create","database-downgrade-tripwire","database-preopen-reconcile","database-upgrade","database-vault-read","database-vault-restore","database-version-read","proximity-history","proximity-history-reset","quick-check","storage-health-read","database"],reason_code:["own-advertisement-absent","multicast-socket-failed","teardown-failed","recreation-failed","no-response"]});
+  var COMPONENT_STATUS = Object.freeze({"started":"install.component_status.started","busy":"install.component_status.busy","bad-component":"install.component_status.bad_component","bad-action":"install.component_status.bad_action","bad-version":"install.component_status.bad_version","uncomparable-version":"install.component_status.uncomparable_version","downgrade-refused":"install.component_status.downgrade_refused"});
+  var APK_STATUS = Object.freeze({"started":"install.apk_status.started","busy":"install.apk_status.busy","stale-or-missing":"install.apk_status.stale_or_missing","disabled":"install.apk_status.disabled","no-root":"install.apk_status.no_root","invalid-url":"install.apk_status.invalid_url","upload-busy":"install.apk_status.upload_busy","stopping":"install.apk_status.stopping","upload-staging-failed":"install.apk_status.upload_staging_failed","insufficient-storage":"install.apk_status.insufficient_storage","upload-too-large":"install.apk_status.upload_too_large","fetch-too-large":"install.apk_status.fetch_too_large","upload-timeout":"install.apk_status.upload_timeout","fetch-timeout":"install.apk_status.fetch_timeout","fetch-failed":"install.apk_status.fetch_failed","cancelled":"install.apk_status.cancelled","invalid-request":"install.apk_status.invalid_request","not-an-apk":"install.apk_status.not_an_apk"});
+  var RESTORE_OUTCOME = Object.freeze({"succeeded":"install.restore_outcome.succeeded","partial":"install.restore_outcome.partial","failed":"install.restore_outcome.failed","skipped":"install.restore_outcome.skipped","rolled_back":"install.restore_outcome.rolled_back","rollback_failed":"install.restore_outcome.rollback_failed"});
+  var RADIO_STATE = Object.freeze({"off":"install.radio_state.off","starting":"install.radio_state.starting","healthy":"install.radio_state.healthy","degraded_unjoined":"install.radio_state.degraded_unjoined","degraded_high_cpu":"install.radio_state.degraded_high_cpu","runaway":"install.radio_state.runaway","contained":"install.radio_state.contained","containment_failed":"install.radio_state.containment_failed","unknown":"install.radio_state.unknown"});
+  var CONFIG_IMPORT_STATUS = Object.freeze({"too-large":"install.config_import_status.too_large","timeout":"install.config_import_status.timeout","bad-bundle":"install.config_import_status.bad_bundle","wrong-kind-or-schema":"install.config_import_status.wrong_kind_or_schema","bad-expected-cfg":"install.config_import_status.bad_expected_cfg","rejected":"install.config_import_status.rejected","dry_run":"install.config_import_status.dry_run","no-op":"install.config_import_status.no_op","stale-preview":"install.config_import_status.stale_preview","error":"install.config_import_status.error","database-compatibility-refused":"install.config_import_status.database_compatibility_refused","applied":"install.config_import_status.applied","partial":"install.config_import_status.partial","restored":"install.config_import_status.restored"});
+  function closedToken(table, value) {
+    var raw = String(value == null ? '' : value), key = table[raw];
+    return key && localized(key) ? t(key, raw) : raw;
+  }
+  function validParam(name, value) {
+    if (typeof value !== 'string' || value.length > 512) return false;
+    if (own.call(ENUMS, name)) return ENUMS[name].indexOf(value) >= 0;
+    if (name === 'package') return value.length <= 255 && /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(value);
+    if (name === 'count' || name === 'from_schema' || name === 'to_schema' || name === 'attempts') return /^(0|[1-9][0-9]{0,9})$/.test(value);
+    if (/^(usable_bytes|total_bytes|database_bytes|wal_bytes)$/.test(name)) return /^(0|[1-9][0-9]{0,18})$/.test(value);
+    if (name === 'used_percent') return /^(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)$/.test(value);
+    if (name === 'target_chromium') return /^[1-9][0-9]{0,2}$/.test(value);
+    if (name === 'release_url') { try { var url = new URL(value); return url.protocol === 'https:' && value.length <= 512; } catch (_) { return false; } }
+    if (name === 'bound_ip' || name === 'lan_ip') return value.length > 0 && value.length <= 45;
+    if (/^(version|current|latest|cap|current_engine)$/.test(name)) return value.length > 0 && value.length <= 128;
+    return true;
+  }
+  function envelopeBytes(value) {
+    try {
+      var json = JSON.stringify(value);
+      if (typeof TextEncoder === 'function') return new TextEncoder().encode(json).length;
+      return encodeURIComponent(json).replace(/%[0-9A-F]{2}|./g, 'x').length;
+    } catch (_) { return 2049; }
+  }
+  function presentation(envelope, compatibility) {
+    var fallback = String(compatibility == null ? '' : compatibility);
+    if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope) || Object.keys(envelope).sort().join(',') !== 'code,params') return { text: fallback, fallback: true };
+    var code = envelope.code, params = envelope.params;
+    if (typeof code !== 'string' || code.length > 64 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(code) || !own.call(PRESENTATIONS, code)) return { text: fallback, fallback: true };
+    if (!params || typeof params !== 'object' || Array.isArray(params) || Object.keys(params).length > 8 || envelopeBytes(envelope) > 2048) return { text: fallback, fallback: true };
+    var rule = PARAMS[code] || {}, required = rule.required || [], optional = rule.optional || [], names = Object.keys(params);
+    if (required.some(function (name) { return !own.call(params, name); }) || names.some(function (name) { return required.indexOf(name) < 0 && optional.indexOf(name) < 0; }) || names.some(function (name) { return !validParam(name, params[name]); })) return { text: fallback, fallback: true };
+    var keySpec = PRESENTATIONS[code], key = keySpec;
+    if (typeof keySpec === 'object') {
+      var count = Number(params[keySpec.selector]);
+      var category = count === 1 ? 'one' : 'other';
+      try { category = new Intl.PluralRules(locale).select(count) === 'one' ? 'one' : 'other'; } catch (_) {}
+      key = keySpec[category];
+    }
+    if (!localized(key)) return { text: fallback, fallback: true };
+    return { text: t(key, fallback, params), fallback: false, rawEvidence: !!rule.raw, compatibility: fallback };
+  }
+  function setPresented(node, envelope, compatibility) {
+    if (!node) return;
+    var value = presentation(envelope, compatibility);
+    node.removeAttribute('lang');
+    if (value.fallback) {
+      node.textContent = value.text;
+      if (locale !== 'en') node.setAttribute('lang', 'en');
+    } else if (value.rawEvidence && value.compatibility && value.compatibility !== value.text && typeof document.createTextNode === 'function') {
+      node.textContent = '';
+      var controlled = document.createElement('span'); controlled.textContent = value.text; node.appendChild(controlled);
+      node.appendChild(document.createTextNode(' — '));
+      var evidence = document.createElement('span'); evidence.className = 'install-raw-evidence'; evidence.setAttribute('lang', 'en'); evidence.textContent = value.compatibility; node.appendChild(evidence);
+    } else if (envelope && envelope.code === 'status-update-available' && envelope.params && envelope.params.release_url && value.text.indexOf(envelope.params.release_url) >= 0 && typeof document.createTextNode === 'function') {
+      var releaseUrl = envelope.params.release_url, parts = value.text.split(releaseUrl);
+      node.textContent = ''; node.appendChild(document.createTextNode(parts.shift()));
+      var link = document.createElement('a'); link.href = releaseUrl; link.textContent = releaseUrl; node.appendChild(link);
+      node.appendChild(document.createTextNode(parts.join(releaseUrl)));
+    } else node.textContent = value.text;
+  }
+  function renderWarnings(node, warnings, overlays) {
+    var validOverlay = Array.isArray(overlays) && overlays.length === warnings.length && overlays.length <= 11;
+    node.textContent = '';
+    warnings.forEach(function (legacy, index) {
+      var row = document.createElement('div'); row.className = 'setup';
+      var envelope = validOverlay ? overlays[index] : null;
+      var value = presentation(envelope, legacy);
+      if (!value.fallback) setPresented(row, envelope, legacy);
+      else { row.setAttribute('lang', 'en'); row.innerHTML = String(legacy == null ? '' : legacy); }
+      node.appendChild(row);
+    });
+  }
+  // Shared only as a frozen renderer so browser tests and future Install-owned fragments exercise the
+  // same fail-closed contract rather than copying validation logic.
+  window.HaPaneldInstallPresentation = Object.freeze({ present: presentation, set: setPresented });
+  var hardenedApprovalTitle = t('configure.hardened.action_approval', 'Requires physical on-panel approval for this action when Hardened mode is enabled.');
+  var hardenedApprovalAttrs = ' data-hardened-approval aria-describedby="hardened-approval-description" title="' + esc(hardenedApprovalTitle) + '"';
+  var hardenedApprovalA11yAttrs = ' aria-describedby="hardened-approval-description" title="' + esc(hardenedApprovalTitle) + '"';
   var scheduleInstallColumnAlignment = function () {};
   var installCardMemoryReady = false, installInitialLoadsComplete = false;
   var msg = function (t) {
     var e = document.getElementById('comp-msg');
     if (e && e.textContent !== t) { e.textContent = t; scheduleInstallColumnAlignment(); }
+  };
+  var msgPresented = function (envelope, fallback) {
+    var e = document.getElementById('comp-msg');
+    if (e) { setPresented(e, envelope, fallback); scheduleInstallColumnAlignment(); }
   };
   var row = function (name) { return document.querySelector('.comprow[data-name="' + name + '"]'); };
   function markVersionGeometryValid() {
@@ -14,7 +135,7 @@
   }
 
   function approvalMessage(body) {
-    return body && body.message || 'Approve this request on the panel, then retry it.';
+    return body && body.message || t('install.progress.approval_retry', 'Approve this request on the panel, then retry it.');
   }
 
   function approvalError(body) {
@@ -70,18 +191,19 @@
     var r = row(name); if (!r) return;
     var chan = r.querySelector('.cchan').value, vsel = r.querySelector('.cvsel');
     var installed = (r.querySelector('.cver') || {}).textContent || '';
-    vsel.innerHTML = '<option>loading…</option>';
+    vsel.textContent = '';
+    var loading = document.createElement('option'); loading.textContent = t('install.shared.loading', 'loading…'); vsel.appendChild(loading);
     return fetch('/api/v1/install/versions?name=' + encodeURIComponent(name) + '&channel=' + encodeURIComponent(chan))
       .then(function (res) { return res.json(); }).then(function (d) {
         var vs = (d && d.versions) || [];
-        if (!vs.length) { vsel.innerHTML = '<option value="">no versions found</option>'; verChanged(name); markVersionGeometryValid(); return true; }
+        if (!vs.length) { vsel.textContent = ''; var none = document.createElement('option'); none.value = ''; none.textContent = t('install.progress.no_versions', 'no versions found'); vsel.appendChild(none); verChanged(name); markVersionGeometryValid(); return true; }
         vsel.innerHTML = '';
         var firstInstallable = -1, installedIndex = -1;
         vs.forEach(function (v, i) {
           var o = document.createElement('option');
-          o.value = v.tag; o.textContent = v.version + (v.installable ? '' : ' (no APK)');
+          o.value = v.tag; o.textContent = v.version + (v.installable ? '' : ' ' + t('install.progress.no_apk', '(no APK)'));
           o.setAttribute('data-notes', v.notes || ''); o.setAttribute('data-installable', v.installable ? '1' : '0');
-          o.setAttribute('data-action', v.action || 'Install');
+          o.setAttribute('data-action', presentation(v.presentations && v.presentations.action, v.action || 'Install').text);
           o.setAttribute('data-apk', v.apk || '');
           if (firstInstallable < 0 && v.installable) firstInstallable = i;
           if (v.version === installed) installedIndex = i;
@@ -91,7 +213,7 @@
         verChanged(name);
         markVersionGeometryValid();
         return true;
-      }).catch(function () { installCardMemoryReady = false;vsel.innerHTML = '<option value="">check failed</option>'; verChanged(name);
+      }).catch(function () { installCardMemoryReady = false; vsel.textContent = ''; var failed = document.createElement('option'); failed.value = ''; failed.textContent = t('install.progress.check_failed', 'check failed'); vsel.appendChild(failed); verChanged(name);
         if (window.CardSizeMemory) window.CardSizeMemory.invalidate('install-cards');return false; });
   };
 
@@ -103,7 +225,7 @@
     var url = o ? o.getAttribute('data-notes') : '', installable = o && o.getAttribute('data-installable') === '1';
     setSafeLink(notes, url, 'visibility', 'visible', 'hidden');
     if (btn) {
-      btn.textContent = o ? (o.getAttribute('data-action') || 'Install') : 'Install';
+      btn.textContent = o ? (o.getAttribute('data-action') || t('install.components.install', 'Install')) : t('install.components.install', 'Install');
       btn.disabled = !(btn.getAttribute('data-root') === '1' && installable);
     }
     // No-root panels render a Download link instead of the Install button (ha-paneld can't install
@@ -129,62 +251,64 @@
   // Shared: POST the install, then poll /install/status until done and reload so versions re-render.
   function start(name, extra, btn) {
     if (btn) btn.disabled = true;
-    msg('Starting ' + name + '…');
+    msg(t('install.progress.starting', 'Starting {component}…', { component: name }));
     var body = 'name=' + encodeURIComponent(name);
     if (extra.action) body += '&action=' + encodeURIComponent(extra.action);
     if (extra.version) body += '&version=' + encodeURIComponent(extra.version);
     fetch('/api/v1/install/component', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })
       .then(approvalAwareJson).then(function (d) {
-        if (d.status === 'busy') { msg('Another install is already running — try again shortly.'); if (btn) btn.disabled = false; return; }
-        if (d.status !== 'started') { msg('Could not start: ' + (d.status || 'error')); if (btn) btn.disabled = false; return; }
+        if (d.status === 'busy') { msg(t('install.progress.busy', 'Another install is already running — try again shortly.')); if (btn) btn.disabled = false; return; }
+        if (d.status !== 'started') { var status = d.status || 'error'; msg(t('install.progress.could_not_start', 'Could not start: {status}', { status: closedToken(COMPONENT_STATUS, status) })); if (btn) btn.disabled = false; return; }
         pollInstall(0);
-      }).catch(function (error) { msg(requestFailure(error, 'Failed to start — check root/daemon.')); if (btn) btn.disabled = false; });
+      }).catch(function (error) { msg(requestFailure(error, t('install.progress.start_failed', 'Failed to start — check root/daemon.'))); if (btn) btn.disabled = false; });
   }
 
   function pollInstall(n) {
     fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
-      if (d.running) { msg((d.component || 'Install') + ': working…'); setTimeout(function () { pollInstall(n + 1); }, 2500); return; }
-      msg((d.component || 'Install') + ': ' + (d.message || 'done') + ' — reloading…');
+      if (d.running) { var workingFallback = t('install.progress.working', '{component}: working…', { component: d.component || t('install.components.install', 'Install') }); msgPresented(d.presentation, workingFallback); setTimeout(function () { pollInstall(n + 1); }, 2500); return; }
+      var result = presentation(d.presentation, d.message || 'done');
+      var done = t('install.progress.done_reload', '{component}: {result} — reloading…', { component: d.component || t('install.components.install', 'Install'), result: result.text });
+      if (result.rawEvidence && !result.fallback) msgPresented(d.presentation, d.message || 'done'); else msg(done);
       setTimeout(function () { location.reload(); }, 2000);
     }).catch(function () {
       // Transient (e.g. ha-paneld restarted itself after a self-update) — keep trying a while.
-      if (n < 40) setTimeout(function () { pollInstall(n + 1); }, 3000); else msg('Lost contact — reload to check.');
+      if (n < 40) setTimeout(function () { pollInstall(n + 1); }, 3000); else msg(t('install.progress.lost_contact_reload', 'Lost contact — reload to check.'));
     });
   }
 
   // Top-of-tab WebView too-old heal button.
   window.healWebView = function (btn) {
     btn.disabled = true; var s = document.getElementById('wv-heal');
-    if (s) s.textContent = 'Downloading + installing… this takes a minute.';
+    if (s) s.textContent = t('install.progress.webview_installing', 'Downloading + installing… this takes a minute.');
     fetch('/api/v1/webview/heal', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
-      if (d.status === 'busy') { if (s) s.textContent = 'Another operation is running — try again shortly.'; btn.disabled = false; return; }
-      if (s) s.textContent = 'Installing WebView — reload the dashboard, then refresh this page to confirm the new version.';
-    }).catch(function (error) { if (s) s.textContent = requestFailure(error, 'Failed to start — check root/daemon.'); btn.disabled = false; });
+      if (d.status === 'busy') { if (s) s.textContent = t('install.progress.operation_busy', 'Another operation is running — try again shortly.'); btn.disabled = false; return; }
+      if (s) setPresented(s, d.presentation, t('install.progress.webview_started', 'Installing WebView — reload the dashboard, then refresh this page to confirm the new version.'));
+    }).catch(function (error) { if (s) s.textContent = requestFailure(error, t('install.progress.start_failed', 'Failed to start — check root/daemon.')); btn.disabled = false; });
   };
 
   // Companion internal-URL repair (HA 2026.7 "Missing 'Host' header"): copy external_url into a blank
   // internal_url, then force-stop + relaunch the Companion.
   window.repairCompUrl = function (btn) {
     btn.disabled = true; var s = document.getElementById('cu-fix');
-    if (s) s.textContent = 'Repairing + relaunching the Companion…';
+    if (s) s.textContent = t('install.progress.companion_repairing', 'Repairing + relaunching the Companion…');
     fetch('/api/v1/companion/repair-url', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
-      if (d.status === 'busy') { if (s) s.textContent = 'Another operation is running — try again shortly.'; btn.disabled = false; return; }
-      if (s) s.textContent = 'Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.';
-    }).catch(function (error) { if (s) s.textContent = requestFailure(error, 'Failed to start — check root.'); btn.disabled = false; });
+      if (d.status === 'busy') { if (s) s.textContent = t('install.progress.operation_busy', 'Another operation is running — try again shortly.'); btn.disabled = false; return; }
+      if (s) setPresented(s, d.presentation, t('install.progress.companion_repair_started', 'Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.'));
+    }).catch(function (error) { if (s) s.textContent = requestFailure(error, t('install.progress.companion_repair_failed', 'Failed to start — check root.')); btn.disabled = false; });
   };
 
   // On-demand health audit: force a fresh update check + re-probe, render the warnings inline.
   window.healthAudit = function (btn) {
     btn.disabled = true; var out = document.getElementById('audit-out');
-    if (out) { out.innerHTML = '<p class="note">Checking…</p>'; scheduleInstallColumnAlignment(); }
+    if (out) { out.textContent = ''; var checking = document.createElement('p'); checking.className = 'note'; checking.textContent = t('install.progress.audit_checking', 'Checking…'); out.appendChild(checking); scheduleInstallColumnAlignment(); }
     fetch('/api/v1/status?refresh=1').then(function (r) { return r.json(); }).then(function (d) {
       var w = (d && d.warnings) || [];
       if (!out) return;
-      if (!w.length) { out.innerHTML = '<p class="note">✓ No problems detected — this panel looks ready.</p>'; }
-      else { out.innerHTML = w.map(function (h) { return '<div class="setup">' + h + '</div>'; }).join(''); }
+      if (!w.length) { out.textContent = ''; var clean = document.createElement('p'); clean.className = 'note'; clean.textContent = '✓ ' + t('install.progress.audit_clean', 'No problems detected — this panel looks ready.'); out.appendChild(clean); }
+      else { renderWarnings(out, w, d.warning_presentations); }
       btn.disabled = false; scheduleInstallColumnAlignment();
     }).catch(function () {
-      if (out) out.innerHTML = '<p class="note">Audit failed — try again.</p>';
+      if (out) { out.textContent = ''; var failure = document.createElement('p'); failure.className = 'note'; failure.textContent = t('install.progress.audit_failed', 'Audit failed — try again.'); out.appendChild(failure); }
       btn.disabled = false; scheduleInstallColumnAlignment();
     });
   };
@@ -227,7 +351,10 @@
     'invalid-request': 'the panel rejected this request identifier',
     'not-an-apk': 'that file is not a readable APK'
   };
-  function apkErrorText(code) { return APK_ERRORS[code] || code || 'error'; }
+  function apkErrorText(code) {
+    var fallback = APK_ERRORS[code] || code || 'error', key = APK_STATUS[code];
+    return key && localized(key) ? t(key, fallback) : fallback;
+  }
 
   // Render the inspected identity + the approval-marked Confirm-install button. Shared by both APK
   // sources so a fetched APK gets exactly the review an uploaded one does, from the same token.
@@ -242,14 +369,14 @@
       scheduleInstallColumnAlignment();
       return;
     }
-    prev.innerHTML = '<table class="dt"><tr><th>Package</th><td>' + esc(d.package) + '</td></tr>' +
-      '<tr><th>Version</th><td>' + esc(d.version) + '</td></tr>' +
-      '<tr><th>Signer SHA-256</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
+    prev.innerHTML = '<table class="dt"><tr><th>' + esc(t('install.apk.dynamic.package', 'Package')) + '</th><td>' + esc(d.package) + '</td></tr>' +
+      '<tr><th>' + esc(t('install.shared.version', 'Version')) + '</th><td>' + esc(d.version) + '</td></tr>' +
+      '<tr><th>' + esc(t('install.apk.dynamic.signer', 'Signer SHA-256')) + '</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
-      '<button class="pbtn"' + hardenedApprovalAttrs + ' data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ Install ' + esc(d.package) + '</button>' +
-      '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ Cancel</button>' +
+      '<button class="pbtn"' + hardenedApprovalAttrs + ' data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ ' + esc(t('install.apk.dynamic.install', 'Install {package}', { package: d.package })) + '</button>' +
+      '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.cancel', 'Cancel')) + '</button>' +
       '</div>' +
-      '<p class="note">Wrong APK? Cancel deletes it from the panel — or just choose another file or link, which replaces it.</p>';
+      '<p class="note">' + esc(t('install.apk.dynamic.wrong_apk', 'Wrong APK? Cancel deletes it from the panel — or just choose another file or link, which replaces it.')) + '</p>';
     scheduleInstallColumnAlignment();
   }
 
@@ -275,9 +402,8 @@
   // re-probes rather than deleting something the operator never saw.
   function renderApkPendingRecovery(prev, d) {
     if (!prev) return;
-    prev.innerHTML = '<p class="note">The panel is holding a previously inspected APK: <b>' + esc(d.package) + '</b> ' +
-      esc(d.version) + '. Uploading or fetching a new APK will replace it.</p>' +
-      '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ Discard pending upload</button>';
+    prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.pending', 'The panel is holding a previously inspected APK: {package} {version}. Uploading or fetching a new APK will replace it.', { package: d.package, version: d.version })) + '</p>' +
+      '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.discard_pending', 'Discard pending upload')) + '</button>';
     scheduleInstallColumnAlignment();
   }
 
@@ -304,14 +430,14 @@
     apkMsg('');
     var mine = ++apkPreviewGeneration;
     apkFetchRequest = null;
-    if (prev) { prev.innerHTML = '<p class="note">Uploading + inspecting ' + esc(f.name) + '…</p>'; scheduleInstallColumnAlignment(); }
+    if (prev) { prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.uploading', 'Uploading + inspecting {filename}…', { filename: f.name })) + '</p>'; scheduleInstallColumnAlignment(); }
     fetch('/api/v1/install/apk', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f })
       .then(function (r) { return r.json(); }).then(function (d) {
         if (mine !== apkPreviewGeneration) return;
-        renderApkPreview(prev, d, 'Upload failed');
+        renderApkPreview(prev, d, t('install.apk.dynamic.upload_failed', 'Upload failed'));
       }).catch(function () {
         if (mine !== apkPreviewGeneration) return;
-        if (prev) prev.innerHTML = '<p class="note">Upload failed.</p>';
+        if (prev) prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.upload_failed_sentence', 'Upload failed.')) + '</p>';
         scheduleInstallColumnAlignment();
       });
   };
@@ -331,14 +457,14 @@
     var input = document.getElementById('apk-url');
     var url = input ? String(input.value || '').trim() : '';
     var prev = document.getElementById('apk-preview');
-    if (!url) { apkMsg('Paste an https:// link to an APK first.'); return; }
+    if (!url) { apkMsg(t('install.apk.dynamic.paste_url', 'Paste an https:// link to an APK first.')); return; }
     apkMsg('');
     var request = newRequestId();
     var mine = ++apkPreviewGeneration;
     apkFetchRequest = request;
     if (prev) {
-      prev.innerHTML = '<p class="note">Downloading + inspecting…</p>' +
-        '<button class="pbtn" style="margin-top:8px" onclick="apkCancelFetch()">Cancel</button>';
+      prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.downloading', 'Downloading + inspecting…')) + '</p>' +
+        '<button class="pbtn" style="margin-top:8px" onclick="apkCancelFetch()">' + esc(t('install.apk.dynamic.cancel', 'Cancel')) + '</button>';
       scheduleInstallColumnAlignment();
     }
     fetch('/api/v1/install/apk/from-url', {
@@ -349,15 +475,15 @@
       if (mine !== apkPreviewGeneration) return;
       apkFetchRequest = null;
       if (!d.ok && d.error === 'cancelled') {
-        if (prev) { prev.innerHTML = '<p class="note">Download cancelled — the panel stopped it.</p>'; scheduleInstallColumnAlignment(); }
+        if (prev) { prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.download_cancelled', 'Download cancelled — the panel stopped it.')) + '</p>'; scheduleInstallColumnAlignment(); }
         return;
       }
-      renderApkPreview(prev, d, 'Download failed');
+      renderApkPreview(prev, d, t('install.apk.dynamic.download_failed', 'Download failed'));
     }).catch(function (error) {
       if (mine !== apkPreviewGeneration) return;
       apkFetchRequest = null;
       if (prev) {
-        prev.innerHTML = '<p class="note">' + esc(requestFailure(error, 'Download failed.')) + '</p>';
+        prev.innerHTML = '<p class="note">' + esc(requestFailure(error, t('install.apk.dynamic.download_failed_sentence', 'Download failed.'))) + '</p>';
         scheduleInstallColumnAlignment();
       }
     });
@@ -368,7 +494,7 @@
   window.apkCancelFetch = function () {
     var request = apkFetchRequest;
     if (!request) return;
-    apkMsg('Cancelling…');
+    apkMsg(t('install.apk.dynamic.cancelling', 'Cancelling…'));
     fetch('/api/v1/install/apk/fetch/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -395,7 +521,7 @@
       if (mine !== apkPreviewGeneration) return;
       if (d.ok) {
         if (prev) {
-          prev.innerHTML = '<p class="note">' + (d.discarded ? 'Pending APK discarded.' : 'No staged APK is pending.') + '</p>';
+          prev.innerHTML = '<p class="note">' + esc(d.discarded ? t('install.apk.dynamic.discarded', 'Pending APK discarded.') : t('install.apk.dynamic.none_pending', 'No staged APK is pending.')) + '</p>';
           scheduleInstallColumnAlignment();
         }
         return;
@@ -403,35 +529,35 @@
       // Refused: this view is stale — a newer upload owns the slot. Say so, then repaint from the
       // panel's truth instead of leaving a card that lies.
       if (prev) {
-        prev.innerHTML = '<p class="note">The pending upload changed — checking what the panel is holding…</p>';
+        prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.pending_changed', 'The pending upload changed — checking what the panel is holding…')) + '</p>';
         scheduleInstallColumnAlignment();
       }
       apkProbePending();
     }).catch(function (error) {
       btn.disabled = false;
       if (mine !== apkPreviewGeneration) return;
-      apkMsg(requestFailure(error, 'Failed to discard.'));
+      apkMsg(requestFailure(error, t('install.apk.dynamic.discard_failed', 'Failed to discard.')));
     });
   };
 
   window.apkInstall = function (btn) {
-    btn.disabled = true; apkMsg('Installing…');
+    btn.disabled = true; apkMsg(t('install.apk.dynamic.installing', 'Installing…'));
     var body = 'token=' + encodeURIComponent(btn.getAttribute('data-token') || '');
     fetch('/api/v1/install/apk/commit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body }).then(approvalAwareJson).then(function (d) {
-      if (d.status === 'busy') { apkMsg('Another install is running — try again shortly.'); btn.disabled = false; return; }
-      if (d.status === 'stale-or-missing') { apkMsg('This APK was replaced or expired — choose or fetch it again.'); btn.disabled = false; return; }
-      if (d.status !== 'started') { apkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
+      if (d.status === 'busy') { apkMsg(t('install.apk.dynamic.install_busy', 'Another install is running — try again shortly.')); btn.disabled = false; return; }
+      if (d.status === 'stale-or-missing') { apkMsg(t('install.apk.dynamic.stale', 'This APK was replaced or expired — choose or fetch it again.')); btn.disabled = false; return; }
+      if (d.status !== 'started') { var status = d.status || 'error'; apkMsg(t('install.progress.could_not_start', 'Could not start: {status}', { status: apkErrorText(status) })); btn.disabled = false; return; }
       var prev = document.getElementById('apk-preview');
       if (prev) prev.querySelectorAll('button').forEach(function (action) { action.disabled = true; });
       pollApk(0);
-    }).catch(function (error) { apkMsg(requestFailure(error, 'Failed to start.')); btn.disabled = false; });
+    }).catch(function (error) { apkMsg(requestFailure(error, t('install.apk.dynamic.start_failed', 'Failed to start.'))); btn.disabled = false; });
   };
 
   function pollApk(n) {
     fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
-      if (d.running) { apkMsg('Installing…'); setTimeout(function () { pollApk(n + 1); }, 2000); return; }
-      apkMsg('Result: ' + (d.message || 'done'));
-    }).catch(function () { if (n < 20) setTimeout(function () { pollApk(n + 1); }, 2500); else apkMsg('Lost contact.'); });
+      if (d.running) { apkMsg(t('install.apk.dynamic.installing', 'Installing…')); setTimeout(function () { pollApk(n + 1); }, 2000); return; }
+      var result = presentation(d.presentation, d.message || 'done'); apkMsg(t('install.apk.dynamic.result', 'Result: {result}', { result: result.text }));
+    }).catch(function () { if (n < 20) setTimeout(function () { pollApk(n + 1); }, 2500); else apkMsg(t('install.apk.dynamic.lost_contact', 'Lost contact.')); });
   }
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
@@ -441,21 +567,24 @@
     var sel = document.getElementById('uninst-pkg'); if (!sel) return Promise.resolve();
     return fetch('/api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
       var ps = (d && d.packages) || [];
-      if (!ps.length) { sel.innerHTML = '<option value="">no removable apps</option>'; return true; }
+      if (!ps.length) { sel.textContent = ''; var none = document.createElement('option'); none.value = ''; none.textContent = t('install.uninstall.dynamic.none', 'no removable apps'); sel.appendChild(none); return true; }
       sel.innerHTML = ps.map(function (p) { return '<option value="' + esc(p.pkg) + '">' + esc(p.label) + ' (' + esc(p.pkg) + ')</option>'; }).join('');
       return true;
-    }).catch(function () { sel.innerHTML = '<option value="">load failed</option>'; return false; });
+    }).catch(function () { sel.textContent = ''; var failed = document.createElement('option'); failed.value = ''; failed.textContent = t('install.uninstall.dynamic.load_failed', 'load failed'); sel.appendChild(failed); return false; });
   }
   window.doUninstall = function (btn) {
     var sel = document.getElementById('uninst-pkg'), msg = document.getElementById('uninst-msg');
     var pkg = sel && sel.value; if (!pkg) return;
-    if (!confirm('Uninstall ' + pkg + '? This removes the app and its data.')) return;
-    btn.disabled = true; if (msg) msg.textContent = 'Uninstalling ' + pkg + '…';
+    if (!confirm(t('install.uninstall.dynamic.confirm', 'Uninstall {package}? This removes the app and its data.', { package: pkg }))) return;
+    btn.disabled = true; if (msg) msg.textContent = t('install.uninstall.dynamic.working', 'Uninstalling {package}…', { package: pkg });
     fetch('/api/v1/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'pkg=' + encodeURIComponent(pkg) })
       .then(approvalAwareJson).then(function (d) {
-        if (msg) msg.textContent = d.ok ? ('Uninstalled ' + pkg) : ('Failed: ' + (d.result || d.error || 'error'));
+        if (msg) {
+          var compatibility = d.ok ? t('install.uninstall.dynamic.succeeded', 'Uninstalled {package}', { package: pkg }) : t('install.uninstall.dynamic.failed', 'Failed: {result}', { result: d.result || d.error || 'error' });
+          setPresented(msg, d.presentation, compatibility);
+        }
         btn.disabled = false; if (d.ok) loadPackages();
-      }).catch(function (error) { if (msg) msg.textContent = requestFailure(error, 'Failed.'); btn.disabled = false; });
+      }).catch(function (error) { if (msg) msg.textContent = requestFailure(error, t('install.uninstall.dynamic.request_failed', 'Failed.')); btn.disabled = false; });
   };
   var initialPackagesLoad = loadPackages();
 
@@ -471,10 +600,10 @@
     var plain = !!((document.getElementById('bk-plain') || {}).checked);
     var comp = document.getElementById('bk-comp');
     if (!pw && !plain) {
-      bkMsg('Enter a passphrase, or explicitly acknowledge the unencrypted plaintext ZIP.');
+      bkMsg(t('install.backup.dynamic.passphrase_required', 'Enter a passphrase, or explicitly acknowledge the unencrypted plaintext ZIP.'));
       return;
     }
-    btn.disabled = true; bkMsg(pw ? 'Building encrypted backup…' : 'Building unencrypted ZIP…');
+    btn.disabled = true; bkMsg(pw ? t('install.backup.dynamic.building_encrypted', 'Building encrypted backup…') : t('install.backup.dynamic.building_plain', 'Building unencrypted ZIP…'));
     fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'passphrase=' + encodeURIComponent(pw) + '&allow_plaintext=' + (plain ? '1' : '0') +
         '&include_companion=' + (comp && comp.checked ? '1' : '0') })
@@ -482,16 +611,16 @@
         // A 202 approval JSON is not an archive. Parse it before the generic 2xx/blob branch so it
         // can never be saved with an .hpb or .zip filename.
         if (r.status === 202) return approvalAwareJson(r).then(function (d) {
-          throw new Error(d.message || d.error || 'Backup was accepted without an archive.');
+          throw new Error(d.message || d.error || t('install.backup.dynamic.accepted_without_archive', 'Backup was accepted without an archive.'));
         });
         if (r.ok) return r.blob();
-        return r.json().then(function (d) { throw new Error(d.message || d.error || 'request failed'); });
+        return r.json().then(function (d) { throw new Error(d.message || d.error || t('install.backup.dynamic.request_failed', 'request failed')); });
       }).then(function (b) {
         var a = document.createElement('a'), url = URL.createObjectURL(b);
         var switcher = document.getElementById('pswitch'), panelName = switcher && switcher.dataset && switcher.dataset.selfName;
         a.href = url; a.download = (panelName || document.title.split('·')[0] || 'panel').trim() + '-backup.' + (pw ? 'hpb' : 'zip');
         document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-        bkMsg('Backup downloaded' + (pw ? ' (encrypted) — keep the passphrase.' : ' (unencrypted ZIP).')); btn.disabled = false;
+        bkMsg(pw ? t('install.backup.dynamic.downloaded_encrypted', 'Backup downloaded (encrypted) — keep the passphrase.') : t('install.backup.dynamic.downloaded_plain', 'Backup downloaded (unencrypted ZIP).')); btn.disabled = false;
       }).catch(function (e) { bkMsg(e && e.approvalRequired ? e.message : 'Backup failed: ' + (e.message || 'request failed')); btn.disabled = false; });
   };
 
@@ -500,11 +629,11 @@
   window.configExport = function (includeSecrets, btn) {
     var out = document.getElementById('cfg-export-result');
     if (btn) btn.disabled = true;
-    if (out) out.textContent = includeSecrets ? 'Requesting credential-inclusive export…' : 'Building configuration export…';
+    if (out) out.textContent = includeSecrets ? t('install.backup.dynamic.export_requesting_secrets', 'Requesting credential-inclusive export…') : t('install.backup.dynamic.export_building', 'Building configuration export…');
     var path = '/api/v1/config/export' + (includeSecrets ? '?include_secrets=1' : '');
     fetch(path, { headers: { 'Accept': 'application/json' } }).then(function (r) {
       if (r.status === 202) return approvalAwareJson(r).then(function (d) {
-        throw new Error(d.message || d.error || 'Export was accepted without a download.');
+        throw new Error(d.message || d.error || t('install.backup.dynamic.export_accepted_without_download', 'Export was accepted without a download.'));
       });
       if (!r.ok) return r.json().catch(function () { return {}; }).then(function (d) {
         throw new Error(d.message || d.error || ('HTTP ' + r.status));
@@ -516,7 +645,7 @@
       var link = document.createElement('a'), url = URL.createObjectURL(blob);
       link.href = url; link.download = stem + '-config.json';
       document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-      if (out) out.textContent = 'Configuration export downloaded' + (includeSecrets ? ' with stored credentials.' : '.');
+      if (out) out.textContent = includeSecrets ? t('install.backup.dynamic.export_downloaded_secrets', 'Configuration export downloaded with stored credentials.') : t('install.backup.dynamic.export_downloaded', 'Configuration export downloaded.');
       if (btn) btn.disabled = false;
     }).catch(function (error) {
       if (out) out.textContent = requestFailure(error, 'Export failed: ' + (error.message || 'request failed'));
@@ -530,41 +659,41 @@
     rsFile = input.files && input.files[0]; if (!rsFile) return;
     var pw = (document.getElementById('rs-pw') || {}).value || '';
     var prev = document.getElementById('rs-preview');
-    if (prev) { prev.innerHTML = '<p class="note">Reading preview…</p>'; scheduleInstallColumnAlignment(); }
+    if (prev) { prev.innerHTML = '<p class="note">' + esc(t('install.backup.dynamic.restore_reading', 'Reading preview…')) + '</p>'; scheduleInstallColumnAlignment(); }
     fetch('/api/v1/restore?dry_run=1', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
       .then(function (r) { return r.json(); }).then(function (d) {
         if (!prev) return;
-        if (!d.ok) { prev.innerHTML = '<p class="note">' + esc(d.error || 'could not read bundle') + '</p>'; scheduleInstallColumnAlignment(); return; }
-        var comp = d.companion_files ? (esc(d.companion_pkg) + ' (' + d.companion_files + ' files)') : 'none';
-        prev.innerHTML = '<table class="dt"><tr><th>Panel</th><td>' + esc(d.panel_id) + '</td></tr>' +
-          '<tr><th>Config keys</th><td>' + d.config_keys + '</td></tr>' +
-          '<tr><th>Companion login</th><td>' + comp + '</td></tr></table>' +
-          '<button class="pbtn"' + hardenedApprovalA11yAttrs + ' style="margin-top:8px" onclick="restoreConfirm(this)">⚠ Restore this bundle now</button>';
+        if (!d.ok) { var refusedFallback = d.error || t('install.backup.dynamic.restore_unreadable', 'could not read bundle'); prev.textContent = ''; var refusedNode = document.createElement('p'); refusedNode.className = 'note'; setPresented(refusedNode, d.presentation, refusedFallback); prev.appendChild(refusedNode); scheduleInstallColumnAlignment(); return; }
+        var comp = d.companion_files ? pluralText('install.backup.preview_files.one', 'install.backup.preview_files.other', d.companion_files, '{package} ({count} file)', '{package} ({count} files)', { package: d.companion_pkg, count: String(d.companion_files) }) : t('install.backup.dynamic.preview_none', 'none');
+        prev.innerHTML = '<table class="dt"><tr><th>' + esc(t('install.backup.dynamic.preview_panel', 'Panel')) + '</th><td>' + esc(d.panel_id) + '</td></tr>' +
+          '<tr><th>' + esc(t('install.backup.dynamic.preview_config_keys', 'Config keys')) + '</th><td>' + esc(d.config_keys) + '</td></tr>' +
+          '<tr><th>' + esc(t('install.backup.dynamic.preview_companion', 'Companion login')) + '</th><td>' + esc(comp) + '</td></tr></table>' +
+          '<button class="pbtn"' + hardenedApprovalA11yAttrs + ' style="margin-top:8px" onclick="restoreConfirm(this)">⚠ ' + esc(t('install.backup.dynamic.restore_now', 'Restore this bundle now')) + '</button>';
         scheduleInstallColumnAlignment();
       }).catch(function () {
-        if (prev) prev.innerHTML = '<p class="note">Preview failed.</p>';
+        if (prev) prev.innerHTML = '<p class="note">' + esc(t('install.backup.dynamic.preview_failed', 'Preview failed.')) + '</p>';
         scheduleInstallColumnAlignment();
       });
   };
 
   window.restoreConfirm = function (btn) {
     if (!rsFile) return;
-    if (!confirm('Restore overwrites this panel\'s config and Companion login. Continue?')) return;
+    if (!confirm(t('install.backup.dynamic.restore_confirm', 'Restore overwrites this panel\'s config and Companion login. Continue?'))) return;
     var pw = (document.getElementById('rs-pw') || {}).value || '';
-    btn.disabled = true; bkMsg('Restoring…');
+    btn.disabled = true; bkMsg(t('install.backup.dynamic.restoring', 'Restoring…'));
     fetch('/api/v1/restore', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
       .then(approvalAwareJson).then(function (d) {
-        if (d.status === 'busy') { bkMsg('Another operation is running — try again shortly.'); btn.disabled = false; return; }
-        if (d.status !== 'started') { bkMsg('Could not start: ' + (d.status || 'error')); btn.disabled = false; return; }
+        if (d.status === 'busy') { bkMsg(t('install.progress.operation_busy', 'Another operation is running — try again shortly.')); btn.disabled = false; return; }
+        if (d.status !== 'started') { bkMsg(t('install.progress.could_not_start', 'Could not start: {status}', { status: closedToken(COMPONENT_STATUS, d.status || 'error') })); btn.disabled = false; return; }
         pollRestore(0);
-      }).catch(function (error) { bkMsg(requestFailure(error, 'Restore failed to start.')); btn.disabled = false; });
+      }).catch(function (error) { bkMsg(requestFailure(error, t('install.backup.dynamic.restore_start_failed', 'Restore failed to start.'))); btn.disabled = false; });
   };
 
   function pollRestore(n) {
     fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
-      if (d.running) { bkMsg('Restoring…'); setTimeout(function () { pollRestore(n + 1); }, 2500); return; }
-      bkMsg('Restore: ' + (d.message || 'done'));
-    }).catch(function () { if (n < 20) setTimeout(function () { pollRestore(n + 1); }, 3000); else bkMsg('Lost contact — reload to check.'); });
+      if (d.running) { bkMsg(t('install.backup.dynamic.restoring', 'Restoring…')); setTimeout(function () { pollRestore(n + 1); }, 2500); return; }
+      var result = presentation(d.presentation, d.message || 'done'); bkMsg(t('install.backup.dynamic.restore_result', 'Restore: {result}', { result: result.text }));
+    }).catch(function () { if (n < 20) setTimeout(function () { pollRestore(n + 1); }, 3000); else bkMsg(t('install.progress.lost_contact_reload', 'Lost contact — reload to check.')); });
   }
 
   // Config-only bundles are intentionally separate from full device backups. Preview first and carry
@@ -580,28 +709,35 @@
           var summary = changes.length ? changes.map(function (c) {
             return '  ' + c.key + ': ' + (c.from == null ? '(unset)' : c.from) + ' → ' + c.to;
           }).join('\n') : '  (no changes)';
-          if (!confirm('Import will change ' + changes.length + ' setting(s):\n\n' + summary + '\n\nApply now?')) {
-            if (out) out.textContent = 'Import cancelled.';
+          var changedLead = pluralText('install.import.changed.one', 'install.import.changed.other', changes.length, 'Import will change {count} setting:', 'Import will change {count} settings:', { count: String(changes.length) });
+          if (!confirm(changedLead + '\n\n' + summary + '\n\n' + t('install.import.apply_question', 'Apply now?'))) {
+            if (out) out.textContent = t('install.backup.dynamic.import_cancelled', 'Import cancelled.');
             return;
           }
           return fetch('/api/v1/config/import?expected_cfg=' + encodeURIComponent(dry.expected_cfg || ''), { method: 'POST', body: bodyText })
             .then(function (r) { return approvalAwareJson(r).then(function (body) { return { ok: r.ok, status: r.status, body: body }; }); })
             .then(function (response) {
               if (response.status === 409) {
-                if (out) out.textContent = 'Import not applied: panel settings changed after the preview. Preview the file again.';
+                if (out) out.textContent = t('install.backup.dynamic.import_changed', 'Import not applied: panel settings changed after the preview. Preview the file again.');
                 return;
               }
               if (!response.ok) throw (response.body.status || response.status);
               var res = response.body;
-              if (out) out.textContent = 'Import ' + res.status + ' · applied ' + (res.applied || []).length +
-                ', skipped ' + (res.skipped || []).length +
-                ((res.warnings || []).length ? '\nwarnings:\n  ' + res.warnings.join('\n  ') : '') +
-                ((res.errors || []).length ? '\nerrors:\n  ' + res.errors.join('\n  ') : '') +
-                '\nReloading to show the imported settings…';
+              if (out) {
+                out.textContent = '';
+                var controlled = document.createElement('span');
+                controlled.textContent = t('install.backup.dynamic.import_summary', 'Import {status} · applied {applied}, skipped {skipped}', { status: closedToken(CONFIG_IMPORT_STATUS, res.status), applied: String((res.applied || []).length), skipped: String((res.skipped || []).length) });
+                out.appendChild(controlled);
+                var evidenceParts = [];
+                if ((res.warnings || []).length) evidenceParts.push('warnings:\n  ' + res.warnings.join('\n  '));
+                if ((res.errors || []).length) evidenceParts.push('errors:\n  ' + res.errors.join('\n  '));
+                if (evidenceParts.length) { out.appendChild(document.createTextNode('\n')); var evidence = document.createElement('span'); evidence.className = 'install-raw-evidence'; evidence.setAttribute('lang', 'en'); evidence.textContent = evidenceParts.join('\n'); out.appendChild(evidence); }
+                out.appendChild(document.createTextNode('\n' + t('install.backup.dynamic.import_reloading', 'Reloading to show the imported settings…')));
+              }
               setTimeout(function () { location.reload(); }, 1800);
             });
         });
-    }).catch(function (e) { if (out) out.textContent = e && e.approvalRequired ? e.message : 'Import failed: ' + e; });
+    }).catch(function (e) { if (out) { out.textContent = e && e.approvalRequired ? e.message : 'Import failed: ' + e; if (locale !== 'en') out.setAttribute('lang', 'en'); } });
     input.value = '';
   };
 
@@ -621,7 +757,7 @@
     if (!note) {
       note = document.createElement('p'); note.className = 'note protected-form-result'; form.appendChild(note);
     }
-    note.textContent = 'Applying…';
+    note.textContent = t('install.backup.dynamic.form_applying', 'Applying…');
     if (submitter) submitter.disabled = true;
     fetch(path, {
       method: 'POST',
@@ -635,11 +771,12 @@
         return result;
       });
     }).then(function (result) {
-      note.textContent = (result.message || 'Applied.') + ' Returning to this card…';
+      var applied = presentation(result.presentation, result.message || t('install.backup.dynamic.form_applied', 'Applied.'));
+      note.textContent = applied.text + ' ' + t('install.backup.dynamic.form_returning', 'Returning to this card…');
       var target = path === '/api/v1/tame' ? '/install#cfg-tame' : '/install#cfg-display';
       setTimeout(function () { location.href = target; }, path === '/api/v1/tame' ? 1800 : 900);
     }).catch(function (error) {
-      note.textContent = error && error.message ? error.message : 'Could not apply this change.';
+      note.textContent = error && error.message ? error.message : t('install.backup.dynamic.form_failed', 'Could not apply this change.');
       if (submitter && submitter.id === 'tame-package-submit' && typeof updateTamePackageSubmit === 'function') {
         updateTamePackageSubmit();
       } else if (submitter) submitter.disabled = false;
@@ -674,8 +811,8 @@
     if (!d || !d.present) return true;
     var card = document.getElementById('radiocard'), st = document.getElementById('radio-status'),
         health = document.getElementById('radio-health');
-    if (st) st.textContent = d.status || '';
-    if (health) health.textContent = d.state || 'unknown';
+    if (st) setPresented(st, d.presentations && d.presentations.status, d.status || '');
+    if (health) health.textContent = closedToken(RADIO_STATE, d.state || 'unknown');
     if (card) { card.style.display = ''; scheduleInstallColumnAlignment(); }
     return true;
   }).catch(function () { return false; });

@@ -1,13 +1,26 @@
 // Shared explicit repair/acknowledgement interaction for Information, Configure, and Install banners.
 (function () {
+  "use strict";
+  var projection = {};
+  try {
+    var source = document.getElementById('ha-i18n'); projection = source ? JSON.parse(source.textContent || '{}') : {};
+    if (!projection || typeof projection !== 'object' || Array.isArray(projection)) projection = {};
+  } catch (_) { projection = {}; }
+  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement.lang || 'en');
+  var languages = projection.languages && typeof projection.languages === 'object' && !Array.isArray(projection.languages) ? projection.languages : {};
+  function t(key, fallback) {
+    if (!window.HaI18n || typeof window.HaI18n.t !== 'function') return String(fallback == null ? '' : fallback);
+    try { var value = window.HaI18n.t(key, fallback); return typeof value === 'string' ? value : String(fallback == null ? '' : fallback); }
+    catch (_) { return String(fallback == null ? '' : fallback); }
+  }
+  function localized(key) { return locale === 'en' || languages[key] === locale; }
   function repairMessage(body) {
     if (body && body.error === 'approval-required') {
-      return body.message || 'Approve this request physically on the panel, then tap Repair power safety again.';
+      return t('runtime.power_safety.repair.approval', body.message || 'Approve this request physically on the panel, then tap Repair power safety again.');
     }
-    if (body && body.message) return body.message + (body.status === 'repaired' ? ' Refreshing…' : '');
-    if (body && body.status === 'repaired') return 'Power safety repaired and verified. Refreshing…';
-    if (body && body.status === 'partial') return 'Power safety repair was partial. No reboot was attempted.';
-    return body && body.message || 'Power safety repair failed; no reboot was attempted.';
+    if (body && body.status === 'repaired') return t('runtime.power_safety.repair.repaired', body.message || 'Power safety repaired and verified.') + ' ' + t('runtime.power_safety.repair.refreshing', 'Refreshing…');
+    if (body && body.status === 'partial') return t('runtime.power_safety.repair.partial', body.message || 'Power safety repair was partial. No reboot was attempted.');
+    return t('runtime.power_safety.repair.failed_no_reboot', body && body.message || 'Power safety repair failed; no reboot was attempted.');
   }
 
   function parseResponse(response) {
@@ -33,9 +46,9 @@
     var button = form.querySelector('button[type="submit"]');
     if (button) {
       button.disabled = false;
-      button.textContent = 'Hide this caution';
+      button.textContent = t('runtime.power_safety.button.hide', 'Hide this caution');
       button.setAttribute('data-hardened-approval', '');
-      button.title = 'Hide this unchanged caution in panel web pages; Hardened mode requires physical approval';
+      button.title = t('runtime.power_safety.button.hide_title', 'Hide this unchanged caution in panel web pages; Hardened mode requires physical approval');
     }
     var result = form.querySelector('.power-safety-repair-result');
     if (result) result.className = 'power-safety-acknowledge-result';
@@ -50,7 +63,7 @@
       var acknowledgeButton = form.querySelector('button[type="submit"]');
       var acknowledgeResult = form.querySelector('.power-safety-acknowledge-result');
       if (acknowledgeButton) acknowledgeButton.disabled = true;
-      if (acknowledgeResult) acknowledgeResult.textContent = 'Saving acknowledgement…';
+      if (acknowledgeResult) acknowledgeResult.textContent = t('runtime.power_safety.ack.saving', 'Saving acknowledgement…');
       var encoded = new URLSearchParams(new FormData(form)).toString();
       fetch(form.action, {
         method: 'POST',
@@ -60,7 +73,7 @@
         .then(parseResponse)
         .then(function (reply) {
           var body = reply.body;
-          if (acknowledgeResult) acknowledgeResult.textContent = body.message || 'The caution was not hidden.';
+          if (acknowledgeResult) acknowledgeResult.textContent = body.message && !localized('runtime.power_safety.ack.not_hidden') ? body.message : t('runtime.power_safety.ack.not_hidden', body.message || 'The caution was not hidden.');
           if (reply.response.ok && body.acknowledged) {
             var banner = form.closest('[data-power-safety-banner]');
             if (banner) banner.remove();
@@ -69,7 +82,7 @@
           if (acknowledgeButton) acknowledgeButton.disabled = false;
         })
         .catch(function () {
-          if (acknowledgeResult) acknowledgeResult.textContent = 'Could not save the acknowledgement; the caution remains visible.';
+          if (acknowledgeResult) acknowledgeResult.textContent = t('runtime.power_safety.ack.endpoint_failed', 'Could not save the acknowledgement; the caution remains visible.');
           if (acknowledgeButton) acknowledgeButton.disabled = false;
         });
       return;
@@ -79,7 +92,7 @@
     var button = form.querySelector('button[type="submit"]');
     var result = form.querySelector('.power-safety-repair-result');
     if (button) button.disabled = true;
-    if (result) result.textContent = 'Applying and verifying…';
+    if (result) result.textContent = t('runtime.power_safety.repair.applying', 'Applying and verifying…');
     fetch(form.action, { method: 'POST', headers: { 'Accept': 'application/json' } })
       .then(parseResponse)
       .then(function (reply) {
@@ -101,11 +114,14 @@
           setTimeout(function () { location.reload(); }, 1200);
       })
       .catch(function () {
-        if (result) result.textContent = 'Could not reach the repair endpoint; no repair was confirmed.';
+        if (result) result.textContent = t('runtime.power_safety.repair.endpoint_failed', 'Could not reach the repair endpoint; no repair was confirmed.');
         if (button) button.disabled = false;
       })
       .finally(function () {
-        if (button && result && result.textContent.indexOf('Refreshing') < 0) button.disabled = false;
+        if (button && result && bodyRefreshing(result.textContent) === false) button.disabled = false;
       });
   });
+  function bodyRefreshing(text) {
+    return String(text || '').indexOf(t('runtime.power_safety.repair.refreshing', 'Refreshing…')) >= 0;
+  }
 })();
