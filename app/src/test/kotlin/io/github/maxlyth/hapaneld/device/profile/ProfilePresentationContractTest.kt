@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import org.json.JSONObject
 
 class ProfilePresentationContractTest {
     @Test fun `every admitted code has an exact constructible parameter contract`() {
@@ -131,3 +132,20 @@ class ProfilePresentationContractTest {
         val CODE_MESSAGE_PAIR = Regex("\"[a-z][a-z0-9-]+\"\\s+to\\s+\"[^\"]+[.!?]\"")
     }
 }
+
+/** Resolves the production English catalogue exactly as the browser's closed presentation map does. */
+internal fun assertAuthoritativeEnglishMatches(
+    compatibilityProse: String,
+    presentation: ProfilePresentation,
+) {
+    val strings = JSONObject(File("src/main/assets/i18n/en.json").readText()).getJSONObject("strings")
+    val keys = listOf("profiles.issue.${presentation.code}", "profiles.result.${presentation.code}")
+        .filter(strings::has)
+    assertEquals("presentation code must resolve to exactly one authoritative English record", 1, keys.size)
+    var rendered = strings.getJSONObject(keys.single()).getString("text")
+    presentation.params.forEach { (name, value) -> rendered = rendered.replace("{$name}", value) }
+    assertTrue("all authoritative English placeholders must be resolved: $rendered", !PLACEHOLDER.containsMatchIn(rendered))
+    assertEquals(compatibilityProse, rendered)
+}
+
+private val PLACEHOLDER = Regex("\\{[a-z_]+}")

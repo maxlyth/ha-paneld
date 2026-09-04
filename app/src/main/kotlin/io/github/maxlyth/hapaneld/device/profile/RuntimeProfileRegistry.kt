@@ -1001,7 +1001,7 @@ class RuntimeProfileRegistry internal constructor(
                     "Profile ${invalid.ref.id}@${invalid.ref.revision.take(12)} is incompatible; using the rollback selection for this run, but recovery could not be persisted."
                 },
                 if (persisted) "activation-incompatible-selection-restored" else "activation-incompatible-recovery-persist-failed",
-                mapOf("id" to invalid.ref.id, "revision" to invalid.ref.revision),
+                mapOf("id" to invalid.ref.id, "revision" to invalid.ref.revision.take(12)),
             ),
         )
     }
@@ -1078,8 +1078,8 @@ class RuntimeProfileRegistry internal constructor(
                 "pinned-successor-held",
                 mapOf(
                     "id" to pinned.ref.id,
-                    "retired_revision" to pinned.ref.revision,
-                    "current_revision" to current.ref.revision,
+                    "retired_revision" to pinned.ref.revision.take(12),
+                    "current_revision" to current.ref.revision.take(12),
                 ),
             ),
         )
@@ -1121,8 +1121,8 @@ class RuntimeProfileRegistry internal constructor(
             "pinned-revision-retired",
             mapOf(
                 "id" to retired.ref.id,
-                "retired_revision" to retired.ref.revision,
-                "current_revision" to successor.ref.revision,
+                "retired_revision" to retired.ref.revision.take(12),
+                "current_revision" to successor.ref.revision.take(12),
             ),
         ),
     )
@@ -1201,7 +1201,7 @@ class RuntimeProfileRegistry internal constructor(
         ProfileSelection.Auto -> ProfilePresentation("$code-auto")
         is ProfileSelection.Pinned -> ProfilePresentation(
             "$code-pinned",
-            mapOf("id" to selection.ref.id, "revision" to selection.ref.revision),
+            mapOf("id" to selection.ref.id, "revision" to selection.ref.revision.take(12)),
         )
     }
 

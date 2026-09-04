@@ -7,6 +7,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.json.JSONArray
 
+/**
+ * Exact release exceptions approved after semantic review. A fallback is never admitted by state
+ * alone: its locale and key must appear here, and the catalogue parser requires its text to equal
+ * the authoritative English source.
+ */
+internal val APPROVED_PROFILES_ENGLISH_FALLBACKS: Set<Pair<String, String>> = setOf(
+    "de" to "profiles.action.rollback",
+    "fr" to "profiles.error.http",
+    "fr" to "profiles.section.validation",
+    "it" to "profiles.error.http",
+    "it" to "profiles.report.hardware",
+)
+
 /** Exact catalogue boundary for the Profiles HTML authoring surface. */
 class ProfilesI18nContractTest {
     private val assets = File("src/main/assets")
@@ -79,9 +92,15 @@ class ProfilesI18nContractTest {
         }
     }
 
-    @Test fun `every target carries a current staged Profiles translation`() {
+    @Test fun `every target carries a current promoted Profiles translation or exact approved fallback`() {
         val source = SourceCatalogue.parse(sourceFile.readText())
         val profiles = source.strings.filterKeys { it.startsWith("profiles.") }
+        val observedFallbacks = mutableSetOf<Pair<String, String>>()
+
+        APPROVED_PROFILES_ENGLISH_FALLBACKS.forEach { (locale, key) ->
+            assertTrue("approved Profiles fallback names an unsupported locale: $locale", locale in releaseTargetLocales)
+            assertTrue("approved Profiles fallback names a key outside the Profiles slice: $key", key in profiles)
+        }
 
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
@@ -89,16 +108,26 @@ class ProfilesI18nContractTest {
             profiles.forEach { (key, english) ->
                 val translated = checkNotNull(target.strings[key]) { "$locale is missing $key" }
                 assertEquals("$locale has stale source text for $key", english.sourceHash, translated.sourceHash)
-                // Profiles remains explicitly pre-review here. The final reviewed candidate tightens this
-                // to MACHINE_CROSS_CHECKED or COMMUNITY_CORRECTED before release.
+                val fallback = locale to key
+                if (translated.state == TranslationState.ENGLISH_FALLBACK) {
+                    observedFallbacks += fallback
+                    assertEquals("$locale English fallback must equal the authoritative source for $key", english.text, translated.text)
+                }
                 assertTrue(
-                    "$locale $key is an unresolved English fallback rather than a staged translation",
-                    translated.state == TranslationState.MACHINE_DRAFT ||
-                        translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                    "$locale $key must be reviewed or named as an exact approved English fallback",
+                    translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (translated.state == TranslationState.ENGLISH_FALLBACK &&
+                            fallback in APPROVED_PROFILES_ENGLISH_FALLBACKS),
                 )
             }
         }
+
+        assertEquals(
+            "approved Profiles English fallback policy contains a stale or unexercised exception",
+            APPROVED_PROFILES_ENGLISH_FALLBACKS,
+            observedFallbacks,
+        )
     }
 
     @Test fun `Profiles route projects its body locale and declares mixed fallback languages`() {

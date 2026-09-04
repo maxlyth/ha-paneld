@@ -52,13 +52,11 @@ class HtmlUiCatalogueContractTest {
 
     @Test fun `release target HTML UI slices are complete current and promoted`() {
         val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
-        // Profiles has exact staged parity in ProfilesI18nContractTest while its machine drafts are
-        // reviewed. Add profiles. here only in the final reviewed candidate that promotes the slice.
-        val prefixes = listOf("shell.", "dashboard.", "configure.")
+        val prefixes = listOf("shell.", "dashboard.", "configure.", "profiles.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
         assertEquals("the complete source catalogue is a reviewed release contract", 1577, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 818, expected.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1163, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
@@ -77,7 +75,9 @@ class HtmlUiCatalogueContractTest {
                 assertTrue(
                     "$locale must promote HTML UI key $key beyond draft before release",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                    translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (translated.state == TranslationState.ENGLISH_FALLBACK &&
+                            locale to key in APPROVED_PROFILES_ENGLISH_FALLBACKS),
                 )
             }
         }

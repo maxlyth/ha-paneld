@@ -62,7 +62,11 @@ class PinnedBundledRevisionUpgradeTest {
         assertEquals("Vendor", resolved.profile.manufacturer)
         assertEquals("Panel X rev B", resolved.profile.model)
         assertNotNull(resolved.activationGeneration)
+        assertEquals(64, oldRef.revision.length)
+        assertEquals(64, newRef.revision.length)
         assertEquals(listOf(repinWarning(oldRef, newRef)), resolved.issues.filter { it.path == "selection" })
+        val retired = resolved.issues.single { it.presentation?.code == "pinned-revision-retired" }
+        assertAuthoritativeEnglishMatches(retired.message, retired.presentation!!)
         assertTrue(resolved.issues.none { it.severity == ProfileIssueSeverity.ERROR })
         val staged = upgraded.status()
         assertEquals(ProfileSelection.Pinned(newRef), staged.selection)
@@ -166,11 +170,18 @@ class PinnedBundledRevisionUpgradeTest {
         assertEquals(ProfileActivationPhase.ROLLED_BACK, status.activation.phase)
         assertEquals(ProfileSelection.Pinned(oldRef), status.selection)
         assertEquals("Previous activation did not report healthy; rolled back to $vendorId@${oldRef.revision.take(12)}.", status.activation.message)
+        assertEquals(
+            mapOf("id" to vendorId, "revision" to oldRef.revision.take(12)),
+            status.activation.presentation!!.params,
+        )
+        assertAuthoritativeEnglishMatches(status.activation.message!!, status.activation.presentation)
 
         val again = install(releaseTwo).resolveForStartup()
         assertEquals(oldRef, again.summary.ref)
         assertNull(again.activationGeneration)
         assertEquals(listOf(heldWarning(oldRef, newRef)), again.issues.filter { it.path == "selection" })
+        val held = again.issues.single { it.presentation?.code == "pinned-successor-held" }
+        assertAuthoritativeEnglishMatches(held.message, held.presentation!!)
         assertEquals(ProfileActivationPhase.ROLLED_BACK, install(releaseTwo).status().activation.phase)
 
         val thirdYaml = vendorYaml(version = "1.0.2", model = "Panel X rev C")
@@ -506,6 +517,12 @@ class PinnedBundledRevisionUpgradeTest {
                     "$vendorId@${oldRef.revision.take(12)}" in it.message
             },
         )
+        val persistFailure = resolved.issues.single { it.presentation?.code == "repin-persist-failed-pinned" }
+        assertEquals(
+            mapOf("id" to vendorId, "revision" to oldRef.revision.take(12)),
+            persistFailure.presentation!!.params,
+        )
+        assertAuthoritativeEnglishMatches(persistFailure.message, persistFailure.presentation)
         assertEquals(listOf(repinWarning(oldRef, newRef)), resolved.issues.filter { it.path == "selection" })
         val untouched = upgraded.status()
         assertEquals(ProfileSelection.Pinned(oldRef), untouched.selection)
@@ -902,8 +919,8 @@ class PinnedBundledRevisionUpgradeTest {
             "pinned-revision-retired",
             mapOf(
                 "id" to retired.id,
-                "retired_revision" to retired.revision,
-                "current_revision" to successor.revision,
+                "retired_revision" to retired.revision.take(12),
+                "current_revision" to successor.revision.take(12),
             ),
         ),
     )
@@ -917,8 +934,8 @@ class PinnedBundledRevisionUpgradeTest {
             "pinned-successor-held",
             mapOf(
                 "id" to held.id,
-                "retired_revision" to held.revision,
-                "current_revision" to current.revision,
+                "retired_revision" to held.revision.take(12),
+                "current_revision" to current.revision.take(12),
             ),
         ),
     )

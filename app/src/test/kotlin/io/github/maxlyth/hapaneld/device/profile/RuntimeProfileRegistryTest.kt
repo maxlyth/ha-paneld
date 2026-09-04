@@ -739,7 +739,10 @@ class RuntimeProfileRegistryTest {
         assertEquals(ProfileSelection.Pinned(lkg), registry.status().lastKnownGood)
         assertEquals(ProfileActivationPhase.ROLLED_BACK, registry.status().activation.phase)
         assertTrue(registry.status().catalogRevision > revisionBeforeRecovery)
-        assertTrue(recovered.issues.any { "incompatible" in it.message })
+        val incompatibility = recovered.issues.single { it.presentation?.code == "activation-incompatible-selection-restored" }
+        assertEquals(64, ref.revision.length)
+        assertEquals(mapOf("id" to ref.id, "revision" to ref.revision.take(12)), incompatibility.presentation!!.params)
+        assertAuthoritativeEnglishMatches(incompatibility.message, incompatibility.presentation)
         assertFalse(registry.list().single { it.ref == ref }.compatible)
         assertTrue(registry.deleteProfile(ref, registry.status().catalogRevision) is ProfileMutation.Success)
     }
@@ -780,7 +783,10 @@ class RuntimeProfileRegistryTest {
         val recovered = registry.resolveForStartup()
 
         assertEquals("generic", recovered.summary.ref.id)
-        assertTrue(recovered.issues.any { "recovery could not be persisted" in it.message })
+        val incompatibility = recovered.issues.single { it.presentation?.code == "activation-incompatible-recovery-persist-failed" }
+        assertEquals(64, invalid.revision.length)
+        assertEquals(mapOf("id" to invalid.id, "revision" to invalid.revision.take(12)), incompatibility.presentation!!.params)
+        assertAuthoritativeEnglishMatches(incompatibility.message, incompatibility.presentation)
         val status = registry.status()
         assertEquals(17L, status.catalogRevision)
         assertEquals(ProfileSelection.Pinned(invalid), status.selection)
