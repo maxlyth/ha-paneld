@@ -79,6 +79,13 @@ class HardenedControlContractTest {
         assertTrue(dispatch.contains("SensitiveOperation.APK_INSTALL"))
         assertTrue(dispatch.contains("SensitiveOperation.DEVICE_REBOOT"))
 
+        // Hardened mode publishes a closed list of operations it protects, and a dashboard reload is on
+        // it. The MQTT arm shipped ungated while the HTTP route was gated, so a documented protection
+        // was absent on the transport an automation actually uses. Approval must precede the reload.
+        val reloadArm = dispatch.substring(dispatch.indexOf("cmdReload ->"), dispatch.indexOf("cmdReboot ->"))
+        assertTrue(reloadArm.contains("SensitiveOperation.DASHBOARD_RELOAD"))
+        assertTrue(reloadArm.indexOf("authorizeMqttSensitive(") < reloadArm.indexOf("handleReload()"))
+
         val auto = mqtt.substring(mqtt.indexOf("override fun handleCompanionAuto"), mqtt.indexOf("override fun handleSilenceBootChime"))
         assertTrue(auto.contains("if (on && approvalRequired) authorizeMqttSensitive("))
         assertTrue(auto.contains("approvalRequired && config.selfUpdate && requested != was"))

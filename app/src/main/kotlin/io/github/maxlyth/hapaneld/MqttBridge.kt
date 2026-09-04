@@ -2598,7 +2598,14 @@ internal class MqttBridge(
             cmdLed -> handleLed(payload)
             cmdNavigate -> handleNavigate(payload)
             cmdVolume -> handleVolume(payload)
-            cmdReload -> handleReload()
+            cmdReload -> {
+                authorizeMqttSensitive(
+                    SensitiveOperation.DASHBOARD_RELOAD,
+                    payload,
+                    "Reload the dashboard renderer from Home Assistant",
+                )
+                handleReload()
+            }
             cmdReboot -> {
                 authorizeMqttSensitive(
                     SensitiveOperation.DEVICE_REBOOT,
