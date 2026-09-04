@@ -18,6 +18,7 @@ sealed interface InstallOutcome {
     /** The install did not complete; [message] is the exact status shown to the user. */
     sealed interface Failure : InstallOutcome {
         val message: String
+        val presentation: InstallPresentation?
     }
 
     /**
@@ -25,11 +26,17 @@ sealed interface InstallOutcome {
      * mismatch, incompatible update, …). Retrying the same APK cannot help, so a same-pin loop guard
      * treats it as durable evidence.
      */
-    data class Rejected(override val message: String) : Failure
+    data class Rejected(
+        override val message: String,
+        override val presentation: InstallPresentation? = null,
+    ) : Failure
 
     /**
      * A transient network, storage, privilege, or helper-staging failure. A later attempt with the same
      * pin may still succeed, so it is not durable evidence for a loop guard.
      */
-    data class Retryable(override val message: String) : Failure
+    data class Retryable(
+        override val message: String,
+        override val presentation: InstallPresentation? = null,
+    ) : Failure
 }

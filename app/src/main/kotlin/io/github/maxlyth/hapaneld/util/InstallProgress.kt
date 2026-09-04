@@ -27,6 +27,7 @@ object InstallProgress {
         val status: Outcome,
         val items: Int? = null,
         val detail: String = "",
+        val presentation: InstallPresentation? = null,
     )
 
     data class OperationResult(
@@ -40,6 +41,7 @@ object InstallProgress {
     @Volatile var running: Boolean = false; private set
     @Volatile var component: String = ""; private set
     @Volatile var message: String = ""; private set
+    @Volatile private var presentation: InstallPresentation? = null
     @Volatile private var result: OperationResult? = null
     private var generation = 0L
     private var active: Ticket? = null
@@ -47,12 +49,13 @@ object InstallProgress {
 
     /** Claim the operation lane for [component]. Returns null if another owner is already in flight. */
     @Synchronized
-    fun start(component: String): Ticket? {
+    fun start(component: String, presentation: InstallPresentation? = null): Ticket? {
         if (running || activeConfigMutation != null) return null
         val ticket = Ticket(++generation)
         active = ticket
         this.component = component
         this.message = "Working…"
+        this.presentation = presentation
         this.result = null
         this.running = true
         return ticket
@@ -82,13 +85,18 @@ object InstallProgress {
      * competing install/restore caller continues to observe the lane as owned.
      */
     @Synchronized
-    fun promoteConfigMutation(ticket: ConfigMutationTicket, component: String): Ticket? {
+    fun promoteConfigMutation(
+        ticket: ConfigMutationTicket,
+        component: String,
+        presentation: InstallPresentation? = null,
+    ): Ticket? {
         if (activeConfigMutation != ticket || running || active != null) return null
         val promoted = Ticket(ticket.id)
         activeConfigMutation = null
         active = promoted
         this.component = component
         this.message = "Working…"
+        this.presentation = presentation
         this.result = null
         this.running = true
         return promoted
@@ -100,17 +108,29 @@ object InstallProgress {
 
     /** Record [result] only if [ticket] still owns the single progress slot. */
     @Synchronized
-    fun finish(ticket: Ticket, result: String, structured: OperationResult? = null) {
+    fun finish(
+        ticket: Ticket,
+        result: String,
+        structured: OperationResult? = null,
+        presentation: InstallPresentation? = null,
+    ) {
         if (active != ticket) return
         this.message = result
         this.result = structured
+        this.presentation = presentation
         this.running = false
         this.active = null
     }
 
     /** Ensure cancellation before a launched body begins cannot strand the process-global slot busy. */
     fun finishOnFailure(ticket: Ticket, job: Job): Job = job.also {
-        it.invokeOnCompletion { cause -> if (cause != null) finish(ticket, "cancelled") }
+        it.invokeOnCompletion { cause ->
+            if (cause != null) finish(
+                ticket,
+                "cancelled",
+                presentation = InstallPresentation("operation-cancelled"),
+            )
+        }
     }
 
     @Synchronized
@@ -118,6 +138,7 @@ object InstallProgress {
         append("{\"running\":").append(running)
         append(",\"component\":").append(esc(component))
         append(",\"message\":").append(esc(message))
+        presentation?.let { append(",\"presentation\":").append(it.json()) }
         result?.let { append(",\"result\":").append(resultJson(it)) }
         append('}')
     }
@@ -135,6 +156,7 @@ object InstallProgress {
         append("{\"status\":").append(esc(result.status.wireValue))
         result.items?.let { append(",\"items\":").append(it.coerceAtLeast(0)) }
         if (result.detail.isNotBlank()) append(",\"detail\":").append(esc(result.detail.take(MAX_DETAIL_CHARS)))
+        result.presentation?.let { append(",\"presentation\":").append(it.json()) }
         append('}')
     }
 

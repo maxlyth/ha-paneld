@@ -64,6 +64,47 @@ class InstallProgressTest {
         InstallProgress.finish(next, "done")
     }
 
+    @Test fun presentationIsAdditiveNestedBoundedAndClearedWithTheLegacyState() {
+        val working = InstallPresentation("operation-working", mapOf("owner" to "restore"))
+        val ticket = InstallProgress.start("Restore", working)!!
+        var status = JSONObject(InstallProgress.json())
+        assertEquals("Restore", status.getString("component"))
+        assertEquals("Working…", status.getString("message"))
+        assertEquals("operation-working", status.getJSONObject("presentation").getString("code"))
+
+        val terminal = InstallPresentation("restore-completed-with-state", mapOf("count" to "2"))
+        val nested = InstallPresentation("companion-urls-repaired", mapOf("count" to "1"))
+        InstallProgress.finish(
+            ticket,
+            "Restore completed (2 panel-state values restored)",
+            InstallProgress.OperationResult(
+                status = InstallProgress.Outcome.SUCCEEDED,
+                companion = InstallProgress.ComponentResult(
+                    InstallProgress.Outcome.SUCCEEDED,
+                    items = 1,
+                    detail = "repaired 1 server",
+                    presentation = nested,
+                ),
+            ),
+            terminal,
+        )
+        status = JSONObject(InstallProgress.json())
+        assertEquals("Restore completed (2 panel-state values restored)", status.getString("message"))
+        assertEquals("restore-completed-with-state", status.getJSONObject("presentation").getString("code"))
+        assertEquals(
+            "companion-urls-repaired",
+            status.getJSONObject("result").getJSONObject("companion")
+                .getJSONObject("presentation").getString("code"),
+        )
+
+        val next = InstallProgress.start("next")!!
+        status = JSONObject(InstallProgress.json())
+        assertFalse(status.has("presentation"))
+        assertFalse(status.has("result"))
+        InstallProgress.finish(next, "done")
+        assertFalse(JSONObject(InstallProgress.json()).has("presentation"))
+    }
+
     @Test fun destructiveOperationAndConfigureMutationCannotOverlap() {
         val restore = InstallProgress.start("Restore")!!
         try {
