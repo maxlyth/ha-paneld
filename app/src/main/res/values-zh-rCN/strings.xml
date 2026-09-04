@@ -228,7 +228,7 @@
     <string name="disable">禁用</string>
     <string name="shizuku_title">增强访问权限（Shizuku）</string>
     <string name="shizuku_scope">它不允许任意上传 APK、替换 WebView、使用通用 shell、访问 root 应用数据、重启、查看日志或控制供应商应用。\n\n启用后，可通过此面板上 ha-paneld 现有的受信任局域网控制来调用受支持的操作。</string>
-    <string name="shizuku_grant_scope">这仅允许签名已验证的 ha-paneld 执行最小化 Companion 更新、截屏、按键/点按输入、密度和文字大小调整操作。%1$s</string>
+    <string name="shizuku_grant_scope">这只允许签名已验证的 ha-paneld 更新精简版 Companion、截取屏幕截图、输入按键/点按以及调整显示密度和文字大小。%1$s</string>
     <string name="shizuku_not_installed">未安装 Shizuku。请通过 ADB 运行一次 ha-paneld 配置脚本，然后在此面板上批准访问。</string>
     <string name="shizuku_untrusted">已安装名为 Shizuku 的软件包，但其签名证书不受信任。ha-paneld 不会连接到它。</string>
     <string name="shizuku_disabled">ha-paneld 中的增强访问权限已禁用。请在此面板上选择“启用”以开始本地批准。</string>
@@ -243,7 +243,7 @@
     <string name="camera_channel">摄像头</string>
     <string name="camera_in_use">摄像头正在使用</string>
     <string name="storage_health_channel">存储健康状况</string>
-    <string name="storage_health_channel_description">关键的面板存储和 SQLite 故障</string>
+    <string name="storage_health_channel_description">严重的面板存储和 SQLite 故障</string>
     <string name="panel_agent_channel_description">用于 Home Assistant 的面板硬件代理</string>
     <string name="storage_pressure_title">面板存储/数据库空间压力严重</string>
     <string name="storage_capacity_suffix">（文件系统可用空间 %1$d MiB）</string>
@@ -259,6 +259,6 @@
     <string name="database_recovery_notification">本次启动期间的恢复正在进行；正常面板服务已暂停</string>
     <string name="starting">正在启动…</string>
     <string name="listening_on_port">正在监听 :%1$d</string>
-    <string name="degraded_profile_startup">降级 · 配置文件启动失败</string>
+    <string name="degraded_profile_startup">降级 · 硬件配置启动失败</string>
     <string name="degraded_startup">降级 · 启动失败</string>
 </resources>
