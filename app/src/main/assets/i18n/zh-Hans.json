@@ -9416,7 +9416,7 @@
     "install.apk.dynamic.paste_url": {
       "sourceHash": "118e4fa6a3fece92f59bdac05efe677b58adf658a3bc11ada8d92e7ef9831f11",
       "state": "machine-cross-checked",
-      "text": "请先粘贴指向 APK 的安全网页链接。"
+      "text": "请先粘贴指向 APK 的 https:// 链接。"
     },
     "install.apk.dynamic.pending": {
       "sourceHash": "1bc476509cdca006dccba0b9436a26cab15739166effe31f1f936bd01a350cfa",
@@ -9511,7 +9511,7 @@
     "install.apk_status.invalid_url": {
       "sourceHash": "5eb237ea5f1be950341465cf5f0c7314d0464884c3b95bdafb75124d48949a51",
       "state": "machine-cross-checked",
-      "text": "该安全网页链接无效"
+      "text": "该链接不是有效的 https:// 链接"
     },
     "install.apk_status.no_root": {
       "sourceHash": "ccacf47c8e35732eeb3c5a32f4bb40643b3bcaf95b27c22a8e5b39134e10412d",
@@ -10361,7 +10361,7 @@
     "install.presentation.status_zigbee_legacy_watchdog": {
       "sourceHash": "7211ac7681f7033251f8698db5451150506de603c9df900e0d11e33f30455e7c",
       "state": "machine-cross-checked",
-      "text": "⚠ 检测到旧版 Zigbee 监控程序缺陷 — 存在该递归动态库路径赋值。ha-paneld 不会自动修改供应商脚本。"
+      "text": "⚠ 检测到旧版 Zigbee 监控程序缺陷 — 存在完全相同的递归 LD_LIBRARY_PATH 赋值。ha-paneld 不会自动修改供应商脚本。"
     },
     "install.presentation.status_zigbee_not_joined": {
       "sourceHash": "756f12ad96609cfe381d71d0132cd7dcd400cdb9d2aa499bcb86de8aad7fba04",
