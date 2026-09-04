@@ -752,6 +752,7 @@ class CatalogueTest(unittest.TestCase):
             ("fr", "entities.dynamic.source"): "Source",
             ("fr", "entities.issue.source"): "Source",
             ("fr", "entities.row.option.auto"): "Auto",
+            ("fr", "install.shared.version"): "Version",
             ("fr", "shell.runtime.duration_minutes"): "{count} min",
             ("fr", "shell.runtime.duration_seconds"): "{count} s",
             ("it", "entities.dynamic.default_dashboard"): "Dashboard",
