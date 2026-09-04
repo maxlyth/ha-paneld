@@ -9337,6 +9337,1366 @@
       "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
       "state": "machine-cross-checked",
       "text": "MQTT 设置已保存——正在验证消息代理连接。保存后可能需要等待片刻。"
+    },
+    "install.apk.dynamic.cancel": {
+      "sourceHash": "19766ed6ccb2f4a32778eed80d1928d2c87a18d7c275ccb163ec6709d3eb2e27",
+      "state": "machine-cross-checked",
+      "text": "取消"
+    },
+    "install.apk.dynamic.cancelling": {
+      "sourceHash": "91b104db05da1b2d48c57a5aa60128f660e6572f89835ec858f6eb25b8f4af0f",
+      "state": "machine-cross-checked",
+      "text": "正在取消…"
+    },
+    "install.apk.dynamic.discard_failed": {
+      "sourceHash": "9fd6b197d4bf01eed95b3dc9a3e75eb929d40bf3ce6dfccae02808acb5a7f5c3",
+      "state": "machine-cross-checked",
+      "text": "放弃失败。"
+    },
+    "install.apk.dynamic.discard_pending": {
+      "sourceHash": "7e418bd26163de3929663bc7076084f33eb7a2164af949269e5ec656d690c725",
+      "state": "machine-cross-checked",
+      "text": "放弃待处理的上传"
+    },
+    "install.apk.dynamic.discarded": {
+      "sourceHash": "143171ae08dadd852e0bdf13743ec6719fd75da928b61a9ba6b0c14ed329eb3e",
+      "state": "machine-cross-checked",
+      "text": "已放弃待处理的 APK。"
+    },
+    "install.apk.dynamic.download_cancelled": {
+      "sourceHash": "6f2ee2f67be132054bfdbc436d286109b8caa118e50dafbe8b97b5558120566c",
+      "state": "machine-cross-checked",
+      "text": "下载已取消 — 面板已停止下载。"
+    },
+    "install.apk.dynamic.download_failed": {
+      "sourceHash": "eae34ccbc4432c1358da668b091e7c952fe8be24b02dd4f8ec5ea2edef5ca1a4",
+      "state": "machine-cross-checked",
+      "text": "下载失败"
+    },
+    "install.apk.dynamic.download_failed_sentence": {
+      "sourceHash": "22edbe1fbf1555f3bd4988fa3997c0c314bc37e3926880d29c0e10cc025b71b8",
+      "state": "machine-cross-checked",
+      "text": "下载失败。"
+    },
+    "install.apk.dynamic.downloading": {
+      "sourceHash": "3a4d6387f37f52631588dceddb25788886863b68401e0946f50a5b95306ccdbb",
+      "state": "machine-cross-checked",
+      "text": "正在下载并检查…"
+    },
+    "install.apk.dynamic.install": {
+      "sourceHash": "5c4b130ef23462a8a2a79d7025971e93ba0e5f07908818d2aa65e4d34863dd0a",
+      "state": "machine-cross-checked",
+      "text": "安装 {package}"
+    },
+    "install.apk.dynamic.install_busy": {
+      "sourceHash": "33b83e4f2627947770b393b6f31fa2e53c4290e7f2c0ec230cbb7adbb54e0ce8",
+      "state": "machine-cross-checked",
+      "text": "另一项安装正在运行 — 请稍后重试。"
+    },
+    "install.apk.dynamic.installing": {
+      "sourceHash": "530bcc355f0a3cd6a75a5216f1648e3dc48da5615ee41f56e033f4732982a3df",
+      "state": "machine-cross-checked",
+      "text": "正在安装…"
+    },
+    "install.apk.dynamic.lost_contact": {
+      "sourceHash": "6ed92f015c9f66208d73644d23dde3805b1fba342e9b16d9a59a99b661b77fa1",
+      "state": "machine-cross-checked",
+      "text": "连接已中断。"
+    },
+    "install.apk.dynamic.none_pending": {
+      "sourceHash": "5eadb2898fb66bfac121a23c126473caba72911542310786e7b655dc562be2b7",
+      "state": "machine-cross-checked",
+      "text": "没有待处理的已暂存 APK。"
+    },
+    "install.apk.dynamic.package": {
+      "sourceHash": "59de121db1b8145e4c974543653fd48e1d6667b41160f5a393270c9c0f7852c3",
+      "state": "machine-cross-checked",
+      "text": "软件包"
+    },
+    "install.apk.dynamic.paste_url": {
+      "sourceHash": "118e4fa6a3fece92f59bdac05efe677b58adf658a3bc11ada8d92e7ef9831f11",
+      "state": "machine-cross-checked",
+      "text": "请先粘贴指向 APK 的安全网页链接。"
+    },
+    "install.apk.dynamic.pending": {
+      "sourceHash": "1bc476509cdca006dccba0b9436a26cab15739166effe31f1f936bd01a350cfa",
+      "state": "machine-cross-checked",
+      "text": "面板保留着先前已检查的 APK：{package} {version}。上传或获取新的 APK 将替换它。"
+    },
+    "install.apk.dynamic.pending_changed": {
+      "sourceHash": "94b29c22f81a4fb058f97e6a2ed88e332f6575e69035634cc878135c1b53ad6c",
+      "state": "machine-cross-checked",
+      "text": "待处理的上传已更改 — 正在检查面板保留的内容…"
+    },
+    "install.apk.dynamic.signer": {
+      "sourceHash": "6f7e8eaa608ae1f8bb4345f53479c3e7c4cd93a1f9e21ee9be94414af1ec3fb3",
+      "state": "machine-cross-checked",
+      "text": "签名者 SHA-256"
+    },
+    "install.apk.dynamic.stale": {
+      "sourceHash": "3af6c7bf18bf62cb45bc6d3b0edfb340dc24f09ab9a89263156556259e24dbb1",
+      "state": "machine-cross-checked",
+      "text": "此 APK 已被替换或已过期 — 请重新选择或获取。"
+    },
+    "install.apk.dynamic.start_failed": {
+      "sourceHash": "dc0f7e1538e7e57b8ca4f6f0955123148d7d27999fb76ffbfd197f6d2f10c1f0",
+      "state": "machine-cross-checked",
+      "text": "启动失败。"
+    },
+    "install.apk.dynamic.upload_failed": {
+      "sourceHash": "6efc5d27f30b20c103ca1a855bfc65cdbdf9de98c3f8ac93a3df3f319c3388bd",
+      "state": "machine-cross-checked",
+      "text": "上传失败"
+    },
+    "install.apk.dynamic.upload_failed_sentence": {
+      "sourceHash": "3d209f4648d487b456bcd3690b347fdbab9818502d677d52ff6fa2af90d4267f",
+      "state": "machine-cross-checked",
+      "text": "上传失败。"
+    },
+    "install.apk.dynamic.uploading": {
+      "sourceHash": "5727da239c993127833964b85b8214889e2f283193aa2bae87c83787efae9ed7",
+      "state": "machine-cross-checked",
+      "text": "正在上传并检查 {filename}…"
+    },
+    "install.apk.dynamic.wrong_apk": {
+      "sourceHash": "4fcb877bd56da08219bc3b758587ad70704501ae995ea2147f9e299584ee642f",
+      "state": "machine-cross-checked",
+      "text": "APK 不对？取消会将它从面板删除 — 也可以直接选择其他文件或链接来替换它。"
+    },
+    "install.apk.error.too_large": {
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked",
+      "text": "该文件超过面板接受的大小上限"
+    },
+    "install.apk_status.busy": {
+      "sourceHash": "c9bc072f4fa8189466c2a8f2c36a56a4ef1e60a2ffa4986ba2f155cd176c128b",
+      "state": "machine-cross-checked",
+      "text": "正忙"
+    },
+    "install.apk_status.cancelled": {
+      "sourceHash": "b1279fd2e6b6d172f68fb16222e030261d7805d626edad4acb8c9b14aa9d2a2c",
+      "state": "machine-cross-checked",
+      "text": "下载已取消"
+    },
+    "install.apk_status.disabled": {
+      "sourceHash": "ac71df7a441ae1e93ecb9f50564974dfb9cb65d8a3cd6d0e26a216cdd3421dfd",
+      "state": "machine-cross-checked",
+      "text": "此面板已关闭 APK 安装功能"
+    },
+    "install.apk_status.fetch_failed": {
+      "sourceHash": "f42498880844fec60487847c9df29ce4b684942fef96f3f8a925cfd39ae30ccd",
+      "state": "machine-cross-checked",
+      "text": "面板无法下载该链接"
+    },
+    "install.apk_status.fetch_timeout": {
+      "sourceHash": "a41e7468c133d4eb92e87951ad0f5eb4a54d45d775581477f16c06b0b9b71475",
+      "state": "machine-cross-checked",
+      "text": "下载停滞或耗时过长"
+    },
+    "install.apk_status.fetch_too_large": {
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked",
+      "text": "该文件超过面板接受的大小上限"
+    },
+    "install.apk_status.insufficient_storage": {
+      "sourceHash": "a9d8dac2dbe2160ac02672638f7124a4112818a490e996faa3911ff689a2b404",
+      "state": "machine-cross-checked",
+      "text": "面板可用空间不足"
+    },
+    "install.apk_status.invalid_request": {
+      "sourceHash": "cb02224edc3532d5ea6d2e153b58680eab7ebbac49bef09f76ea50682774307e",
+      "state": "machine-cross-checked",
+      "text": "面板拒绝了此请求标识符"
+    },
+    "install.apk_status.invalid_url": {
+      "sourceHash": "5eb237ea5f1be950341465cf5f0c7314d0464884c3b95bdafb75124d48949a51",
+      "state": "machine-cross-checked",
+      "text": "该安全网页链接无效"
+    },
+    "install.apk_status.no_root": {
+      "sourceHash": "ccacf47c8e35732eeb3c5a32f4bb40643b3bcaf95b27c22a8e5b39134e10412d",
+      "state": "machine-cross-checked",
+      "text": "此面板没有超级用户权限或辅助守护进程"
+    },
+    "install.apk_status.not_an_apk": {
+      "sourceHash": "207a2e014af320b15e04f7c05aa0b5843f6e4befe37f20164ae10154dc09e916",
+      "state": "machine-cross-checked",
+      "text": "该文件不是可读取的 APK"
+    },
+    "install.apk_status.stale_or_missing": {
+      "sourceHash": "c712c03387730b25eeeae4f474ab54675661abf49b6d40de44ddab004ee829b2",
+      "state": "machine-cross-checked",
+      "text": "此 APK 已被替换或已过期"
+    },
+    "install.apk_status.started": {
+      "sourceHash": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8",
+      "state": "machine-cross-checked",
+      "text": "已启动"
+    },
+    "install.apk_status.stopping": {
+      "sourceHash": "c8dd0b5133b020fe13449d8fd6485a23e30845b6b1f9c55b0ae6b7b696717b5b",
+      "state": "machine-cross-checked",
+      "text": "面板正在关机"
+    },
+    "install.apk_status.upload_busy": {
+      "sourceHash": "57f6dab19faac726963f491fb5b283fd48cf46f145942394343250a1979560db",
+      "state": "machine-cross-checked",
+      "text": "面板仍在处理另一个 APK — 请稍后重试"
+    },
+    "install.apk_status.upload_staging_failed": {
+      "sourceHash": "8a4ea06166f3cb0dcbf9309b3cf9646c9e030f1f472326e2257d88227c5eb2e0",
+      "state": "machine-cross-checked",
+      "text": "面板无法打开暂存文件"
+    },
+    "install.apk_status.upload_timeout": {
+      "sourceHash": "9f6766e89a507d7be8719e9dc7d3b399435583e862aa8bfe6172f5d2f3656dd6",
+      "state": "machine-cross-checked",
+      "text": "上传耗时过长"
+    },
+    "install.apk_status.upload_too_large": {
+      "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
+      "state": "machine-cross-checked",
+      "text": "该文件超过面板接受的大小上限"
+    },
+    "install.backup.dynamic.accepted_without_archive": {
+      "sourceHash": "dfeabb50516e6c317db6cb96c74c6bceab73a7fc964a6b627944cad2ca26ba38",
+      "state": "machine-cross-checked",
+      "text": "备份请求已接受，但未生成归档。"
+    },
+    "install.backup.dynamic.building_encrypted": {
+      "sourceHash": "0d04c198eae05f56fda1e16ba30d99f4d20fb60414510cae03c83efa8393bc27",
+      "state": "machine-cross-checked",
+      "text": "正在创建加密备份…"
+    },
+    "install.backup.dynamic.building_plain": {
+      "sourceHash": "a8f8b4d61714d0a462abeed68075150268a8faa15bc4abed725528eaac396229",
+      "state": "machine-cross-checked",
+      "text": "正在创建未加密的 ZIP…"
+    },
+    "install.backup.dynamic.downloaded_encrypted": {
+      "sourceHash": "273aa9b4b0de3263dd02476c261e8834dc306ebf2c1ef30b92fa6d6590b92084",
+      "state": "machine-cross-checked",
+      "text": "备份已下载（已加密）— 请妥善保管密码短语。"
+    },
+    "install.backup.dynamic.downloaded_plain": {
+      "sourceHash": "e81e8548da1ae25cffa032446ba64ad700212ac82122619a7e882a30decafb4e",
+      "state": "machine-cross-checked",
+      "text": "备份已下载（未加密的 ZIP）。"
+    },
+    "install.backup.dynamic.export_accepted_without_download": {
+      "sourceHash": "db4d7593a4cbf55f25e70f703b5f19105b1af3ca49595b4990923628cf931eed",
+      "state": "machine-cross-checked",
+      "text": "导出请求已接受，但未提供下载。"
+    },
+    "install.backup.dynamic.export_building": {
+      "sourceHash": "18c648d89c4832afd1d6c1980df829e7afd5c13068afbc609fe84c95d93c46fb",
+      "state": "machine-cross-checked",
+      "text": "正在创建配置导出…"
+    },
+    "install.backup.dynamic.export_downloaded": {
+      "sourceHash": "d39e3499af450ebb89d47781282f5cc4023a546b4a66161b2f8ca5345584a21b",
+      "state": "machine-cross-checked",
+      "text": "配置导出已下载。"
+    },
+    "install.backup.dynamic.export_downloaded_secrets": {
+      "sourceHash": "ae37ceaa873c24a5a3c68d5b18cab8d6eee930d43ef2d924224163f1dc31a3b3",
+      "state": "machine-cross-checked",
+      "text": "包含已存储凭据的配置导出已下载。"
+    },
+    "install.backup.dynamic.export_requesting_secrets": {
+      "sourceHash": "843a71b0f54a7194f7030e2e5c6e29ddcb32b974545e285354570e285873c871",
+      "state": "machine-cross-checked",
+      "text": "正在请求包含凭据的导出…"
+    },
+    "install.backup.dynamic.form_applied": {
+      "sourceHash": "954b4955ec92e5dac836a857210035a657cb96763e5e3c60a12c8ea8a8784bad",
+      "state": "machine-cross-checked",
+      "text": "已应用。"
+    },
+    "install.backup.dynamic.form_applying": {
+      "sourceHash": "3329a9bb48b9c8d4a5e6182042ea9737427233c72b853b93d0a6365050ae476d",
+      "state": "machine-cross-checked",
+      "text": "正在应用…"
+    },
+    "install.backup.dynamic.form_failed": {
+      "sourceHash": "0f9e7ca0d08107ef88aedb80e715ab09e5dda9b112b46c38465003c2f23f3aa1",
+      "state": "machine-cross-checked",
+      "text": "无法应用此更改。"
+    },
+    "install.backup.dynamic.form_returning": {
+      "sourceHash": "8a11fdd7da7f22cf100a40819b071ccca25462c66f617aac977d01fc0ecb4eff",
+      "state": "machine-cross-checked",
+      "text": "正在返回此卡片…"
+    },
+    "install.backup.dynamic.import_cancelled": {
+      "sourceHash": "33ffe414fe4ec20dcbb6c1225f1d681933ba989a0c4d1345095f91e1e0172572",
+      "state": "machine-cross-checked",
+      "text": "导入已取消。"
+    },
+    "install.backup.dynamic.import_changed": {
+      "sourceHash": "32278e4a67374659ec954df5b64136502a99a4b380bc0af724744f9233f11b1b",
+      "state": "machine-cross-checked",
+      "text": "未应用导入：预览后面板设置已更改。请重新预览该文件。"
+    },
+    "install.backup.dynamic.import_reloading": {
+      "sourceHash": "46da33cca444867c597c3c3aca9966107a8c42fd187e8a5ddf9468ddc948a66f",
+      "state": "machine-cross-checked",
+      "text": "正在重新加载以显示导入的设置…"
+    },
+    "install.backup.dynamic.import_summary": {
+      "sourceHash": "8874d556b53bc527d77eb5b2d74f22038b2907ebf044efa961a5e96428a10190",
+      "state": "machine-cross-checked",
+      "text": "导入{status} · 已应用 {applied} 项，已跳过 {skipped} 项"
+    },
+    "install.backup.dynamic.passphrase_required": {
+      "sourceHash": "21fa937d903a62786539fd74490cc60a541ca8c8bb1154f7eeb5f6b204847dc6",
+      "state": "machine-cross-checked",
+      "text": "请输入密码短语，或明确确认接受未加密的明文 ZIP。"
+    },
+    "install.backup.dynamic.preview_companion": {
+      "sourceHash": "a3fc55b59be7ed4d1208fe616ca1405b7326170db3d881d724f9c8c52e583327",
+      "state": "machine-cross-checked",
+      "text": "配套应用登录"
+    },
+    "install.backup.dynamic.preview_config_keys": {
+      "sourceHash": "361f87bb7c897517e80d6140d0e91e9a57893b3366d7a94533f63ba019293a8f",
+      "state": "machine-cross-checked",
+      "text": "配置键"
+    },
+    "install.backup.dynamic.preview_failed": {
+      "sourceHash": "8f5998bb6b151246d07b8bf1d00d532ab20bcae6061618957364613eccaa560e",
+      "state": "machine-cross-checked",
+      "text": "预览失败。"
+    },
+    "install.backup.dynamic.preview_none": {
+      "sourceHash": "140bedbf9c3f6d56a9846d2ba7088798683f4da0c248231336e6a05679e4fdfe",
+      "state": "machine-cross-checked",
+      "text": "无"
+    },
+    "install.backup.dynamic.preview_panel": {
+      "sourceHash": "d0d91173008b6f839a8380e77582a9072bef1d0971459683f35ca072792818f5",
+      "state": "machine-cross-checked",
+      "text": "面板"
+    },
+    "install.backup.dynamic.request_failed": {
+      "sourceHash": "fbbc1b5ba8644e5c54c2af5b1616eeb8644446465dfaae001bf9167a2ed30567",
+      "state": "machine-cross-checked",
+      "text": "请求失败"
+    },
+    "install.backup.dynamic.restore_confirm": {
+      "sourceHash": "45131b43ed2624f4dac0513d95c29edae28819f5ac6f090403b48ee5befa8927",
+      "state": "machine-cross-checked",
+      "text": "恢复操作将覆盖此面板的配置和配套应用登录。是否继续？"
+    },
+    "install.backup.dynamic.restore_now": {
+      "sourceHash": "983de6dbc369f41533a600215dd40dee2eaf2504071f7a7e9653650213ee4aa4",
+      "state": "machine-cross-checked",
+      "text": "立即恢复此备份包"
+    },
+    "install.backup.dynamic.restore_reading": {
+      "sourceHash": "3093c9a02caea7f5069c829a24f15ed3d74c906fbee986dbf7f4c95d1de106b5",
+      "state": "machine-cross-checked",
+      "text": "正在读取预览…"
+    },
+    "install.backup.dynamic.restore_result": {
+      "sourceHash": "8a69ab0a626be15ce1407d1cf12c93c23d136ac4f7edd60d58d695e42f254fe9",
+      "state": "machine-cross-checked",
+      "text": "恢复：{result}"
+    },
+    "install.backup.dynamic.restore_start_failed": {
+      "sourceHash": "d4a3fc81ca2d38a5e54bd5775b77cfc85b11a8749f42befac9de38c9e68f9bd6",
+      "state": "machine-cross-checked",
+      "text": "恢复未能启动。"
+    },
+    "install.backup.dynamic.restore_unreadable": {
+      "sourceHash": "23e1af7a9c50f5f0a0af66bf21f67abcc1ea651606abe83db9f7ae30314effb6",
+      "state": "machine-cross-checked",
+      "text": "无法读取备份包"
+    },
+    "install.backup.dynamic.restoring": {
+      "sourceHash": "5a4918e0201c877c92430c346267ddf24b93853b918784cccc2190f7a4472144",
+      "state": "machine-cross-checked",
+      "text": "正在恢复…"
+    },
+    "install.backup.preview_files.one": {
+      "sourceHash": "9ff7fb9b7b88fc94010ff7fd055dd1d1efd32b34a26f466917f9cfc447513a65",
+      "state": "machine-cross-checked",
+      "text": "{package}（{count} 个文件）"
+    },
+    "install.backup.preview_files.other": {
+      "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
+      "state": "machine-cross-checked",
+      "text": "{package}（{count} 个文件）"
+    },
+    "install.companion.error.helper_busy": {
+      "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
+      "state": "machine-cross-checked",
+      "text": "配套应用辅助程序正忙"
+    },
+    "install.companion.error.helper_unavailable": {
+      "sourceHash": "7ff8ce015e30889d9cc37648e0f3cf6e03b100156bed873f69993b5339e18cca",
+      "state": "machine-cross-checked",
+      "text": "配套应用辅助程序不可用"
+    },
+    "install.companion.error.marker_failed": {
+      "sourceHash": "bcf33daf2b195cd0bf26848ff1e14f60bc1cd537f618bd3eaa1e09d924d4b855",
+      "state": "machine-cross-checked",
+      "text": "无法持久保存配套应用操作安全标记"
+    },
+    "install.companion.urls_repaired.one": {
+      "sourceHash": "ab1dad8519985db12bf5a67459819495c00a3fc6d14958d1454977458327e3c3",
+      "state": "machine-cross-checked",
+      "text": "已修复 {count} 台服务器 — 内部 URL 已设为外部 URL；配套应用已重新启动"
+    },
+    "install.companion.urls_repaired.other": {
+      "sourceHash": "f0c7a86e0f56af0cd82b7ffdd47cbb1e27911edb1baa1328a9871a394ca35353",
+      "state": "machine-cross-checked",
+      "text": "已修复 {count} 台服务器 — 内部 URL 已设为外部 URL；配套应用已重新启动"
+    },
+    "install.component_status.bad_action": {
+      "sourceHash": "04852b17ebf0a245cab7804ced1f31f6934a67a857db347e3db44c13c9bac1ed",
+      "state": "machine-cross-checked",
+      "text": "未知操作"
+    },
+    "install.component_status.bad_component": {
+      "sourceHash": "dc883dcda18e319e5e3401682c844005123642bba2cc6b9a6bfdf0e1d50d95d9",
+      "state": "machine-cross-checked",
+      "text": "未知组件"
+    },
+    "install.component_status.bad_version": {
+      "sourceHash": "abb0efe95296c1a5009db15d861e7e5c48fc96b5bcfa34f465d2cf94cdf9b4e2",
+      "state": "machine-cross-checked",
+      "text": "版本无效"
+    },
+    "install.component_status.busy": {
+      "sourceHash": "c9bc072f4fa8189466c2a8f2c36a56a4ef1e60a2ffa4986ba2f155cd176c128b",
+      "state": "machine-cross-checked",
+      "text": "正忙"
+    },
+    "install.component_status.downgrade_refused": {
+      "sourceHash": "a754df63eaa7f7814ff5e348e8bb16435ff438309235a3fbf3ea4759122738d0",
+      "state": "machine-cross-checked",
+      "text": "已拒绝降级"
+    },
+    "install.component_status.started": {
+      "sourceHash": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8",
+      "state": "machine-cross-checked",
+      "text": "已启动"
+    },
+    "install.component_status.uncomparable_version": {
+      "sourceHash": "fdbbeb38fe4b530a6707d3344310b643c9aaac25ca20cfecebce6bffd61861fd",
+      "state": "machine-cross-checked",
+      "text": "无法比较版本"
+    },
+    "install.components.install": {
+      "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
+      "state": "machine-cross-checked",
+      "text": "安装"
+    },
+    "install.config_import_status.applied": {
+      "sourceHash": "b4267ce93cbba4e415504feb895f662dcced5d7aa406f27e8447c8fd5f0d48c8",
+      "state": "machine-cross-checked",
+      "text": "已应用"
+    },
+    "install.config_import_status.bad_bundle": {
+      "sourceHash": "433fac887a5132324d675b401decfdc8ad6765067e549d95027ef197ddb7b11e",
+      "state": "machine-cross-checked",
+      "text": "备份包无效"
+    },
+    "install.config_import_status.bad_expected_cfg": {
+      "sourceHash": "2d52814276499238e2ca67fe4515f3908670e12688f6a6240b30fdc88d9ef8bd",
+      "state": "machine-cross-checked",
+      "text": "预期配置无效"
+    },
+    "install.config_import_status.database_compatibility_refused": {
+      "sourceHash": "20a539acc8bf064780369707ca97f27d6c613a8f87503bbdc4dca72a55d3379a",
+      "state": "machine-cross-checked",
+      "text": "数据库兼容性检查拒绝了导入"
+    },
+    "install.config_import_status.dry_run": {
+      "sourceHash": "e77dd7def5c403c2fa0e7bc5e9d1204157d5551a1b3600b376ad54869cbfd4d4",
+      "state": "machine-cross-checked",
+      "text": "已预览"
+    },
+    "install.config_import_status.error": {
+      "sourceHash": "ca00fccfb408989eddc401062c4d1219a6aceb6b9b55412357f1790862e8f178",
+      "state": "machine-cross-checked",
+      "text": "错误"
+    },
+    "install.config_import_status.no_op": {
+      "sourceHash": "44f9161c3a252925f55022d60f68918abf8fdc1a9a3fadbf5ab766549f6b3461",
+      "state": "machine-cross-checked",
+      "text": "无更改"
+    },
+    "install.config_import_status.partial": {
+      "sourceHash": "1a58081342fabfaf5ca9e185bb6a7a05d1c61c321daf98a7ba78a8ad3ad01964",
+      "state": "machine-cross-checked",
+      "text": "已部分应用"
+    },
+    "install.config_import_status.rejected": {
+      "sourceHash": "20cd938a2ea64f612b3523bc9219130c6fc66cd09b394ea38437488c0b8898b2",
+      "state": "machine-cross-checked",
+      "text": "已拒绝"
+    },
+    "install.config_import_status.restored": {
+      "sourceHash": "eb00bf0aba491c620ddf47bf68068be4cc52c39bf3b8b554e2c51ff74e5e915e",
+      "state": "machine-cross-checked",
+      "text": "已恢复"
+    },
+    "install.config_import_status.stale_preview": {
+      "sourceHash": "128a2589910b546cff344f57cb79852a579cdceef9c12f58853166878910f6c8",
+      "state": "machine-cross-checked",
+      "text": "预览已过期"
+    },
+    "install.config_import_status.timeout": {
+      "sourceHash": "93deb3798f1b6a3ee1a01f97dd9a20c5c28a42a29504b25612525876c282bf4a",
+      "state": "machine-cross-checked",
+      "text": "请求超时"
+    },
+    "install.config_import_status.too_large": {
+      "sourceHash": "323f05efa912718108ba219e1e7929be22eba6980e18b91ee51769b0d9166fd7",
+      "state": "machine-cross-checked",
+      "text": "备份包过大"
+    },
+    "install.config_import_status.wrong_kind_or_schema": {
+      "sourceHash": "1c21c6d03f0d44225159a00471cbcdf0692fe355be05f6282fd8aaa78c4c0460",
+      "state": "machine-cross-checked",
+      "text": "备份包类型或架构不正确"
+    },
+    "install.import.apply_question": {
+      "sourceHash": "3681133a75776a670ae87e94396cd9789687fd91aab68352223285603b6cdf3e",
+      "state": "machine-cross-checked",
+      "text": "立即应用？"
+    },
+    "install.import.changed.one": {
+      "sourceHash": "526f8b685ef0423fe8d4ab2fad93c35d538506d2f1ae8ff3f868e9a46d6dc433",
+      "state": "machine-cross-checked",
+      "text": "导入将更改 {count} 项设置："
+    },
+    "install.import.changed.other": {
+      "sourceHash": "f64d6122a6863eeb7e92750b10ec10aa95bbd839ce976fe59ee4ec41fec7aca7",
+      "state": "machine-cross-checked",
+      "text": "导入将更改 {count} 项设置："
+    },
+    "install.presentation.apk_pending_lost": {
+      "sourceHash": "3af6c7bf18bf62cb45bc6d3b0edfb340dc24f09ab9a89263156556259e24dbb1",
+      "state": "machine-cross-checked",
+      "text": "此 APK 已被替换或已过期 — 请重新选择或获取。"
+    },
+    "install.presentation.backup_cancelled": {
+      "sourceHash": "c9efd4041c2aa5376169a7d76fee3e12c44045d6357dc8e83212c233e215651f",
+      "state": "machine-cross-checked",
+      "text": "备份已取消"
+    },
+    "install.presentation.backup_companion_too_large": {
+      "sourceHash": "1101a9bdfc4798f20675bddb2bde0326be3a47b3035848445781a030277a641c",
+      "state": "machine-cross-checked",
+      "text": "配套应用备份过大"
+    },
+    "install.presentation.backup_import_partial_selection_unchanged": {
+      "sourceHash": "8c2d8345bac7bca850fcd9063cdbffe13692632792b6e6b666e1a12f12cbee8f",
+      "state": "machine-cross-checked",
+      "text": "部分配置文件修订版已以非活动状态导入；选择未更改。"
+    },
+    "install.presentation.backup_import_selection_stage_failed": {
+      "sourceHash": "f14487fd769331c313b786fc7750c13494039dc58f0f0fc7c5c8b0b6ba46b735",
+      "state": "machine-cross-checked",
+      "text": "配置文件修订版已以非活动状态导入，但无法暂存所选配置。"
+    },
+    "install.presentation.backup_ready": {
+      "sourceHash": "ef14eeec6bfca04b0f3fb1a9788521edc9411618116b69c7434c5f133534da93",
+      "state": "machine-cross-checked",
+      "text": "备份已就绪"
+    },
+    "install.presentation.backup_restore_rejected_before_mutation": {
+      "sourceHash": "b80876accead761400633dffbe6c55e0dbe94e01678dabf741467ad8b18c7f3d",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录恢复在进行任何更改前被拒绝。"
+    },
+    "install.presentation.backup_restored_selection_staged": {
+      "sourceHash": "71d179990d3bdbab24c8dc55c8ab5a9cd6af24ed3707703477c00ea94c59c9f7",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录已恢复；所选配置已暂存，将在通过健康检查后重启。"
+    },
+    "install.presentation.backup_restored_selection_unchanged": {
+      "sourceHash": "785d68796453312b3f246617dd55d45a7cafb201ade8aa0eb89657a2b5b4a270",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录已恢复；所选配置未更改。"
+    },
+    "install.presentation.backup_selection_restore_failed": {
+      "sourceHash": "da5f008eb582e2ffe71c82bd960c0b56ddae151f9cdc697f7a864798f4390c15",
+      "state": "machine-cross-checked",
+      "text": "无法恢复所选配置文件。"
+    },
+    "install.presentation.backup_staging_retained": {
+      "sourceHash": "ac442bd0592e6dc5bdd5116ed7abb908d496d12e7cd1ae6a15ff94234dfb7945",
+      "state": "machine-cross-checked",
+      "text": "无法删除敏感的临时备份数据。请检查面板存储空间后重试；备份未下载。"
+    },
+    "install.presentation.companion_helper_busy": {
+      "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
+      "state": "machine-cross-checked",
+      "text": "配套应用辅助程序正忙"
+    },
+    "install.presentation.companion_helper_unavailable": {
+      "sourceHash": "7ff8ce015e30889d9cc37648e0f3cf6e03b100156bed873f69993b5339e18cca",
+      "state": "machine-cross-checked",
+      "text": "配套应用辅助程序不可用"
+    },
+    "install.presentation.companion_indeterminate": {
+      "sourceHash": "9b1e2f162c2e00bd2b1f0b1152ea24aa7973fc62cb928e00ede3060041fc364d",
+      "state": "machine-cross-checked",
+      "text": "无法确定恢复的最终状态"
+    },
+    "install.presentation.companion_marker_failed": {
+      "sourceHash": "bcf33daf2b195cd0bf26848ff1e14f60bc1cd537f618bd3eaa1e09d924d4b855",
+      "state": "machine-cross-checked",
+      "text": "无法持久保存配套应用操作安全标记"
+    },
+    "install.presentation.companion_owner_restored": {
+      "sourceHash": "dd290669fb84a7635003840fd45c717b4690214efdca0cd936c089ee4bb43167",
+      "state": "machine-cross-checked",
+      "text": "所有者/上下文已恢复"
+    },
+    "install.presentation.companion_payload_invalid": {
+      "sourceHash": "e921cb252399b43f1034764e7813cd35f2021189756bb024424571971c4795ee",
+      "state": "machine-cross-checked",
+      "text": "配套应用负载验证失败"
+    },
+    "install.presentation.companion_prior_files_retained": {
+      "sourceHash": "6b6e401a8b46b3e9556a57b4cbe9914906f00c1b53282c1c5aa0819ef3c38b08",
+      "state": "machine-cross-checked",
+      "text": "恢复失败；已保留原有配套应用文件"
+    },
+    "install.presentation.companion_rejected_before_commit": {
+      "sourceHash": "d5a6ebcb9867def3e5afd89d8d608f6690e7e298c6c89490a1f5139e9ec93d7e",
+      "state": "machine-cross-checked",
+      "text": "恢复在提交前被拒绝"
+    },
+    "install.presentation.companion_relaunch_unconfirmed": {
+      "sourceHash": "bb4c8ff5ebb62321b03ea41dbf1aa8b94324e3b5738861fc414a2605c4db3665",
+      "state": "machine-cross-checked",
+      "text": "文件已恢复，但未确认配套应用已重新启动"
+    },
+    "install.presentation.companion_rollback_failed": {
+      "sourceHash": "186bdcdc3b12e49ed3dfee4d0de307d39e938bb6956fe4c994be65d273082b56",
+      "state": "machine-cross-checked",
+      "text": "恢复和回滚均失败；配套应用状态可能不完整"
+    },
+    "install.presentation.companion_unsupported_package": {
+      "sourceHash": "f37ecf7b506b23384678259f098be2cf28acdcaf24d6309331b8c892657b2152",
+      "state": "machine-cross-checked",
+      "text": "配套应用软件包不是受支持的已安装软件包"
+    },
+    "install.presentation.component_not_present": {
+      "sourceHash": "4a6080efcc757a04f1d2d851d48ddd1495ed3587fb4b18fc2ff167660393cab2",
+      "state": "machine-cross-checked",
+      "text": "不存在"
+    },
+    "install.presentation.guard_db_arm_not_started": {
+      "sourceHash": "a291427c80abacc4b3f1eb8c4c4b1477597b45979461dc6d91e741dd9f45fe25",
+      "state": "machine-cross-checked",
+      "text": "数据库保护预备操作未启动"
+    },
+    "install.presentation.guard_db_candidate_discard_finished": {
+      "sourceHash": "a5135e9bfba5fb1aabde5e25cbf51d8ae93fab7998c95e6243ee6f2a6bdc10e1",
+      "state": "machine-cross-checked",
+      "text": "数据库保护候选版本放弃操作已完成"
+    },
+    "install.presentation.guard_db_candidate_staging_finished": {
+      "sourceHash": "a45137aa2884b762272a1f6b3e176e53fbed31567ad34626b78549307e79ba69",
+      "state": "machine-cross-checked",
+      "text": "数据库保护候选版本暂存已完成"
+    },
+    "install.presentation.guard_db_retirement_settled": {
+      "sourceHash": "09ab0bf09da7c61e6c34a98873d977a6cfe4489189b47bfde7d3988968f3d9d3",
+      "state": "machine-cross-checked",
+      "text": "数据库保护退役操作已完成"
+    },
+    "install.presentation.install_deferred_saving_state": {
+      "sourceHash": "f5e5e68129e50b951c9ec4f983c516610ef233d5f5db66615f14277dea5e225a",
+      "state": "machine-cross-checked",
+      "text": "保存面板状态期间，{component} 安装已推迟。"
+    },
+    "install.presentation.install_download_failed": {
+      "sourceHash": "cb932d29dd04d858898bf01ab1cb53a43030b941b2a3ddc39cc0497b0c2cdc92",
+      "state": "machine-cross-checked",
+      "text": "面板无法下载 {component}。"
+    },
+    "install.presentation.install_download_too_large": {
+      "sourceHash": "8457679bc05fc56b2d4f981d49d1ab1d3b1991223a3a416572369a62b6758ccf",
+      "state": "machine-cross-checked",
+      "text": "{component} 下载文件超过面板接受的大小上限。"
+    },
+    "install.presentation.install_durable_rejection": {
+      "sourceHash": "9db26fbbcef40ecc31fdf592e4bc29ffc05ab027fb642ce568ab02f9a7805b07",
+      "state": "machine-cross-checked",
+      "text": "持久性安全检查拒绝了 {component} 安装。"
+    },
+    "install.presentation.install_guard_db_owned": {
+      "sourceHash": "e3c6a60060e2c3e9defd463280b50063329de1fb528dc2cec6ec257e99556b6a",
+      "state": "machine-cross-checked",
+      "text": "数据库保护功能控制更新路径期间，{component} 安装被阻止。"
+    },
+    "install.presentation.install_insufficient_storage": {
+      "sourceHash": "d8d8d9490bdfee5fb1e8ebacf9fd25a5777d3d7b2649a06ca855cafb294df271",
+      "state": "machine-cross-checked",
+      "text": "面板存储空间不足，无法安装 {component}。"
+    },
+    "install.presentation.install_no_permitted_route": {
+      "sourceHash": "e7f5a12fb98044cb05cf0fcd264736b641fd4f187355e5d58656dcd2c2d30092",
+      "state": "machine-cross-checked",
+      "text": "没有可用于 {component} 的获准安装途径。"
+    },
+    "install.presentation.install_retryable_failure": {
+      "sourceHash": "5985a879d82b24f59582a258f4ecb2ee3d198b07e01972d4479098da336e1c49",
+      "state": "machine-cross-checked",
+      "text": "{component} 安装失败，可以重试。"
+    },
+    "install.presentation.install_staging_failed": {
+      "sourceHash": "8e4e3db918995f4ac0f5cdfc19ef4d9f3b8a63a68979105b432f89e9d47dd85c",
+      "state": "machine-cross-checked",
+      "text": "面板无法暂存 {component} 软件包。"
+    },
+    "install.presentation.managed_apk_missing": {
+      "sourceHash": "cd41f0caa468f58d054916f98e2f3e83a51a6ba6d60cb2bbe7380617a61a561f",
+      "state": "machine-cross-checked",
+      "text": "{component} {version} 版本没有可安装的 APK。"
+    },
+    "install.presentation.managed_attempt_recorded": {
+      "sourceHash": "a6f21db34260241e20331a4677549009928105b1e2306d7f59e5f90320afdf6d",
+      "state": "machine-cross-checked",
+      "text": "已记录过在当前安装版本 {current} 上尝试安装 {component} {version}。"
+    },
+    "install.presentation.managed_downgrade_committed": {
+      "sourceHash": "8ddf713c3cd4968cf1aa1e57607cd5fd4304e1f3d53a58f2b0673bb72a57bf95",
+      "state": "machine-cross-checked",
+      "text": "已将 {component} 降级至 {version}。"
+    },
+    "install.presentation.managed_install_committed": {
+      "sourceHash": "0ad50770d4d5dee91572dd9cc8f52047068a423caf050a51cd369d723c0bd3b2",
+      "state": "machine-cross-checked",
+      "text": "已安装 {component} {version}。"
+    },
+    "install.presentation.managed_manual_downgrade_required": {
+      "sourceHash": "f126e8ba3cafc78828fb66b1497115f75fe472895f3386f6f15393d4c20cf3f3",
+      "state": "machine-cross-checked",
+      "text": "{component} {current} 超过安全上限 {cap}；请手动降级。"
+    },
+    "install.presentation.managed_no_newer": {
+      "sourceHash": "9ab5109b5b1c32835f225bb075f701cf5552e1aae250501e1a3c6b4732bd501d",
+      "state": "machine-cross-checked",
+      "text": "没有比 {current} 更新的 {component} 版本。"
+    },
+    "install.presentation.managed_no_recommendation": {
+      "sourceHash": "ec4d429ec067b2c8f7838d14801bfc40e69d9338b9ac4f1036418826a1400c38",
+      "state": "machine-cross-checked",
+      "text": "尚未配置托管的 {component} 版本。"
+    },
+    "install.presentation.managed_pinned": {
+      "sourceHash": "8dafa5f01a9280676db9a176ee408063035cfbb9aca0e44f6bffbbc713e795a3",
+      "state": "machine-cross-checked",
+      "text": "保留 {component} {current}：最新版本 {latest} 超过安全上限 {cap}。"
+    },
+    "install.presentation.managed_play_managed": {
+      "sourceHash": "1a67a430d5b56d2561f87eec7b009bc1d3dbc1c90238bbf03752e916b1869ccb",
+      "state": "machine-cross-checked",
+      "text": "{component} 由 Google Play 管理。"
+    },
+    "install.presentation.managed_release_unresolved": {
+      "sourceHash": "d7d978ffeb2560a6dcdf1b41e6b7348a85f42065b35aa63331415399581f1b6c",
+      "state": "machine-cross-checked",
+      "text": "无法解析 {channel} 通道上的最新 {component} 版本。"
+    },
+    "install.presentation.managed_safety_cap_refused": {
+      "sourceHash": "518954f003781646821416208b463d905318b789f4a35dd793550505847830e7",
+      "state": "machine-cross-checked",
+      "text": "已拒绝 {component} {version}：该版本超过安全上限 {cap}。"
+    },
+    "install.presentation.managed_up_to_date": {
+      "sourceHash": "5edf6e5b58865569fb9e26fba5cb6fcbc5e7cb1295941aac7dec6aa1c236c657",
+      "state": "machine-cross-checked",
+      "text": "{component} {current} 已是最新版本。"
+    },
+    "install.presentation.managed_update_committed": {
+      "sourceHash": "61b7a7b9f1e30456ad5a276f37c7760ed51e608d2e93482a6af5992105607866",
+      "state": "machine-cross-checked",
+      "text": "已将 {component} 更新至 {version}。"
+    },
+    "install.presentation.operation_cancelled": {
+      "sourceHash": "8b47045eb7b8ca42aa967f33ee1d014ba89f8d1ac207426b482d34b5c0d90935",
+      "state": "machine-cross-checked",
+      "text": "已取消"
+    },
+    "install.presentation.operation_working": {
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked",
+      "text": "处理中…"
+    },
+    "install.presentation.package_uninstall_failed": {
+      "sourceHash": "50f8872b441716c5d1cee3fdd6eaad56c75c0509cdf18f1da16110795a15f1ae",
+      "state": "machine-cross-checked",
+      "text": "卸载失败：{package}"
+    },
+    "install.presentation.package_uninstalled": {
+      "sourceHash": "764b9132371477aefbe7b9f4dce1c5b9cb9116c1dae3d541623b4ea9069636a8",
+      "state": "machine-cross-checked",
+      "text": "已卸载 {package}"
+    },
+    "install.presentation.profile_catalog_restore_unavailable": {
+      "sourceHash": "2539623e45bed0f96a08c068a4e9c2788015eb68c8c746e303ad2d7adc580c62",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录恢复不可用。"
+    },
+    "install.presentation.restore_app_state_invalid": {
+      "sourceHash": "ebe236ea5430ffd9de73f7ff34091f03da5ab8502f86ff15c5a8ef97b82d1b1f",
+      "state": "machine-cross-checked",
+      "text": "应用状态负载无效"
+    },
+    "install.presentation.restore_archive_entries_invalid": {
+      "sourceHash": "05160b8fa6ac6f7af161dc55f176491aae6c19ec889c921e906f10882782e671",
+      "state": "machine-cross-checked",
+      "text": "备份归档中缺少文件或包含意外文件"
+    },
+    "install.presentation.restore_archive_metadata_invalid": {
+      "sourceHash": "6ffe50cd9f252c5ebcd3e6fa40b1e28cffed6aa320fb0c86d2a9a71ea914abbd",
+      "state": "machine-cross-checked",
+      "text": "备份归档元数据无效"
+    },
+    "install.presentation.restore_companion_helper_required": {
+      "sourceHash": "ae7af3902c71c032bdb03fb0bb6e76424a7a9c29bc377a28c275fed1ebccf702",
+      "state": "machine-cross-checked",
+      "text": "恢复配套应用需要当前版本的 ha-paneld 辅助程序"
+    },
+    "install.presentation.restore_companion_section_invalid": {
+      "sourceHash": "92ffed6f90cd1201a409dab6021ac415ef2910d8d9760e68e9c27597483b472a",
+      "state": "machine-cross-checked",
+      "text": "配套应用恢复部分无效"
+    },
+    "install.presentation.restore_completed": {
+      "sourceHash": "d054b6105189ae7b6f3f87b3a6ce564bc8c3d3c2ebe6a441b23c46f071ce4030",
+      "state": "machine-cross-checked",
+      "text": "恢复已完成"
+    },
+    "install.presentation.restore_config_invalid": {
+      "sourceHash": "dcd891bdf459f53bf7457d82777ce818c15000e0a4b0e3cce1be201fc5e0484c",
+      "state": "machine-cross-checked",
+      "text": "备份配置无效"
+    },
+    "install.presentation.restore_config_missing": {
+      "sourceHash": "962d91f91c159609946bea90a455438cb41c4f84438b0d3236d20b83fc83a74d",
+      "state": "machine-cross-checked",
+      "text": "备份中没有配置对象"
+    },
+    "install.presentation.restore_entity_object_invalid": {
+      "sourceHash": "77e8c96b9b8843a8d9dbcbda9e8422437bef98c7b05d1ee8074d6ad9b61423d9",
+      "state": "machine-cross-checked",
+      "text": "实体状态对象无效"
+    },
+    "install.presentation.restore_entity_owner_missing": {
+      "sourceHash": "096f93b1f5118c353e29476ce665665086492a82560caf94b3cfeeedd10f9886",
+      "state": "machine-cross-checked",
+      "text": "实体状态缺少其所有者命名空间"
+    },
+    "install.presentation.restore_entity_state_invalid": {
+      "sourceHash": "d37884f1c791f1128fdbe31f512a5d10e331e465210528177c89a65440e23fa9",
+      "state": "machine-cross-checked",
+      "text": "按所有者划分的实体状态无效"
+    },
+    "install.presentation.restore_failed": {
+      "sourceHash": "b8476ceedfdd95b004d8b76a5a5d72c71686fe7e232d1b595bc0dc6941fe093b",
+      "state": "machine-cross-checked",
+      "text": "恢复失败"
+    },
+    "install.presentation.restore_legacy_too_large": {
+      "sourceHash": "ebf134ca6c3afdbecf848bbce058c27770f8f3a4513ddd22f6f5d4652b52e72b",
+      "state": "machine-cross-checked",
+      "text": "旧版备份过大；请先创建新备份再恢复"
+    },
+    "install.presentation.restore_not_panel_backup": {
+      "sourceHash": "15c0f21ad749e2da90a94c485eb9fc8e11d8bc60b1338784eb687caed026901c",
+      "state": "machine-cross-checked",
+      "text": "不是 ha-paneld 备份"
+    },
+    "install.presentation.restore_partial": {
+      "sourceHash": "010d07c111632fb5a6625202ca7f1606c3e0d4070fd5e8003893d1cac9bb6339",
+      "state": "machine-cross-checked",
+      "text": "恢复已部分完成"
+    },
+    "install.presentation.restore_passphrase_or_bundle_invalid": {
+      "sourceHash": "f5e093d1a2d72e397d77e02e1264afc864939df6842fd0c26a616c3d02f71fe5",
+      "state": "machine-cross-checked",
+      "text": "密码短语错误或备份包损坏"
+    },
+    "install.presentation.restore_passphrase_required": {
+      "sourceHash": "65e1c3cbcb8bae55b95b030ed102d523f4fc2a4ae008f701101eaf2790e3952a",
+      "state": "machine-cross-checked",
+      "text": "此备份包已加密 — 请输入密码短语"
+    },
+    "install.presentation.restore_preview_complete": {
+      "sourceHash": "2ad8296900534435c3f354df4c2e22e90d06c3488000a061c13dd92995b53d6c",
+      "state": "machine-cross-checked",
+      "text": "恢复预览已完成"
+    },
+    "install.presentation.restore_profile_archive_invalid": {
+      "sourceHash": "10cab69571e1de516046ca2faeb84bf84f3fb1e2f2340b3e6e7fe5b9d94a747f",
+      "state": "machine-cross-checked",
+      "text": "配置文件归档条目无效"
+    },
+    "install.presentation.restore_profile_catalog_invalid": {
+      "sourceHash": "2479d8b3ef477da64a34f23ab4ede579ca5528d651738b2380681a0542ae7d83",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录无效"
+    },
+    "install.presentation.restore_profile_catalog_not_restorable": {
+      "sourceHash": "f272d4d8cc71526b31360136440db1e9bbe7628fb0290d9e96e536920bbc8bbe",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录无法恢复"
+    },
+    "install.presentation.restore_profile_restore_unavailable": {
+      "sourceHash": "f33793bc261a630ee064e9732add72ea1615005739d81224186cf9307d633c9f",
+      "state": "machine-cross-checked",
+      "text": "配置文件目录恢复不可用"
+    },
+    "install.presentation.restore_profiles_object_invalid": {
+      "sourceHash": "d78738aebcd5ea1dfc4defcd4d0993450538457477490c07f5b2bad23b8ffe5f",
+      "state": "machine-cross-checked",
+      "text": "配置文件对象无效"
+    },
+    "install.presentation.restore_request_rejected": {
+      "sourceHash": "64ddbd6fc50543ab1864168d8cc4d9b31651a7398a21b69e5bb35c4edf0ae07f",
+      "state": "machine-cross-checked",
+      "text": "恢复请求被拒绝"
+    },
+    "install.presentation.restore_schema_missing": {
+      "sourceHash": "8e0d25c2cf57c5e07a14e064064dffda3a3ea6259565727744cf1fb42fe78086",
+      "state": "machine-cross-checked",
+      "text": "备份中没有有效架构"
+    },
+    "install.presentation.restore_state_object_invalid": {
+      "sourceHash": "4d8d22f9fa4bd06a614b3f860d8b2bf582cefb5f80aafa2ede6e0344c45478a0",
+      "state": "machine-cross-checked",
+      "text": "状态对象无效"
+    },
+    "install.presentation.status_builtin_renderer_retries_stopped": {
+      "sourceHash": "1b5418807f2f485ae2f516c802d5e0801c94630d573966d230b92d877e08417e",
+      "state": "machine-cross-checked",
+      "text": "⛔ 内置渲染器在 WebView 反复失败后已停止重试。请更新或修复 System WebView，然后从面板导航栏或“仪表板”标签页选择“重新加载仪表板”。"
+    },
+    "install.presentation.status_companion_probe_failed": {
+      "sourceHash": "83c7c52039d25735ee5aeee671408b86ec8086c5373cb90639510e03eb1f5c9e",
+      "state": "machine-cross-checked",
+      "text": "⚠ 无法检查 Home Assistant 配套应用设置；ha-paneld 将保留最近一次已知结果并自动重试。"
+    },
+    "install.presentation.status_external_renderer_crash_loop": {
+      "sourceHash": "42858bae496ba84d6e265afb20e07fe3adedbe091111df9daa5cc5537be88c5a",
+      "state": "machine-cross-checked",
+      "text": "⛔ 仪表板应用反复崩溃 — 为避免不断重启，监控程序已停止重新启动它。请重新安装或降级仪表板/配套应用，或重启面板。"
+    },
+    "install.presentation.status_no_renderer": {
+      "sourceHash": "5f1d7770181d47b58470733464108f40b48294488714774fa4aa9407d8d2e136",
+      "state": "machine-cross-checked",
+      "text": "ℹ MQTT 已配置。下一步：选择仪表板渲染器。请选择 ha-paneld 内置渲染器、安装 Home Assistant 配套应用，或配置其他仪表板软件包。"
+    },
+    "install.presentation.status_power_at_risk": {
+      "sourceHash": "a74da057925352acddd3dd33fbb3024de2c565cbcb5410079024512fbe9ad1ab",
+      "state": "machine-cross-checked",
+      "text": "⛔ 面板电源安全：存在风险 — 屏幕关闭后，面板可能挂起或进入 Doze 模式，导致 HTTP、MQTT 和后台任务无法访问。"
+    },
+    "install.presentation.status_power_caution": {
+      "sourceHash": "273989e72a98d72372d95ba1d2feaf622938b7d790190778fe97601d39eb31f2",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板电源安全：需注意 — 目前仅有一项已观测到的电源保护措施维持面板可访问。"
+    },
+    "install.presentation.status_power_unknown": {
+      "sourceHash": "4860f8deecc3d0e600a76ea9939ee63a388c57f725018c5fdcef7e2a4d102a94",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板电源安全：未知 — 一个或多个 Android 电源探测不可用或结果不明确，因此无法确定电源安全状态。"
+    },
+    "install.presentation.status_schema_rollback": {
+      "sourceHash": "ff545e82f7b3e9d88e6e9660d1be124df64ff521098d5cbfe7290f766b84be88",
+      "state": "machine-cross-checked",
+      "text": "⚠ 版本降级后已保留较新的数据库（{from_schema} → {to_schema}）— 此版本的架构较旧，因此打开了全新的状态存储；部分设置可能已重置。此前的数据库仍保留在面板上，可用于恢复。请检查“设置”或恢复备份。"
+    },
+    "install.presentation.status_storage_critical": {
+      "sourceHash": "295fe783455c31f34bc6b768f65d3186ddd758063b80d481ff37778dcf1b096d",
+      "state": "machine-cross-checked",
+      "text": "⛔ 存储压力：严重 — 存储空间或数据库文件压力已达严重程度。请立即释放存储空间或处理预写日志增长，并在恢复正常前避免更新或更改设置。"
+    },
+    "install.presentation.status_storage_database_failure": {
+      "sourceHash": "083234acb19d795bc53258a435bc2da8d7461c6cae434d8c50439f545a26eca8",
+      "state": "machine-cross-checked",
+      "text": "⛔ 数据库存储故障 — 数据库在执行 {operation} 时发生 {failure} 故障；尚未验证是否已恢复。请保留数据库、解决存储故障，并等待健康检查通过后再重试。"
+    },
+    "install.presentation.status_storage_warning": {
+      "sourceHash": "39871e542befdb986c95c290b2a6ba66c318d7dcdf7ca65f15480d49200c5b69",
+      "state": "machine-cross-checked",
+      "text": "⚠ 存储压力：警告 — 存储空间或数据库文件压力升高。请在下次更新或更改设置前检查可用空间以及预写日志/数据库文件的增长情况。"
+    },
+    "install.presentation.status_update_available": {
+      "sourceHash": "109e7a98b964b60067ff03fa7416d4a17cbb4584970ccf60fdc9fb66a564d4ce",
+      "state": "machine-cross-checked",
+      "text": "⬆ {component} {latest} 已可用（已安装 {current}）— 下载：{release_url}"
+    },
+    "install.presentation.status_webview_old": {
+      "sourceHash": "7059a4b3c081fbba7034c06238f4bd8e43158f6258078ac03f3f1a30a8740f83",
+      "state": "machine-cross-checked",
+      "text": "⚠ System WebView 版本过旧（{current_engine}）— Home Assistant 仪表板可能显示空白。查看更新方法和原因（目标 Chromium {target_chromium}+）。"
+    },
+    "install.presentation.status_zigbee_contained": {
+      "sourceHash": "927191599be07c441b61433ce2c9b4abed9d77c01da01bd861df7ac5cc5b84f3",
+      "state": "machine-cross-checked",
+      "text": "⛔ Zigbee 网关失控已得到控制 — 在未加入网络且 CPU 持续高占用或反复重启后，路由器开关已关闭。"
+    },
+    "install.presentation.status_zigbee_containment_incomplete": {
+      "sourceHash": "d905a90accb9cb4861e2e1d676e0f0865201e2a7f15272754ddd9d2044347e38",
+      "state": "machine-cross-checked",
+      "text": "⛔ Zigbee 网关控制未完全成功 — 已尽可能停止重启程序，并降低仍在运行的任务优先级。请检查诊断信息后再重试。"
+    },
+    "install.presentation.status_zigbee_high_cpu": {
+      "sourceHash": "fb0d9f1ae1e44847a3da28752f6aae197cb7932443060bb89d57cd90e25e9f7e",
+      "state": "machine-cross-checked",
+      "text": "⚠ 已入网的 Zigbee 网关持续高 CPU 占用 — 由于已入网的路由器仅发出警告，因此它仍在运行。"
+    },
+    "install.presentation.status_zigbee_legacy_watchdog": {
+      "sourceHash": "7211ac7681f7033251f8698db5451150506de603c9df900e0d11e33f30455e7c",
+      "state": "machine-cross-checked",
+      "text": "⚠ 检测到旧版 Zigbee 监控程序缺陷 — 存在该递归动态库路径赋值。ha-paneld 不会自动修改供应商脚本。"
+    },
+    "install.presentation.status_zigbee_not_joined": {
+      "sourceHash": "756f12ad96609cfe381d71d0132cd7dcd400cdb9d2aa499bcb86de8aad7fba04",
+      "state": "machine-cross-checked",
+      "text": "⚠ Zigbee 路由器已启用但尚未入网 — 反复尝试入网可能占用大量 CPU。请将此面板加入 Zigbee 协调器，或关闭 Zigbee 路由器开关。解决 Zigbee 设置 →"
+    },
+    "install.presentation.status_zigbee_runaway": {
+      "sourceHash": "3e0c7c80a21f56afec7ff637b568ab1aaaf3548356d9e0cc4da584ba6b058bd2",
+      "state": "machine-cross-checked",
+      "text": "⛔ Zigbee 网关已失控 — 正在自动控制。"
+    },
+    "install.presentation.version_downgrade": {
+      "sourceHash": "d955b7e8fdb14a071c0eebd39f710dd252254d0966eee5ce6addcde4b294063d",
+      "state": "machine-cross-checked",
+      "text": "降级"
+    },
+    "install.presentation.version_install": {
+      "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
+      "state": "machine-cross-checked",
+      "text": "安装"
+    },
+    "install.presentation.version_upgrade": {
+      "sourceHash": "7ec0261b8e8aa3e0b1affde5f18ca1930ae73d81a5303d667aae9ffd2803cbc7",
+      "state": "machine-cross-checked",
+      "text": "升级"
+    },
+    "install.progress.approval_retry": {
+      "sourceHash": "be7545a353d7b786a59ce8893679e105d9fe23794cee284b5127c4037408f353",
+      "state": "machine-cross-checked",
+      "text": "请在面板上批准此请求，然后重试。"
+    },
+    "install.progress.audit_checking": {
+      "sourceHash": "ec963ffc911b840134fc738b41a8bb0493489c402a4a761efd36c16dea7d984b",
+      "state": "machine-cross-checked",
+      "text": "正在检查…"
+    },
+    "install.progress.audit_clean": {
+      "sourceHash": "0c308ba34530d02ab24532c6ef364b5996f244ed20c14a57e469a58eff0d4b3e",
+      "state": "machine-cross-checked",
+      "text": "未检测到问题 — 此面板已准备就绪。"
+    },
+    "install.progress.audit_failed": {
+      "sourceHash": "92ef48b5511c479ba16193ca379cba613c8d42a19e5d7b321601097492611d96",
+      "state": "machine-cross-checked",
+      "text": "检查失败 — 请重试。"
+    },
+    "install.progress.busy": {
+      "sourceHash": "19e8c5aca9efddb205589b314c3f685b38ed8955e53d4f4f4b9c7b16726da5d9",
+      "state": "machine-cross-checked",
+      "text": "另一项安装已在运行 — 请稍后重试。"
+    },
+    "install.progress.check_failed": {
+      "sourceHash": "b0282ea36d3d4e4c457498ab4297a4d379d88c464be4016d5703fa0d8db3af30",
+      "state": "machine-cross-checked",
+      "text": "检查失败"
+    },
+    "install.progress.companion_repair_failed": {
+      "sourceHash": "92a679238687c0cdd237e2ff98b2d869b1548ab549cbc8fe7af648513d75a598",
+      "state": "machine-cross-checked",
+      "text": "启动失败 — 请检查超级用户权限。"
+    },
+    "install.progress.companion_repair_started": {
+      "sourceHash": "6db6488f412ce5c7b5e9353b5f34fddec5274099e864d9a9736bdde78024903c",
+      "state": "machine-cross-checked",
+      "text": "修复已启动 — 配套应用将重新启动；请在几秒后刷新此页面以确认。"
+    },
+    "install.progress.companion_repairing": {
+      "sourceHash": "e271aaa4deb6e2242b996ff77fa63b136152af72d0a26aad09e400ad3f977b53",
+      "state": "machine-cross-checked",
+      "text": "正在修复并重新启动配套应用…"
+    },
+    "install.progress.could_not_start": {
+      "sourceHash": "18e2e48d4bb00852505658c6a8a0d721c59cb8beb133864c6b32c1be6177d54b",
+      "state": "machine-cross-checked",
+      "text": "无法启动：{status}"
+    },
+    "install.progress.done_reload": {
+      "sourceHash": "a229b17b07a8cbc45162c5a3fa9eea4af1797a0c23ba5447198a8443ef519620",
+      "state": "machine-cross-checked",
+      "text": "{component}：{result} — 正在重新加载…"
+    },
+    "install.progress.lost_contact_reload": {
+      "sourceHash": "01a4ff5d87ed48050e644839b4a4f605a5e38cb16e9efd286fe4aa633e68618e",
+      "state": "machine-cross-checked",
+      "text": "连接已中断 — 请重新加载以检查状态。"
+    },
+    "install.progress.no_apk": {
+      "sourceHash": "0f10f590a397a5a0da926e9bfcd1fef3ccfadeba12684a9a0ad08eb0dc6b8814",
+      "state": "machine-cross-checked",
+      "text": "（无 APK）"
+    },
+    "install.progress.no_versions": {
+      "sourceHash": "9951218352e8274cb230343e99f457c76b845f808b2679eb52dc5e51f808a4c1",
+      "state": "machine-cross-checked",
+      "text": "未找到版本"
+    },
+    "install.progress.operation_busy": {
+      "sourceHash": "37739a5845b8ab44c9f11e50d380019019c911e9a10795db8ade5dc90d7678b2",
+      "state": "machine-cross-checked",
+      "text": "另一项操作正在运行 — 请稍后重试。"
+    },
+    "install.progress.start_failed": {
+      "sourceHash": "9103311cc720bc97d955427612ff27b35a1f903804906cd576e5bd7155170d8d",
+      "state": "machine-cross-checked",
+      "text": "启动失败 — 请检查超级用户权限/守护进程。"
+    },
+    "install.progress.starting": {
+      "sourceHash": "ca256bf73937fc7875b0920ff33652ea6c36b66cdefef1012b3a4d2eb09b6b72",
+      "state": "machine-cross-checked",
+      "text": "正在启动 {component}…"
+    },
+    "install.progress.webview_installing": {
+      "sourceHash": "5050d01630df63bb3f9698161feb000f5c01842de55bae1e5ff0daaf1b70501a",
+      "state": "machine-cross-checked",
+      "text": "正在下载并安装… 这需要约一分钟。"
+    },
+    "install.progress.webview_started": {
+      "sourceHash": "1ba2a713c79ac4d74904c59b80a3191b16e97dd3240a3b06ef9df9e3288a65ea",
+      "state": "machine-cross-checked",
+      "text": "正在安装 WebView — 请重新加载仪表板，然后刷新此页面以确认新版本。"
+    },
+    "install.progress.working": {
+      "sourceHash": "a99604834124e176f8c1dae30419f4a3fa9b1f3ce5b3481533166e789bb85275",
+      "state": "machine-cross-checked",
+      "text": "{component}：处理中…"
+    },
+    "install.radio_state.contained": {
+      "sourceHash": "8a935a27dcc2a56a25459a31cdeb129213c65465ec2391afef3d5f9e763d3a25",
+      "state": "machine-cross-checked",
+      "text": "已控制"
+    },
+    "install.radio_state.containment_failed": {
+      "sourceHash": "4c2cf2f68277a6118288743110b3037146bc0cc1c54c95b96c2fc30ac3669e91",
+      "state": "machine-cross-checked",
+      "text": "控制失败"
+    },
+    "install.radio_state.degraded_high_cpu": {
+      "sourceHash": "546617ee99cf849e7a990e080e605c0017480c802f98194767be7e7545cf35e8",
+      "state": "machine-cross-checked",
+      "text": "CPU 占用率高"
+    },
+    "install.radio_state.degraded_unjoined": {
+      "sourceHash": "288c8641f2299933fa852a4aff2015132ed34f3eae489bbc9e8905aa7b1c619d",
+      "state": "machine-cross-checked",
+      "text": "已启用但未入网"
+    },
+    "install.radio_state.healthy": {
+      "sourceHash": "87695fdac81728b9d7f2d4a1335c2632bb5e6ba1bed21d2dff0254fba31c7d5b",
+      "state": "machine-cross-checked",
+      "text": "正常"
+    },
+    "install.radio_state.off": {
+      "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
+      "state": "machine-cross-checked",
+      "text": "已关闭"
+    },
+    "install.radio_state.runaway": {
+      "sourceHash": "cebe099203265a88890654d4cea269afa605e5f780a8d33c0da1bb8d9bcf9a0f",
+      "state": "machine-cross-checked",
+      "text": "重启循环"
+    },
+    "install.radio_state.starting": {
+      "sourceHash": "59dbf36d9930a99bfc1e13a10518cd5cf42d29ef9b21993c424b4146a81aa30e",
+      "state": "machine-cross-checked",
+      "text": "正在启动"
+    },
+    "install.radio_state.unknown": {
+      "sourceHash": "b23a6a8439c0dde5515893e7c90c1e3233b8616e634470f20dc4928bcf3609bc",
+      "state": "machine-cross-checked",
+      "text": "未知"
+    },
+    "install.restore.state_values.one": {
+      "sourceHash": "706097a0c28ba85557497af9ba9f404cf40d5f38c7e2511c977c0ff3c9e6bf53",
+      "state": "machine-cross-checked",
+      "text": "恢复已完成（已恢复 {count} 个面板状态值）"
+    },
+    "install.restore.state_values.other": {
+      "sourceHash": "882f5a25b20ebede1a5e18886df93e4d9568aa19ab67e4d21b8e5cc443aa6070",
+      "state": "machine-cross-checked",
+      "text": "恢复已完成（已恢复 {count} 个面板状态值）"
+    },
+    "install.restore_outcome.failed": {
+      "sourceHash": "5d28a90f4498a81461efbaf6f628a19d9778390bb5c81a393dd936181cc3d826",
+      "state": "machine-cross-checked",
+      "text": "失败"
+    },
+    "install.restore_outcome.partial": {
+      "sourceHash": "acebff93c35f899bbdf85fa7803de8bd87d2c48e53a4bcfcd513cf0c1de6cd3f",
+      "state": "machine-cross-checked",
+      "text": "部分完成"
+    },
+    "install.restore_outcome.rollback_failed": {
+      "sourceHash": "67a01f103707765d98805b52ae1f65d91466f93d89bf4b6b23045a724de4ef4e",
+      "state": "machine-cross-checked",
+      "text": "回滚失败"
+    },
+    "install.restore_outcome.rolled_back": {
+      "sourceHash": "d17977b7ecfc6018ea268ad1988199c54e59239386430f2b90c258a2f90a260a",
+      "state": "machine-cross-checked",
+      "text": "已回滚"
+    },
+    "install.restore_outcome.skipped": {
+      "sourceHash": "389595a44dc9dce7dee673f243e805244bae603d6a65a536ad493340ec99ced3",
+      "state": "machine-cross-checked",
+      "text": "已跳过"
+    },
+    "install.restore_outcome.succeeded": {
+      "sourceHash": "5dceaeceb6d8a49d3665594710ace68dfbc1800e2d663d7febb302b4dbee3d27",
+      "state": "machine-cross-checked",
+      "text": "成功"
+    },
+    "install.shared.loading": {
+      "sourceHash": "fbc6d752fe528706966cdcf8fce5d3d46999313ffd6098308efb6306972d6b44",
+      "state": "machine-cross-checked",
+      "text": "正在加载…"
+    },
+    "install.shared.not_installed": {
+      "sourceHash": "e9363f76e1145505f670e682d00a8497f163aa9aa81034d513260edf155923c9",
+      "state": "machine-cross-checked",
+      "text": "未安装"
+    },
+    "install.shared.operation_busy": {
+      "sourceHash": "2f3ade1aef148c86c17bce8fa9a7ef17a6f1faa35db5cea5966f69dd03544349",
+      "state": "machine-cross-checked",
+      "text": "另一项操作正在运行。"
+    },
+    "install.shared.version": {
+      "sourceHash": "dd167905de0defcaf72de673ee44c07431770d129ccffab286bd2edfdaf62396",
+      "state": "machine-cross-checked",
+      "text": "版本"
+    },
+    "install.status.companion_url_missing.one": {
+      "sourceHash": "6ec34cbc2c652fbcf870b2d71fb669d7d4ae9e8d53a769d7d775816ce539c94b",
+      "state": "machine-cross-checked",
+      "text": "⚠ Home Assistant 配套应用有 {count} 台服务器未设置内部 URL — 仪表板可能会加载失败并提示“缺少主机标头”。请在“安装”标签页中修复。"
+    },
+    "install.status.companion_url_missing.other": {
+      "sourceHash": "0e438c28f54290449d21614ea11cf55a5fee35079ca10181de7174535f670dc5",
+      "state": "machine-cross-checked",
+      "text": "⚠ Home Assistant 配套应用有 {count} 台服务器未设置内部 URL — 仪表板可能会加载失败并提示“缺少主机标头”。请在“安装”标签页中修复。"
+    },
+    "install.uninstall.dynamic.confirm": {
+      "sourceHash": "7a0a791ef3c4ca2a78a7daadfbc80fb864e90f34ddd590d076f7100f6f122e77",
+      "state": "machine-cross-checked",
+      "text": "卸载 {package}？这将删除该应用及其数据。"
+    },
+    "install.uninstall.dynamic.load_failed": {
+      "sourceHash": "f318eb3d47fba6e3eb24eed98dcd21023cd2e9a67e25563666aa55611dde0c2f",
+      "state": "machine-cross-checked",
+      "text": "加载失败"
+    },
+    "install.uninstall.dynamic.none": {
+      "sourceHash": "857e324e486859a8fb02806020847f3d341f0f40d2c0732f0912947f19a064ce",
+      "state": "machine-cross-checked",
+      "text": "没有可卸载的应用"
+    },
+    "install.uninstall.dynamic.request_failed": {
+      "sourceHash": "794548f29d319b9d3ed5f813f3af7385c7844e8226ff9db9f440fa992a21f08f",
+      "state": "machine-cross-checked",
+      "text": "失败。"
+    },
+    "install.uninstall.dynamic.working": {
+      "sourceHash": "d90138c373e0ee5a8b1249c57bcc66f76217a346e162667b8751646c6ea16a3c",
+      "state": "machine-cross-checked",
+      "text": "正在卸载 {package}…"
+    },
+    "runtime.mdns.attempts.one": {
+      "sourceHash": "ae389f31914ab8bdb2d6e1105a60446aab9793e605e54f41742eea4de1e288ed",
+      "state": "machine-cross-checked",
+      "text": "{attempts} 次恢复尝试"
+    },
+    "runtime.mdns.attempts.other": {
+      "sourceHash": "6de553f3ae5b9afd0c2a996801834dfce7e3e828a7ff89c44966dccc22161a56",
+      "state": "machine-cross-checked",
+      "text": "{attempts} 次恢复尝试"
+    },
+    "runtime.mdns.not_running": {
+      "sourceHash": "8675c52511c0fbb2209793d8ce5a0e2e97d2f86b18a51e3817bab6abae120d0b",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板发现服务未运行 — 此面板不会出现在其他面板的切换器菜单或 Home Assistant 发现中。请将面板重新连接到网络或重启 ha-paneld。"
+    },
+    "runtime.mdns.recovering": {
+      "sourceHash": "c61385635cb7cd2cbbdaf2053f4333441ac1969d38e3d0b91d869aafc2d732e9",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板发现服务正在恢复 — {reason_code}。"
+    },
+    "runtime.mdns.stale_address": {
+      "sourceHash": "8677f10a52a47c0e7df96907de1da8b86cd875d30bb03b25092a3d63c725157c",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板发现服务的地址已过期（{bound_ip}，当前为 {lan_ip}）— 在重新绑定前，其他面板无法通过切换器访问此面板。"
+    },
+    "runtime.mdns.unresponsive.one": {
+      "sourceHash": "289dcccea3d8553fd62952feace3548ef6d933d11a2667263bd88d66db965b8a",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板发现服务无响应 — 自动恢复在 {attempts} 次尝试后停止（{reason_code}）。请将面板重新连接到网络或重启 ha-paneld。"
+    },
+    "runtime.mdns.unresponsive.other": {
+      "sourceHash": "ba82d4d04f4d477b6e648db2fb3d6cb4a11e3945c9ca77e601983fb3ba14c726",
+      "state": "machine-cross-checked",
+      "text": "⚠ 面板发现服务无响应 — 自动恢复在 {attempts} 次尝试后停止（{reason_code}）。请将面板重新连接到网络或重启 ha-paneld。"
+    },
+    "runtime.power_safety.ack.endpoint_failed": {
+      "sourceHash": "8db0a9affb0f9ccc6412f17d2e0e8a38c47fd0f4ba8e7692b3031b628a68a4e2",
+      "state": "machine-cross-checked",
+      "text": "无法保存确认；此警告仍会显示。"
+    },
+    "runtime.power_safety.ack.saving": {
+      "sourceHash": "05360a57b87a18b1c7fc61b5d81158ccbfc3f953c2e8c6f3f353c003eff79499",
+      "state": "machine-cross-checked",
+      "text": "正在保存确认…"
+    },
+    "runtime.power_safety.button.hide": {
+      "sourceHash": "65150e117bf29d5f27999ac819fbee19c26f1709364a6873d7a8519e4c4fe04c",
+      "state": "machine-cross-checked",
+      "text": "隐藏此警告"
+    },
+    "runtime.power_safety.button.hide_title": {
+      "sourceHash": "b813ee640e36ac9f14fe39e0c557cae18c1b9fbc1daed8a0d5aea590d20c1a84",
+      "state": "machine-cross-checked",
+      "text": "在面板网页中隐藏此项未变化的警告；Hardened 模式需要在设备上批准"
+    },
+    "runtime.power_safety.repair.applying": {
+      "sourceHash": "0a4d00786291e3748e44cb8c56ceb349eda167603ba5e2bc79779a6c46ee8447",
+      "state": "machine-cross-checked",
+      "text": "正在应用并验证…"
+    },
+    "runtime.power_safety.repair.endpoint_failed": {
+      "sourceHash": "00806a21056ce5e3b5faab1e9e31ac1d324b0fef358891ee76b07f9dbfca386c",
+      "state": "machine-cross-checked",
+      "text": "无法连接修复端点；未确认任何修复。"
+    },
+    "runtime.power_safety.repair.refreshing": {
+      "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
+      "state": "machine-cross-checked",
+      "text": "正在刷新…"
     }
   }
 }
