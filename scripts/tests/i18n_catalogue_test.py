@@ -744,10 +744,17 @@ class CatalogueTest(unittest.TestCase):
         for pair, expected in {
             ("de", "setup.progress.name"): "Name",
             ("de", "setup.progress.server"): "Server",
+            ("de", "entities.dynamic.default_dashboard"): "Dashboard",
+            ("de", "entities.issue.default_dashboard"): "Dashboard",
             ("es", "shell.runtime.duration_minutes"): "{count} min",
             ("es", "shell.runtime.duration_seconds"): "{count} s",
+            ("fr", "entities.dynamic.source"): "Source",
+            ("fr", "entities.issue.source"): "Source",
+            ("fr", "entities.row.option.auto"): "Auto",
             ("fr", "shell.runtime.duration_minutes"): "{count} min",
             ("fr", "shell.runtime.duration_seconds"): "{count} s",
+            ("it", "entities.dynamic.default_dashboard"): "Dashboard",
+            ("it", "entities.issue.default_dashboard"): "Dashboard",
             ("it", "shell.runtime.duration_minutes"): "{count} min",
             ("it", "shell.runtime.duration_seconds"): "{count} s",
         }.items():
@@ -829,6 +836,28 @@ class CatalogueTest(unittest.TestCase):
         ):
             with self.subTest(key=key, text=text), self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target_language(key, text, "zh-Hans", mqtt_help)
+
+        zh_target = i18n.validate_target(
+            catalogue_dir / "zh-Hans.json",
+            source,
+            expected_locale="zh-Hans",
+        )
+        expected_entities_literals = {
+            "entities.dynamic.body": ("ID",),
+            "entities.issue.auto-entities-options-dynamic.summary": ("Auto-entities",),
+            "entities.issue.auto-entities-options-javascript.summary": ("Auto-entities",),
+            "entities.issue.auto-entities-seed-row-dynamic.summary": ("Auto-entities",),
+            "entities.issue.auto-entities-typed-row-dynamic.summary": ("Auto-entities",),
+            "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation": ("Kiosk",),
+            "entities.status.unresolved_help": ("ID",),
+        }
+        for key, literals in expected_entities_literals.items():
+            pair = ("zh-Hans", key)
+            self.assertEqual(literals, i18n.TARGET_LITERAL_EXCEPTIONS.get(pair))
+            text = zh_target["strings"][key]["text"]
+            with mock.patch.dict(i18n.TARGET_LITERAL_EXCEPTIONS, {pair: ()}):
+                with self.subTest(key=key), self.assertRaises(i18n.CatalogueError):
+                    i18n.validate_target_language(key, text, "zh-Hans", source["strings"][key])
 
     def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
         with tempfile.TemporaryDirectory() as directory:

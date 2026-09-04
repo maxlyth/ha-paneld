@@ -3913,6 +3913,1141 @@
       "sourceHash": "6ee0eb490ff832101cf82a3d387c35f29e4230be786978f7acf9e811febf6723",
       "state": "machine-cross-checked"
     },
+    "entities.age.days": {
+      "text": "vor {count} T.",
+      "sourceHash": "a41234397f3c63b22d27312ffcea05114f8d3ae9d602ef1320168a6eae9ca361",
+      "state": "machine-cross-checked"
+    },
+    "entities.age.hours": {
+      "text": "vor {count} Std.",
+      "sourceHash": "520c737ea62430c4aa3e953abb60cf6bf7ecde97f0aef8f5e3fab5a9011db2a0",
+      "state": "machine-cross-checked"
+    },
+    "entities.age.minutes": {
+      "text": "vor {count} Min.",
+      "sourceHash": "0a03167c208c5cd797a7fe6736e89a7fafe9ff5ed5b671bf33797f7fd715b35f",
+      "state": "machine-cross-checked"
+    },
+    "entities.age.never": {
+      "text": "nie",
+      "sourceHash": "6497e4b3d7bed16979a343a7db4efa6d57725529f5ac3cec45c1f08fabcbdafc",
+      "state": "machine-cross-checked"
+    },
+    "entities.age.seconds": {
+      "text": "vor {count} Sek.",
+      "sourceHash": "244073ecb2be8fe875a37bcf7023ff32fb21f7c64e5d29e0ae62931a84c98a6a",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.applying": {
+      "text": "Das von der Richtlinie ausgewählte Abonnement wird angewendet…",
+      "sourceHash": "428045ab67c20cc39fb7ced4c062398a642ef2482975bd97ede0425fa2105f0c",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.changed": {
+      "text": "Angewendet. Live-Abonnement vorher: {previous}; nachher: {current}. Hinzugefügt: {added}; entfernt: {removed}. Neuladen des Dashboards angefordert.",
+      "sourceHash": "e6663a78ebc94de30783b44a3bbc39da17c8f70ac0d46f813b2d4e4176874fe8",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.enable_confirm": {
+      "text": "Aktuellen Datenstrom (Entitätsanzahl: {current}) beibehalten und künftige automatische Richtlinienaktualisierungen aktivieren?",
+      "sourceHash": "bac6011889095102b94474f07be420771d6019f85ae6145be6e969f509525ecc",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.failed": {
+      "text": "Anwenden fehlgeschlagen.",
+      "sourceHash": "db995af502a14773306243a2cf53a61ea0cd39bbe303ab0d2740bf9717d0511f",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.replace_confirm": {
+      "text": "Aktuellen Datenstrom (Entitätsanzahl: {current}) durch die von der Richtlinie ausgewählte Entitätsmenge (Entitätsanzahl: {desired}) ersetzen? Hinzugefügt: {added}; entfernt: {removed}. Dadurch wird das Dashboard neu geladen.",
+      "sourceHash": "770343d8562dc49d471c9d0759a998a6c18ca3f79c9d7d27c24c430ce99e6834",
+      "state": "machine-cross-checked"
+    },
+    "entities.apply.unchanged": {
+      "text": "Automatische Aktualisierungen aktiviert. Anzahl im Live-Datenstrom unverändert: {count}.",
+      "sourceHash": "ba66ce74d616e1093eba2ca1c87586fea5146ef115e5b6affadf6d75056db70f",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.auto_selected": {
+      "text": "Auswahl auf Automatisch gesetzt",
+      "sourceHash": "bcdd1196df6de9d85a9b0bea729aa5e35b56d6897d71f50f2f48db4a509d2ece",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.exclude_all_confirm.one": {
+      "text": "{count} vorgeschlagene Entität ausschließen? Dadurch können Dashboard-Karten ausfallen.",
+      "sourceHash": "4ee7872151dc628a5534388bc708bbdaaa3854e51513b745e69be6ce297f1447",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.exclude_all_confirm.other": {
+      "text": "Alle {count} vorgeschlagenen Entitäten ausschließen? Dadurch können Dashboard-Karten ausfallen.",
+      "sourceHash": "f71967c93e9b393036ab0e5c4e0d5189d27764b34014e3998bd9d529ca305ae5",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.exclude_selected": {
+      "text": "Ausgewählte ausschließen",
+      "sourceHash": "2748363ffa4124f831a4e5f7b381251e76cec4593ac9864f1bd53f501e56c932",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.exclude_selected_confirm.one": {
+      "text": "{count} ausgewählte Entität ausschließen? Dadurch können Dashboard-Karten ausfallen.",
+      "sourceHash": "227268d87fbedc2dfd3681cdb64ea4aa08966e03db558c156671e14d22f4e357",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.exclude_selected_confirm.other": {
+      "text": "{count} ausgewählte Entitäten ausschließen? Dadurch können Dashboard-Karten ausfallen.",
+      "sourceHash": "a4d9e3e4433232a4693d7b385710a5641b8b1352ea5e80a956edce2e14bd0bba",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.failed": {
+      "text": "Massenänderung fehlgeschlagen",
+      "sourceHash": "36941e6910702fea428a60ceeeed35583842648c0bba0264ae63a77bcfec913f",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_all_confirm.one": {
+      "text": "{count} vorgeschlagene Entität anheften?",
+      "sourceHash": "1d741b9dda2c5645cb6f05b3f56409acf87abee8b61d5c6b955ec13e7ae25c24",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_all_confirm.other": {
+      "text": "Alle {count} vorgeschlagenen Entitäten anheften?",
+      "sourceHash": "9ca6f7bc0cc669c9a4df740064cdbbf4a00b7e2c9224a26dc64f17b5f9a919a5",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_all_suggested": {
+      "text": "Alle Vorschläge anheften",
+      "sourceHash": "a065b473d105e06ffe8a8f0ea34c19753f14452c09493e24901c6b1073aeaa50",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_selected": {
+      "text": "Ausgewählte anheften",
+      "sourceHash": "22e545df141030fca49a2c765d0ce073e24ec243cd67b1f5fe6dba63e26085b2",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_selected_confirm.one": {
+      "text": "{count} ausgewählte Entität anheften?",
+      "sourceHash": "1bbe3e3f4f495e4157d82fcd04a62ed0cf81ac548b75434d8ba9a841d1233ead",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.pin_selected_confirm.other": {
+      "text": "{count} ausgewählte Entitäten anheften?",
+      "sourceHash": "14bec6aa4ecbb15d7e6e772a1a3482d38a7c2d6e7421f08064c189c53de1fbec",
+      "state": "machine-cross-checked"
+    },
+    "entities.bulk.select_first": {
+      "text": "Wähle zuerst mindestens eine Entität aus.",
+      "sourceHash": "424bd5c37d06d5176bae7c4b5aecc4b81e8297eab846968d5921be3c5bcace23",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.apply_policy": {
+      "text": "Von der Richtlinie ausgewählte Entitäten anwenden ({current} → {desired})",
+      "sourceHash": "538781bf551ef48ab4a9bf050de1cef5e5f7f1b63aabdf7385e6a706be8cb926",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.applying": {
+      "text": "Wird angewendet…",
+      "sourceHash": "3329a9bb48b9c8d4a5e6182042ea9737427233c72b853b93d0a6365050ae476d",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.choose_checks": {
+      "text": "Umgang mit Prüfungen der Entitätserkennung auswählen",
+      "sourceHash": "2aa77c0f827a8c7d7ea3293581d5185ed0f24881a47fa0b8eeacce79f1df78ec",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.enable_updates": {
+      "text": "Automatische Aktualisierungen aktivieren",
+      "sourceHash": "35b384295b66af7b238f1ebdd77b46d9c3c0f27fc7c92a21e32a04bc25273e86",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.reset": {
+      "text": "Gelernte Daten zurücksetzen",
+      "sourceHash": "49dc6d157094fdc2b69f4b58c47990183681beb8c38407c89d5f8b055cfe21e8",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.reset_after_scan": {
+      "text": "Zurücksetzen nach Scan verfügbar",
+      "sourceHash": "6abe012cb7f5d429ab5f6d794c9c93f3bd5f2dc7109446ff54fe94bfc9c74d26",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.reset_in_progress": {
+      "text": "Zurücksetzen läuft…",
+      "sourceHash": "020fba621f800493fb641c4a33860a1eeeeb1afb0da65ab59e55c7c1489aac33",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.resetting": {
+      "text": "Wird zurückgesetzt…",
+      "sourceHash": "1505f40de62c4f2620f934141fe63916300b6d82ca8701e1f1be53ea22eba6b1",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.scan": {
+      "text": "Dashboard jetzt scannen",
+      "sourceHash": "8edb4583e8d2ec8d230c75d2bcb7c5d325083faf3be88f8b0b05350bf55b4b21",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.scan_in_progress": {
+      "text": "Scan läuft…",
+      "sourceHash": "c19b8ea94d1d20590e8f1e4a1f486865cdc0d6db3fca68c91da1331005d26ebe",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.scanning": {
+      "text": "Wird gescannt…",
+      "sourceHash": "38d96da6e8b253d22c8974b69006a281bcacbdfa26420d89b9534dc1dfb5ac17",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.up_to_date": {
+      "text": "Abonnement ist aktuell",
+      "sourceHash": "dcdcea51734ac125afc811ce1b8e0f71f7cf58fb14d95530b40b5ea000260741",
+      "state": "machine-cross-checked"
+    },
+    "entities.control.update_in_progress": {
+      "text": "Aktualisierung läuft…",
+      "sourceHash": "58769b33f63d08cf2a59046b70027dd48b6fcc7656e24eefa248d49dd5fb1553",
+      "state": "machine-cross-checked"
+    },
+    "entities.disabled.badge": {
+      "text": "experimentell",
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-cross-checked"
+    },
+    "entities.disabled.body": {
+      "text": "Aktiviere {setting} unter {configure} → {dashboard}, während du den integrierten Renderer verwendest.",
+      "sourceHash": "8d35d3cde0d347fb97487543bfb8c0c20af1c59d78b670b8f92381860aacdb71",
+      "state": "machine-cross-checked"
+    },
+    "entities.disabled.title": {
+      "text": "Dashboard-Entitäten",
+      "sourceHash": "3db0d66bd72cf3128b18ff59bae034b5c0a982d1d78dd696caedb6dfa1edd02a",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.body": {
+      "text": "Diese Ausdrücke sind keine Konfigurationsfehler. Führe den relevanten Dashboard-Zustand aus, damit die Laufzeitbeobachtung konkrete Entitäts-IDs erkennen kann. Vorlagen, die Home Assistant auf dem Server rendert, etwa {{ ... }} und {% ... %}, werden ausgewertet, bevor das Dashboard sie erhält. Durch Ausführen lassen sich die von ihnen gelesenen Entitäten daher nie erkennen. Das ist auch nicht nötig: Home Assistant sendet das gerenderte Ergebnis über ein separates Abonnement, das dieser Filter nicht berührt, sodass für diese Entitäten nichts zu tun ist. Nur eine Entität, die eine solche Vorlage als Kartenreferenz erzeugt, muss manuell hinzugefügt werden.",
+      "sourceHash": "b71078752a0fda1c44508c52871014086acdfd547b2ea28da0bb0be8c02e005f",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.default_dashboard": {
+      "text": "Dashboard",
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.source": {
+      "text": "Quelle",
+      "sourceHash": "0e570ca6fabe24f94e52c1833f3ffd25567022beb826fa16891f3322051bc221",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.title": {
+      "text": "Auszuführende dynamische Ausdrücke",
+      "sourceHash": "c6cbcd1b93723034c7507ef075acf867da60081d09569b80ec9ab1e3bf7cad2f",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.truncated": {
+      "text": "Ausdruck für Diagnosezwecke gekürzt.",
+      "sourceHash": "a183484b32eab63829e15f0aa4de94864ec0fdddda951abe291bfcf7f36dbc6c",
+      "state": "machine-cross-checked"
+    },
+    "entities.dynamic.unavailable": {
+      "text": "Probleme mit der Dashboard-Konfiguration sind vorübergehend nicht verfügbar.",
+      "sourceHash": "97d2f9ead197e0a0f6d72fbc2ec76b03e1b3d7a5f90688459226ab29fc796c7c",
+      "state": "machine-cross-checked"
+    },
+    "entities.error.mutation_ownership_changed": {
+      "text": "Die Zuständigkeit für Entitätsänderungen hat sich geändert.",
+      "sourceHash": "51a27bda55e91fb4c7c10831f0361f218210190aac463b96faec5b7b76d7b90f",
+      "state": "machine-cross-checked"
+    },
+    "entities.error.request_unavailable": {
+      "text": "Anfrage nicht verfügbar",
+      "sourceHash": "1234cb6dc3fca8e3ddb2ad853b786605838aa96fdd7405bdd2d0f2c6697a4d02",
+      "state": "machine-cross-checked"
+    },
+    "entities.error.unknown": {
+      "text": "unbekannter Fehler",
+      "sourceHash": "3e4443e52275a9a092994d93853ea05b985abc67238b4b482c7b90b3a76e6098",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.checking": {
+      "text": "Abonnement wird geprüft…",
+      "sourceHash": "dae829dc2e42f25c3d4d811b3e4528488a6d8df3c6212b63a8e146586342ba83",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.export": {
+      "text": "Details exportieren",
+      "sourceHash": "9ca0326b9c8865068061ae1f83dd3f946e36f33537d3478ebdf079c817db82ce",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.loading": {
+      "text": "Wird geladen…",
+      "sourceHash": "ba3bbbe10d8bef66441c88536ce7b8e724e2829b59a3da658654f4961cd61ae5",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.reset": {
+      "text": "Gelernte Daten zurücksetzen",
+      "sourceHash": "49dc6d157094fdc2b69f4b58c47990183681beb8c38407c89d5f8b055cfe21e8",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.scan": {
+      "text": "Dashboard jetzt scannen",
+      "sourceHash": "8edb4583e8d2ec8d230c75d2bcb7c5d325083faf3be88f8b0b05350bf55b4b21",
+      "state": "machine-cross-checked"
+    },
+    "entities.filter.title": {
+      "text": "Filter für Entitätsabonnements",
+      "sourceHash": "553c1e39d186ac8c3979ba327a650e28d17b9e3d1d00e1025c4a6a5071bae9d6",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.allow_note": {
+      "text": "Das Zulassen dieser Prüfung fügt niemals Entitäten hinzu. Es ermöglicht lediglich, automatische Aktualisierungen ohne sie fortzusetzen. Um eine Entität zu abonnieren, suche sie oben auf dieser Seite über die Katalogsuche und setze sie auf {pinned}; eine manuelle Anheftung bleibt bestehen, bis du sie entfernst.",
+      "sourceHash": "d3c4b6d2399ff0b190f6ccafb3bb888b75db62d7a682cd5a5c06dbe91a24df72",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.area-broad.summary": {
+      "text": "Bereichskarte überschreitet das Sicherheitslimit pro Auswahl",
+      "sourceHash": "8ef940c2a79a9331d1a10a00ddeba03e63618b3afdc4528e2380e0553f7f8861",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.area-missing-id.summary": {
+      "text": "Bereichskarte hat keine statische Bereichs-ID",
+      "sourceHash": "96f1bb3976e5f7e232bbe3cef6d90da628247f136d69569a2156e7a965f944ec",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.area-registry-incomplete.summary": {
+      "text": "Bereichsregisterdaten für die Bereichskarte sind unvollständig",
+      "sourceHash": "d25c1fe35add58e9f0e38d8c03485387e1f1ff193fc1830b5387cda97495c1f7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.auto-entities-options-dynamic.summary": {
+      "text": "Auto-Entities-Optionen können zur Laufzeit Entitätsabhängigkeiten erzeugen",
+      "sourceHash": "5c2b12a42a8e3532dc2419da1a6acffb51b32084a7b1e20307a703bce0a5f9e3",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.auto-entities-options-javascript.summary": {
+      "text": "Auto-Entities-Optionen führen JavaScript aus, das Entitätsabhängigkeiten ersetzen kann",
+      "sourceHash": "22ceb20450b38f3e3d14b8fc60baf3f2f1e72e6f5b67f49b3059452c95e082e7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.auto-entities-seed-row-dynamic.summary": {
+      "text": "Auto-Entities-Ausgangszeile kann zur Laufzeit Entitätsabhängigkeiten erzeugen",
+      "sourceHash": "19844079e668f90890e0175779b98c82fc44bc1a804f93b91b2da6ca279e6609",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.auto-entities-typed-row-dynamic.summary": {
+      "text": "Typisierte Auto-Entities-Zeile kann zur Laufzeit Entitätsabhängigkeiten erzeugen",
+      "sourceHash": "4c5f40b1bf80e9559cc388ad364d6786786976643187f19a5b49c5339c02f7d7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.bubble-card-runtime-coverage.reason": {
+      "text": "Statische Entitäts-IDs werden sofort erkannt. Andere direkte hass.states-Abhängigkeiten aus Pop-ups, Stilen, Unterschaltflächen und Modulen von Bubble Card werden bei ihrer Ausführung automatisch gelernt. Daher kann die Liste erkannter Entitäten unvollständig bleiben, bis jedes relevante Pop-up, jeder bedingte Zustand, jeder Modulpfad und jede Interaktion ausgeführt wurde.",
+      "sourceHash": "a9753dc0f564984e7c520550203a16df607746759b83d6f8ad39160eaa22176b",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.bubble-card-runtime-coverage.summary": {
+      "text": "Die Entitätserkennung von Bubble Card hängt von der Dashboard-Abdeckung ab",
+      "sourceHash": "f52c911e7ffca64cb85a6468cf6781106654795e91c81bf4fe91338c8d94fc1f",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-dynamic-features.reason": {
+      "text": "Diese Funktionen von Button Card können Abhängigkeiten einführen, die in der Dashboard-Konfiguration nicht als statische Entitäts-IDs vorhanden sind.",
+      "sourceHash": "33565213a61df76f36e54baea1a468cf9c5fe5d166311e0b612a27c344b67dba",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-dynamic-features.recommendation": {
+      "text": "Ersetze sie durch explizite Entitäts-IDs und Aktualisierungsauslöser oder hefte jede erzeugte Abhängigkeit an.",
+      "sourceHash": "aa0acc67b2b36ac03142f453db84a32bcb5e617f8e83e6ff83902d3c55560f6e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-dynamic-features.summary": {
+      "text": "Button Card verwendet Funktionen mit dynamischen Entitätsabhängigkeiten",
+      "sourceHash": "93034e488e61180e11cc9f9ca4f4de844058421c741776941b613bc6ca5c4c4e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-limited-support.reason": {
+      "text": "Statische Entitäts-IDs und Ziele werden gescannt, aber Vererbung von Konfigurationsvorlagen, JavaScript, Gruppenerweiterung und allgemeine Aktualisierungsauslöser werden nicht ausgewertet.",
+      "sourceHash": "3b8cd86cfa82bdd7b08f30ea3fb1d3fd1a1e63964ce92dcddad0c85c087cd254",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-limited-support.recommendation": {
+      "text": "Halte Abhängigkeiten explizit und hefte alle Entitäten an, die über Vorlagen von Button Card oder JavaScript eingeführt werden.",
+      "sourceHash": "9c28da4774b4293c32b44663895e35eea6cc5b60945319848b06983a6ed11664",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.button-card-limited-support.summary": {
+      "text": "Button Card unterstützt die Entitätserkennung nur eingeschränkt",
+      "sourceHash": "284123b501316e60e92ab480b8f99d6e935936c8235a9faf60605b14d0e5f7a2",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.candidate_set": {
+      "text": "Kandidatensatz",
+      "sourceHash": "9cceb5a05dd99f8b85ad074abfc602d24570ae707fc49d2b76e9f4130253976e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.card.kiosk_mode_configuration": {
+      "text": "Konfiguration von HACS Kiosk Mode",
+      "sourceHash": "d28f78f8972124e7e87f6c382f784c0590692ce3b63f8b1eeae5f0d6a693013d",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.dashboard-strategy.summary": {
+      "text": "Dashboard-Strategie erzeugt zur Laufzeit Entitätsabhängigkeiten",
+      "sourceHash": "c2ef5e779dcb1501a2b260488a99ebcd44cc4bef2a10e3f47f5399e9dff8d740",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.decluttering-template-expansion.reason": {
+      "text": "Statische Entitäts-IDs und Ziele werden gescannt, aber die referenzierte Vorlage, Standardwerte und Variablen können Abhängigkeiten einführen, die im Aufruf fehlen.",
+      "sourceHash": "6afdd9a4bbd534c4428d39590daed384b4fdf03273386f1175cca946167c9c5d",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.decluttering-template-expansion.recommendation": {
+      "text": "Halte Abhängigkeiten explizit und hefte jede von der Vorlage erzeugte Entität an.",
+      "sourceHash": "e66f036d5398b5e17550ef7db7a3c0f7ed182189e8d71f7d7577b49639d06e41",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.decluttering-template-expansion.summary": {
+      "text": "Decluttering Card unterstützt die Entitätserkennung nur eingeschränkt",
+      "sourceHash": "577c853d33d7495cf113c9e8813b28b4763746cff05da594189337eabb46e66c",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.default-broad.reason": {
+      "text": "Der strukturelle Kandidatensatz überschreitet das Sicherheitslimit pro Auswahl. Dynamische Filter, Sortierung und Anzeigelimits können ihn nicht sicher verkleinern.",
+      "sourceHash": "09254a3ff2f9fc0d2023d14ba0326bf5a9837be72fd87261b842cd2ec6cfb154",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.default-broad.recommendation": {
+      "text": "Grenze die Auswahl durch einen Bereich, eine Etage, ein Label, ein Entitätsmuster oder eine explizite Entitätsliste ein.",
+      "sourceHash": "ee01905364ebf98329a8c55c886e5437838273b6eb78f464b5320cc42501932a",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.default-unbounded.reason": {
+      "text": "Die Auswahl hat keine strukturelle Begrenzung, die in eine sichere Menge abonnierter Entitäten umgewandelt werden kann.",
+      "sourceHash": "82a4eeff8f306907cd156b2847f430a0801bcb6b05b669c47879476497494fda",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.default-unbounded.recommendation": {
+      "text": "Füge eine explizite Entitäts-ID oder eine Einschränkung nach Entitätsmuster, Domäne, Bereich, Etage oder Label hinzu.",
+      "sourceHash": "d714413bd8c2e44d31e88af3b74b728fe19cfc282c90d2d77af0aaa986ce1939",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.default_dashboard": {
+      "text": "Dashboard",
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.diagnostic-limit.reason": {
+      "text": "Es wurden mehr als 64 verschiedene blockierende Prüfungen gefunden.",
+      "sourceHash": "1b01bdd7d4f02af1d7fa0fe94827e071c0e0a55fb746b409c65b173155c5616d",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.diagnostic-limit.recommendation": {
+      "text": "Vereinfache das Dashboard oder teile es in kleinere Dashboards auf, bevor du die automatische Entitätsfilterung aktivierst.",
+      "sourceHash": "51d9424df4f4bdc068b69d11f6f19e3cd8eaf42bd62d4acba954daf8568d156e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.diagnostic-limit.summary": {
+      "text": "Das Dashboard enthält mehr Sicherheitsprüfungen, als überprüft werden können",
+      "sourceHash": "9389720c884f9e7cc15417daa3c982e8083f3ad18bd02b8fb89d06a19fb198dd",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.ignore": {
+      "text": "Potenzielle Entitäten ignorieren und fortfahren",
+      "sourceHash": "ce23f81f852dcb0da169baedd751ff559b6aa05f9f40ff83b5e431d389361844",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.ignore_confirm": {
+      "text": "Fortfahren und dabei alle potenziellen Entitäten aus dieser Konfiguration weglassen? Dadurch werden dem Abonnement keine Entitäten hinzugefügt. Karten, die von ihnen abhängen, können als nicht verfügbar erscheinen, bis du diese Entitäten manuell anheftest, das Dashboard eingrenzt oder die Sicherheitsprüfung wieder aktivierst.",
+      "sourceHash": "67413638e256350b1b2523684e53c746d79e9ca69729a04598065bc78e18d4ce",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.reason": {
+      "text": "Diese clientseitigen Ausdrücke können von Entitäten abhängen, die in der statisch ermittelten Menge abonnierter Entitäten fehlen.",
+      "sourceHash": "848d2c9cb3f62b9ce9bafee07f503cb464e1f9e902cebb6e7bfe064cc443f3a6",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation": {
+      "text": "Entferne für die automatische Entitätsfilterung clientseitiges JavaScript oder hefte jede Abhängigkeit an; dies wirkt sich weder auf die HACS-Darstellung noch auf den nativen Kioskbefehl von Home Assistant aus.",
+      "sourceHash": "16bfc9f542e706bd0fb6dffd6cbda316c8c1e2de53fbca3309e06eb4a72c0070",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.summary": {
+      "text": "HACS Kiosk Mode verwendet clientseitiges JavaScript mit unbekannten Entitätsabhängigkeiten",
+      "sourceHash": "4738246d419bdcdb6d251cb23cc2c9edd4d568d9a4c64d1089c963c6d9eb34c8",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.reason": {
+      "text": "Literale Entitäts-IDs in clientseitigen Vorlagen werden gescannt, aber berechnete Referenzen sowie die Aufzählung von Entitäten, Domänen oder Registrierungen können nicht sicher ausgewertet werden.",
+      "sourceHash": "45fc404517466e160d28ad59823726bfb75d79d467999f978ee60ffff324abcb",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.recommendation": {
+      "text": "Verwende für die automatische Entitätsfilterung literale Entitäts-IDs im JavaScript von HACS Kiosk Mode und vermeide Aufzählungen; serverseitig gerenderte Jinja-Einstellungen benötigen keine Abhängigkeiten im Hauptdatenstrom.",
+      "sourceHash": "6722add1f9e7bd22036c91f7c5cdb90df36db9da4f5c444dd3db697dc862c2a7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.summary": {
+      "text": "Das JavaScript von HACS Kiosk Mode unterstützt die Entitätserkennung nur eingeschränkt",
+      "sourceHash": "c9e5190b8c38b4b229b6d2daab82903f342aa822d7e708f4d835fc5e17172c32",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.map-dynamic-enumeration.summary": {
+      "text": "Die Kartenansicht zählt Entitäten dynamisch auf",
+      "sourceHash": "b111a3e84686fe9239a5c1e667c61725cda8c4d80fa6295e738525a5733f33b1",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.map-zone-registry-incomplete.summary": {
+      "text": "Personenstandorte auf der Karte erfordern vollständige Zonenregisterdaten",
+      "sourceHash": "a1ce3f18abe80b0e3acac6fb137177e8cb27af87fd4c84d8a2932fe8c76750d7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.map-zones-broad.summary": {
+      "text": "Personenstandorte auf der Karte können von mehr Zonen abhängen, als das Sicherheitslimit pro Auswahl zulässt",
+      "sourceHash": "d798c85ccbde78b7c54da084875518986414e04bc22f84d03e60df5bbb925648",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.potential.one": {
+      "text": "{count} potenzielle Entität",
+      "sourceHash": "f75281896320ad0561a49cd8ea060f210ef269dfa88bf872846b2909fc8f1155",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.potential.other": {
+      "text": "{count} potenzielle Entitäten",
+      "sourceHash": "7a260af11075e3860a3e8fe30c1b4a9ec6c00af5216b3052f8957541ba070d4e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.reenable": {
+      "text": "Sicherheitsprüfung wieder aktivieren",
+      "sourceHash": "6df1092397377b4a3a7bf825e9a58c0435a04bc95f868a48ae61e233e7752705",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.rule": {
+      "text": "Regel",
+      "sourceHash": "62845f31a2fe00be3ebaaeb93f5b27af82ab81dfcbaa1871c76f596cd98cf3c9",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.safe_limit": {
+      "text": "Sicherheitslimit {limit}",
+      "sourceHash": "96ae9819fbc18f601308c6893bb0d261dd7cad4fa9180d80ba5a2481a2967e13",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.safety_failed": {
+      "text": "Aktualisierung der Sicherheitsprüfung fehlgeschlagen",
+      "sourceHash": "0c76f43b08a9dd23b36c17732e0289ae0656f118fa44f3ef3d99d2ddf1fd9e4f",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.search": {
+      "text": "Entitätskatalog durchsuchen",
+      "sourceHash": "581af26ec01d05bb16f1d7c11c1e8f75a0e42eceb5367d454c12f58fbe3d003f",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-broad.summary": {
+      "text": "Entitätsauswahl überschreitet das Sicherheitslimit pro Auswahl",
+      "sourceHash": "f3cd9e80876d154a35591c1aa4b51a350aaf42e76005ccd1c948ba59feb596bb",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-missing-include.summary": {
+      "text": "Unbegrenzte Entitätsauswahl",
+      "sourceHash": "13b952c306bef29e900e2340a09367e3814afc02bf9311f02a5e4a060c6fcb2a",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-registry-incomplete.summary": {
+      "text": "Für die Entitätsauswahl sind die Registerdaten unvollständig",
+      "sourceHash": "1660048cec84e73c46fb601b775b6d846b48ca9c8eb24814e284160122d69420",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-total-budget.reason": {
+      "text": "Die kombinierten begrenzten Auswahlen überschreiten das Sicherheitslimit des Dashboard-Abonnements.",
+      "sourceHash": "8aed88e4dcadaf16d7cdaf424cf672f49063a2514bfdbfb2efdc24da5f914bb6",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-total-budget.recommendation": {
+      "text": "Grenze die Dashboard-Auswahlen so ein, dass ihre gemeinsame Entitätsmenge innerhalb des Limits bleibt.",
+      "sourceHash": "6d361987a0367d900941e123f4c0dba8d970f90f042d6cb79d77367364f5ba44",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-total-budget.summary": {
+      "text": "Begrenzte Auswahlen erfassen zusammen {candidate_count} Entitäten",
+      "sourceHash": "b9b9031818790fa57e332221654ebb7128f3110f15825ee9040bdd50153d8446",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.selector-unbounded-or-dynamic.summary": {
+      "text": "Unbegrenzte oder dynamische Entitätsauswahl",
+      "sourceHash": "3539593c2db1a56f1f9ab18fa2962f15fc34736617c61c8daded69b6d5c5fc16",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.severity.allowed": {
+      "text": "Zugelassen",
+      "sourceHash": "1bb201d188352e9b4633f85e4fb8a31ea93fd14dec702443fd3e2713d657fd2d",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.severity.limited": {
+      "text": "Eingeschränkte Abdeckung",
+      "sourceHash": "f68a5e496832ce9b7306ea2446a3693e1e04b95e6aa0feea005bdb300817a08a",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.severity.note": {
+      "text": "Kompatibilitätshinweis",
+      "sourceHash": "3db29fb719427bdcb84598bba17dee215653716af1eb3f417823809126b048dc",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.severity.paused": {
+      "text": "Automatische Aktualisierungen pausiert",
+      "sourceHash": "5e708eebe7117fbb8cb96ce9dc4f163f6f232528eadeaa6093796e638ffb96ad",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.source": {
+      "text": "Quelle",
+      "sourceHash": "0e570ca6fabe24f94e52c1833f3ffd25567022beb826fa16891f3322051bc221",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.streamline-runtime-coverage.reason": {
+      "text": "Statische Entitäts-IDs werden sofort erkannt. Andere direkte hass.states-Abhängigkeiten werden bei der Ausführung von Streamline-Vorlagen automatisch gelernt. Daher kann die Liste erkannter Entitäten unvollständig bleiben, bis jede relevante Ansicht, jeder bedingte Zustand, jedes Pop-up und jede Interaktion ausgeführt wurde.",
+      "sourceHash": "10f83b2d9703e2cee1267ce449bf860a18a6439897fff3d8039cc65516de5f5b",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.streamline-runtime-coverage.summary": {
+      "text": "Die Streamline-Entitätserkennung hängt von der Dashboard-Abdeckung ab",
+      "sourceHash": "37938fd6140133ef9a24e412e7c7d2ab94afaa014b8ba48e9b1a4df9dd66a4c2",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.suggested_edit": {
+      "text": "Vorgeschlagene Änderung:",
+      "sourceHash": "17f08ab889b9f97f3633228988c4e1d939458e52a181d5cc4f9f78475ce13d70",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.template-selector.reason": {
+      "text": "ha-paneld wertet Vorlagen nicht aus und kann daher nicht erkennen, welche Entitäten dieser Filter zurückgibt. Entitäten, die eine Vorlage lediglich liest, werden von Home Assistant selbst außerhalb dieses Filters bereitgestellt. Ihr Fehlen hier ist daher korrekt und es ist nichts zu tun.",
+      "sourceHash": "78fbab96e9baabf4059991f1fa21fbc8cf624e3e409e7b90aa241a026c397837",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.template-selector.recommendation": {
+      "text": "Begrenze den Filter strukturell oder hefte nur die Entitäten an, die die Vorlage zurückgibt.",
+      "sourceHash": "2698ccb1ebcabb0e1a92b42b0bf165eba907a2cef2922162d496b0786bfa0b5c",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.template-selector.summary": {
+      "text": "Unbegrenzte Vorlagen-Entitätsauswahl",
+      "sourceHash": "77922d0110ae843152f8e1cdc92a41f6c88e478f06bbc0f0468702219af5efd7",
+      "state": "machine-cross-checked"
+    },
+    "entities.issue.view.untitled": {
+      "text": "Ansicht {index}",
+      "sourceHash": "e0c10b993769c8866cab87427180d78d70c00b4fc959b01afa01f0ada563419e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.checking": {
+      "text": "Dashboard-Konfiguration wird geprüft…",
+      "sourceHash": "79c9c5e94080183d8c7d87f52ce70be165130b5dffe781db9659e31cece0a515",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.rescan": {
+      "text": "Nach Bearbeitung des Dashboards erneut scannen",
+      "sourceHash": "a6373efa0c0388c76fbfaff8c85718c444fd22dd8cc9667c3cd02aabc7f84786",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.allowed.one": {
+      "text": "{count} zuvor zugelassene Prüfung. Die Entitätserkennung ist aktiv; es ist keine Aktion erforderlich.",
+      "sourceHash": "0fc5ba0d68061746d736429945aa2cb8c7ec0f63fc715d220ff9e4618a369cca",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.allowed.other": {
+      "text": "{count} zuvor zugelassene Prüfungen. Die Entitätserkennung ist aktiv; es ist keine Aktion erforderlich.",
+      "sourceHash": "c1ae8bdbc66f37d9f6dd17b0a62a2c2fd4d232f6bf8109e8c81e13dc577fb3b8",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.blocking.one": {
+      "text": "{count} Prüfung muss überprüft werden, bevor automatische Aktualisierungen das Entitätsabonnement ändern können. Das Dashboard und das aktuelle Abonnement funktionieren weiter.",
+      "sourceHash": "1ed24d833a9feffcd89e12012907cfbea22abcb1f3ccfb9245a0257ddc2029e1",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.blocking.other": {
+      "text": "{count} Prüfungen müssen überprüft werden, bevor automatische Aktualisierungen das Entitätsabonnement ändern können. Das Dashboard und das aktuelle Abonnement funktionieren weiter.",
+      "sourceHash": "0e6a436a7951f68a9e48943e5c0fa5174c889d4bbac1b837f8edb99e9bf4a45e",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.blocking_allowed.one": {
+      "text": "{count} Prüfung muss überprüft werden, bevor automatische Aktualisierungen das Entitätsabonnement ändern können · {allowed} zuvor zugelassen. Das Dashboard und das aktuelle Abonnement funktionieren weiter.",
+      "sourceHash": "50df7415c958b6dc777ca19c433e4cfc0bfb40379d9a0e66dd5c757fd459fb87",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.blocking_allowed.other": {
+      "text": "{count} Prüfungen müssen überprüft werden, bevor automatische Aktualisierungen das Entitätsabonnement ändern können · {allowed} zuvor zugelassen. Das Dashboard und das aktuelle Abonnement funktionieren weiter.",
+      "sourceHash": "f2a1fd998a48a160086d8fa2e5914f6332e5d946e87caeb217abba365bffada3",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.none": {
+      "text": "Beim letzten Scan wurden keine Kompatibilitätshinweise zur Entitätserkennung erkannt.",
+      "sourceHash": "05a5b6f12c6303c5122d17dc97804b4228a70a7a6555cd25d60b1cc1eb81b2da",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.notes.one": {
+      "text": "{count} Kompatibilitätshinweis. Die Entitätserkennung ist aktiv; es ist keine Aktion erforderlich.",
+      "sourceHash": "b97af08a2be12fb3de900f99b9f7bb9d32821be75161c2f0a77002a67ab01aae",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.summary.notes.other": {
+      "text": "{count} Kompatibilitätshinweise. Die Entitätserkennung ist aktiv; es ist keine Aktion erforderlich.",
+      "sourceHash": "775b6fcf34eb4399555f7a7bfa0af748c17adb8f14527f1e4b04c2cffe98aba6",
+      "state": "machine-cross-checked"
+    },
+    "entities.issues.title": {
+      "text": "Kompatibilität der Entitätserkennung",
+      "sourceHash": "eb4e09bf32f157bcec74907fe18323558be077e4b7c7c0ac3a6f3697f2a46abb",
+      "state": "machine-cross-checked"
+    },
+    "entities.override.exclude_confirm": {
+      "text": "{entity_id} ausschließen, obwohl das Dashboard davon abhängt?",
+      "sourceHash": "d0ab4e63729c4a23af1b6d0645a61fa9b04070790957b396dea1c56e451ec94b",
+      "state": "machine-cross-checked"
+    },
+    "entities.override.failed": {
+      "text": "Entitätsüberschreibung fehlgeschlagen",
+      "sourceHash": "b42ba8ad55e097922c0c1b5bb2122a798ffa01e071c205d78086dc166c3e8347",
+      "state": "machine-cross-checked"
+    },
+    "entities.pagination.loading": {
+      "text": "Wird geladen…",
+      "sourceHash": "ba3bbbe10d8bef66441c88536ce7b8e724e2829b59a3da658654f4961cd61ae5",
+      "state": "machine-cross-checked"
+    },
+    "entities.pagination.next": {
+      "text": "Weiter",
+      "sourceHash": "1ff57a29d7c9d11bdf61c1b80f2b289b44c1ea844824d4b94a0d52b6ba5fc858",
+      "state": "machine-cross-checked"
+    },
+    "entities.pagination.previous": {
+      "text": "Zurück",
+      "sourceHash": "a57b08a480b822a0a572b993391c292ede593bf8000b406675b180bbb16260fa",
+      "state": "machine-cross-checked"
+    },
+    "entities.policy.failed": {
+      "text": "Richtlinienaktualisierung fehlgeschlagen",
+      "sourceHash": "f2a7b7fe6d1d385454a300df0157b0360a1e33c2f06a1be617fbe81c3c7e1912",
+      "state": "machine-cross-checked"
+    },
+    "entities.policy.legend": {
+      "text": "Automatische Übernahme",
+      "sourceHash": "372f3c684e518a002fa11b80b3fe86e3fbdaae24f4b7c51cf68befd1a1f32db4",
+      "state": "machine-cross-checked"
+    },
+    "entities.policy.note": {
+      "text": "Deaktiviere eine der Quellen, um ihre Nachweise weiter zu erfassen, ohne das Live-Abonnement zu ändern.",
+      "sourceHash": "057787a0d21860cbb6efd521e5059d84221464d94381451cd29615f0a7f0c740",
+      "state": "machine-cross-checked"
+    },
+    "entities.policy.runtime": {
+      "text": "Fehlende über hass.states aufgerufene Entitäten hinzufügen",
+      "sourceHash": "6451de60e846286045878311b2bdaedeb2d3cc35eaa12e47daa449d547f2f383",
+      "state": "machine-cross-checked"
+    },
+    "entities.policy.static": {
+      "text": "Aus der Dashboard-Konfiguration gelesene Entitäten hinzufügen",
+      "sourceHash": "ab548e1a8d2f9568a455bfebdc0b65ecd7dd593c4e850ab62116c4d54223c298",
+      "state": "machine-cross-checked"
+    },
+    "entities.reason.config": {
+      "text": "Dashboard-Konfiguration",
+      "sourceHash": "311816e83e03c9f7385ff897bb2ab989cba37bd9d410e78ef8e7ed39b09e8a6c",
+      "state": "machine-cross-checked"
+    },
+    "entities.reason.excluded": {
+      "text": "Ausgeschlossen, aber weiterhin erkannt",
+      "sourceHash": "9f4bdac47fa754937eb5f19eefba0569a835ee83e7b721eb6ebd76577cf1011b",
+      "state": "machine-cross-checked"
+    },
+    "entities.reason.manual": {
+      "text": "Manuelle Überschreibung",
+      "sourceHash": "723c2826018e4a1a6c461564ff8846db1ab398c2982f2c0997c0059da7b00466",
+      "state": "machine-cross-checked"
+    },
+    "entities.reason.runtime": {
+      "text": "Laufzeitzugriff auf hass.states",
+      "sourceHash": "7c3a132490938ba30055f6a0f3d2e773a7b94a7f20d3d939197f2465143c5b26",
+      "state": "machine-cross-checked"
+    },
+    "entities.reason.search": {
+      "text": "Katalogsuche",
+      "sourceHash": "13dc33ab0bd9416fad90bd227497493127102b1a2c8032f0d00ab94fd5117174",
+      "state": "machine-cross-checked"
+    },
+    "entities.reset.complete_no_scan": {
+      "text": "Zurücksetzen abgeschlossen. Gelernte Nachweise, manuelle Überschreibungen und Entscheidungen zum Ignorieren von Sicherheitsprüfungen wurden entfernt. Das aktuelle Live-Abonnement wurde beibehalten, aber der Ersatzscan wurde nicht gestartet; verwende {scan_action}, um es erneut zu versuchen.",
+      "sourceHash": "f0198d70c226424f7a78ff65f1545e155230fd732de12e08ed4474cbaf7451c6",
+      "state": "machine-cross-checked"
+    },
+    "entities.reset.complete_scanning": {
+      "text": "Zurücksetzen abgeschlossen. Gelernte Nachweise, manuelle Überschreibungen und Entscheidungen zum Ignorieren von Sicherheitsprüfungen wurden entfernt. Ein Ersatzscan läuft; das aktuelle Live-Abonnement bleibt bestehen, bis dieser Scan erfolgreich abgeschlossen ist.",
+      "sourceHash": "0c9fed9e1b5fcde6591508c956e73fb8249ada0f34305d203ebe0298b074dfdf",
+      "state": "machine-cross-checked"
+    },
+    "entities.reset.confirm": {
+      "text": "Alle gelernten Entitätsnachweise, manuellen Anheftungs-/Ausschlussüberschreibungen und Entscheidungen zum Ignorieren von Sicherheitsprüfungen der Entitätserkennung zurücksetzen? Dies kann nicht rückgängig gemacht werden. Das aktuelle Live-Abonnement wird beibehalten, während ein Ersatzscan die Nachweise neu aufbaut.",
+      "sourceHash": "af56ee112e5d4353209106117b9426c18de16a6c7cfc2c2e2db39526d56a1db6",
+      "state": "machine-cross-checked"
+    },
+    "entities.reset.failed": {
+      "text": "Zurücksetzen fehlgeschlagen.",
+      "sourceHash": "58468d4a827c6964aed84bda2d797fb1ef5d0162ff99b65c9bdcf9489147ca6a",
+      "state": "machine-cross-checked"
+    },
+    "entities.reset.resetting": {
+      "text": "Gelernte Entitätsdaten werden zurückgesetzt, während das aktuelle Live-Abonnement beibehalten wird…",
+      "sourceHash": "4245bf2a7c7d1dfb95da35ba88bc5e7dcb1ae69ca3754477666697d1597eca3d",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.list_unavailable": {
+      "text": "Entitätsliste nicht verfügbar",
+      "sourceHash": "f1dc90d780c019c794f81449f77ecb6fb57babbe1c43e43045c601c96c7d305a",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.option.auto": {
+      "text": "Automatisch",
+      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.option.excluded": {
+      "text": "Ausgeschlossen",
+      "sourceHash": "bef1fd9e5caea8b51aab74a9db1cde99164263ed7d076225d7829faae9737d90",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.option.pinned": {
+      "text": "Angeheftet",
+      "sourceHash": "f20c879465551f0d1457a13d4390d0f1ece456b115d75463169c5d55341b9b1e",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.select": {
+      "text": "{entity_id} auswählen",
+      "sourceHash": "72bed5ac0bae357fad13ad21f77d72249dba49aefb972e7e131c55751fb827a9",
+      "state": "machine-cross-checked"
+    },
+    "entities.row.showing": {
+      "text": "{start}–{end} von {total} werden angezeigt",
+      "sourceHash": "64af6de234a62a3e39742f6bcc4995cb28140f24848ac8ecc53dff6803ee33b4",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.blocked.one": {
+      "text": "Scan abgeschlossen: Für {blocking} Sicherheitsprüfung der Entitätserkennung ist eine Auswahl erforderlich. Home Assistant und das Dashboard sind weiterhin verfügbar; das vorherige Live-Abonnement wurde beibehalten (Entitätsanzahl: {stream_count}).",
+      "sourceHash": "03419581172c169e5d109b2d8d4a2c95e69c824ee077ae4a678703cad540ef24",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.blocked.other": {
+      "text": "Scan abgeschlossen: Für {blocking} Sicherheitsprüfungen der Entitätserkennung ist eine Auswahl erforderlich. Home Assistant und das Dashboard sind weiterhin verfügbar; das vorherige Live-Abonnement wurde beibehalten (Entitätsanzahl: {stream_count}).",
+      "sourceHash": "c7d400c1aba614c65e828a9c8b803646f29cf74f2475a1258f70874d6f387891",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.complete_changed": {
+      "text": "Scan abgeschlossen. Katalogisiert: {catalogued}; vorgeschlagen: {suggested}. Live-Abonnement vorher: {previous}; nachher: {current}.",
+      "sourceHash": "ad27263e800e049ae4fc87cb4a2b4236c6bdc217d5dc695e9df392566c25ee40",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.complete_unchanged": {
+      "text": "Scan abgeschlossen. Katalogisiert: {catalogued}; vorgeschlagen: {suggested}. Anzahl im Live-Abonnement unverändert: {current}.",
+      "sourceHash": "700d9dd54f5cbdb25b1daf336f7ac7afc0bd5713f4e109c8065af376a65b2033",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.failed": {
+      "text": "Scan fehlgeschlagen.",
+      "sourceHash": "b0daf47f06fda541769b292ad485375f029e47f9f4ac708df8accba0daf5ef5e",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.finished_error": {
+      "text": "Scan mit einem Fehler beendet. Das vorherige Live-Abonnement wurde beibehalten.",
+      "sourceHash": "7112692ae0bd8d7fd7f21d93f15c637cbabe8415f6f733de191ac7d10bec86e4",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.start_failed": {
+      "text": "Scan konnte nicht gestartet werden.",
+      "sourceHash": "067b6083c50d5f164647851df7663b034faf208178b3425392e1b057be627523",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.starting": {
+      "text": "HA-Katalog und Dashboard werden gescannt; das Live-Abonnement ändert sich nur, wenn die aktivierte Richtlinie eine andere Entitätsmenge ermittelt.",
+      "sourceHash": "b9d9942984c51d0d893c364fb1e4233d89f172b7edcb4ac83280d055e079cf5d",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.status_unavailable": {
+      "text": "Der Scan konnte nicht gestartet werden, da der Status nicht verfügbar ist.",
+      "sourceHash": "c3fa6d30fee125868b8fd0827d7c8bf632a2f7cb4320f4c4e81e2182f4ffc1e4",
+      "state": "machine-cross-checked"
+    },
+    "entities.scan.still_running": {
+      "text": "Der Scan läuft noch; der Status oben wird weiter aktualisiert.",
+      "sourceHash": "51b0e7bee9d55f665313c9c424bfa6f481d09d04cba3f63c144a1990111a0d1f",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.label": {
+      "text": "Vollständigen Entitätskatalog von Home Assistant durchsuchen",
+      "sourceHash": "6f3f6170916d16fad7cc021410078ae6689e43c069cb2fd760340ae30bde82d1",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.matches": {
+      "text": "Treffer: {sections}",
+      "sourceHash": "2b94cb5ba04de4b7233f1feb8761e6ae5b1cae43d17370adb806ae1d201e06a9",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.none": {
+      "text": "Keine Entitäten entsprechen dieser Suche.",
+      "sourceHash": "7fa34193a602bcd2faf0e35d3b664e873f5c32f3a6d77ba3a92e3b3a2ef1313c",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.placeholder": {
+      "text": "Vollständigen Entitätskatalog von Home Assistant durchsuchen",
+      "sourceHash": "6f3f6170916d16fad7cc021410078ae6689e43c069cb2fd760340ae30bde82d1",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.searching": {
+      "text": "Suche läuft…",
+      "sourceHash": "c31723ab330289fe2cc4c7b69b7a862361da79a01f84893dc7b89a6de0ab4b42",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.current.one": {
+      "text": "Aktuell: {count}",
+      "sourceHash": "d384ac45ce0f2b125e013adc71bfb7122ed67ebcea3e4ce68b9677b5589fdc14",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.current.other": {
+      "text": "Aktuell: {count}",
+      "sourceHash": "d384ac45ce0f2b125e013adc71bfb7122ed67ebcea3e4ce68b9677b5589fdc14",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.review.one": {
+      "text": "Veraltet oder auffällig: {count}",
+      "sourceHash": "eac19c77161713b1492321e03c87ee4fb7c6454630bf1c9c750f4a493877e672",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.review.other": {
+      "text": "Veraltet oder auffällig: {count}",
+      "sourceHash": "eac19c77161713b1492321e03c87ee4fb7c6454630bf1c9c750f4a493877e672",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.suggested.one": {
+      "text": "Vorgeschlagen: {count}",
+      "sourceHash": "4da5692994ee5ab2bba5a0f6577aead078a33e0e7a651f20ad010440427bca1e",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.section.suggested.other": {
+      "text": "Vorgeschlagen: {count}",
+      "sourceHash": "4da5692994ee5ab2bba5a0f6577aead078a33e0e7a651f20ad010440427bca1e",
+      "state": "machine-cross-checked"
+    },
+    "entities.search.unavailable": {
+      "text": "Suchergebnisse sind vorübergehend nicht verfügbar.",
+      "sourceHash": "4b3ba5c7298eca7a01609d94e15c0a419666d4ccb08cecad197914c3a70060f3",
+      "state": "machine-cross-checked"
+    },
+    "entities.selection.count": {
+      "text": "{count} ausgewählt",
+      "sourceHash": "529aacfdfd2b17bf9fe56ebad9a24339a2d1151327dd420c52c5f163aeb9acc6",
+      "state": "machine-cross-checked"
+    },
+    "entities.selection.none": {
+      "text": "0 ausgewählt",
+      "sourceHash": "08ff49a1bdcabb879ea94b5fc23fe9dbe1f16d7dc439e750d0a3e17305b26e2f",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.blocking.one": {
+      "text": "Für {count} Prüfung der Entitätserkennung ist eine Auswahl erforderlich",
+      "sourceHash": "14cf999d8b639e7fc1390538f8117a92c0a3436ac9ab7a052e6f6f1b6ba2dece",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.blocking.other": {
+      "text": "Für {count} Prüfungen der Entitätserkennung ist eine Auswahl erforderlich",
+      "sourceHash": "2df4c15d7988abf1fa67cf9b39e6b2828948e33f5311e77028c60a926226c5db",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.catalogued.one": {
+      "text": "{count} katalogisierte Entität",
+      "sourceHash": "f017981ee76a4067b833de4fc9743c4e2335a6f272e9fbb674dab295ad4906d2",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.catalogued.other": {
+      "text": "{count} katalogisierte Entitäten",
+      "sourceHash": "beb4ecc4010756bf5df4da04a2dedafeec7bea7be812c94d9919f568b74b6856",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.database": {
+      "text": "DB {size}",
+      "sourceHash": "ef7d5592d195b8a7e08f7058952b3e905071ec3fcb182b607fa508481bd834b1",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.ignored.one": {
+      "text": "{count} Sicherheitsprüfung ignoriert",
+      "sourceHash": "42a93b43aac443ee2e2cd5dd61690c5b349391d86e5b2d01a238fca1894fb05f",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.ignored.other": {
+      "text": "{count} Sicherheitsprüfungen ignoriert",
+      "sourceHash": "870bd8ae5103ec2ef878612baf57627816ff56cbb8b26c0b327f848213d9a81b",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.last_scan": {
+      "text": "letzter Scan: {age}",
+      "sourceHash": "b70b794e055dc60c640d84eb53ec08456348f4f8d25de12f07ebf9143c817917",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.active": {
+      "text": "aktiv",
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.blocked": {
+      "text": "blockiert",
+      "sourceHash": "6973dddd3ef9cb6a2932702f31777faad9c9bf3124d147a84f31aadb6d139546",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.degraded": {
+      "text": "beeinträchtigt",
+      "sourceHash": "3c8cab8b47d6d0ac0e1bb0a3c209b836f5cf1a61e851626dc7a5d7f011a7e5dd",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.disabled": {
+      "text": "deaktiviert",
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.learning": {
+      "text": "lernt",
+      "sourceHash": "edd95740e339e6aa0a1dab45741b0521185680b051631a7c265b5630da4f2158",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.observing": {
+      "text": "beobachtet",
+      "sourceHash": "a08c21fc7b1d10ef3cbe5ec065f0450a983920923841a9993a5192b8e448d332",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.state.synchronizing": {
+      "text": "synchronisiert",
+      "sourceHash": "644b72e97de001b8a0e917dde5dc058c35ccf9657b728560604cbcca6ab4f2b4",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.stream.one": {
+      "text": "{count} Entität aktiv abonniert",
+      "sourceHash": "fab02429d470d355fdcfe09f2d67dbd0803c09cd93e27959ec1d38775949c141",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.stream.other": {
+      "text": "{count} Entitäten aktiv abonniert",
+      "sourceHash": "9250b45af2f1f5d7621031270cf48938c21e3405dd745198d1393dab7f8ff74f",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.suggested.one": {
+      "text": "{count} vorgeschlagene Entität",
+      "sourceHash": "c64e06e6f7f45df746eef51b105ed7e05406e3ca8a080781e2a37ed648462242",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.suggested.other": {
+      "text": "{count} vorgeschlagene Entitäten",
+      "sourceHash": "6cc58f9eab9d7af7c25bf336f59c7e59f43ad133b312e93047f81718c989d718",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.unavailable": {
+      "text": "Status nicht verfügbar",
+      "sourceHash": "7eb5af92e49c32f0e22097bda3e39b3b9b3bcdeb80d5c278b5d74504b96c2beb",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.unfiltered": {
+      "text": "ungefiltert",
+      "sourceHash": "4caa06bd0e89b1695f9533cb586443232dad216ffd525dcc1a628c844b9e80a4",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.unresolved.one": {
+      "text": "{count} dynamischer Ausdruck nicht statisch auflösbar",
+      "sourceHash": "5869b0f7a09f12dc041dc0ef1ee91ef7752b27df3d1b7247963c6b20fb75df36",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.unresolved.other": {
+      "text": "{count} dynamische Ausdrücke nicht statisch auflösbar",
+      "sourceHash": "fa1b0937dbba2a47e90b136e8fc590c885db91b38e54d326969ef92d51c32b79",
+      "state": "machine-cross-checked"
+    },
+    "entities.status.unresolved_help": {
+      "text": "Die statische Analyse konnte diese dynamischen Vorlagen oder Ausdrücke benutzerdefinierter Karten keinen exakten Entitäts-IDs zuordnen. Konkrete IDs, die später zur Laufzeit beobachtet werden, werden gespeichert und dann je nach Richtlinie zur Laufzeitübernahme automatisch abonniert oder unter „Vorgeschlagen“ angezeigt. Diese Zahl beschreibt Quellausdrücke und wird nicht kleiner, wenn IDs beobachtet werden.",
+      "sourceHash": "f6b1ac744a4fa93aa65ce3bbc3642a8f702205578cd332e0abee79505c11dbe7",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.accesses": {
+      "text": "Zugriffe",
+      "sourceHash": "7d4a688a59a544ddd7d6c707c7502e4ab269c827a8ac6356ec17eb85ec9c843a",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.bytes_per_second": {
+      "text": "B/s",
+      "sourceHash": "23756ccc7b8443f972f6067e26b19a63720e866c2d9a61cebf87e6299791da2c",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.current.note": {
+      "text": "Die Entitäten im Live-Datenstrom von Home Assistant. Ein ungefilterter Datenstrom enthält den vollständigen sichtbaren Katalog.",
+      "sourceHash": "0c8dd97ec030e664742241d19cd0d8adda3a51351139a3b1b69a9ef4cb008315",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.current.short": {
+      "text": "Aktuell",
+      "sourceHash": "e0d1b68224bf0b31ef16b206c65b5f8f6b89d18161f4a7cdcb8d0ac8d952549a",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.current.title": {
+      "text": "Aktuell abonnierte Entitäten",
+      "sourceHash": "93755f5c4733b3a132568d16344df091cb08136634f73a302c6f02c0c898930d",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.data_rate": {
+      "text": "Datenrate",
+      "sourceHash": "2a5676396d22229d6c4305d01ce6a02a61fedc1d67b51150271ad45f7e63412d",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.entity": {
+      "text": "Entität",
+      "sourceHash": "2ed3bb60c9af04774f0ea421f81bd64e65083c969a43360c5887b6e17d050794",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.last_access": {
+      "text": "Letzter Zugriff",
+      "sourceHash": "9d665a8e91f76c7ca97abe4a7c7669afe2c5bd860e07b952db8323722428caa0",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.override": {
+      "text": "Überschreibung",
+      "sourceHash": "43bc0f5fc035108f88cb7436ade1a103b0c710ba82c733cb5835a2b89dc4568f",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.period_tooltip": {
+      "text": "1 Minute / 1 Stunde / 1 Tag",
+      "sourceHash": "1a82de57b7f3ed2e18f6f12276c4934b7e81d4aca0955bec5b84cd8dac795fba",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.reason": {
+      "text": "Grund",
+      "sourceHash": "f81ab834de5f84918dc040b884267c2b61cb1a52d46442de10e97f35a94d0500",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.review.note": {
+      "text": "Entitäten im aktuellen Datenstrom, die in Home Assistant fehlen, Aktualisierungen erhalten, ohne als Dashboard-Abhängigkeiten beobachtet zu werden, oder manuell angeheftet wurden, obwohl dieses Dashboard sie nicht verwendet. Nur zur Überprüfung; eine manuelle Anheftung oder ein Ausschluss wird niemals automatisch entfernt – hebe die Anheftung hier auf, wenn du die Entität entfernen möchtest.",
+      "sourceHash": "96035cee159d53cfff753798302c0d73e6ff3552be2aca08d4003359264efbbe",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.review.short": {
+      "text": "Veraltet oder auffällig",
+      "sourceHash": "b6ebdcc3e50028da6dcfbf35b31253230c1c685e4ec86caa2219cd8672a6b0d9",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.review.title": {
+      "text": "Veraltete oder auffällige Entitäten",
+      "sourceHash": "ef849b2d560b2580b6e2c8f52ba6175512f93bbd93665d493307f40f55e59268",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.select_page": {
+      "text": "Diese Seite auswählen",
+      "sourceHash": "80796358926c43086751a9de59ca57f9060de6678bf656840aed33656a6a8cba",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.suggested.note": {
+      "text": "Nicht angeheftete Dashboard-Referenzen und Laufzeitzugriffe, die derzeit nicht abonniert sind. Ausgeschlossene Entitäten bleiben sichtbar, wenn das Dashboard sie weiterhin verwendet. Während der Suche zeigt diese Tabelle außerdem nicht angeheftete Treffer aus dem vollständigen Katalog von Home Assistant.",
+      "sourceHash": "8cb1def2d1fb025f4c38cad0b8291d8cdf333f26d5b27ba1e5e723903e3ebc2a",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.suggested.short": {
+      "text": "Vorgeschlagen",
+      "sourceHash": "93b63bab4c3a28d73a8bb83bcdfdcc5f6ddecfc8fc702296ca159d94c5dc6e53",
+      "state": "machine-cross-checked"
+    },
+    "entities.table.suggested.title": {
+      "text": "Vorgeschlagene Dashboard-Entitäten",
+      "sourceHash": "116d030af30a47c77e4b40b6783fbab3837e71cf38b5c7b3d5408ac7f9cd3831",
+      "state": "machine-cross-checked"
+    },
     "fleet.note.direct": {
       "text": "Öffnen Sie vorerst ein anderes Panel direkt unter",
       "sourceHash": "e1c2a22afad5337db44569d030a1c44a11da9827b984f1860ccf0c9a933810f3",

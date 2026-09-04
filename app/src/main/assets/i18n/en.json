@@ -11129,6 +11129,4052 @@
       "softMaxChars": 8,
       "hardMaxChars": 16
     },
+    "entities.age.days": {
+      "context": "entities.js.age: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.age.hours",
+        "entities.age.minutes",
+        "entities.age.never",
+        "entities.age.seconds"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "a41234397f3c63b22d27312ffcea05114f8d3ae9d602ef1320168a6eae9ca361",
+      "surface": "entities",
+      "text": "{count}d ago"
+    },
+    "entities.age.hours": {
+      "context": "entities.js.age: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.age.days",
+        "entities.age.minutes",
+        "entities.age.never",
+        "entities.age.seconds"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "520c737ea62430c4aa3e953abb60cf6bf7ecde97f0aef8f5e3fab5a9011db2a0",
+      "surface": "entities",
+      "text": "{count}h ago"
+    },
+    "entities.age.minutes": {
+      "context": "entities.js.age: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.age.days",
+        "entities.age.hours",
+        "entities.age.never",
+        "entities.age.seconds"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "0a03167c208c5cd797a7fe6736e89a7fafe9ff5ed5b671bf33797f7fd715b35f",
+      "surface": "entities",
+      "text": "{count}m ago"
+    },
+    "entities.age.never": {
+      "context": "entities.js.age: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.age.days",
+        "entities.age.hours",
+        "entities.age.minutes",
+        "entities.age.seconds"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "6497e4b3d7bed16979a343a7db4efa6d57725529f5ac3cec45c1f08fabcbdafc",
+      "surface": "entities",
+      "text": "never"
+    },
+    "entities.age.seconds": {
+      "context": "entities.js.age: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.age.days",
+        "entities.age.hours",
+        "entities.age.minutes",
+        "entities.age.never"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "244073ecb2be8fe875a37bcf7023ff32fb21f7c64e5d29e0ae62931a84c98a6a",
+      "surface": "entities",
+      "text": "{count}s ago"
+    },
+    "entities.apply.applying": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 93,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.apply.changed",
+        "entities.apply.enable_confirm",
+        "entities.apply.failed",
+        "entities.apply.replace_confirm",
+        "entities.apply.unchanged"
+      ],
+      "softMaxChars": 63,
+      "sourceHash": "428045ab67c20cc39fb7ced4c062398a642ef2482975bd97ede0425fa2105f0c",
+      "surface": "entities",
+      "text": "Applying the policy-selected subscription…"
+    },
+    "entities.apply.changed": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 308,
+      "placeholders": [
+        "{previous}",
+        "{current}",
+        "{added}",
+        "{removed}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.apply.applying",
+        "entities.apply.enable_confirm",
+        "entities.apply.failed",
+        "entities.apply.replace_confirm",
+        "entities.apply.unchanged"
+      ],
+      "softMaxChars": 180,
+      "sourceHash": "e6663a78ebc94de30783b44a3bbc39da17c8f70ac0d46f813b2d4e4176874fe8",
+      "surface": "entities",
+      "text": "Applied. Live subscription before: {previous}; after: {current}. Added: {added}; removed: {removed}. Dashboard reload requested."
+    },
+    "entities.apply.enable_confirm": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 224,
+      "placeholders": [
+        "{current}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.apply.applying",
+        "entities.apply.changed",
+        "entities.apply.failed",
+        "entities.apply.replace_confirm",
+        "entities.apply.unchanged"
+      ],
+      "softMaxChars": 131,
+      "sourceHash": "bac6011889095102b94474f07be420771d6019f85ae6145be6e969f509525ecc",
+      "surface": "entities",
+      "text": "Keep the current stream (entity count: {current}) and enable future automatic policy updates?"
+    },
+    "entities.apply.failed": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.apply.applying",
+        "entities.apply.changed",
+        "entities.apply.enable_confirm",
+        "entities.apply.replace_confirm",
+        "entities.apply.unchanged"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "db995af502a14773306243a2cf53a61ea0cd39bbe303ab0d2740bf9717d0511f",
+      "surface": "entities",
+      "text": "Apply failed."
+    },
+    "entities.apply.replace_confirm": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 413,
+      "placeholders": [
+        "{current}",
+        "{desired}",
+        "{added}",
+        "{removed}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.apply.applying",
+        "entities.apply.changed",
+        "entities.apply.enable_confirm",
+        "entities.apply.failed",
+        "entities.apply.unchanged"
+      ],
+      "softMaxChars": 241,
+      "sourceHash": "770343d8562dc49d471c9d0759a998a6c18ca3f79c9d7d27c24c430ce99e6834",
+      "surface": "entities",
+      "text": "Replace the current stream (entity count: {current}) with the policy-selected set (entity count: {desired})? Added: {added}; removed: {removed}. This reloads the dashboard."
+    },
+    "entities.apply.unchanged": {
+      "context": "entities.js.applyButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 154,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.apply.applying",
+        "entities.apply.changed",
+        "entities.apply.enable_confirm",
+        "entities.apply.failed",
+        "entities.apply.replace_confirm"
+      ],
+      "softMaxChars": 90,
+      "sourceHash": "ba66ce74d616e1093eba2ca1c87586fea5146ef115e5b6affadf6d75056db70f",
+      "surface": "entities",
+      "text": "Automatic updates enabled. Live stream count unchanged: {count}."
+    },
+    "entities.bulk.auto_selected": {
+      "context": "PaneldServer.entityTableHtml: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.bulk.exclude_selected",
+        "entities.bulk.failed",
+        "entities.bulk.pin_all_suggested",
+        "entities.bulk.pin_selected",
+        "entities.bulk.select_first"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "bcdd1196df6de9d85a9b0bea729aa5e35b56d6897d71f50f2f48db4a509d2ece",
+      "surface": "entities",
+      "text": "Auto selected"
+    },
+    "entities.bulk.exclude_all_confirm.one": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 156,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.exclude_all_confirm.other"
+      ],
+      "softMaxChars": 91,
+      "sourceHash": "4ee7872151dc628a5534388bc708bbdaaa3854e51513b745e69be6ce297f1447",
+      "surface": "entities",
+      "text": "Exclude {count} suggested entity? This can break dashboard cards."
+    },
+    "entities.bulk.exclude_all_confirm.other": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 171,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.exclude_all_confirm.one"
+      ],
+      "softMaxChars": 100,
+      "sourceHash": "f71967c93e9b393036ab0e5c4e0d5189d27764b34014e3998bd9d529ca305ae5",
+      "surface": "entities",
+      "text": "Exclude all {count} suggested entities? This can break dashboard cards."
+    },
+    "entities.bulk.exclude_selected": {
+      "context": "PaneldServer.entityTableHtml: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.auto_selected",
+        "entities.bulk.failed",
+        "entities.bulk.pin_all_suggested",
+        "entities.bulk.pin_selected",
+        "entities.bulk.select_first"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "2748363ffa4124f831a4e5f7b381251e76cec4593ac9864f1bd53f501e56c932",
+      "surface": "entities",
+      "text": "Exclude selected"
+    },
+    "entities.bulk.exclude_selected_confirm.one": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 154,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.exclude_selected_confirm.other"
+      ],
+      "softMaxChars": 90,
+      "sourceHash": "227268d87fbedc2dfd3681cdb64ea4aa08966e03db558c156671e14d22f4e357",
+      "surface": "entities",
+      "text": "Exclude {count} selected entity? This can break dashboard cards."
+    },
+    "entities.bulk.exclude_selected_confirm.other": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 159,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.exclude_selected_confirm.one"
+      ],
+      "softMaxChars": 93,
+      "sourceHash": "a4d9e3e4433232a4693d7b385710a5641b8b1352ea5e80a956edce2e14bd0bba",
+      "surface": "entities",
+      "text": "Exclude {count} selected entities? This can break dashboard cards."
+    },
+    "entities.bulk.failed": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.bulk.auto_selected",
+        "entities.bulk.exclude_selected",
+        "entities.bulk.pin_all_suggested",
+        "entities.bulk.pin_selected",
+        "entities.bulk.select_first"
+      ],
+      "softMaxChars": 30,
+      "sourceHash": "36941e6910702fea428a60ceeeed35583842648c0bba0264ae63a77bcfec913f",
+      "surface": "entities",
+      "text": "Bulk override failed"
+    },
+    "entities.bulk.pin_all_confirm.one": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 128,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.pin_all_confirm.other"
+      ],
+      "softMaxChars": 64,
+      "sourceHash": "1d741b9dda2c5645cb6f05b3f56409acf87abee8b61d5c6b955ec13e7ae25c24",
+      "surface": "entities",
+      "text": "Pin {count} suggested entity?"
+    },
+    "entities.bulk.pin_all_confirm.other": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 128,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.pin_all_confirm.one"
+      ],
+      "softMaxChars": 64,
+      "sourceHash": "9ca6f7bc0cc669c9a4df740064cdbbf4a00b7e2c9224a26dc64f17b5f9a919a5",
+      "surface": "entities",
+      "text": "Pin all {count} suggested entities?"
+    },
+    "entities.bulk.pin_all_suggested": {
+      "context": "PaneldServer.entityTableHtml: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.auto_selected",
+        "entities.bulk.exclude_selected",
+        "entities.bulk.failed",
+        "entities.bulk.pin_selected",
+        "entities.bulk.select_first"
+      ],
+      "softMaxChars": 26,
+      "sourceHash": "a065b473d105e06ffe8a8f0ea34c19753f14452c09493e24901c6b1073aeaa50",
+      "surface": "entities",
+      "text": "Pin all suggested"
+    },
+    "entities.bulk.pin_selected": {
+      "context": "PaneldServer.entityTableHtml: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.bulk.auto_selected",
+        "entities.bulk.exclude_selected",
+        "entities.bulk.failed",
+        "entities.bulk.pin_all_suggested",
+        "entities.bulk.select_first"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "22e545df141030fca49a2c765d0ce073e24ec243cd67b1f5fe6dba63e26085b2",
+      "surface": "entities",
+      "text": "Pin selected"
+    },
+    "entities.bulk.pin_selected_confirm.one": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 128,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.pin_selected_confirm.other"
+      ],
+      "softMaxChars": 64,
+      "sourceHash": "1bbe3e3f4f495e4157d82fcd04a62ed0cf81ac548b75434d8ba9a841d1233ead",
+      "surface": "entities",
+      "text": "Pin {count} selected entity?"
+    },
+    "entities.bulk.pin_selected_confirm.other": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 128,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.bulk.pin_selected_confirm.one"
+      ],
+      "softMaxChars": 64,
+      "sourceHash": "14bec6aa4ecbb15d7e6e772a1a3482d38a7c2d6e7421f08064c189c53de1fbec",
+      "surface": "entities",
+      "text": "Pin {count} selected entities?"
+    },
+    "entities.bulk.select_first": {
+      "context": "entities.js.bulk: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 73,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.bulk.auto_selected",
+        "entities.bulk.exclude_selected",
+        "entities.bulk.failed",
+        "entities.bulk.pin_all_suggested",
+        "entities.bulk.pin_selected"
+      ],
+      "softMaxChars": 50,
+      "sourceHash": "424bd5c37d06d5176bae7c4b5aecc4b81e8297eab846968d5921be3c5bcace23",
+      "surface": "entities",
+      "text": "Select at least one entity first."
+    },
+    "entities.control.apply_policy": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 88,
+      "placeholders": [
+        "{current}",
+        "{desired}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 60,
+      "sourceHash": "538781bf551ef48ab4a9bf050de1cef5e5f7f1b63aabdf7385e6a706be8cb926",
+      "surface": "entities",
+      "text": "Apply policy set ({current} → {desired})"
+    },
+    "entities.control.applying": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "3329a9bb48b9c8d4a5e6182042ea9737427233c72b853b93d0a6365050ae476d",
+      "surface": "entities",
+      "text": "Applying…"
+    },
+    "entities.control.choose_checks": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 97,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 66,
+      "sourceHash": "2aa77c0f827a8c7d7ea3293581d5185ed0f24881a47fa0b8eeacce79f1df78ec",
+      "surface": "entities",
+      "text": "Choose how to handle entity-discovery checks"
+    },
+    "entities.control.enable_updates": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 53,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 36,
+      "sourceHash": "35b384295b66af7b238f1ebdd77b46d9c3c0f27fc7c92a21e32a04bc25273e86",
+      "surface": "entities",
+      "text": "Enable automatic updates"
+    },
+    "entities.control.reset": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "49dc6d157094fdc2b69f4b58c47990183681beb8c38407c89d5f8b055cfe21e8",
+      "surface": "entities",
+      "text": "Reset learned data"
+    },
+    "entities.control.reset_after_scan": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 58,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "6abe012cb7f5d429ab5f6d794c9c93f3bd5f2dc7109446ff54fe94bfc9c74d26",
+      "surface": "entities",
+      "text": "Reset available after scan"
+    },
+    "entities.control.reset_in_progress": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.resetting",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "020fba621f800493fb641c4a33860a1eeeeb1afb0da65ab59e55c7c1489aac33",
+      "surface": "entities",
+      "text": "Reset in progress…"
+    },
+    "entities.control.resetting": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.scan"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "1505f40de62c4f2620f934141fe63916300b6d82ca8701e1f1be53ea22eba6b1",
+      "surface": "entities",
+      "text": "Resetting…"
+    },
+    "entities.control.scan": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "8edb4583e8d2ec8d230c75d2bcb7c5d325083faf3be88f8b0b05350bf55b4b21",
+      "surface": "entities",
+      "text": "Scan dashboard now"
+    },
+    "entities.control.scan_in_progress": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting"
+      ],
+      "softMaxChars": 26,
+      "sourceHash": "c19b8ea94d1d20590e8f1e4a1f486865cdc0d6db3fca68c91da1331005d26ebe",
+      "surface": "entities",
+      "text": "Scan in progress…"
+    },
+    "entities.control.scanning": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "38d96da6e8b253d22c8974b69006a281bcacbdfa26420d89b9534dc1dfb5ac17",
+      "surface": "entities",
+      "text": "Scanning…"
+    },
+    "entities.control.up_to_date": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "dcdcea51734ac125afc811ce1b8e0f71f7cf58fb14d95530b40b5ea000260741",
+      "surface": "entities",
+      "text": "Subscription up to date"
+    },
+    "entities.control.update_in_progress": {
+      "context": "entities.js.refreshMutationControls: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.control.apply_policy",
+        "entities.control.applying",
+        "entities.control.choose_checks",
+        "entities.control.enable_updates",
+        "entities.control.reset",
+        "entities.control.reset_after_scan",
+        "entities.control.reset_in_progress",
+        "entities.control.resetting"
+      ],
+      "softMaxChars": 29,
+      "sourceHash": "58769b33f63d08cf2a59046b70027dd48b6fcc7656e24eefa248d49dd5fb1553",
+      "surface": "entities",
+      "text": "Update in progress…"
+    },
+    "entities.disabled.badge": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.disabled.body",
+        "entities.disabled.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "surface": "entities",
+      "text": "experimental"
+    },
+    "entities.disabled.body": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 176,
+      "placeholders": [
+        "{setting}",
+        "{configure}",
+        "{dashboard}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.disabled.badge",
+        "entities.disabled.title"
+      ],
+      "softMaxChars": 120,
+      "sourceHash": "8d35d3cde0d347fb97487543bfb8c0c20af1c59d78b670b8f92381860aacdb71",
+      "surface": "entities",
+      "text": "Enable {setting} on {configure} → {dashboard} while using the built-in renderer."
+    },
+    "entities.disabled.title": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.disabled.badge",
+        "entities.disabled.body"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "3db0d66bd72cf3128b18ff59bae034b5c0a982d1d78dd696caedb6dfa1edd02a",
+      "surface": "entities",
+      "text": "Dashboard entities"
+    },
+    "entities.dynamic.body": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant",
+        "{{ ... }}",
+        "{% ... %}"
+      ],
+      "hardMaxChars": 1347,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.dynamic.default_dashboard",
+        "entities.dynamic.source",
+        "entities.dynamic.title",
+        "entities.dynamic.truncated",
+        "entities.dynamic.unavailable"
+      ],
+      "softMaxChars": 758,
+      "sourceHash": "b71078752a0fda1c44508c52871014086acdfd547b2ea28da0bb0be8c02e005f",
+      "surface": "entities",
+      "text": "These expressions are not configuration errors. Exercise the relevant dashboard state so runtime observation can reveal concrete entity IDs. Templates that Home Assistant renders on the server, such as {{ ... }} and {% ... %}, are evaluated before the dashboard sees them, so exercising never reveals the entities they read. It does not need to: Home Assistant sends the rendered result over a separate subscription this filter does not touch, so those entities need nothing. Only an entity such a template produces as a card reference has to be added, by hand."
+    },
+    "entities.dynamic.default_dashboard": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.dynamic.body",
+        "entities.dynamic.source",
+        "entities.dynamic.title",
+        "entities.dynamic.truncated",
+        "entities.dynamic.unavailable"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "surface": "entities",
+      "text": "Dashboard"
+    },
+    "entities.dynamic.source": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.dynamic.body",
+        "entities.dynamic.default_dashboard",
+        "entities.dynamic.title",
+        "entities.dynamic.truncated",
+        "entities.dynamic.unavailable"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "0e570ca6fabe24f94e52c1833f3ffd25567022beb826fa16891f3322051bc221",
+      "surface": "entities",
+      "text": "Source"
+    },
+    "entities.dynamic.title": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 69,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.dynamic.body",
+        "entities.dynamic.default_dashboard",
+        "entities.dynamic.source",
+        "entities.dynamic.truncated",
+        "entities.dynamic.unavailable"
+      ],
+      "softMaxChars": 47,
+      "sourceHash": "c6cbcd1b93723034c7507ef075acf867da60081d09569b80ec9ab1e3bf7cad2f",
+      "surface": "entities",
+      "text": "Dynamic expressions to exercise"
+    },
+    "entities.dynamic.truncated": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 82,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.dynamic.body",
+        "entities.dynamic.default_dashboard",
+        "entities.dynamic.source",
+        "entities.dynamic.title",
+        "entities.dynamic.unavailable"
+      ],
+      "softMaxChars": 56,
+      "sourceHash": "a183484b32eab63829e15f0aa4de94864ec0fdddda951abe291bfcf7f36dbc6c",
+      "surface": "entities",
+      "text": "Expression shortened for diagnostics."
+    },
+    "entities.dynamic.unavailable": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 130,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.dynamic.body",
+        "entities.dynamic.default_dashboard",
+        "entities.dynamic.source",
+        "entities.dynamic.title",
+        "entities.dynamic.truncated"
+      ],
+      "softMaxChars": 89,
+      "sourceHash": "97d2f9ead197e0a0f6d72fbc2ec76b03e1b3d7a5f90688459226ab29fc796c7c",
+      "surface": "entities",
+      "text": "Dashboard configuration issues are temporarily unavailable."
+    },
+    "entities.error.mutation_ownership_changed": {
+      "context": "entities.js.mutationRequest: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 73,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.error.request_unavailable",
+        "entities.error.unknown"
+      ],
+      "softMaxChars": 50,
+      "sourceHash": "51a27bda55e91fb4c7c10831f0361f218210190aac463b96faec5b7b76d7b90f",
+      "surface": "entities",
+      "text": "entity mutation ownership changed"
+    },
+    "entities.error.request_unavailable": {
+      "context": "entities.js action handlers: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.error.mutation_ownership_changed",
+        "entities.error.unknown"
+      ],
+      "softMaxChars": 29,
+      "sourceHash": "1234cb6dc3fca8e3ddb2ad853b786605838aa96fdd7405bdd2d0f2c6697a4d02",
+      "surface": "entities",
+      "text": "request unavailable"
+    },
+    "entities.error.unknown": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.error.mutation_ownership_changed",
+        "entities.error.request_unavailable"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "3e4443e52275a9a092994d93853ea05b985abc67238b4b482c7b90b3a76e6098",
+      "surface": "entities",
+      "text": "unknown error"
+    },
+    "entities.filter.checking": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 49,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.filter.export",
+        "entities.filter.loading",
+        "entities.filter.reset",
+        "entities.filter.scan",
+        "entities.filter.title"
+      ],
+      "softMaxChars": 33,
+      "sourceHash": "dae829dc2e42f25c3d4d811b3e4528488a6d8df3c6212b63a8e146586342ba83",
+      "surface": "entities",
+      "text": "Checking subscription…"
+    },
+    "entities.filter.export": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.filter.checking",
+        "entities.filter.loading",
+        "entities.filter.reset",
+        "entities.filter.scan",
+        "entities.filter.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "9ca0326b9c8865068061ae1f83dd3f946e36f33537d3478ebdf079c817db82ce",
+      "surface": "entities",
+      "text": "Export details"
+    },
+    "entities.filter.loading": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.filter.checking",
+        "entities.filter.export",
+        "entities.filter.reset",
+        "entities.filter.scan",
+        "entities.filter.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "ba3bbbe10d8bef66441c88536ce7b8e724e2829b59a3da658654f4961cd61ae5",
+      "surface": "entities",
+      "text": "Loading…"
+    },
+    "entities.filter.reset": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.filter.checking",
+        "entities.filter.export",
+        "entities.filter.loading",
+        "entities.filter.scan",
+        "entities.filter.title"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "49dc6d157094fdc2b69f4b58c47990183681beb8c38407c89d5f8b055cfe21e8",
+      "surface": "entities",
+      "text": "Reset learned data"
+    },
+    "entities.filter.scan": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.filter.checking",
+        "entities.filter.export",
+        "entities.filter.loading",
+        "entities.filter.reset",
+        "entities.filter.title"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "8edb4583e8d2ec8d230c75d2bcb7c5d325083faf3be88f8b0b05350bf55b4b21",
+      "surface": "entities",
+      "text": "Scan dashboard now"
+    },
+    "entities.filter.title": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 58,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.filter.checking",
+        "entities.filter.export",
+        "entities.filter.loading",
+        "entities.filter.reset",
+        "entities.filter.scan"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "553c1e39d186ac8c3979ba327a650e28d17b9e3d1d00e1025c4a6a5071bae9d6",
+      "surface": "entities",
+      "text": "Entity subscription filter"
+    },
+    "entities.issue.allow_note": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 574,
+      "placeholders": [
+        "{pinned}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 323,
+      "sourceHash": "d3c4b6d2399ff0b190f6ccafb3bb888b75db62d7a682cd5a5c06dbe91a24df72",
+      "surface": "entities",
+      "text": "Allowing this check never adds entities. It only lets automatic updates continue without them. To subscribe to one, find it with the catalogue search at the top of this page and set it to {pinned}; a manual pin is kept until you remove it."
+    },
+    "entities.issue.area-broad.summary": {
+      "context": "DashboardConfigurationLint.analyzeArea: localized presentation for issue code area-broad.",
+      "frozen": [],
+      "hardMaxChars": 132,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary",
+        "entities.issue.auto-entities-options-dynamic.summary"
+      ],
+      "softMaxChars": 90,
+      "sourceHash": "8ef940c2a79a9331d1a10a00ddeba03e63618b3afdc4528e2380e0553f7f8861",
+      "surface": "entities",
+      "text": "Area card exceeds the per-selector subscription safety limit"
+    },
+    "entities.issue.area-missing-id.summary": {
+      "context": "DashboardConfigurationLint.analyzeArea: localized presentation for issue code area-missing-id.",
+      "frozen": [
+        "ID"
+      ],
+      "hardMaxChars": 69,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-registry-incomplete.summary",
+        "entities.issue.auto-entities-options-dynamic.summary"
+      ],
+      "softMaxChars": 47,
+      "sourceHash": "96f1bb3976e5f7e232bbe3cef6d90da628247f136d69569a2156e7a965f944ec",
+      "surface": "entities",
+      "text": "Area card has no static area ID"
+    },
+    "entities.issue.area-registry-incomplete.summary": {
+      "context": "DashboardConfigurationLint.analyzeArea: localized presentation for issue code area-registry-incomplete.",
+      "frozen": [],
+      "hardMaxChars": 91,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.auto-entities-options-dynamic.summary"
+      ],
+      "softMaxChars": 62,
+      "sourceHash": "d25c1fe35add58e9f0e38d8c03485387e1f1ff193fc1830b5387cda97495c1f7",
+      "surface": "entities",
+      "text": "Area card registry metadata is incomplete"
+    },
+    "entities.issue.auto-entities-options-dynamic.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code auto-entities-options-dynamic.",
+      "frozen": [],
+      "hardMaxChars": 143,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 98,
+      "sourceHash": "5c2b12a42a8e3532dc2419da1a6acffb51b32084a7b1e20307a703bce0a5f9e3",
+      "surface": "entities",
+      "text": "Auto-entities options can generate entity dependencies at runtime"
+    },
+    "entities.issue.auto-entities-options-javascript.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code auto-entities-options-javascript.",
+      "frozen": [
+        "JavaScript"
+      ],
+      "hardMaxChars": 170,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 116,
+      "sourceHash": "22ceb20450b38f3e3d14b8fc60baf3f2f1e72e6f5b67f49b3059452c95e082e7",
+      "surface": "entities",
+      "text": "Auto-entities options execute JavaScript that can replace entity dependencies"
+    },
+    "entities.issue.auto-entities-seed-row-dynamic.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code auto-entities-seed-row-dynamic.",
+      "frozen": [],
+      "hardMaxChars": 146,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 99,
+      "sourceHash": "19844079e668f90890e0175779b98c82fc44bc1a804f93b91b2da6ca279e6609",
+      "surface": "entities",
+      "text": "Auto-entities seed row can generate entity dependencies at runtime"
+    },
+    "entities.issue.auto-entities-typed-row-dynamic.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code auto-entities-typed-row-dynamic.",
+      "frozen": [],
+      "hardMaxChars": 148,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 101,
+      "sourceHash": "4c5f40b1bf80e9559cc388ad364d6786786976643187f19a5b49c5339c02f7d7",
+      "surface": "entities",
+      "text": "Auto-entities typed row can generate entity dependencies at runtime"
+    },
+    "entities.issue.bubble-card-runtime-coverage.reason": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code bubble-card-runtime-coverage.",
+      "frozen": [
+        "hass.states",
+        "Bubble Card",
+        "ID"
+      ],
+      "hardMaxChars": 778,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.bubble-card-runtime-coverage.summary"
+      ],
+      "softMaxChars": 438,
+      "sourceHash": "a9753dc0f564984e7c520550203a16df607746759b83d6f8ad39160eaa22176b",
+      "surface": "entities",
+      "text": "Static entity IDs are detected immediately. Other direct hass.states dependencies from Bubble Card popups, styles, sub-buttons, and modules are learned automatically as they run, so the detected entity list may remain incomplete until every relevant popup, conditional state, module path, and interaction has been exercised."
+    },
+    "entities.issue.bubble-card-runtime-coverage.summary": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code bubble-card-runtime-coverage.",
+      "frozen": [
+        "Bubble Card"
+      ],
+      "hardMaxChars": 128,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.bubble-card-runtime-coverage.reason"
+      ],
+      "softMaxChars": 87,
+      "sourceHash": "f52c911e7ffca64cb85a6468cf6781106654795e91c81bf4fe91338c8d94fc1f",
+      "surface": "entities",
+      "text": "Bubble Card entity discovery depends on dashboard coverage"
+    },
+    "entities.issue.button-card-dynamic-features.reason": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-dynamic-features.",
+      "frozen": [
+        "Button Card",
+        "ID"
+      ],
+      "hardMaxChars": 280,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-dynamic-features.recommendation",
+        "entities.issue.button-card-dynamic-features.summary"
+      ],
+      "softMaxChars": 191,
+      "sourceHash": "33565213a61df76f36e54baea1a468cf9c5fe5d166311e0b612a27c344b67dba",
+      "surface": "entities",
+      "text": "These Button Card features can introduce dependencies that are not present as static entity IDs in the dashboard configuration."
+    },
+    "entities.issue.button-card-dynamic-features.recommendation": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-dynamic-features.",
+      "frozen": [
+        "ID"
+      ],
+      "hardMaxChars": 205,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-dynamic-features.reason",
+        "entities.issue.button-card-dynamic-features.summary"
+      ],
+      "softMaxChars": 140,
+      "sourceHash": "aa0acc67b2b36ac03142f453db84a32bcb5e617f8e83e6ff83902d3c55560f6e",
+      "surface": "entities",
+      "text": "Replace them with explicit entity IDs and update triggers, or pin every generated dependency."
+    },
+    "entities.issue.button-card-dynamic-features.summary": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-dynamic-features.",
+      "frozen": [
+        "Button Card"
+      ],
+      "hardMaxChars": 128,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-dynamic-features.reason",
+        "entities.issue.button-card-dynamic-features.recommendation"
+      ],
+      "softMaxChars": 87,
+      "sourceHash": "93034e488e61180e11cc9f9ca4f4de844058421c741776941b613bc6ca5c4c4e",
+      "surface": "entities",
+      "text": "Button Card uses features with dynamic entity dependencies"
+    },
+    "entities.issue.button-card-limited-support.reason": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-limited-support.",
+      "frozen": [
+        "JavaScript",
+        "ID"
+      ],
+      "hardMaxChars": 328,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-limited-support.recommendation",
+        "entities.issue.button-card-limited-support.summary"
+      ],
+      "softMaxChars": 224,
+      "sourceHash": "3b8cd86cfa82bdd7b08f30ea3fb1d3fd1a1e63964ce92dcddad0c85c087cd254",
+      "surface": "entities",
+      "text": "Static entity IDs and targets are scanned, but config-template inheritance, JavaScript, group expansion, and broad update triggers are not evaluated."
+    },
+    "entities.issue.button-card-limited-support.recommendation": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-limited-support.",
+      "frozen": [
+        "Button Card",
+        "JavaScript"
+      ],
+      "hardMaxChars": 227,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-limited-support.reason",
+        "entities.issue.button-card-limited-support.summary"
+      ],
+      "softMaxChars": 155,
+      "sourceHash": "9c28da4774b4293c32b44663895e35eea6cc5b60945319848b06983a6ed11664",
+      "surface": "entities",
+      "text": "Keep dependencies explicit and pin any entities introduced through Button Card templates or JavaScript."
+    },
+    "entities.issue.button-card-limited-support.summary": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code button-card-limited-support.",
+      "frozen": [
+        "Button Card"
+      ],
+      "hardMaxChars": 106,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.button-card-limited-support.reason",
+        "entities.issue.button-card-limited-support.recommendation"
+      ],
+      "softMaxChars": 72,
+      "sourceHash": "284123b501316e60e92ab480b8f99d6e935936c8235a9faf60605b14d0e5f7a2",
+      "surface": "entities",
+      "text": "Button Card has limited entity discovery support"
+    },
+    "entities.issue.candidate_set": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "9cceb5a05dd99f8b85ad074abfc602d24570ae707fc49d2b76e9f4130253976e",
+      "surface": "entities",
+      "text": "Candidate set"
+    },
+    "entities.issue.card.kiosk_mode_configuration": {
+      "context": "typed synthesized card title: visible Entities page copy.",
+      "frozen": [
+        "HACS Kiosk Mode"
+      ],
+      "hardMaxChars": 64,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 44,
+      "sourceHash": "d28f78f8972124e7e87f6c382f784c0590692ce3b63f8b1eeae5f0d6a693013d",
+      "surface": "entities",
+      "text": "HACS Kiosk Mode configuration"
+    },
+    "entities.issue.dashboard-strategy.summary": {
+      "context": "DashboardConfigurationLint.analyzeSource: localized presentation for issue code dashboard-strategy.",
+      "frozen": [],
+      "hardMaxChars": 130,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 89,
+      "sourceHash": "c2ef5e779dcb1501a2b260488a99ebcd44cc4bef2a10e3f47f5399e9dff8d740",
+      "surface": "entities",
+      "text": "Dashboard strategy generates entity dependencies at runtime"
+    },
+    "entities.issue.decluttering-template-expansion.reason": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code decluttering-template-expansion.",
+      "frozen": [
+        "ID"
+      ],
+      "hardMaxChars": 330,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.decluttering-template-expansion.recommendation",
+        "entities.issue.decluttering-template-expansion.summary"
+      ],
+      "softMaxChars": 225,
+      "sourceHash": "6afdd9a4bbd534c4428d39590daed384b4fdf03273386f1175cca946167c9c5d",
+      "surface": "entities",
+      "text": "Static entity IDs and targets are scanned, but the referenced template, defaults, and variables can introduce dependencies absent from the invocation."
+    },
+    "entities.issue.decluttering-template-expansion.recommendation": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code decluttering-template-expansion.",
+      "frozen": [],
+      "hardMaxChars": 161,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.decluttering-template-expansion.reason",
+        "entities.issue.decluttering-template-expansion.summary"
+      ],
+      "softMaxChars": 110,
+      "sourceHash": "e66f036d5398b5e17550ef7db7a3c0f7ed182189e8d71f7d7577b49639d06e41",
+      "surface": "entities",
+      "text": "Keep dependencies explicit and pin every entity produced by the template."
+    },
+    "entities.issue.decluttering-template-expansion.summary": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code decluttering-template-expansion.",
+      "frozen": [
+        "Decluttering Card"
+      ],
+      "hardMaxChars": 119,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.decluttering-template-expansion.reason",
+        "entities.issue.decluttering-template-expansion.recommendation"
+      ],
+      "softMaxChars": 81,
+      "sourceHash": "577c853d33d7495cf113c9e8813b28b4763746cff05da594189337eabb46e66c",
+      "surface": "entities",
+      "text": "Decluttering Card has limited entity discovery support"
+    },
+    "entities.issue.default-broad.reason": {
+      "context": "DashboardConfigurationLint.group: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 360,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.default-broad.recommendation"
+      ],
+      "softMaxChars": 210,
+      "sourceHash": "09254a3ff2f9fc0d2023d14ba0326bf5a9837be72fd87261b842cd2ec6cfb154",
+      "surface": "entities",
+      "text": "The structural candidate set exceeds the per-selector subscription safety limit. Dynamic filters, sorting, and display limits cannot safely reduce it."
+    },
+    "entities.issue.default-broad.recommendation": {
+      "context": "DashboardConfigurationLint.group: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 194,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.default-broad.reason"
+      ],
+      "softMaxChars": 132,
+      "sourceHash": "ee01905364ebf98329a8c55c886e5437838273b6eb78f464b5320cc42501932a",
+      "surface": "entities",
+      "text": "Narrow the selector with an area, floor, label, entity pattern, or explicit entity list."
+    },
+    "entities.issue.default-unbounded.reason": {
+      "context": "DashboardConfigurationLint.group: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 194,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.default-unbounded.recommendation"
+      ],
+      "softMaxChars": 132,
+      "sourceHash": "82a4eeff8f306907cd156b2847f430a0801bcb6b05b669c47879476497494fda",
+      "surface": "entities",
+      "text": "The selector has no structural bound that can be converted into a safe subscription set."
+    },
+    "entities.issue.default-unbounded.recommendation": {
+      "context": "DashboardConfigurationLint.group: visible Entities page copy.",
+      "frozen": [
+        "ID"
+      ],
+      "hardMaxChars": 185,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.default-unbounded.reason"
+      ],
+      "softMaxChars": 126,
+      "sourceHash": "d714413bd8c2e44d31e88af3b74b728fe19cfc282c90d2d77af0aaa986ce1939",
+      "surface": "entities",
+      "text": "Add an explicit entity ID, entity pattern, domain, area, floor, or label constraint."
+    },
+    "entities.issue.default_dashboard": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "67b696468610b879ed7f224dbf6b0861f27e39d20454cb9d7af1ec52d3e5eeaa",
+      "surface": "entities",
+      "text": "Dashboard"
+    },
+    "entities.issue.diagnostic-limit.reason": {
+      "context": "DashboardConfigurationLint.FindingAccumulator: localized presentation for issue code diagnostic-limit.",
+      "frozen": [
+        "64"
+      ],
+      "hardMaxChars": 108,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.diagnostic-limit.recommendation",
+        "entities.issue.diagnostic-limit.summary"
+      ],
+      "softMaxChars": 74,
+      "sourceHash": "1b01bdd7d4f02af1d7fa0fe94827e071c0e0a55fb746b409c65b173155c5616d",
+      "surface": "entities",
+      "text": "More than 64 distinct blocking checks were found."
+    },
+    "entities.issue.diagnostic-limit.recommendation": {
+      "context": "DashboardConfigurationLint.FindingAccumulator: localized presentation for issue code diagnostic-limit.",
+      "frozen": [],
+      "hardMaxChars": 225,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.diagnostic-limit.reason",
+        "entities.issue.diagnostic-limit.summary"
+      ],
+      "softMaxChars": 153,
+      "sourceHash": "51d9424df4f4bdc068b69d11f6f19e3cd8eaf42bd62d4acba954daf8568d156e",
+      "surface": "entities",
+      "text": "Simplify the dashboard or split it into smaller dashboards before enabling automatic entity filtering."
+    },
+    "entities.issue.diagnostic-limit.summary": {
+      "context": "DashboardConfigurationLint.FindingAccumulator: localized presentation for issue code diagnostic-limit.",
+      "frozen": [],
+      "hardMaxChars": 117,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.diagnostic-limit.reason",
+        "entities.issue.diagnostic-limit.recommendation"
+      ],
+      "softMaxChars": 80,
+      "sourceHash": "9389720c884f9e7cc15417daa3c982e8083f3ad18bd02b8fb89d06a19fb198dd",
+      "surface": "entities",
+      "text": "Dashboard has more safety checks than can be reviewed"
+    },
+    "entities.issue.ignore": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 84,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 57,
+      "sourceHash": "ce23f81f852dcb0da169baedd751ff559b6aa05f9f40ff83b5e431d389361844",
+      "surface": "entities",
+      "text": "Ignore potential entities and continue"
+    },
+    "entities.issue.ignore_confirm": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 629,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 354,
+      "sourceHash": "67413638e256350b1b2523684e53c746d79e9ca69729a04598065bc78e18d4ce",
+      "surface": "entities",
+      "text": "Continue while omitting every potential entity from this configuration? This adds no entities to the subscription. Cards which depend on them may show unavailable until you pin those entities by hand, the dashboard is narrowed, or the safety check is re-enabled."
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.reason": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-dynamic-javascript.",
+      "frozen": [],
+      "hardMaxChars": 258,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation",
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.summary"
+      ],
+      "softMaxChars": 176,
+      "sourceHash": "848d2c9cb3f62b9ce9bafee07f503cb464e1f9e902cebb6e7bfe064cc443f3a6",
+      "surface": "entities",
+      "text": "These client-side expressions can depend on entities that are absent from the statically discovered subscription set."
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-dynamic-javascript.",
+      "frozen": [
+        "JavaScript",
+        "HACS",
+        "Home Assistant"
+      ],
+      "hardMaxChars": 401,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.reason",
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.summary"
+      ],
+      "softMaxChars": 234,
+      "sourceHash": "16bfc9f542e706bd0fb6dffd6cbda316c8c1e2de53fbca3309e06eb4a72c0070",
+      "surface": "entities",
+      "text": "For automatic entity filtering, remove client-side JavaScript or pin every dependency; this does not affect HACS presentation or Home Assistant's native kiosk command."
+    },
+    "entities.issue.kio\u0073k-mode-dynamic-javascript.summary": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-dynamic-javascript.",
+      "frozen": [
+        "HACS Kiosk Mode",
+        "JavaScript"
+      ],
+      "hardMaxChars": 168,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.reason",
+        "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation"
+      ],
+      "softMaxChars": 114,
+      "sourceHash": "4738246d419bdcdb6d251cb23cc2c9edd4d568d9a4c64d1089c963c6d9eb34c8",
+      "surface": "entities",
+      "text": "HACS Kiosk Mode uses client-side JavaScript with unknown entity dependencies"
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.reason": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-limited-support.",
+      "frozen": [
+        "ID"
+      ],
+      "hardMaxChars": 335,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-limited-support.recommendation",
+        "entities.issue.kio\u0073k-mode-limited-support.summary"
+      ],
+      "softMaxChars": 228,
+      "sourceHash": "45fc404517466e160d28ad59823726bfb75d79d467999f978ee60ffff324abcb",
+      "surface": "entities",
+      "text": "Literal entity IDs in client-side templates are scanned, but computed references and entity, domain, or registry enumeration cannot be evaluated safely."
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.recommendation": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-limited-support.",
+      "frozen": [
+        "HACS Kiosk Mode",
+        "JavaScript",
+        "Jinja",
+        "ID"
+      ],
+      "hardMaxChars": 430,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-limited-support.reason",
+        "entities.issue.kio\u0073k-mode-limited-support.summary"
+      ],
+      "softMaxChars": 251,
+      "sourceHash": "6722add1f9e7bd22036c91f7c5cdb90df36db9da4f5c444dd3db697dc862c2a7",
+      "surface": "entities",
+      "text": "For automatic entity filtering, use literal entity IDs in HACS Kiosk Mode JavaScript and avoid enumeration; server-rendered Jinja settings do not require main-stream dependencies."
+    },
+    "entities.issue.kio\u0073k-mode-limited-support.summary": {
+      "context": "DashboardConfigurationLint.analyzeKioskMode: localized presentation for issue code kio\u0073k-mode-limited-support.",
+      "frozen": [
+        "HACS Kiosk Mode",
+        "JavaScript"
+      ],
+      "hardMaxChars": 139,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.kio\u0073k-mode-limited-support.reason",
+        "entities.issue.kio\u0073k-mode-limited-support.recommendation"
+      ],
+      "softMaxChars": 95,
+      "sourceHash": "c9e5190b8c38b4b229b6d2daab82903f342aa822d7e708f4d835fc5e17172c32",
+      "surface": "entities",
+      "text": "HACS Kiosk Mode JavaScript has limited entity-discovery support"
+    },
+    "entities.issue.map-dynamic-enumeration.summary": {
+      "context": "DashboardConfigurationLint.analyzeMap: localized presentation for issue code map-dynamic-enumeration.",
+      "frozen": [],
+      "hardMaxChars": 88,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 60,
+      "sourceHash": "b111a3e84686fe9239a5c1e667c61725cda8c4d80fa6295e738525a5733f33b1",
+      "surface": "entities",
+      "text": "Map card dynamically enumerates entities"
+    },
+    "entities.issue.map-zone-registry-incomplete.summary": {
+      "context": "DashboardConfigurationLint.analyzeMap: localized presentation for issue code map-zone-registry-incomplete.",
+      "frozen": [],
+      "hardMaxChars": 132,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 90,
+      "sourceHash": "a1ce3f18abe80b0e3acac6fb137177e8cb27af87fd4c84d8a2932fe8c76750d7",
+      "surface": "entities",
+      "text": "Map person locations require complete zone registry metadata"
+    },
+    "entities.issue.map-zones-broad.summary": {
+      "context": "DashboardConfigurationLint.analyzeMap: localized presentation for issue code map-zones-broad.",
+      "frozen": [],
+      "hardMaxChars": 176,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 120,
+      "sourceHash": "d798c85ccbde78b7c54da084875518986414e04bc22f84d03e60df5bbb925648",
+      "surface": "entities",
+      "text": "Map person locations may depend on more zones than the per-selector safety limit"
+    },
+    "entities.issue.potential.one": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 53,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.potential.other"
+      ],
+      "softMaxChars": 36,
+      "sourceHash": "f75281896320ad0561a49cd8ea060f210ef269dfa88bf872846b2909fc8f1155",
+      "surface": "entities",
+      "text": "{count} potential entity"
+    },
+    "entities.issue.potential.other": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 58,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.potential.one"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "7a260af11075e3860a3e8fe30c1b4a9ec6c00af5216b3052f8957541ba070d4e",
+      "surface": "entities",
+      "text": "{count} potential entities"
+    },
+    "entities.issue.reenable": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 49,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.rule",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 33,
+      "sourceHash": "6df1092397377b4a3a7bf825e9a58c0435a04bc95f868a48ae61e233e7752705",
+      "surface": "entities",
+      "text": "Re-enable safety check"
+    },
+    "entities.issue.rule": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.safe_limit",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "62845f31a2fe00be3ebaaeb93f5b27af82ab81dfcbaa1871c76f596cd98cf3c9",
+      "surface": "entities",
+      "text": "Rule"
+    },
+    "entities.issue.safe_limit": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{limit}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safety_failed"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "96ae9819fbc18f601308c6893bb0d261dd7cad4fa9180d80ba5a2481a2967e13",
+      "surface": "entities",
+      "text": "safe limit {limit}"
+    },
+    "entities.issue.safety_failed": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 58,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "0c76f43b08a9dd23b36c17732e0289ae0656f118fa44f3ef3d99d2ddf1fd9e4f",
+      "surface": "entities",
+      "text": "Safety-check update failed"
+    },
+    "entities.issue.search": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 60,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit"
+      ],
+      "softMaxChars": 41,
+      "sourceHash": "581af26ec01d05bb16f1d7c11c1e8f75a0e42eceb5367d454c12f58fbe3d003f",
+      "surface": "entities",
+      "text": "Search the entity catalogue"
+    },
+    "entities.issue.selector-broad.summary": {
+      "context": "DashboardConfigurationLint.addCandidates: localized presentation for issue code selector-broad.",
+      "frozen": [],
+      "hardMaxChars": 146,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 99,
+      "sourceHash": "f3cd9e80876d154a35591c1aa4b51a350aaf42e76005ccd1c948ba59feb596bb",
+      "surface": "entities",
+      "text": "Entity selector exceeds the per-selector subscription safety limit"
+    },
+    "entities.issue.selector-missing-include.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code selector-missing-include.",
+      "frozen": [],
+      "hardMaxChars": 56,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 38,
+      "sourceHash": "13b952c306bef29e900e2340a09367e3814afc02bf9311f02a5e4a060c6fcb2a",
+      "surface": "entities",
+      "text": "Unbounded entity selector"
+    },
+    "entities.issue.selector-registry-incomplete.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code selector-registry-incomplete.",
+      "frozen": [],
+      "hardMaxChars": 117,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 80,
+      "sourceHash": "1660048cec84e73c46fb601b775b6d846b48ca9c8eb24814e284160122d69420",
+      "surface": "entities",
+      "text": "Entity selector requires incomplete registry metadata"
+    },
+    "entities.issue.selector-total-budget.reason": {
+      "context": "DashboardConfigurationLint.group: localized presentation for issue code selector-total-budget.",
+      "frozen": [],
+      "hardMaxChars": 172,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.selector-total-budget.recommendation",
+        "entities.issue.selector-total-budget.summary"
+      ],
+      "softMaxChars": 117,
+      "sourceHash": "8aed88e4dcadaf16d7cdaf424cf672f49063a2514bfdbfb2efdc24da5f914bb6",
+      "surface": "entities",
+      "text": "The combined bounded selectors exceed the dashboard subscription safety limit."
+    },
+    "entities.issue.selector-total-budget.recommendation": {
+      "context": "DashboardConfigurationLint.group: localized presentation for issue code selector-total-budget.",
+      "frozen": [],
+      "hardMaxChars": 183,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.selector-total-budget.reason",
+        "entities.issue.selector-total-budget.summary"
+      ],
+      "softMaxChars": 125,
+      "sourceHash": "6d361987a0367d900941e123f4c0dba8d970f90f042d6cb79d77367364f5ba44",
+      "surface": "entities",
+      "text": "Narrow the dashboard selectors so their combined entity set stays within the limit."
+    },
+    "entities.issue.selector-total-budget.summary": {
+      "context": "DashboardConfigurationLint.analyze: localized presentation for issue code selector-total-budget.",
+      "frozen": [],
+      "hardMaxChars": 139,
+      "placeholders": [
+        "{candidate_count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.selector-total-budget.reason",
+        "entities.issue.selector-total-budget.recommendation"
+      ],
+      "softMaxChars": 95,
+      "sourceHash": "b9b9031818790fa57e332221654ebb7128f3110f15825ee9040bdd50153d8446",
+      "surface": "entities",
+      "text": "Bounded selectors collectively match {candidate_count} entities"
+    },
+    "entities.issue.selector-unbounded-or-dynamic.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code selector-unbounded-or-dynamic.",
+      "frozen": [],
+      "hardMaxChars": 80,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 54,
+      "sourceHash": "3539593c2db1a56f1f9ab18fa2962f15fc34736617c61c8daded69b6d5c5fc16",
+      "surface": "entities",
+      "text": "Unbounded or dynamic entity selector"
+    },
+    "entities.issue.severity.allowed": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.severity.limited",
+        "entities.issue.severity.note",
+        "entities.issue.severity.paused"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "1bb201d188352e9b4633f85e4fb8a31ea93fd14dec702443fd3e2713d657fd2d",
+      "surface": "entities",
+      "text": "Allowed"
+    },
+    "entities.issue.severity.limited": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.severity.allowed",
+        "entities.issue.severity.note",
+        "entities.issue.severity.paused"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "f68a5e496832ce9b7306ea2446a3693e1e04b95e6aa0feea005bdb300817a08a",
+      "surface": "entities",
+      "text": "Limited coverage"
+    },
+    "entities.issue.severity.note": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.severity.allowed",
+        "entities.issue.severity.limited",
+        "entities.issue.severity.paused"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "3db29fb719427bdcb84598bba17dee215653716af1eb3f417823809126b048dc",
+      "surface": "entities",
+      "text": "Compatibility note"
+    },
+    "entities.issue.severity.paused": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 53,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.severity.allowed",
+        "entities.issue.severity.limited",
+        "entities.issue.severity.note"
+      ],
+      "softMaxChars": 36,
+      "sourceHash": "5e708eebe7117fbb8cb96ce9dc4f163f6f232528eadeaa6093796e638ffb96ad",
+      "surface": "entities",
+      "text": "Automatic updates paused"
+    },
+    "entities.issue.source": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "0e570ca6fabe24f94e52c1833f3ffd25567022beb826fa16891f3322051bc221",
+      "surface": "entities",
+      "text": "Source"
+    },
+    "entities.issue.streamline-runtime-coverage.reason": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code streamline-runtime-coverage.",
+      "frozen": [
+        "hass.states",
+        "Streamline",
+        "ID"
+      ],
+      "hardMaxChars": 660,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.streamline-runtime-coverage.summary"
+      ],
+      "softMaxChars": 372,
+      "sourceHash": "10f83b2d9703e2cee1267ce449bf860a18a6439897fff3d8039cc65516de5f5b",
+      "surface": "entities",
+      "text": "Static entity IDs are detected immediately. Other direct hass.states dependencies are learned automatically as Streamline templates run, so the detected entity list may remain incomplete until every relevant view, conditional state, popup, and interaction has been exercised."
+    },
+    "entities.issue.streamline-runtime-coverage.summary": {
+      "context": "DashboardConfigurationLint.analyzeLimitedSupportCard: localized presentation for issue code streamline-runtime-coverage.",
+      "frozen": [
+        "Streamline"
+      ],
+      "hardMaxChars": 126,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.streamline-runtime-coverage.reason"
+      ],
+      "softMaxChars": 86,
+      "sourceHash": "37938fd6140133ef9a24e412e7c7d2ab94afaa014b8ba48e9b1a4df9dd66a4c2",
+      "surface": "entities",
+      "text": "Streamline entity discovery depends on dashboard coverage"
+    },
+    "entities.issue.suggested_edit": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.candidate_set",
+        "entities.issue.default_dashboard",
+        "entities.issue.ignore",
+        "entities.issue.ignore_confirm",
+        "entities.issue.reenable",
+        "entities.issue.rule",
+        "entities.issue.safe_limit"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "17f08ab889b9f97f3633228988c4e1d939458e52a181d5cc4f9f78475ce13d70",
+      "surface": "entities",
+      "text": "Suggested edit:"
+    },
+    "entities.issue.template-selector.reason": {
+      "context": "DashboardConfigurationLint.TEMPLATE_SELECTOR_REASON: localized presentation for issue code template-selector.",
+      "frozen": [
+        "ha-paneld",
+        "Home Assistant"
+      ],
+      "hardMaxChars": 548,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.template-selector.recommendation",
+        "entities.issue.template-selector.summary"
+      ],
+      "softMaxChars": 308,
+      "sourceHash": "78fbab96e9baabf4059991f1fa21fbc8cf624e3e409e7b90aa241a026c397837",
+      "surface": "entities",
+      "text": "ha-paneld does not evaluate templates, so it cannot tell which entities this filter returns. Entities it only reads are Home Assistant's own, delivered outside this filter, so their absence here is correct and they need nothing."
+    },
+    "entities.issue.template-selector.recommendation": {
+      "context": "DashboardConfigurationLint.TEMPLATE_SELECTOR_RECOMMENDATION: localized presentation for issue code template-selector.",
+      "frozen": [],
+      "hardMaxChars": 170,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.template-selector.reason",
+        "entities.issue.template-selector.summary"
+      ],
+      "softMaxChars": 116,
+      "sourceHash": "2698ccb1ebcabb0e1a92b42b0bf165eba907a2cef2922162d496b0786bfa0b5c",
+      "surface": "entities",
+      "text": "Bound the filter structurally, or pin only the entities the template returns."
+    },
+    "entities.issue.template-selector.summary": {
+      "context": "DashboardConfigurationLint.analyzeAutoEntities: localized presentation for issue code template-selector.",
+      "frozen": [],
+      "hardMaxChars": 75,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.issue.template-selector.reason",
+        "entities.issue.template-selector.recommendation"
+      ],
+      "softMaxChars": 51,
+      "sourceHash": "77922d0110ae843152f8e1cdc92a41f6c88e478f06bbc0f0468702219af5efd7",
+      "surface": "entities",
+      "text": "Unbounded template entity selector"
+    },
+    "entities.issue.view.untitled": {
+      "context": "typed synthesized view title: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{index}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issue.allow_note",
+        "entities.issue.area-broad.summary",
+        "entities.issue.area-missing-id.summary",
+        "entities.issue.area-registry-incomplete.summary"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "e0c10b993769c8866cab87427180d78d70c00b4fc959b01afa01f0ada563419e",
+      "surface": "entities",
+      "text": "View {index}"
+    },
+    "entities.issues.checking": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 82,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.rescan",
+        "entities.issues.title"
+      ],
+      "softMaxChars": 56,
+      "sourceHash": "79c9c5e94080183d8c7d87f52ce70be165130b5dffe781db9659e31cece0a515",
+      "surface": "entities",
+      "text": "Checking the dashboard configuration…"
+    },
+    "entities.issues.rescan": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 69,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.checking",
+        "entities.issues.title"
+      ],
+      "softMaxChars": 47,
+      "sourceHash": "a6373efa0c0388c76fbfaff8c85718c444fd22dd8cc9667c3cd02aabc7f84786",
+      "surface": "entities",
+      "text": "Re-scan after editing dashboard"
+    },
+    "entities.issues.summary.allowed.one": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 202,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.allowed.other"
+      ],
+      "softMaxChars": 118,
+      "sourceHash": "0fc5ba0d68061746d736429945aa2cb8c7ec0f63fc715d220ff9e4618a369cca",
+      "surface": "entities",
+      "text": "{count} previously allowed check. Entity discovery is active; no action is required."
+    },
+    "entities.issues.summary.allowed.other": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 204,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.allowed.one"
+      ],
+      "softMaxChars": 119,
+      "sourceHash": "c1ae8bdbc66f37d9f6dd17b0a62a2c2fd4d232f6bf8109e8c81e13dc577fb3b8",
+      "surface": "entities",
+      "text": "{count} previously allowed checks. Entity discovery is active; no action is required."
+    },
+    "entities.issues.summary.blocking.one": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 353,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.blocking.other"
+      ],
+      "softMaxChars": 206,
+      "sourceHash": "1ed24d833a9feffcd89e12012907cfbea22abcb1f3ccfb9245a0257ddc2029e1",
+      "surface": "entities",
+      "text": "{count} check requires review before automatic updates can change the entity subscription. The dashboard and current subscription continue working."
+    },
+    "entities.issues.summary.blocking.other": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 353,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.blocking.one"
+      ],
+      "softMaxChars": 206,
+      "sourceHash": "0e6a436a7951f68a9e48943e5c0fa5174c889d4bbac1b837f8edb99e9bf4a45e",
+      "surface": "entities",
+      "text": "{count} checks require review before automatic updates can change the entity subscription. The dashboard and current subscription continue working."
+    },
+    "entities.issues.summary.blocking_allowed.one": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 428,
+      "placeholders": [
+        "{count}",
+        "{allowed}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.blocking_allowed.other"
+      ],
+      "softMaxChars": 250,
+      "sourceHash": "50df7415c958b6dc777ca19c433e4cfc0bfb40379d9a0e66dd5c757fd459fb87",
+      "surface": "entities",
+      "text": "{count} check requires review before automatic updates can change the entity subscription · {allowed} previously allowed. The dashboard and current subscription continue working."
+    },
+    "entities.issues.summary.blocking_allowed.other": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 428,
+      "placeholders": [
+        "{count}",
+        "{allowed}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.issues.summary.blocking_allowed.one"
+      ],
+      "softMaxChars": 250,
+      "sourceHash": "f2a1fd998a48a160086d8fa2e5914f6332e5d946e87caeb217abba365bffada3",
+      "surface": "entities",
+      "text": "{count} checks require review before automatic updates can change the entity subscription · {allowed} previously allowed. The dashboard and current subscription continue working."
+    },
+    "entities.issues.summary.none": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 146,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.checking",
+        "entities.issues.rescan",
+        "entities.issues.summary.allowed.one",
+        "entities.issues.summary.allowed.other"
+      ],
+      "softMaxChars": 99,
+      "sourceHash": "05a5b6f12c6303c5122d17dc97804b4228a70a7a6555cd25d60b1cc1eb81b2da",
+      "surface": "entities",
+      "text": "No entity-discovery compatibility notes detected by the last scan."
+    },
+    "entities.issues.summary.notes.one": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 188,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.summary.notes.other"
+      ],
+      "softMaxChars": 110,
+      "sourceHash": "b97af08a2be12fb3de900f99b9f7bb9d32821be75161c2f0a77002a67ab01aae",
+      "surface": "entities",
+      "text": "{count} compatibility note. Entity discovery is active; no action is required."
+    },
+    "entities.issues.summary.notes.other": {
+      "context": "entities.js.loadIssues: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 190,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.summary.notes.one"
+      ],
+      "softMaxChars": 111,
+      "sourceHash": "775b6fcf34eb4399555f7a7bfa0af748c17adb8f14527f1e4b04c2cffe98aba6",
+      "surface": "entities",
+      "text": "{count} compatibility notes. Entity discovery is active; no action is required."
+    },
+    "entities.issues.title": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 66,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.issues.checking",
+        "entities.issues.rescan"
+      ],
+      "softMaxChars": 45,
+      "sourceHash": "eb4e09bf32f157bcec74907fe18323558be077e4b7c7c0ac3a6f3697f2a46abb",
+      "surface": "entities",
+      "text": "Entity-discovery compatibility"
+    },
+    "entities.override.exclude_confirm": {
+      "context": "entities.js.override handler: visible Entities page copy.",
+      "frozen": [
+        "{entity_id}"
+      ],
+      "hardMaxChars": 135,
+      "placeholders": [
+        "{entity_id}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.override.failed"
+      ],
+      "softMaxChars": 79,
+      "sourceHash": "d0ab4e63729c4a23af1b6d0645a61fa9b04070790957b396dea1c56e451ec94b",
+      "surface": "entities",
+      "text": "Exclude {entity_id} even if the dashboard depends on it?"
+    },
+    "entities.override.failed": {
+      "context": "entities.js.override handler: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 49,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.override.exclude_confirm"
+      ],
+      "softMaxChars": 33,
+      "sourceHash": "b42ba8ad55e097922c0c1b5bb2122a798ffa01e071c205d78086dc166c3e8347",
+      "surface": "entities",
+      "text": "Entity override failed"
+    },
+    "entities.pagination.loading": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.pagination.next",
+        "entities.pagination.previous"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "ba3bbbe10d8bef66441c88536ce7b8e724e2829b59a3da658654f4961cd61ae5",
+      "surface": "entities",
+      "text": "Loading…"
+    },
+    "entities.pagination.next": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.pagination.loading",
+        "entities.pagination.previous"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "1ff57a29d7c9d11bdf61c1b80f2b289b44c1ea844824d4b94a0d52b6ba5fc858",
+      "surface": "entities",
+      "text": "Next"
+    },
+    "entities.pagination.previous": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.pagination.loading",
+        "entities.pagination.next"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "a57b08a480b822a0a572b993391c292ede593bf8000b406675b180bbb16260fa",
+      "surface": "entities",
+      "text": "Previous"
+    },
+    "entities.policy.failed": {
+      "context": "entities.js.savePolicy: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.policy.legend",
+        "entities.policy.note",
+        "entities.policy.runtime",
+        "entities.policy.static"
+      ],
+      "softMaxChars": 30,
+      "sourceHash": "f2a7b7fe6d1d385454a300df0157b0360a1e33c2f06a1be617fbe81c3c7e1912",
+      "surface": "entities",
+      "text": "Policy update failed"
+    },
+    "entities.policy.legend": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.policy.failed",
+        "entities.policy.note",
+        "entities.policy.runtime",
+        "entities.policy.static"
+      ],
+      "softMaxChars": 29,
+      "sourceHash": "372f3c684e518a002fa11b80b3fe86e3fbdaae24f4b7c51cf68befd1a1f32db4",
+      "surface": "entities",
+      "text": "Automatic promotion"
+    },
+    "entities.policy.note": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 207,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.policy.failed",
+        "entities.policy.legend",
+        "entities.policy.runtime",
+        "entities.policy.static"
+      ],
+      "softMaxChars": 141,
+      "sourceHash": "057787a0d21860cbb6efd521e5059d84221464d94381451cd29615f0a7f0c740",
+      "surface": "entities",
+      "text": "Turn either source off to keep collecting its evidence without changing the live subscription."
+    },
+    "entities.policy.runtime": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [
+        "hass.states"
+      ],
+      "hardMaxChars": 108,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.policy.failed",
+        "entities.policy.legend",
+        "entities.policy.note",
+        "entities.policy.static"
+      ],
+      "softMaxChars": 74,
+      "sourceHash": "6451de60e846286045878311b2bdaedeb2d3cc35eaa12e47daa449d547f2f383",
+      "surface": "entities",
+      "text": "Add missing entities accessed through hass.states"
+    },
+    "entities.policy.static": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 106,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.policy.failed",
+        "entities.policy.legend",
+        "entities.policy.note",
+        "entities.policy.runtime"
+      ],
+      "softMaxChars": 72,
+      "sourceHash": "ab548e1a8d2f9568a455bfebdc0b65ecd7dd593c4e850ab62116c4d54223c298",
+      "surface": "entities",
+      "text": "Add entities parsed from dashboard configuration"
+    },
+    "entities.reason.config": {
+      "context": "entities.js.reasonIcons: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.reason.excluded",
+        "entities.reason.manual",
+        "entities.reason.runtime",
+        "entities.reason.search"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "311816e83e03c9f7385ff897bb2ab989cba37bd9d410e78ef8e7ed39b09e8a6c",
+      "surface": "entities",
+      "text": "Dashboard configuration"
+    },
+    "entities.reason.excluded": {
+      "context": "entities.js.reasonIcons: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 60,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.reason.config",
+        "entities.reason.manual",
+        "entities.reason.runtime",
+        "entities.reason.search"
+      ],
+      "softMaxChars": 41,
+      "sourceHash": "9f4bdac47fa754937eb5f19eefba0569a835ee83e7b721eb6ebd76577cf1011b",
+      "surface": "entities",
+      "text": "Excluded but still detected"
+    },
+    "entities.reason.manual": {
+      "context": "entities.js.reasonIcons: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.reason.config",
+        "entities.reason.excluded",
+        "entities.reason.runtime",
+        "entities.reason.search"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "723c2826018e4a1a6c461564ff8846db1ab398c2982f2c0997c0059da7b00466",
+      "surface": "entities",
+      "text": "Manual override"
+    },
+    "entities.reason.runtime": {
+      "context": "entities.js.reasonIcons: visible Entities page copy.",
+      "frozen": [
+        "hass.states"
+      ],
+      "hardMaxChars": 58,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.reason.config",
+        "entities.reason.excluded",
+        "entities.reason.manual",
+        "entities.reason.search"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "7c3a132490938ba30055f6a0f3d2e773a7b94a7f20d3d939197f2465143c5b26",
+      "surface": "entities",
+      "text": "Runtime hass.states access"
+    },
+    "entities.reason.search": {
+      "context": "entities.js.reasonIcons: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.reason.config",
+        "entities.reason.excluded",
+        "entities.reason.manual",
+        "entities.reason.runtime"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "13dc33ab0bd9416fad90bd227497493127102b1a2c8032f0d00ab94fd5117174",
+      "surface": "entities",
+      "text": "Catalogue search"
+    },
+    "entities.reset.complete_no_scan": {
+      "context": "entities.js.resetButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 492,
+      "placeholders": [
+        "{scan_action}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.reset.complete_scanning",
+        "entities.reset.confirm",
+        "entities.reset.failed",
+        "entities.reset.resetting"
+      ],
+      "softMaxChars": 277,
+      "sourceHash": "f0198d70c226424f7a78ff65f1545e155230fd732de12e08ed4474cbaf7451c6",
+      "surface": "entities",
+      "text": "Reset complete. Learned evidence, manual overrides, and safety ignore decisions were removed. The current live subscription was retained, but the replacement scan did not start; use {scan_action} to retry."
+    },
+    "entities.reset.complete_scanning": {
+      "context": "entities.js.resetButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 473,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.reset.complete_no_scan",
+        "entities.reset.confirm",
+        "entities.reset.failed",
+        "entities.reset.resetting"
+      ],
+      "softMaxChars": 266,
+      "sourceHash": "0c9fed9e1b5fcde6591508c956e73fb8249ada0f34305d203ebe0298b074dfdf",
+      "surface": "entities",
+      "text": "Reset complete. Learned evidence, manual overrides, and safety ignore decisions were removed. A replacement scan is running; the current live subscription remains in place until that scan succeeds."
+    },
+    "entities.reset.confirm": {
+      "context": "entities.js.resetButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 538,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.reset.complete_no_scan",
+        "entities.reset.complete_scanning",
+        "entities.reset.failed",
+        "entities.reset.resetting"
+      ],
+      "softMaxChars": 303,
+      "sourceHash": "af56ee112e5d4353209106117b9426c18de16a6c7cfc2c2e2db39526d56a1db6",
+      "surface": "entities",
+      "text": "Reset all learned entity evidence, manual pin/exclude overrides, and entity-discovery safety ignore decisions? This cannot be undone. The current live subscription will be kept while a replacement scan rebuilds the evidence."
+    },
+    "entities.reset.failed": {
+      "context": "entities.js.resetButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.reset.complete_no_scan",
+        "entities.reset.complete_scanning",
+        "entities.reset.confirm",
+        "entities.reset.resetting"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "58468d4a827c6964aed84bda2d797fb1ef5d0162ff99b65c9bdcf9489147ca6a",
+      "surface": "entities",
+      "text": "Reset failed."
+    },
+    "entities.reset.resetting": {
+      "context": "entities.js.resetButton: complete action, confirmation, or result sentence; do not translate as a fragment.",
+      "frozen": [],
+      "hardMaxChars": 168,
+      "placeholders": [],
+      "risk": "consequential",
+      "siblings": [
+        "entities.reset.complete_no_scan",
+        "entities.reset.complete_scanning",
+        "entities.reset.confirm",
+        "entities.reset.failed"
+      ],
+      "softMaxChars": 114,
+      "sourceHash": "4245bf2a7c7d1dfb95da35ba88bc5e7dcb1ae69ca3754477666697d1597eca3d",
+      "surface": "entities",
+      "text": "Resetting learned entity data while retaining the current live subscription…"
+    },
+    "entities.row.list_unavailable": {
+      "context": "entities.js.controller.load: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.row.select",
+        "entities.row.showing"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "f1dc90d780c019c794f81449f77ecb6fb57babbe1c43e43045c601c96c7d305a",
+      "surface": "entities",
+      "text": "Entity list unavailable"
+    },
+    "entities.row.option.auto": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.row.option.excluded",
+        "entities.row.option.pinned"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
+      "surface": "entities",
+      "text": "Auto"
+    },
+    "entities.row.option.excluded": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.row.option.auto",
+        "entities.row.option.pinned"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "bef1fd9e5caea8b51aab74a9db1cde99164263ed7d076225d7829faae9737d90",
+      "surface": "entities",
+      "text": "Excluded"
+    },
+    "entities.row.option.pinned": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.row.option.auto",
+        "entities.row.option.excluded"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "f20c879465551f0d1457a13d4390d0f1ece456b115d75463169c5d55341b9b1e",
+      "surface": "entities",
+      "text": "Pinned"
+    },
+    "entities.row.select": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [
+        "{entity_id}"
+      ],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{entity_id}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.row.list_unavailable",
+        "entities.row.showing"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "72bed5ac0bae357fad13ad21f77d72249dba49aefb972e7e131c55751fb827a9",
+      "surface": "entities",
+      "text": "Select {entity_id}"
+    },
+    "entities.row.showing": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 71,
+      "placeholders": [
+        "{start}",
+        "{end}",
+        "{total}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.row.list_unavailable",
+        "entities.row.select"
+      ],
+      "softMaxChars": 48,
+      "sourceHash": "64af6de234a62a3e39742f6bcc4995cb28140f24848ac8ecc53dff6803ee33b4",
+      "surface": "entities",
+      "text": "Showing {start}–{end} of {total}"
+    },
+    "entities.scan.blocked.one": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 483,
+      "placeholders": [
+        "{blocking}",
+        "{stream_count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.scan.blocked.other"
+      ],
+      "softMaxChars": 272,
+      "sourceHash": "03419581172c169e5d109b2d8d4a2c95e69c824ee077ae4a678703cad540ef24",
+      "surface": "entities",
+      "text": "Scan complete: {blocking} entity-discovery safety check needs a choice. Home Assistant and the dashboard are still available; the previous live subscription was retained (entity count: {stream_count})."
+    },
+    "entities.scan.blocked.other": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 483,
+      "placeholders": [
+        "{blocking}",
+        "{stream_count}"
+      ],
+      "risk": "consequential",
+      "siblings": [
+        "entities.scan.blocked.one"
+      ],
+      "softMaxChars": 272,
+      "sourceHash": "c7d400c1aba614c65e828a9c8b803646f29cf74f2475a1258f70874d6f387891",
+      "surface": "entities",
+      "text": "Scan complete: {blocking} entity-discovery safety checks need a choice. Home Assistant and the dashboard are still available; the previous live subscription was retained (entity count: {stream_count})."
+    },
+    "entities.scan.complete_changed": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 288,
+      "placeholders": [
+        "{catalogued}",
+        "{suggested}",
+        "{previous}",
+        "{current}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 168,
+      "sourceHash": "ad27263e800e049ae4fc87cb4a2b4236c6bdc217d5dc695e9df392566c25ee40",
+      "surface": "entities",
+      "text": "Scan complete. Catalogued: {catalogued}; suggested: {suggested}. Live subscription before: {previous}; after: {current}."
+    },
+    "entities.scan.complete_unchanged": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 264,
+      "placeholders": [
+        "{catalogued}",
+        "{suggested}",
+        "{current}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 154,
+      "sourceHash": "700d9dd54f5cbdb25b1daf336f7ac7afc0bd5713f4e109c8065af376a65b2033",
+      "surface": "entities",
+      "text": "Scan complete. Catalogued: {catalogued}; suggested: {suggested}. Live subscription count unchanged: {current}."
+    },
+    "entities.scan.failed": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "b0daf47f06fda541769b292ad485375f029e47f9f4ac708df8accba0daf5ef5e",
+      "surface": "entities",
+      "text": "Scan failed."
+    },
+    "entities.scan.finished_error": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 176,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 103,
+      "sourceHash": "7112692ae0bd8d7fd7f21d93f15c637cbabe8415f6f733de191ac7d10bec86e4",
+      "surface": "entities",
+      "text": "Scan finished with an error. The previous live subscription was retained."
+    },
+    "entities.scan.start_failed": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 32,
+      "sourceHash": "067b6083c50d5f164647851df7663b034faf208178b3425392e1b057be627523",
+      "surface": "entities",
+      "text": "Scan failed to start."
+    },
+    "entities.scan.starting": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [
+        "HA"
+      ],
+      "hardMaxChars": 279,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.status_unavailable",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 163,
+      "sourceHash": "b9d9942984c51d0d893c364fb1e4233d89f172b7edcb4ac83280d055e079cf5d",
+      "surface": "entities",
+      "text": "Scanning the HA catalogue and dashboard; the live subscription changes only if enabled policy finds a different set."
+    },
+    "entities.scan.status_unavailable": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 113,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.still_running"
+      ],
+      "softMaxChars": 77,
+      "sourceHash": "c3fa6d30fee125868b8fd0827d7c8bf632a2f7cb4320f4c4e81e2182f4ffc1e4",
+      "surface": "entities",
+      "text": "Scan could not start because status is unavailable."
+    },
+    "entities.scan.still_running": {
+      "context": "entities.js.syncButton: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 142,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.scan.complete_changed",
+        "entities.scan.complete_unchanged",
+        "entities.scan.failed",
+        "entities.scan.finished_error",
+        "entities.scan.start_failed",
+        "entities.scan.starting",
+        "entities.scan.status_unavailable"
+      ],
+      "softMaxChars": 83,
+      "sourceHash": "51b0e7bee9d55f665313c9c424bfa6f481d09d04cba3f63c144a1990111a0d1f",
+      "surface": "entities",
+      "text": "Scan is still running; status will continue updating above."
+    },
+    "entities.search.label": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 113,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.matches",
+        "entities.search.none",
+        "entities.search.placeholder",
+        "entities.search.searching",
+        "entities.search.unavailable"
+      ],
+      "softMaxChars": 77,
+      "sourceHash": "6f3f6170916d16fad7cc021410078ae6689e43c069cb2fd760340ae30bde82d1",
+      "surface": "entities",
+      "text": "Search the complete Home Assistant entity catalogue"
+    },
+    "entities.search.matches": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{sections}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.label",
+        "entities.search.none",
+        "entities.search.placeholder",
+        "entities.search.searching",
+        "entities.search.unavailable"
+      ],
+      "softMaxChars": 29,
+      "sourceHash": "2b94cb5ba04de4b7233f1feb8761e6ae5b1cae43d17370adb806ae1d201e06a9",
+      "surface": "entities",
+      "text": "Matches: {sections}"
+    },
+    "entities.search.none": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 66,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.label",
+        "entities.search.matches",
+        "entities.search.placeholder",
+        "entities.search.searching",
+        "entities.search.unavailable"
+      ],
+      "softMaxChars": 45,
+      "sourceHash": "7fa34193a602bcd2faf0e35d3b664e873f5c32f3a6d77ba3a92e3b3a2ef1313c",
+      "surface": "entities",
+      "text": "No entities match this search."
+    },
+    "entities.search.placeholder": {
+      "context": "PaneldServer.entitiesBody: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 113,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.label",
+        "entities.search.matches",
+        "entities.search.none",
+        "entities.search.searching",
+        "entities.search.unavailable"
+      ],
+      "softMaxChars": 77,
+      "sourceHash": "6f3f6170916d16fad7cc021410078ae6689e43c069cb2fd760340ae30bde82d1",
+      "surface": "entities",
+      "text": "Search the complete Home Assistant entity catalogue"
+    },
+    "entities.search.searching": {
+      "context": "entities.js.search input handler: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.label",
+        "entities.search.matches",
+        "entities.search.none",
+        "entities.search.placeholder",
+        "entities.search.unavailable"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "c31723ab330289fe2cc4c7b69b7a862361da79a01f84893dc7b89a6de0ab4b42",
+      "surface": "entities",
+      "text": "Searching…"
+    },
+    "entities.search.section.current.one": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.current.other"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "d384ac45ce0f2b125e013adc71bfb7122ed67ebcea3e4ce68b9677b5589fdc14",
+      "surface": "entities",
+      "text": "Current: {count}"
+    },
+    "entities.search.section.current.other": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.current.one"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "d384ac45ce0f2b125e013adc71bfb7122ed67ebcea3e4ce68b9677b5589fdc14",
+      "surface": "entities",
+      "text": "Current: {count}"
+    },
+    "entities.search.section.review.one": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.review.other"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "eac19c77161713b1492321e03c87ee4fb7c6454630bf1c9c750f4a493877e672",
+      "surface": "entities",
+      "text": "Stale or noisy: {count}"
+    },
+    "entities.search.section.review.other": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.review.one"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "eac19c77161713b1492321e03c87ee4fb7c6454630bf1c9c750f4a493877e672",
+      "surface": "entities",
+      "text": "Stale or noisy: {count}"
+    },
+    "entities.search.section.suggested.one": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.suggested.other"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "4da5692994ee5ab2bba5a0f6577aead078a33e0e7a651f20ad010440427bca1e",
+      "surface": "entities",
+      "text": "Suggested: {count}"
+    },
+    "entities.search.section.suggested.other": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.section.suggested.one"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "4da5692994ee5ab2bba5a0f6577aead078a33e0e7a651f20ad010440427bca1e",
+      "surface": "entities",
+      "text": "Suggested: {count}"
+    },
+    "entities.search.unavailable": {
+      "context": "entities.js.finishQuery: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 95,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.search.label",
+        "entities.search.matches",
+        "entities.search.none",
+        "entities.search.placeholder",
+        "entities.search.searching"
+      ],
+      "softMaxChars": 65,
+      "sourceHash": "4b3ba5c7298eca7a01609d94e15c0a419666d4ccb08cecad197914c3a70060f3",
+      "surface": "entities",
+      "text": "Search results are temporarily unavailable."
+    },
+    "entities.selection.count": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.selection.none"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "529aacfdfd2b17bf9fe56ebad9a24339a2d1151327dd420c52c5f163aeb9acc6",
+      "surface": "entities",
+      "text": "{count} selected"
+    },
+    "entities.selection.none": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.selection.count"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "08ff49a1bdcabb879ea94b5fc23fe9dbe1f16d7dc439e750d0a3e17305b26e2f",
+      "surface": "entities",
+      "text": "0 selected"
+    },
+    "entities.status.blocking.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 100,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.blocking.other"
+      ],
+      "softMaxChars": 68,
+      "sourceHash": "14cf999d8b639e7fc1390538f8117a92c0a3436ac9ab7a052e6f6f1b6ba2dece",
+      "surface": "entities",
+      "text": "{count} entity-discovery check needs a choice"
+    },
+    "entities.status.blocking.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 100,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.blocking.one"
+      ],
+      "softMaxChars": 68,
+      "sourceHash": "2df4c15d7988abf1fa67cf9b39e6b2828948e33f5311e77028c60a926226c5db",
+      "surface": "entities",
+      "text": "{count} entity-discovery checks need a choice"
+    },
+    "entities.status.catalogued.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 56,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.catalogued.other"
+      ],
+      "softMaxChars": 38,
+      "sourceHash": "f017981ee76a4067b833de4fc9743c4e2335a6f272e9fbb674dab295ad4906d2",
+      "surface": "entities",
+      "text": "{count} catalogued entity"
+    },
+    "entities.status.catalogued.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 60,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.catalogued.one"
+      ],
+      "softMaxChars": 41,
+      "sourceHash": "beb4ecc4010756bf5df4da04a2dedafeec7bea7be812c94d9919f568b74b6856",
+      "surface": "entities",
+      "text": "{count} catalogued entities"
+    },
+    "entities.status.database": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [
+        "DB"
+      ],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{size}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.last_scan",
+        "entities.status.unavailable",
+        "entities.status.unfiltered",
+        "entities.status.unresolved_help"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "ef7d5592d195b8a7e08f7058952b3e905071ec3fcb182b607fa508481bd834b1",
+      "surface": "entities",
+      "text": "DB {size}"
+    },
+    "entities.status.ignored.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 62,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.ignored.other"
+      ],
+      "softMaxChars": 42,
+      "sourceHash": "42a93b43aac443ee2e2cd5dd61690c5b349391d86e5b2d01a238fca1894fb05f",
+      "surface": "entities",
+      "text": "{count} safety check ignored"
+    },
+    "entities.status.ignored.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 64,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.ignored.one"
+      ],
+      "softMaxChars": 44,
+      "sourceHash": "870bd8ae5103ec2ef878612baf57627816ff56cbb8b26c0b327f848213d9a81b",
+      "surface": "entities",
+      "text": "{count} safety checks ignored"
+    },
+    "entities.status.last_scan": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [
+        "{age}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.database",
+        "entities.status.unavailable",
+        "entities.status.unfiltered",
+        "entities.status.unresolved_help"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "b70b794e055dc60c640d84eb53ec08456348f4f8d25de12f07ebf9143c817917",
+      "surface": "entities",
+      "text": "last scan {age}"
+    },
+    "entities.status.state.active": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.state.blocked",
+        "entities.status.state.degraded",
+        "entities.status.state.disabled",
+        "entities.status.state.learning",
+        "entities.status.state.observing",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "surface": "entities",
+      "text": "active"
+    },
+    "entities.status.state.blocked": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.degraded",
+        "entities.status.state.disabled",
+        "entities.status.state.learning",
+        "entities.status.state.observing",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "6973dddd3ef9cb6a2932702f31777faad9c9bf3124d147a84f31aadb6d139546",
+      "surface": "entities",
+      "text": "blocked"
+    },
+    "entities.status.state.degraded": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.blocked",
+        "entities.status.state.disabled",
+        "entities.status.state.learning",
+        "entities.status.state.observing",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "3c8cab8b47d6d0ac0e1bb0a3c209b836f5cf1a61e851626dc7a5d7f011a7e5dd",
+      "surface": "entities",
+      "text": "degraded"
+    },
+    "entities.status.state.disabled": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.blocked",
+        "entities.status.state.degraded",
+        "entities.status.state.learning",
+        "entities.status.state.observing",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "surface": "entities",
+      "text": "disabled"
+    },
+    "entities.status.state.learning": {
+      "context": "entities.js closed status map: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.blocked",
+        "entities.status.state.degraded",
+        "entities.status.state.disabled",
+        "entities.status.state.observing",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "edd95740e339e6aa0a1dab45741b0521185680b051631a7c265b5630da4f2158",
+      "surface": "entities",
+      "text": "learning"
+    },
+    "entities.status.state.observing": {
+      "context": "entities.js closed status map: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.blocked",
+        "entities.status.state.degraded",
+        "entities.status.state.disabled",
+        "entities.status.state.learning",
+        "entities.status.state.synchronizing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "a08c21fc7b1d10ef3cbe5ec065f0450a983920923841a9993a5192b8e448d332",
+      "surface": "entities",
+      "text": "observing"
+    },
+    "entities.status.state.synchronizing": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.state.active",
+        "entities.status.state.blocked",
+        "entities.status.state.degraded",
+        "entities.status.state.disabled",
+        "entities.status.state.learning",
+        "entities.status.state.observing"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "644b72e97de001b8a0e917dde5dc058c35ccf9657b728560604cbcca6ab4f2b4",
+      "surface": "entities",
+      "text": "synchronizing"
+    },
+    "entities.status.stream.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 75,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.stream.other"
+      ],
+      "softMaxChars": 51,
+      "sourceHash": "fab02429d470d355fdcfe09f2d67dbd0803c09cd93e27959ec1d38775949c141",
+      "surface": "entities",
+      "text": "{count} entity actively subscribed"
+    },
+    "entities.status.stream.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 80,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.stream.one"
+      ],
+      "softMaxChars": 54,
+      "sourceHash": "9250b45af2f1f5d7621031270cf48938c21e3405dd745198d1393dab7f8ff74f",
+      "surface": "entities",
+      "text": "{count} entities actively subscribed"
+    },
+    "entities.status.suggested.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 53,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.suggested.other"
+      ],
+      "softMaxChars": 36,
+      "sourceHash": "c64e06e6f7f45df746eef51b105ed7e05406e3ca8a080781e2a37ed648462242",
+      "surface": "entities",
+      "text": "{count} suggested entity"
+    },
+    "entities.status.suggested.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 58,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.suggested.one"
+      ],
+      "softMaxChars": 39,
+      "sourceHash": "6cc58f9eab9d7af7c25bf336f59c7e59f43ad133b312e93047f81718c989d718",
+      "surface": "entities",
+      "text": "{count} suggested entities"
+    },
+    "entities.status.unavailable": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.database",
+        "entities.status.last_scan",
+        "entities.status.unfiltered",
+        "entities.status.unresolved_help"
+      ],
+      "softMaxChars": 27,
+      "sourceHash": "7eb5af92e49c32f0e22097bda3e39b3b9b3bcdeb80d5c278b5d74504b96c2beb",
+      "surface": "entities",
+      "text": "Status unavailable"
+    },
+    "entities.status.unfiltered": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.database",
+        "entities.status.last_scan",
+        "entities.status.unavailable",
+        "entities.status.unresolved_help"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "4caa06bd0e89b1695f9533cb586443232dad216ffd525dcc1a628c844b9e80a4",
+      "surface": "entities",
+      "text": "unfiltered"
+    },
+    "entities.status.unresolved.one": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 115,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.unresolved.other"
+      ],
+      "softMaxChars": 78,
+      "sourceHash": "5869b0f7a09f12dc041dc0ef1ee91ef7752b27df3d1b7247963c6b20fb75df36",
+      "surface": "entities",
+      "text": "{count} dynamic expression not statically resolvable"
+    },
+    "entities.status.unresolved.other": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 117,
+      "placeholders": [
+        "{count}"
+      ],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.status.unresolved.one"
+      ],
+      "softMaxChars": 80,
+      "sourceHash": "fa1b0937dbba2a47e90b136e8fc590c885db91b38e54d326969ef92d51c32b79",
+      "surface": "entities",
+      "text": "{count} dynamic expressions not statically resolvable"
+    },
+    "entities.status.unresolved_help": {
+      "context": "entities.js.loadStatus: live entity-learning status; unknown wire values remain exact fallbacks.",
+      "frozen": [],
+      "hardMaxChars": 812,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.status.database",
+        "entities.status.last_scan",
+        "entities.status.unavailable",
+        "entities.status.unfiltered"
+      ],
+      "softMaxChars": 457,
+      "sourceHash": "f6b1ac744a4fa93aa65ce3bbc3642a8f702205578cd332e0abee79505c11dbe7",
+      "surface": "entities",
+      "text": "Static scanning could not map these dynamic templates or custom-card expressions to exact entity IDs. Concrete IDs later observed at runtime are persisted, then automatically subscribed or shown under Suggested according to the runtime promotion policy. This count describes source expressions and does not count down as IDs are observed."
+    },
+    "entities.table.accesses": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "7d4a688a59a544ddd7d6c707c7502e4ab269c827a8ac6356ec17eb85ec9c843a",
+      "surface": "entities",
+      "text": "Accesses"
+    },
+    "entities.table.bytes_per_second": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [
+        "B/s"
+      ],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "23756ccc7b8443f972f6067e26b19a63720e866c2d9a61cebf87e6299791da2c",
+      "surface": "entities",
+      "text": "B/s"
+    },
+    "entities.table.current.note": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 262,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.current.short",
+        "entities.table.current.title"
+      ],
+      "softMaxChars": 153,
+      "sourceHash": "0c8dd97ec030e664742241d19cd0d8adda3a51351139a3b1b69a9ef4cb008315",
+      "surface": "entities",
+      "text": "The entities in the live Home Assistant stream. An unfiltered stream contains the complete visible catalogue."
+    },
+    "entities.table.current.short": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.current.note",
+        "entities.table.current.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "e0d1b68224bf0b31ef16b206c65b5f8f6b89d18161f4a7cdcb8d0ac8d952549a",
+      "surface": "entities",
+      "text": "Current"
+    },
+    "entities.table.current.title": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 60,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.current.note",
+        "entities.table.current.short"
+      ],
+      "softMaxChars": 41,
+      "sourceHash": "93755f5c4733b3a132568d16344df091cb08136634f73a302c6f02c0c898930d",
+      "surface": "entities",
+      "text": "Current subscribed entities"
+    },
+    "entities.table.data_rate": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "2a5676396d22229d6c4305d01ce6a02a61fedc1d67b51150271ad45f7e63412d",
+      "surface": "entities",
+      "text": "Data rate"
+    },
+    "entities.table.entity": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "2ed3bb60c9af04774f0ea421f81bd64e65083c969a43360c5887b6e17d050794",
+      "surface": "entities",
+      "text": "Entity"
+    },
+    "entities.table.last_access": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "9d665a8e91f76c7ca97abe4a7c7669afe2c5bd860e07b952db8323722428caa0",
+      "surface": "entities",
+      "text": "Last access"
+    },
+    "entities.table.override": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.period_tooltip",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "43bc0f5fc035108f88cb7436ade1a103b0c710ba82c733cb5835a2b89dc4568f",
+      "surface": "entities",
+      "text": "Override"
+    },
+    "entities.table.period_tooltip": {
+      "context": "entities.js.render: visible Entities page copy.",
+      "frozen": [
+        "1"
+      ],
+      "hardMaxChars": 56,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.reason",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 38,
+      "sourceHash": "1a82de57b7f3ed2e18f6f12276c4934b7e81d4aca0955bec5b84cd8dac795fba",
+      "surface": "entities",
+      "text": "1 minute / 1 hour / 1 day"
+    },
+    "entities.table.reason": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.select_page"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "f81ab834de5f84918dc040b884267c2b61cb1a52d46442de10e97f35a94d0500",
+      "surface": "entities",
+      "text": "Reason"
+    },
+    "entities.table.review.note": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 677,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.table.review.short",
+        "entities.table.review.title"
+      ],
+      "softMaxChars": 381,
+      "sourceHash": "96035cee159d53cfff753798302c0d73e6ff3552be2aca08d4003359264efbbe",
+      "surface": "entities",
+      "text": "Current-stream entities missing from Home Assistant, receiving updates without being observed as dashboard dependencies, or pinned by hand without this dashboard using them. Review only; a manual pin or exclusion is never removed automatically — unpin it here when you want it gone."
+    },
+    "entities.table.review.short": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.review.note",
+        "entities.table.review.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "b6ebdcc3e50028da6dcfbf35b31253230c1c685e4ec86caa2219cd8672a6b0d9",
+      "surface": "entities",
+      "text": "Stale or noisy"
+    },
+    "entities.table.review.title": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 51,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.review.note",
+        "entities.table.review.short"
+      ],
+      "softMaxChars": 35,
+      "sourceHash": "ef849b2d560b2580b6e2c8f52ba6175512f93bbd93665d493307f40f55e59268",
+      "surface": "entities",
+      "text": "Stale or noisy entities"
+    },
+    "entities.table.select_page": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.accesses",
+        "entities.table.bytes_per_second",
+        "entities.table.data_rate",
+        "entities.table.entity",
+        "entities.table.last_access",
+        "entities.table.override",
+        "entities.table.period_tooltip",
+        "entities.table.reason"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "80796358926c43086751a9de59ca57f9060de6678bf656840aed33656a6a8cba",
+      "surface": "entities",
+      "text": "Select this page"
+    },
+    "entities.table.suggested.note": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [
+        "Home Assistant"
+      ],
+      "hardMaxChars": 608,
+      "placeholders": [],
+      "risk": "setup",
+      "siblings": [
+        "entities.table.suggested.short",
+        "entities.table.suggested.title"
+      ],
+      "softMaxChars": 342,
+      "sourceHash": "8cb1def2d1fb025f4c38cad0b8291d8cdf333f26d5b27ba1e5e723903e3ebc2a",
+      "surface": "entities",
+      "text": "Unpinned dashboard references and runtime lookups that are not currently subscribed. Excluded entities remain visible when the dashboard still uses them. While searching, this table also shows unpinned matches from the complete Home Assistant catalogue."
+    },
+    "entities.table.suggested.short": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 48,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.suggested.note",
+        "entities.table.suggested.title"
+      ],
+      "softMaxChars": 24,
+      "sourceHash": "93b63bab4c3a28d73a8bb83bcdfdcc5f6ddecfc8fc702296ca159d94c5dc6e53",
+      "surface": "entities",
+      "text": "Suggested"
+    },
+    "entities.table.suggested.title": {
+      "context": "PaneldServer.entityTableHtml: visible Entities page copy.",
+      "frozen": [],
+      "hardMaxChars": 62,
+      "placeholders": [],
+      "risk": "ordinary",
+      "siblings": [
+        "entities.table.suggested.note",
+        "entities.table.suggested.short"
+      ],
+      "softMaxChars": 42,
+      "sourceHash": "116d030af30a47c77e4b40b6783fbab3837e71cf38b5c7b3d5408ac7f9cd3831",
+      "surface": "entities",
+      "text": "Suggested dashboard entities"
+    },
     "fleet.note.direct": {
       "text": "For now, open another panel directly at",
       "sourceHash": "e1c2a22afad5337db44569d030a1c44a11da9827b984f1860ccf0c9a933810f3",
