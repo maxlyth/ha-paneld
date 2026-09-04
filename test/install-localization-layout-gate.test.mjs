@@ -151,8 +151,8 @@ test('Install layout fixture stays bound to production dynamic surfaces', async 
   assert.match(power, /data-power-safety-(?:repair|acknowledge)/, 'production power-safety interaction remains bound');
 });
 
-const browserTest = existsSync(CHROME) ? test : test.skip;
-browserTest('Install dynamic states fit every release locale, theme and target viewport', { timeout: 240_000 }, async (t) => {
+test('Install dynamic states fit every release locale, theme and target viewport', { timeout: 240_000 }, async (t) => {
+  assert.ok(existsSync(CHROME), `required Chromium executable is missing: ${CHROME}`);
   const server = await startServer();
   const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
   t.after(async () => { await browser.close(); await new Promise((done) => server.close(done)); });
