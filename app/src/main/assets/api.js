@@ -72,11 +72,6 @@
       "api.approval.conditional",
       "Some request values require physical on-panel approval when Hardened mode is enabled; other values may be ordinary or unavailable."
     );
-    text(
-      "api-approval-key",
-      "shell.hardened.key",
-      "Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely."
-    );
   }
 
   function requestBody(operation) {
@@ -146,6 +141,11 @@
         root.appendChild(endpoint(entry.path, entry.method, entry.operation));
       });
     });
+    text(
+      "api-approval-key",
+      "shell.hardened.key",
+      "Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely."
+    );
   }
 
   function endpoint(path, method, operation) {
