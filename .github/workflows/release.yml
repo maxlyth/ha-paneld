@@ -66,6 +66,65 @@ jobs:
           fi
           echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
+      - name: Validate release catalogue provenance
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def fail(message):
+              raise SystemExit(f"::error::{message}")
+
+          def git(*arguments):
+              return subprocess.run(
+                  ["git", *arguments], check=True, capture_output=True, text=True
+              ).stdout.strip()
+
+          def unique_object(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      fail("Release catalogue contains a duplicate JSON key.")
+                  result[key] = value
+              return result
+
+          try:
+              if git("rev-parse", "--is-shallow-repository") != "false":
+                  fail("Release catalogue provenance requires full Git history.")
+              source_commit = os.environ.get("SOURCE_COMMIT", "")
+              if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or source_commit != git("rev-parse", "HEAD"):
+                  fail("Release catalogue source binding is invalid.")
+              directory = Path("app/src/main/assets/i18n")
+              expected = ["de.json", "en.json", "es.json", "fr.json", "it.json", "zh-Hans.json"]
+              paths = sorted(directory.glob("*.json"))
+              if [path.name for path in paths] != expected:
+                  fail("Release catalogue files do not match the supported locales.")
+              revisions = set()
+              for path in paths:
+                  catalogue = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+                  revision = catalogue.get("sourceRevision") if isinstance(catalogue, dict) else None
+                  if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+                      fail("Release catalogue source revision is not one full commit SHA.")
+                  revisions.add(revision)
+              if len(revisions) != 1:
+                  fail("Release catalogues do not share one source revision.")
+              revision = revisions.pop()
+              if git("cat-file", "-t", revision) != "commit":
+                  fail("Release catalogue source revision does not name a commit.")
+              ancestry = subprocess.run(
+                  ["git", "merge-base", "--is-ancestor", revision, source_commit],
+                  check=False, capture_output=True,
+              )
+              if ancestry.returncode != 0:
+                  fail("Release catalogue source revision is not an ancestor of the release source.")
+          except (OSError, ValueError, RecursionError, subprocess.SubprocessError):
+              fail("Unable to inspect release catalogue provenance.")
+          print("Release catalogue provenance verified.")
+          PY
+
       - name: Test release workflow contracts
         run: scripts/tests/release_workflow_test.sh
 

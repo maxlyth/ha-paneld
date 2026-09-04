@@ -269,6 +269,167 @@ else
   fail_test "both parallel jobs validate and bind the same release source"
 fi
 
+if python3 - "$WORKFLOW" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+lines = Path(sys.argv[1]).read_text().splitlines()
+name = "      - name: Validate release catalogue provenance"
+assert lines.count(name) == 1
+start = lines.index("  verify:")
+end = next(index for index in range(start + 1, len(lines)) if re.fullmatch(r"  [\w-]+:", lines[index]))
+verify = lines[start:end]
+assert not any(re.match(r"    (?:if|continue-on-error):", line) for line in verify)
+starts = [index for index, line in enumerate(verify) if line.startswith("      - ")]
+blocks = [verify[left:right] for left, right in zip(starts, [*starts[1:], len(verify)])]
+gate_index = next(index for index, block in enumerate(blocks) if block[0] == name)
+gate = blocks[gate_index]
+assert "        run: |" in gate
+assert not any(re.match(r"        (?:if|continue-on-error):", line) for line in gate)
+checkout = [block for block in blocks[:gate_index] if "uses: actions/checkout@" in block[0]]
+assert len(checkout) == 1 and "          fetch-depth: 0" in checkout[0]
+assert not any(re.match(r"        (?:if|continue-on-error):", line) for line in checkout[0])
+assert any(block[0] == "      - name: Validate release tag and source commit" for block in blocks[:gate_index])
+poll_index = next(index for index, block in enumerate(blocks) if block[0] == "      - name: Require clean integrated checks for the source commit")
+assert gate_index < poll_index
+before_gate_end = "\n".join(verify[:starts[gate_index] + len(gate)])
+assert not re.search(r"\$\{\{\s*(?:secrets\.|github\.token)|\bGH_TOKEN:", before_gate_end)
+PY
+then
+  pass "release catalogue provenance is one unconditional full-history verify gate before credentials and polling"
+else
+  fail_test "release catalogue provenance is one unconditional full-history verify gate before credentials and polling"
+fi
+
+provenance_step="$TMP/provenance-step.sh"
+extract_named_step 'Validate release catalogue provenance' > "$provenance_step"
+provenance_seed="$TMP/provenance-seed"
+git -c init.defaultBranch=main init --quiet --template= "$provenance_seed"
+provenance_git() {
+  git -C "$provenance_seed" -c user.name='Release contract test' \
+    -c user.email=release-contract@example.invalid -c commit.gpgSign=false \
+    -c tag.gpgSign=false -c core.hooksPath=/dev/null "$@"
+}
+provenance_blob=$(printf 'catalogue fixture\n' | provenance_git hash-object -w --stdin)
+provenance_tree=$(printf '100644 blob %s\tfixture\n' "$provenance_blob" | provenance_git mktree)
+provenance_ancestor=$(provenance_git commit-tree "$provenance_tree" -m 'Catalogue ancestor')
+provenance_second=$(provenance_git commit-tree "$provenance_tree" -p "$provenance_ancestor" -m 'Second ancestor')
+provenance_source=$(provenance_git commit-tree "$provenance_tree" -p "$provenance_second" -m 'Release source')
+provenance_descendant=$(provenance_git commit-tree "$provenance_tree" -p "$provenance_source" -m 'Later commit')
+provenance_unrelated=$(provenance_git commit-tree "$provenance_tree" -m 'Unrelated history')
+provenance_git update-ref refs/heads/main "$provenance_source"
+provenance_git tag -a catalogue-source "$provenance_ancestor" -m 'Annotated catalogue source'
+provenance_tag=$(provenance_git rev-parse refs/tags/catalogue-source)
+provenance_real_git=$(command -v git)
+
+make_provenance_case() {
+  provenance_case="$TMP/provenance-$1"
+  cp -a "$provenance_seed" "$provenance_case"
+  provenance_catalogues="$provenance_case/app/src/main/assets/i18n"
+  mkdir -p "$provenance_catalogues"
+  for locale in de en es fr it zh-Hans; do
+    printf '{"sourceRevision":"%s"}\n' "$2" > "$provenance_catalogues/$locale.json"
+  done
+}
+
+check_provenance_case() {
+  local label="$1" expected_error="$2" source_binding="${3-$provenance_source}" status=0
+  (
+    cd "$provenance_case" || exit 2
+    SOURCE_COMMIT="$source_binding" PATH="$provenance_case/mock-bin:$PATH" \
+      timeout 10s bash -e "$provenance_step"
+  ) > "$provenance_case/output.log" 2>&1 || status=$?
+  if { [ -z "$expected_error" ] && [ "$status" -eq 0 ] && \
+       grep -Fxq 'Release catalogue provenance verified.' "$provenance_case/output.log" && \
+       ! grep -Fq '::error::' "$provenance_case/output.log"; } || \
+     { [ -n "$expected_error" ] && [ "$status" -eq 1 ] && \
+       grep -Fxq "::error::$expected_error" "$provenance_case/output.log" && \
+       ! grep -Fq 'Release catalogue provenance verified.' "$provenance_case/output.log"; }; then
+    pass "release catalogue provenance $label"
+  else
+    sed -n '1,20p' "$provenance_case/output.log" >&2
+    fail_test "release catalogue provenance $label"
+  fi
+}
+
+make_provenance_case valid "$provenance_ancestor"
+check_provenance_case 'accepts a valid ancestor' ''
+make_provenance_case differing "$provenance_ancestor"
+printf '{"sourceRevision":"%s"}\n' "$provenance_second" > "$provenance_catalogues/de.json"
+check_provenance_case 'rejects differing valid ancestors' 'Release catalogues do not share one source revision.'
+
+for revision_case in missing abbreviated symbolic nonstring invalid duplicate; do
+  make_provenance_case "$revision_case" "$provenance_ancestor"
+  expected_error='Release catalogue source revision is not one full commit SHA.'
+  case "$revision_case" in
+    missing) printf '{}\n' > "$provenance_catalogues/de.json"; label='rejects missing revision' ;;
+    abbreviated) printf '{"sourceRevision":"%.12s"}\n' "$provenance_ancestor" > "$provenance_catalogues/de.json"; label='rejects abbreviated revision' ;;
+    symbolic) printf '{"sourceRevision":"HEAD~1"}\n' > "$provenance_catalogues/de.json"; label='rejects symbolic revision' ;;
+    nonstring) printf '{"sourceRevision":123}\n' > "$provenance_catalogues/de.json"; label='rejects nonstring revision' ;;
+    invalid) printf '{invalid\n' > "$provenance_catalogues/de.json"; label='rejects invalid JSON'; expected_error='Unable to inspect release catalogue provenance.' ;;
+    duplicate) printf '{"sourceRevision":"%s","sourceRevision":"%s"}\n' "$provenance_ancestor" "$provenance_ancestor" > "$provenance_catalogues/de.json"; label='rejects duplicate JSON key'; expected_error='Release catalogue contains a duplicate JSON key.' ;;
+  esac
+  if [ "$revision_case" = abbreviated ] || [ "$revision_case" = symbolic ]; then
+    for locale in en es fr it zh-Hans; do
+      cp "$provenance_catalogues/de.json" "$provenance_catalogues/$locale.json"
+    done
+  fi
+  check_provenance_case "$label" "$expected_error"
+done
+
+make_provenance_case missing-catalogue "$provenance_ancestor"
+mv "$provenance_catalogues/de.json" "$provenance_case/de.json"
+check_provenance_case 'rejects missing catalogue' 'Release catalogue files do not match the supported locales.'
+make_provenance_case extra-catalogue "$provenance_ancestor"
+cp "$provenance_catalogues/de.json" "$provenance_catalogues/nl.json"
+check_provenance_case 'rejects extra catalogue' 'Release catalogue files do not match the supported locales.'
+
+for object_case in missing blob tree tag unrelated descendant; do
+  expected_error='Release catalogue source revision does not name a commit.'
+  case "$object_case" in
+    missing) revision=0000000000000000000000000000000000000000; label='rejects missing object'; expected_error='Unable to inspect release catalogue provenance.' ;;
+    blob) revision="$provenance_blob"; label='rejects blob object' ;;
+    tree) revision="$provenance_tree"; label='rejects tree object' ;;
+    tag) revision="$provenance_tag"; label='rejects annotated tag object' ;;
+    unrelated) revision="$provenance_unrelated"; label='rejects unrelated commit'; expected_error='Release catalogue source revision is not an ancestor of the release source.' ;;
+    descendant) revision="$provenance_descendant"; label='rejects descendant commit'; expected_error='Release catalogue source revision is not an ancestor of the release source.' ;;
+  esac
+  make_provenance_case "$object_case-object" "$revision"
+  check_provenance_case "$label" "$expected_error"
+done
+
+# Keep the named ancestor object available so only the shallow-history guard rejects this case.
+make_provenance_case shallow "$provenance_source"
+printf '%s\n' "$provenance_source" > "$provenance_case/.git/shallow"
+check_provenance_case 'rejects shallow history' 'Release catalogue provenance requires full Git history.'
+
+for git_error in inspection ancestry; do
+  make_provenance_case "git-$git_error" "$provenance_ancestor"
+  mkdir -p "$provenance_case/mock-bin"
+  if [ "$git_error" = inspection ]; then
+    git_command=cat-file
+    expected_error='Unable to inspect release catalogue provenance.'
+  else
+    git_command=merge-base
+    expected_error='Release catalogue source revision is not an ancestor of the release source.'
+  fi
+  printf '#!/usr/bin/env bash\nif [ "$1" = "%s" ]; then exit 128; fi\nexec "%s" "$@"\n' \
+    "$git_command" "$provenance_real_git" > "$provenance_case/mock-bin/git"
+  chmod +x "$provenance_case/mock-bin/git"
+  check_provenance_case "fails closed on Git $git_error error" "$expected_error"
+done
+
+for binding_case in missing malformed mismatched; do
+  make_provenance_case "binding-$binding_case" "$provenance_ancestor"
+  case "$binding_case" in
+    missing) source_binding='' ;;
+    malformed) source_binding=HEAD ;;
+    mismatched) source_binding="$provenance_descendant" ;;
+  esac
+  check_provenance_case "rejects $binding_case source binding" 'Release catalogue source binding is invalid.' "$source_binding"
+done
+
 descriptor_step="$(extract_named_step 'Generate bounded install descriptor without release credentials')"
 proof_step="$(extract_named_step 'Sign and authenticate release proofs')"
 final_step="$(extract_named_step 'Final exact verification before publication')"
