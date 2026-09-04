@@ -36,7 +36,7 @@
     "api.intro.live": {
       "sourceHash": "4c6b19a324019c78cd5ff3eccf1f1ecfa7bcab532ec28603dc5c378f28f85fb0",
       "state": "machine-cross-checked",
-      "text": "Esploratore API disponibile direttamente sul pannello."
+      "text": "Esploratore API in tempo reale direttamente sul pannello."
     },
     "api.intro.network": {
       "sourceHash": "e7668612168c85895e82396278494d86417ce8ea9a061693d39cdc18638abff6",

@@ -162,8 +162,8 @@ test('API Explorer layout gate remains bound to the production frame, runtime an
   EXPANDED_ENDPOINTS.forEach(({ path, method }) => assert.ok(paths[path]?.[method.toLowerCase()], `production OpenAPI specification lost ${method} ${path}`));
 });
 
-const layoutTest = existsSync(CHROME) ? test : test.skip;
-layoutTest('API Explorer fits every release locale and theme at narrow and wide widths', { timeout: 180_000 }, async (t) => {
+test('API Explorer fits every release locale and theme at narrow and wide widths', { timeout: 180_000 }, async (t) => {
+  assert.ok(existsSync(CHROME), `Chromium is required for the API Explorer layout gate: ${CHROME}`);
   const catalogues = new Map(await Promise.all(LOCALES.map(async (locale) => [
     locale, JSON.parse(await readFile(resolve(ASSETS, `i18n/${locale}.json`), 'utf8')),
   ])));
