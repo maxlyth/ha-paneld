@@ -6654,7 +6654,7 @@
       "state": "machine-cross-checked"
     },
     "install.status.companion_url_missing.other": {
-      "text": "⚠ Home Assistant Companion n’a pas d’URL interne pour {count} serveurs — le tableau de bord peut échouer avec « Missing 'Host' header ». Corrigez leurs URL internes dans l’onglet Installer.",
+      "text": "⚠ Home Assistant Companion n’a pas d’URL interne pour {count} serveurs — le tableau de bord peut échouer avec « Missing 'Host' header ». Corrigez-les dans l’onglet Installer.",
       "sourceHash": "0e438c28f54290449d21614ea11cf55a5fee35079ca10181de7174535f670dc5",
       "state": "machine-cross-checked"
     },
