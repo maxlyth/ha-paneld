@@ -115,7 +115,7 @@ Reset removes settings, learned entity data, proximity and ambient history, and 
 
 Fleet updates refuse `--reset-config`. Reset panels one at a time.
 
-The CLI `--restore FILE` option imports a config JSON export and requires Python 3 on the computer running the installer. It does not accept an `.hpb` backup. Restore an `.hpb` through **Install → Restore** on the same panel page.
+The CLI `--restore FILE` and `--restore-fleet FILE` options import a config JSON export and require Python 3 on the computer running the installer. It does not accept an `.hpb` backup. Restore an `.hpb` through **Install → Restore** on the same panel page.
 
 For the distinction between config exports, supported `.hpb` backups and automatic break-glass database copies, see [Provisioning safety and recovery](provisioning-safety.md#backups-and-recovery).
 
@@ -191,7 +191,7 @@ scripts/provision.sh <panel-ip:5555> \
 
 `--allow-unsigned-helper` acknowledges that the helper embedded in a local APK is controlled by the local builder instead of authenticated as a published release. It is required whenever a local APK is sent to a panel with a usable root or helper route, including the first helper installation. A genuinely unrooted panel skips helper work. Official `--latest` and `--prerelease` installs authenticate the release helper automatically and do not use this flag.
 
-Local `--apk` provisioning requires Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. Before any upgrade backup or panel change, the provisioner verifies the package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key. Add `--require-release-signer` only when the local file should carry the official release certificate.
+Android SDK Build-Tools containing `apksigner` are required to update a panel that already has ha-paneld installed, whatever the APK source, because the provisioner compares the installed and candidate signers before it changes anything. A first installation on a panel without ha-paneld does not need them. Local `--apk` provisioning additionally needs either `aapt` or `aapt2`. Before any upgrade backup or panel change, the provisioner verifies the package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key. Add `--require-release-signer` only when the local file should carry the official release certificate.
 
 The profile-aware plan reports when selected drivers need the helper. Many rk3576 and PX30 panels can run `su` in-app, while sandboxed rooted panels use the helper for privileged operations. A genuinely unrooted panel continues with standard Android capabilities unless its profile declares a separately documented alternative for one exact feature.
 

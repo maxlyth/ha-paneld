@@ -12,7 +12,7 @@ Config exports contain secrets and are written with owner-only permissions. Trea
 
 ## Release and package authentication
 
-The checkout-free installer downloads the matching release APK and provisioner. It authenticates published APKs and helper binaries against release-key-signed SHA-256 records before changing the panel. If Android Build-Tools are available, it also inspects the APK package and signer; otherwise Android performs its own APK signature check during installation. The provisioner selects the helper for the panel's reported ABI.
+The checkout-free installer downloads the matching release APK and provisioner. It authenticates published APKs and helper binaries against release-key-signed SHA-256 records before changing the panel. It also inspects the APK package and signer with Android Build-Tools. Those are optional for a first installation on a panel that does not yet carry ha-paneld, where Android performs its own signature check during installation, and required to update a panel that already does: the provisioner compares the installed and candidate signers before it changes anything, and refuses rather than guessing. A mismatched signer would otherwise retire the running helper and only then fail to install. The provisioner selects the helper for the panel's reported ABI.
 
 A local APK follows a separate developer path. It must still contain the ha-paneld package and exactly one valid signer, but it may use the builder's consistent signing key. `--require-release-signer` tightens that check when the local file is expected to be an official build. `--allow-unsigned-helper` is a separate acknowledgement for helper binaries controlled by the local builder rather than authenticated as release assets.
 
