@@ -20,6 +20,120 @@ checkout_free_docs=(
   docs/api.md
 )
 
+# Localized consumer documents are declared by the committed, provider-neutral documentation
+# manifest. Keep this extraction independent of the Node translation tooling: this test must only
+# read committed data, and an unsafe or malformed output path must fail before awk opens it.
+docs_i18n_manifest="docs/i18n/manifest.json"
+if [[ -f "$docs_i18n_manifest" ]]; then
+  if ! localized_document_rows="$(python3 - "$docs_i18n_manifest" <<'PY'
+import json
+import pathlib
+import sys
+
+EXPECTED_LOCALES = ("de", "es", "fr", "it", "zh-Hans")
+root = pathlib.Path.cwd().resolve()
+manifest_path = pathlib.Path(sys.argv[1])
+
+
+def reject_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def normalized_relative(value, label):
+    if not isinstance(value, str) or not value or "\\" in value or "\t" in value or "\n" in value:
+        raise ValueError(f"{label} is not a safe relative path")
+    path = pathlib.PurePosixPath(value)
+    if path.is_absolute() or value != path.as_posix() or any(part in ("", ".", "..") for part in path.parts):
+        raise ValueError(f"{label} is not a normalized relative path: {value}")
+    return path
+
+
+try:
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        manifest = json.load(handle, object_pairs_hook=reject_duplicates)
+    if not isinstance(manifest, dict) or tuple(manifest.get("locales", ())) != EXPECTED_LOCALES:
+        raise ValueError("manifest locales do not match the exact supported locale set")
+    documents = manifest.get("documents")
+    if not isinstance(documents, list) or not documents:
+        raise ValueError("manifest documents must be a non-empty array")
+
+    seen_sources = set()
+    seen_outputs = set()
+    rows = []
+    for index, document in enumerate(documents):
+        if not isinstance(document, dict):
+            raise ValueError(f"documents[{index}] must be an object")
+        source = normalized_relative(document.get("sourcePath"), f"documents[{index}].sourcePath")
+        source_text = source.as_posix()
+        if source_text != "README.md" and not source_text.startswith("docs/"):
+            raise ValueError(f"source document is outside the admitted roots: {source_text}")
+        if source_text.startswith(tuple(f"docs/{locale}/" for locale in EXPECTED_LOCALES)):
+            raise ValueError(f"localized document cannot be a source: {source_text}")
+        if source_text in seen_sources:
+            raise ValueError(f"duplicate source document: {source_text}")
+        seen_sources.add(source_text)
+
+        outputs = document.get("outputs")
+        if not isinstance(outputs, dict) or set(outputs) != set(EXPECTED_LOCALES):
+            raise ValueError(f"outputs for {source_text} do not cover the exact locale set")
+        source_tail = "README.md" if source_text == "README.md" else source_text.removeprefix("docs/")
+        for locale in EXPECTED_LOCALES:
+            output = normalized_relative(outputs[locale], f"outputs[{locale}] for {source_text}")
+            expected = pathlib.PurePosixPath("docs", locale, source_tail)
+            if output != expected:
+                raise ValueError(
+                    f"output mapping is not deterministic for {source_text}/{locale}: "
+                    f"expected {expected}, got {output}"
+                )
+            output_text = output.as_posix()
+            if output_text in seen_outputs:
+                raise ValueError(f"duplicate localized output: {output_text}")
+            seen_outputs.add(output_text)
+
+            candidate = root
+            for part in output.parts:
+                candidate = candidate / part
+                if candidate.is_symlink():
+                    raise ValueError(f"localized output traverses a symlink: {output_text}")
+            if not candidate.is_file() or candidate.resolve() != root.joinpath(*output.parts):
+                raise ValueError(f"localized output is not a regular confined file: {output_text}")
+            rows.append((source_text, output_text))
+
+    for source, output in rows:
+        print(f"{source}\t{output}")
+except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
+    print(f"{manifest_path}: unsafe documentation manifest: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+  )"; then
+    exit 1
+  fi
+
+  is_checkout_free_source() {
+    local requested="$1"
+    local source
+    for source in "${checkout_free_docs[@]}"; do
+      if [[ "$source" == "$requested" ]]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  if [[ -n "$localized_document_rows" ]]; then
+    while IFS=$'\t' read -r source output; do
+      if is_checkout_free_source "$source"; then
+        checkout_free_docs+=("$output")
+      fi
+    done <<< "$localized_document_rows"
+  fi
+fi
+
 failed=0
 for doc in "${checkout_free_docs[@]}"; do
   while IFS=: read -r line text; do

@@ -140,6 +140,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js for documentation localization
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20.18.1'
+          cache: npm
+          cache-dependency-path: tools/docs-i18n/package-lock.json
+
+      - name: Validate multilingual documentation
+        working-directory: tools/docs-i18n
+        run: |
+          npm ci --ignore-scripts --audit=false --fund=false
+          npm test
+          npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json
+
       - name: Test firmware index tooling
         run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
 
