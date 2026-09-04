@@ -151,8 +151,13 @@ class StringsTest {
         assertEquals("en", Strings(source, partial).locale)
         assertEquals("de", Strings(source, complete).locale)
         assertEquals(listOf("de", "en"), Strings(source, partial).languages)
-        assertEquals(listOf("de"), Strings(source, complete).languages)
+        assertEquals(
+            "the complete catalogue reports its reviewed per-key English fallback",
+            listOf("de", "en"),
+            Strings(source, complete).languages,
+        )
         assertEquals(listOf("de"), Strings(source, complete).languages(setOf("settings.")))
+        assertEquals(listOf("de", "en"), Strings(source, complete).languages(setOf("profiles.")))
         assertEquals(
             "the real German catalogue now promotes the complete HTML shell",
             listOf("de"),
