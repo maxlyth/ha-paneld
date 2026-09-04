@@ -6,7 +6,7 @@
     var source = document.getElementById('ha-i18n'); projection = source ? JSON.parse(source.textContent || '{}') : {};
     if (!projection || typeof projection !== 'object' || Array.isArray(projection)) projection = {};
   } catch (_) { projection = {}; }
-  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement.lang || 'en');
+  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement && document.documentElement.lang || 'en');
   var languages = projection.languages && typeof projection.languages === 'object' && !Array.isArray(projection.languages) ? projection.languages : {};
   function t(key, fallback) {
     if (!window.HaI18n || typeof window.HaI18n.t !== 'function') return String(fallback == null ? '' : fallback);

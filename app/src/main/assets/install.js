@@ -8,7 +8,7 @@
     projection = projectionNode ? JSON.parse(projectionNode.textContent || '{}') : {};
     if (!projection || typeof projection !== 'object' || Array.isArray(projection)) projection = {};
   } catch (_) { projection = {}; }
-  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement.lang || 'en');
+  var locale = window.HaI18n && typeof window.HaI18n.locale === 'string' ? window.HaI18n.locale : (document.documentElement && document.documentElement.lang || 'en');
   var languages = projection.languages && typeof projection.languages === 'object' && !Array.isArray(projection.languages) ? projection.languages : {};
   function fallbackText(fallback, values) {
     return String(fallback == null ? '' : fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (token, name) {
@@ -115,7 +115,7 @@
   }
   // Shared only as a frozen renderer so browser tests and future Install-owned fragments exercise the
   // same fail-closed contract rather than copying validation logic.
-  window.HaPaneldInstallPresentation = Object.freeze({ present: presentation, set: setPresented });
+  window.HaPaneldInstallPresentation = Object.freeze({ present: presentation, set: setPresented, renderRestoreResult: renderRestoreResult });
   var hardenedApprovalTitle = t('configure.hardened.action_approval', 'Requires physical on-panel approval for this action when Hardened mode is enabled.');
   var hardenedApprovalAttrs = ' data-hardened-approval aria-describedby="hardened-approval-description" title="' + esc(hardenedApprovalTitle) + '"';
   var hardenedApprovalA11yAttrs = ' aria-describedby="hardened-approval-description" title="' + esc(hardenedApprovalTitle) + '"';
@@ -374,7 +374,7 @@
       '<tr><th>' + esc(t('install.apk.dynamic.signer', 'Signer SHA-256')) + '</th><td style="word-break:break-all">' + esc(d.signer) + '</td></tr></table>' +
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">' +
       '<button class="pbtn"' + hardenedApprovalAttrs + ' data-token="' + esc(d.token) + '" onclick="apkInstall(this)">⬇ ' + esc(t('install.apk.dynamic.install', 'Install {package}', { package: d.package })) + '</button>' +
-      '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.cancel', 'Cancel')) + '</button>' +
+      (locale === 'en' ? '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ Cancel</button>' : '<button class="pbtn" data-token="' + esc(d.token) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.cancel', 'Cancel')) + '</button>') +
       '</div>' +
       '<p class="note">' + esc(t('install.apk.dynamic.wrong_apk', 'Wrong APK? Cancel deletes it from the panel — or just choose another file or link, which replaces it.')) + '</p>';
     scheduleInstallColumnAlignment();
@@ -403,7 +403,7 @@
   function renderApkPendingRecovery(prev, d) {
     if (!prev) return;
     prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.pending', 'The panel is holding a previously inspected APK: {package} {version}. Uploading or fetching a new APK will replace it.', { package: d.package, version: d.version })) + '</p>' +
-      '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.discard_pending', 'Discard pending upload')) + '</button>';
+      (locale === 'en' ? '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ Discard pending upload</button>' : '<button class="pbtn" data-token="' + esc(d.discard) + '" onclick="apkDiscard(this)">✕ ' + esc(t('install.apk.dynamic.discard_pending', 'Discard pending upload')) + '</button>');
     scheduleInstallColumnAlignment();
   }
 
@@ -593,6 +593,33 @@
     var e = document.getElementById('bk-msg');
     if (e && e.textContent !== t) { e.textContent = t; scheduleInstallColumnAlignment(); }
   };
+  function restoreComponentLabel(name) {
+    var labels = { config: ['install.restore.result.component.config', 'Config'], profiles: ['install.restore.result.component.profiles', 'Profiles'], companion: ['install.restore.result.component.companion', 'Companion'], rollback: ['install.restore.result.component.rollback', 'Rollback'] };
+    return labels[name] ? t(labels[name][0], labels[name][1]) : name;
+  }
+  function renderRestoreResult(body) {
+    var node = document.getElementById('bk-msg');
+    if (!node) return;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) body = {};
+    var topFallback = t('install.backup.dynamic.restore_result', 'Restore: {result}', { result: body.message || 'done' });
+    node.textContent = '';
+    var top = document.createElement('span'); setPresented(top, body.presentation, topFallback); node.appendChild(top);
+    var result = body.result;
+    if (!result || typeof result !== 'object' || Array.isArray(result)) { scheduleInstallColumnAlignment(); return; }
+    ['config', 'profiles', 'companion', 'rollback'].forEach(function (name) {
+      var item = result[name]; if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+      node.appendChild(document.createElement('br'));
+      var line = document.createElement('span');
+      line.appendChild(document.createTextNode(restoreComponentLabel(name) + ': ' + closedToken(RESTORE_OUTCOME, item.status)));
+      if (item.items != null) line.appendChild(document.createTextNode(' · ' + String(item.items)));
+      if (item.detail || item.presentation) {
+        line.appendChild(document.createTextNode(' · '));
+        var detail = document.createElement('span'); setPresented(detail, item.presentation, item.detail || closedToken(RESTORE_OUTCOME, item.status)); line.appendChild(detail);
+      }
+      node.appendChild(line);
+    });
+    scheduleInstallColumnAlignment();
+  }
   var rsFile = null;
 
   window.doBackup = function (btn) {
@@ -692,7 +719,7 @@
   function pollRestore(n) {
     fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
       if (d.running) { bkMsg(t('install.backup.dynamic.restoring', 'Restoring…')); setTimeout(function () { pollRestore(n + 1); }, 2500); return; }
-      var result = presentation(d.presentation, d.message || 'done'); bkMsg(t('install.backup.dynamic.restore_result', 'Restore: {result}', { result: result.text }));
+      renderRestoreResult(d);
     }).catch(function () { if (n < 20) setTimeout(function () { pollRestore(n + 1); }, 3000); else bkMsg(t('install.progress.lost_contact_reload', 'Lost contact — reload to check.')); });
   }
 

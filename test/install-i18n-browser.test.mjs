@@ -8,6 +8,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 const asset = fileURLToPath(new URL('../app/src/main/assets/install.js', import.meta.url));
+const powerAsset = fileURLToPath(new URL('../app/src/main/assets/power-safety.js', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 
@@ -85,7 +86,7 @@ async function rig(t, options = {}) {
     if (path === '/api/v1/status') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(status)); return; }
     const helper = options.noHelper ? '' : `<script>window.HaI18n={locale:'zh-Hans',t:(key,fallback,values)=>{const all=${JSON.stringify(strings)};return String(Object.prototype.hasOwnProperty.call(all,key)?all[key]:fallback).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(token,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):token);}};</script>`;
     response.writeHead(200, { 'content-type': 'text/html' });
-    response.end(`<!doctype html><html lang="zh-Hans"><body><script id="ha-i18n" type="application/json">${payload}</script>${helper}<div id="audit-out"></div><script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/install.js"></script></body></html>`);
+    response.end(`<!doctype html><html lang="zh-Hans"><body><script id="ha-i18n" type="application/json">${payload}</script>${helper}<div id="audit-out"></div><div id="bk-msg"></div><script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/install.js"></script></body></html>`);
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
@@ -143,6 +144,35 @@ browserTest('Install presentation rendering keeps hostile values as text, raw ev
   assert.equal(outcome.owned, undefined);
 });
 
+browserTest('Install restore result localizes closed outcomes and isolates arbitrary English detail', async (t) => {
+  const { page } = await rig(t);
+  const outcome = await page.evaluate(() => {
+    window.HaPaneldInstallPresentation.renderRestoreResult({
+      message: 'completed',
+      presentation: { code: 'restore-completed', params: {} },
+      result: {
+        config: { status: 'succeeded', items: 3 },
+        companion: { status: 'partial', detail: '<img src=x onerror=window.__restoreOwned=1>' },
+      },
+    });
+    const node = document.getElementById('bk-msg');
+    return {
+      text: node.textContent,
+      parentLang: node.getAttribute('lang'),
+      english: Array.from(node.querySelectorAll('[lang="en"]')).map((item) => item.textContent),
+      images: node.querySelectorAll('img').length,
+      owned: window.__restoreOwned,
+    };
+  });
+  assert.match(outcome.text, /^LOC:restore-completed:/);
+  assert.match(outcome.text, /Config: succeeded/);
+  assert.match(outcome.text, /Companion: partial/);
+  assert.equal(outcome.parentLang, null);
+  assert.deepEqual(outcome.english, ['<img src=x onerror=window.__restoreOwned=1>']);
+  assert.equal(outcome.images, 0);
+  assert.equal(outcome.owned, undefined);
+});
+
 browserTest('Install warning overlay localizes valid entries and preserves exact per-item English fallback', async (t) => {
   const status = {
     warnings: ['<b>legacy known</b>', '<i>legacy unknown</i>'],
@@ -163,4 +193,48 @@ browserTest('Install remains usable in exact English when the shared helper is a
   const { page } = await rig(t, { noHelper: true });
   const value = await page.evaluate(() => window.HaPaneldInstallPresentation.present({ code: 'managed-up-to-date', params: { component: 'paneld', current: '1' } }, 'Exact English fallback'));
   assert.equal(value.text, 'Exact English fallback');
+});
+
+browserTest('Install power-safety alerts localize repair and acknowledgement states', async (t) => {
+  const source = await readFile(powerAsset, 'utf8');
+  const strings = {
+    'runtime.power_safety.repair.applying': 'LOC applying',
+    'runtime.power_safety.repair.partial': 'LOC partial',
+    'runtime.power_safety.button.hide': 'LOC hide caution',
+    'runtime.power_safety.button.hide_title': 'LOC hide title',
+    'runtime.power_safety.ack.saving': 'LOC saving',
+    'runtime.power_safety.ack.not_hidden': 'LOC not hidden',
+  };
+  const projection = JSON.stringify({ locale: 'de', strings, languages: Object.fromEntries(Object.keys(strings).map((key) => [key, 'de'])) });
+  const calls = [];
+  const server = createServer((request, response) => {
+    const path = new URL(request.url, 'http://panel.test').pathname;
+    if (path === '/power-safety.js') { response.writeHead(200, { 'content-type': 'application/javascript' }); response.end(source); return; }
+    if (path === '/api/v1/power-safety/repair') {
+      calls.push(path); response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ status: 'partial', message: 'raw partial detail', power_safety: { acknowledge_available: true, acknowledgement_fingerprint: 'fingerprint-1' } })); return;
+    }
+    if (path === '/api/v1/power-safety/acknowledge') {
+      calls.push(path); response.writeHead(409, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ acknowledged: false, message: 'raw acknowledgement detail' })); return;
+    }
+    response.writeHead(200, { 'content-type': 'text/html' });
+    response.end(`<!doctype html><html lang="de"><body><script id="ha-i18n" type="application/json">${projection}</script>
+      <script>window.HaI18n={locale:'de',t:(key,fallback)=>(${JSON.stringify(strings)})[key]||fallback};</script>
+      <div data-power-safety-banner><form action="/api/v1/power-safety/repair" data-power-safety-repair>
+      <button type="submit">Repair</button><span class="power-safety-repair-result"></span></form></div>
+      <script src="/power-safety.js"></script></body></html>`);
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  t.after(async () => { await browser.close(); server.closeAllConnections?.(); await new Promise((done) => server.close(done)); });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: 'domcontentloaded' });
+  await page.click('button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('.power-safety-acknowledge-result')?.textContent === 'LOC partial');
+  assert.equal(await page.locator('button[type="submit"]').textContent(), 'LOC hide caution');
+  assert.equal(await page.locator('button[type="submit"]').getAttribute('title'), 'LOC hide title');
+  await page.click('button[type="submit"]');
+  await page.waitForFunction(() => document.querySelector('.power-safety-acknowledge-result')?.textContent === 'LOC not hidden');
+  assert.deepEqual(calls, ['/api/v1/power-safety/repair', '/api/v1/power-safety/acknowledge']);
 });
