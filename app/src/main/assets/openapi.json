@@ -23,6 +23,7 @@
         "description": "Layer-3 ICMP echo measurement of the path to the address the Home Assistant socket is connected on. Intermittent, with an interval that widens while the path proves reliable. Reported only in this release; it does not raise the panel warning.",
         "required": ["available"],
         "properties": {
+          "family": { "type": "string", "enum": ["ipv4", "ipv6"], "nullable": true, "description": "The address family the Home Assistant socket actually connected on; null when no route is held. Reported in every state, including unsupported." },
           "available": { "type": "string", "enum": ["unowned", "unsupported", "unproven", "proven"], "description": "unsupported means the platform refuses the app an ICMP socket; unproven means no echo has been answered yet, so silence is not counted as loss." },
           "state": { "type": "string", "enum": ["unproven", "healthy", "warning", "severe"] },
           "bursts": { "type": "integer" },

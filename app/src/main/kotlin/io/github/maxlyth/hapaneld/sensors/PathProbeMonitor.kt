@@ -32,8 +32,7 @@ internal class PathProbeMonitor(
      *
      * A burst outlives the moment it was claimed in: it blocks for as long as its echoes take, and
      * the socket can be torn down and re-established underneath it. Without an identity to check on
-     * the way back, a burst measured against a dead route lands in a successor session's history and
-     * the panel reports evidence about a path it is no longer using.
+     * the way back, a burst measured against a dead route lands in a successor session's history.
      */
     private var generation = 0L
 
@@ -133,6 +132,7 @@ internal class PathProbeMonitor(
         if (!measuring && history.state != PathProbeAvailability.UNSUPPORTED) return null
         val aggregate = history.aggregate()
         Snapshot(
+            family = target?.let { if (it is java.net.Inet6Address) "ipv6" else "ipv4" },
             availability = aggregate.availability,
             severity = history.severity(),
             bursts = aggregate.bursts,
@@ -156,6 +156,8 @@ internal class PathProbeMonitor(
      * proven — and a surface must render that as "not measured", never as health.
      */
     data class Snapshot(
+        /** The family the socket actually connected on, or null when no route is held. */
+        val family: String?,
         val availability: PathProbeAvailability,
         val severity: HaNetworkPathSeverity?,
         val bursts: Int,

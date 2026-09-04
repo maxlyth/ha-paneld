@@ -28,16 +28,23 @@ internal object PathProbeRuntime {
      * One `/diag` line. Always present so an absent line cannot be read as health, and terse: counts,
      * percentiles and the cadence, never an address and never an individual echo.
      */
+    /** The route fact every state carries, because it is useful precisely when probing is not. */
+    private fun routeTokens(snap: PathProbeMonitor.Snapshot): String =
+        " family=${snap.family ?: "none"}"
+
     fun diagnosticLine(): String {
         val snap = snapshot() ?: return "[ha-path-probe] state=unowned"
         return when (snap.availability) {
             PathProbeAvailability.UNSUPPORTED ->
-                "[ha-path-probe] state=unsupported detail=this platform refuses an ICMP socket to the app"
+                "[ha-path-probe] state=unsupported" + routeTokens(snap) +
+                    " detail=this platform refuses an ICMP socket to the app"
             PathProbeAvailability.UNPROVEN ->
-                "[ha-path-probe] state=unproven bursts=${snap.bursts} sent=${snap.sent} received=0 " +
+                "[ha-path-probe] state=unproven" + routeTokens(snap) +
+                    " bursts=${snap.bursts} sent=${snap.sent} received=0 " +
                     "detail=no echo answered yet, so silence is not counted as loss"
             PathProbeAvailability.PROVEN ->
-                "[ha-path-probe] state=${snap.severity?.wireValue ?: "unknown"} bursts=${snap.bursts} " +
+                "[ha-path-probe] state=${snap.severity?.wireValue ?: "unknown"}" + routeTokens(snap) +
+                    " bursts=${snap.bursts} " +
                     "sent=${snap.sent} received=${snap.received} " +
                     "loss=${"%.1f".format(java.util.Locale.ROOT, snap.lossPercent)}% " +
                     "p50=${snap.p50Ms} p95=${snap.p95Ms} max=${snap.maxMs} jitter=${snap.jitterMs} " +
@@ -51,6 +58,11 @@ internal object PathProbeRuntime {
         val snap = snapshot()
         val json = org.json.JSONObject()
             .put("available", snap?.availability?.name?.lowercase() ?: "unowned")
+        if (snap != null) {
+            // Route facts are reported in EVERY state, including unsupported: knowing which family
+            // the socket is on matters most exactly when the probe itself cannot run.
+            json.put("family", snap.family ?: org.json.JSONObject.NULL)
+        }
         if (snap != null && snap.availability != PathProbeAvailability.UNSUPPORTED) {
             json.put("state", snap.severity?.wireValue ?: "unproven")
                 .put("bursts", snap.bursts)

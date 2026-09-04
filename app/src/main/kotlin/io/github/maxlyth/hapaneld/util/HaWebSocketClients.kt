@@ -152,7 +152,11 @@ internal object HaWebSocketClients {
                     if (resolver == null) {
                         FamilyPlannedDns(preferIpv4 = preferIpv4, ipv4Only = ipv4Only)
                     } else {
-                        FamilyPlannedDns(preferIpv4 = preferIpv4, ipv4Only = ipv4Only, systemLookup = resolver)
+                        FamilyPlannedDns(
+                            preferIpv4 = preferIpv4,
+                            ipv4Only = ipv4Only,
+                            systemLookup = resolver,
+                        )
                     },
                 )
                 if (tls != null) sslSocketFactory(tls.socketFactory, tls.trustManager)
