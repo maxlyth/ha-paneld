@@ -228,7 +228,7 @@
     <string name="disable">禁用</string>
     <string name="shizuku_title">增强访问权限（Shizuku）</string>
     <string name="shizuku_scope">它不允许任意上传 APK、替换 WebView、使用通用 shell、访问 root 应用数据、重启、查看日志或控制供应商应用。\n\n启用后，可通过此面板上 ha-paneld 现有的受信任局域网控制来调用受支持的操作。</string>
-    <string name="shizuku_grant_scope">这只允许签名已验证的 ha-paneld 更新精简版 Companion、截取屏幕截图、输入按键/点按以及调整显示密度和文字大小。%1$s</string>
+    <string name="shizuku_grant_scope">这仅授予以下操作权限：更新签名已验证的 ha-paneld 和精简版 Companion、截屏、按键/点按输入，以及调整显示密度和文字大小。%1$s</string>
     <string name="shizuku_not_installed">未安装 Shizuku。请通过 ADB 运行一次 ha-paneld 配置脚本，然后在此面板上批准访问。</string>
     <string name="shizuku_untrusted">已安装名为 Shizuku 的软件包，但其签名证书不受信任。ha-paneld 不会连接到它。</string>
     <string name="shizuku_disabled">ha-paneld 中的增强访问权限已禁用。请在此面板上选择“启用”以开始本地批准。</string>
