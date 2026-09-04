@@ -1,7 +1,7 @@
 {
   "locale": "de",
   "schema": 1,
-  "sourceRevision": "202ddad7446b21486121b27d82b2df1e2ec45115",
+  "sourceRevision": "271310c06ec572b4f7830b01af90711c31743fee",
   "strings": {
     "configure.action.failed": {
       "text": "Aktion fehlgeschlagen ({error}).",
