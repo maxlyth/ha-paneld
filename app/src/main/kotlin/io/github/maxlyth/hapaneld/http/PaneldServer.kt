@@ -5935,8 +5935,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             "status-power-unknown" -> "runtime.power_safety.summary.unknown"
             else -> return fallback
         }
-        val summary = translatedText(strings, summaryKey)
-            ?: advisory.assessment.summary
+        val summary = translatedText(strings, summaryKey) ?: return fallback
         val actionKey = when (advisory.action) {
             PowerSafetyAdvisoryAction.NONE -> "runtime.power_safety.action.review"
             PowerSafetyAdvisoryAction.REPAIR -> when (advisory.repairCapability.wireValue) {
@@ -5951,7 +5950,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             }
             PowerSafetyAdvisoryAction.MANUAL_ONLY -> "runtime.power_safety.action.manual"
         }
-        val actionText = translatedText(strings, actionKey) ?: ""
+        val actionText = translatedText(strings, actionKey) ?: return fallback
         val control = when {
             !inlineRepair -> " <a href=\"${localizedHref("/configure#cfg-keep_awake", strings)}\">${esc(strings.get("shell.nav.configure"))} →</a>"
             advisory.action == PowerSafetyAdvisoryAction.REPAIR -> {
