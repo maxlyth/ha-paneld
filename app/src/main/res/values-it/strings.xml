@@ -60,7 +60,7 @@
     <string name="approval_op_display_configuration">Modifica dimensionamento dello schermo</string>
     <string name="approval_op_power_configuration">Modifica protezioni di sicurezza dell’alimentazione del pannello</string>
     <string name="approval_op_power_safety_ack">Nascondi questa specifica avvertenza sulla sicurezza dell’alimentazione</string>
-    <string name="approval_op_guard_db">Avanza ripristino del database</string>
+    <string name="approval_op_guard_db">Prosegui con il ripristino del database</string>
     <string name="approval_op_camera_enable">Attiva fotocamera del pannello</string>
 
     <string name="set_up">Configura</string>
@@ -137,7 +137,7 @@
     <string name="web_viewer_too_old_title">Il visualizzatore web del pannello è troppo vecchio</string>
     <string name="web_viewer_too_old_detail">La dashboard integrata richiede una versione di Android System WebView più recente di quella presente sul pannello. Un’altra app per dashboard installata sul pannello potrebbe comunque funzionare.</string>
     <string name="checking_ha_compatibility">Verifica della compatibilità con Home Assistant</string>
-    <string name="checking_ha_compatibility_detail">Verifica che questa versione di Home Assistant funzioni con la dashboard del pannello prima di aprirla.</string>
+    <string name="checking_ha_compatibility_detail">Il pannello sta verificando che questa versione di Home Assistant funzioni con la dashboard prima di aprirla.</string>
     <string name="ha_upgrade_required">È necessario aggiornare Home Assistant</string>
     <string name="ha_upgrade_required_detail">La dashboard integrata del pannello richiede Home Assistant 2026.4.2 o versione successiva e questo server segnala %1$s. Aggiorna Home Assistant, quindi tocca Riprova. Solo la dashboard integrata richiede tale versione, quindi un’altra app per dashboard sul pannello potrebbe comunque funzionare.</string>
     <string name="ha_version_unverifiable">Versione di Home Assistant non verificabile</string>
@@ -179,7 +179,7 @@
     <string name="entity_filter_attention_detail">Non c’è alcun problema con Home Assistant. Prima di aprire la dashboard, il pannello richiede una risposta sui controlli di sicurezza rilevati durante la lettura delle entità. Numero da esaminare: %1$d.</string>
     <string name="entity_filter_attention_remote">Non c’è alcun problema con Home Assistant. Prima di aprire la dashboard, il pannello richiede una risposta sui controlli di sicurezza rilevati durante la lettura delle entità. Numero da esaminare: %1$d. Le stesse opzioni sono disponibili da un altro dispositivo all’indirizzo %2$s.</string>
     <string name="too_many_flagged_entities">Non c’è alcun problema con Home Assistant. Sono state contrassegnate troppe entità da esaminare sul pannello. Apri le impostazioni delle entità per semplificare la dashboard oppure tocca Disattiva filtro entità.</string>
-    <string name="entity_scan_auth_rejected">Home Assistant ha rifiutato l’accesso del pannello quando ha richiesto quali entità mostrare. La dashboard non è stata aperta. Configura apre le impostazioni di questo pannello, dove Connessione Home Assistant contiene l’accesso; la dashboard tornerà automaticamente non appena funzionerà.</string>
+    <string name="entity_scan_auth_rejected">Home Assistant ha rifiutato l’accesso del pannello quando il pannello ha richiesto quali entità mostrare. La dashboard non è stata aperta. Configura apre le impostazioni di questo pannello, dove Connessione Home Assistant contiene l’accesso; la dashboard tornerà automaticamente non appena funzionerà.</string>
     <string name="entity_scan_failed_detail">La scansione delle entità non è terminata, quindi la dashboard non è stata aperta. Verifica che Home Assistant sia in esecuzione e che il pannello sia connesso alla rete, quindi riprova.</string>
     <string name="entity_scan_preparing_detail">Home Assistant si aprirà quando il primo set di entità filtrate sarà pronto.</string>
     <string name="entity_scan_taking_longer">Sta richiedendo più tempo del solito: il pannello sta ancora lavorando. Se l’operazione non termina, puoi disattivare il filtro delle entità dalle impostazioni del pannello.</string>
@@ -214,7 +214,7 @@
     <string name="guard_db_journal_status">Registro root: %1$s · generazione %2$d</string>
     <string name="guard_db_outcome"> · risultato %1$s</string>
     <string name="guard_db_deadline">Scadenza non prorogabile: %1$d ms trascorsi</string>
-    <string name="guard_db_forward_deadline"> · inoltro: %1$d</string>
+    <string name="guard_db_forward_deadline"> · avanzamento: %1$d</string>
     <string name="guard_db_unreachable">L’helper root si sta riavviando o non è raggiungibile. Non è consentita alcuna modifica.</string>
     <string name="guard_db_malformed">La risposta del registro root non è valida. Il ripristino è sospeso.</string>
     <string name="guard_db_unsupported">L’helper installato non può eseguire questo ripristino. Il ripristino è sospeso.</string>
