@@ -7,6 +7,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileAdmin
 import io.github.maxlyth.hapaneld.device.profile.ProfileDiff
 import io.github.maxlyth.hapaneld.device.profile.ProfileIssue
 import io.github.maxlyth.hapaneld.device.profile.ProfileMutation
+import io.github.maxlyth.hapaneld.device.profile.ProfilePresentation
 import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ProfileSelection
 import io.github.maxlyth.hapaneld.device.profile.ProfileStatus
@@ -55,6 +56,7 @@ internal data class ProfileRestartRejection(
     val error: String,
     val message: String,
     val abortPersisted: Boolean,
+    val presentation: ProfilePresentation,
 )
 
 /** Records whether a staged activation was durably rolled back when restart admission fails. */
@@ -73,12 +75,18 @@ internal fun rejectFailedProfileRestart(
     }
     val abortPersisted = runCatching { abortPendingRestart(rejection.second) }.getOrDefault(false)
     return if (abortPersisted) {
-        ProfileRestartRejection(rejection.first, rejection.second, true)
+        ProfileRestartRejection(
+            rejection.first,
+            rejection.second,
+            true,
+            ProfilePresentation(rejection.first),
+        )
     } else {
         ProfileRestartRejection(
             error = "profile-activation-abort-persist-failed",
             message = "The profile restart could not be scheduled, and its pending activation could not be rolled back durably. The activation remains pending and may apply on the next process restart.",
             abortPersisted = false,
+            presentation = ProfilePresentation("profile-activation-abort-persist-failed"),
         )
     }
 }
@@ -119,23 +127,39 @@ internal fun Route.profileRoutes(dependencies: ProfileRouteDependencies) {
         }
         get("/template") {
             val yaml = dependencies.readOnly.template()
-            if (yaml == null) call.respondText("profile template unavailable\n", status = HttpStatusCode.NotImplemented)
+            if (yaml == null) call.respondProfileTextError(
+                HttpStatusCode.NotImplemented,
+                "profile template unavailable\n",
+                "profile-template-unavailable",
+            )
             else call.respondProfileYaml(yaml, "new-panel-profile.yaml")
         }
         get("/device-draft") {
             val draft = dependencies.readOnly.deviceDraft()
-            if (draft == null) call.respondText("passive device draft unavailable\n", status = HttpStatusCode.NotImplemented)
+            if (draft == null) call.respondProfileTextError(
+                HttpStatusCode.NotImplemented,
+                "passive device draft unavailable\n",
+                "passive-device-draft-unavailable",
+            )
             else call.respondProfileYaml(draft.rawYaml, "passive-device-draft.yaml")
         }
         get("/report") {
             val report = dependencies.readOnly.latestReport()
-            if (report == null) call.respondText("passive report unavailable\n", status = HttpStatusCode.NotFound)
+            if (report == null) call.respondProfileTextError(
+                HttpStatusCode.NotFound,
+                "passive report unavailable\n",
+                "passive-report-unavailable",
+            )
             else call.respondProfileJson(reportJson(report))
         }
         get("/{id}/revisions/{revision}") {
             val ref = call.profileRefOrRespond() ?: return@get
             val yaml = admin.exportProfile(ref)
-            if (yaml == null) call.respondText("profile revision not found\n", status = HttpStatusCode.NotFound)
+            if (yaml == null) call.respondProfileTextError(
+                HttpStatusCode.NotFound,
+                "profile revision not found\n",
+                "profile-revision-not-found",
+            )
             else call.respondProfileYaml(yaml, "${safeFileStem(ref.id)}-${ref.revision.take(12)}.yaml")
         }
 
@@ -155,9 +179,9 @@ internal fun Route.profileRoutes(dependencies: ProfileRouteDependencies) {
 /** Keep the tab and documented paths honest before the runtime repository is wired by the service. */
 internal fun Route.unavailableProfileRoutes() {
     route("/profiles") {
-        get { call.respondText("profile administration unavailable\n", status = HttpStatusCode.ServiceUnavailable) }
-        get("/{path...}") { call.respondText("profile administration unavailable\n", status = HttpStatusCode.ServiceUnavailable) }
-        post("/{path...}") { call.respondText("profile administration unavailable\n", status = HttpStatusCode.ServiceUnavailable) }
+        get { call.respondProfileTextError(HttpStatusCode.ServiceUnavailable, "profile administration unavailable\n", "profile-administration-unavailable") }
+        get("/{path...}") { call.respondProfileTextError(HttpStatusCode.ServiceUnavailable, "profile administration unavailable\n", "profile-administration-unavailable") }
+        post("/{path...}") { call.respondProfileTextError(HttpStatusCode.ServiceUnavailable, "profile administration unavailable\n", "profile-administration-unavailable") }
     }
 }
 
@@ -248,6 +272,7 @@ private suspend fun handleSelection(
                     .put("ok", false)
                     .put("error", rejection.error)
                     .put("message", rejection.message)
+                    .putPresentation(rejection.presentation)
                     .put("activation_pending", !rejection.abortPersisted)
                     .put("status", statusJson(dependencies.admin.status())),
                 HttpStatusCode.ServiceUnavailable,
@@ -363,8 +388,7 @@ private suspend fun ApplicationCall.respondMutation(
         is ProfileMutation.Rejected -> {
             val staleCatalog = expectedCatalogRevision != null && mutation.status.catalogRevision != expectedCatalogRevision
             val stalePreview = mutation.issues.any {
-                it.path == "preview_token" || it.message.contains("stale", ignoreCase = true) ||
-                    it.message.contains("expired", ignoreCase = true)
+                it.path == "preview_token" || it.presentation?.code == "preview-token-invalid"
             }
             respondProfileJson(
                 mutationJson(mutation),
@@ -384,7 +408,24 @@ private suspend fun ApplicationCall.respondProfileJson(
 }
 
 private suspend fun ApplicationCall.respondProfileError(status: HttpStatusCode, error: String) {
-    respondProfileJson(JSONObject().put("ok", false).put("error", error), status)
+    respondProfileJson(
+        JSONObject()
+            .put("ok", false)
+            .put("error", error)
+            .putPresentation(ProfilePresentation(error)),
+        status,
+    )
+}
+
+private suspend fun ApplicationCall.respondProfileTextError(
+    status: HttpStatusCode,
+    message: String,
+    presentationCode: String,
+) {
+    val presentation = ProfilePresentation(presentationCode)
+    response.headers.append("X-Profile-Presentation-Code", presentation.code)
+    response.headers.append("X-Profile-Presentation-Params", JSONObject(presentation.params).toString())
+    respondText(message, status = status)
 }
 
 private suspend fun ApplicationCall.respondProfileYaml(yaml: String, fileName: String) {
@@ -423,6 +464,7 @@ private fun activationJson(activation: ProfileActivationState): JSONObject = JSO
     .put("previous", activation.previous?.let(::selectionJson) ?: JSONObject.NULL)
     .put("desired", activation.desired?.let(::selectionJson) ?: JSONObject.NULL)
     .put("message", activation.message ?: JSONObject.NULL)
+    .putPresentation(activation.presentation)
 
 private fun selectionJson(selection: ProfileSelection): JSONObject = when (selection) {
     ProfileSelection.Auto -> JSONObject().put("mode", "auto")
@@ -471,6 +513,7 @@ private fun mutationJson(mutation: ProfileMutation): JSONObject = when (mutation
     is ProfileMutation.Success -> JSONObject()
         .put("ok", true)
         .put("message", mutation.message)
+        .putPresentation(mutation.presentation)
         .put("restart_required", mutation.restartRequired)
         .put("catalog_revision", mutation.status.catalogRevision)
         .put("status", statusJson(mutation.status))
@@ -486,6 +529,14 @@ private fun issueJson(issue: ProfileIssue): JSONObject = JSONObject()
     .put("severity", issue.severity.name.lowercase())
     .put("path", issue.path)
     .put("message", issue.message)
+    .putPresentation(issue.presentation)
+
+private fun JSONObject.putPresentation(presentation: ProfilePresentation?): JSONObject = apply {
+    if (presentation != null) {
+        put("presentation_code", presentation.code)
+        put("presentation_params", JSONObject(presentation.params))
+    }
+}
 
 private fun diffJson(diff: ProfileDiff): JSONObject = JSONObject()
     .put("path", diff.path)

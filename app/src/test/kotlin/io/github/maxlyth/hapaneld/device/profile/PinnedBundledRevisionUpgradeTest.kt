@@ -898,6 +898,14 @@ class PinnedBundledRevisionUpgradeTest {
         "selection",
         "Pinned profile '${retired.id}' revision ${retired.revision.take(12)} was retired by this release; " +
             "following its current bundled revision ${successor.revision.take(12)}.",
+        ProfilePresentation(
+            "pinned-revision-retired",
+            mapOf(
+                "id" to retired.id,
+                "retired_revision" to retired.revision,
+                "current_revision" to successor.revision,
+            ),
+        ),
     )
 
     private fun heldWarning(held: ProfileRef, current: ProfileRef) = ProfileIssue(
@@ -905,6 +913,14 @@ class PinnedBundledRevisionUpgradeTest {
         "selection",
         "Pinned profile '${held.id}' is held at revision ${held.revision.take(12)}; " +
             "the current bundled revision ${current.revision.take(12)} is not applied automatically. Select it to adopt it.",
+        ProfilePresentation(
+            "pinned-successor-held",
+            mapOf(
+                "id" to held.id,
+                "retired_revision" to held.revision,
+                "current_revision" to current.revision,
+            ),
+        ),
     )
 
     private fun importedFile(ref: ProfileRef) = File(directory, "device-profiles/imported/${ref.id}/${ref.revision}.yaml")

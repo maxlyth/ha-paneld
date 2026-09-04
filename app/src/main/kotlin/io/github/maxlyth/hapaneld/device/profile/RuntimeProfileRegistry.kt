@@ -251,7 +251,7 @@ class RuntimeProfileRegistry internal constructor(
         ensureHydrated()
         val hash = ProfileYaml.sha256(rawYaml)
         if (!previewTokens.consume(previewToken, hash)) {
-            return rejected("preview_token", "Preview token is invalid, expired, already used, or belongs to different content.")
+            return rejected("preview_token", "Preview token is invalid, expired, already used, or belongs to different content.", "preview-token-invalid")
         }
         val parsed = measuredParse(rawYaml)
         val document = parsed.document
@@ -261,20 +261,43 @@ class RuntimeProfileRegistry internal constructor(
         if (entries[ref] == null) {
             val rawBytes = rawYaml.toByteArray(Charsets.UTF_8).size.toLong()
             val quotaIssue = when {
-                importedDiskCount >= ProfileMetadata.MAX_IMPORTED_REVISIONS -> "Imported catalog is limited to ${ProfileMetadata.MAX_IMPORTED_REVISIONS} revisions."
-                importedDiskCountById.getOrDefault(document.id, 0) >= ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID -> "Profile '${document.id}' is limited to ${ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID} revisions."
-                importedDiskBytes > ProfileMetadata.MAX_IMPORTED_BYTES - rawBytes -> "Imported catalog is limited to ${ProfileMetadata.MAX_IMPORTED_BYTES} bytes."
+                importedDiskCount >= ProfileMetadata.MAX_IMPORTED_REVISIONS ->
+                    "Imported catalog is limited to ${ProfileMetadata.MAX_IMPORTED_REVISIONS} revisions." to ProfilePresentation(
+                        "imported-catalog-revision-limit",
+                        mapOf("max" to ProfileMetadata.MAX_IMPORTED_REVISIONS.toString()),
+                    )
+                importedDiskCountById.getOrDefault(document.id, 0) >= ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID ->
+                    "Profile '${document.id}' is limited to ${ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID} revisions." to ProfilePresentation(
+                        "imported-profile-revision-limit",
+                        mapOf(
+                            "id" to document.id,
+                            "max" to ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID.toString(),
+                        ),
+                    )
+                importedDiskBytes > ProfileMetadata.MAX_IMPORTED_BYTES - rawBytes ->
+                    "Imported catalog is limited to ${ProfileMetadata.MAX_IMPORTED_BYTES} bytes." to ProfilePresentation(
+                        "imported-catalog-byte-limit",
+                        mapOf("max" to ProfileMetadata.MAX_IMPORTED_BYTES.toString()),
+                    )
                 else -> null
             }
-            if (quotaIssue != null) return rejected("catalog.quota", quotaIssue)
+            if (quotaIssue != null) return rejected("catalog.quota", quotaIssue.first, quotaIssue.second)
             // Reserve the optimistic-concurrency revision before touching disk. A crash or write failure
             // may conservatively make clients refresh, but can no longer change the catalog while leaving
             // its revision unchanged.
-            if (!bumpCatalogRevision()) return rejected("catalog_revision", "Could not reserve the catalog change.")
-            if (!writeImported(ref, rawYaml)) return rejected("$", "Could not store the immutable profile revision.")
+            if (!bumpCatalogRevision()) return rejected("catalog_revision", "Could not reserve the catalog change.", "catalog-reservation-failed")
+            if (!writeImported(ref, rawYaml)) return rejected("$", "Could not store the immutable profile revision.", "profile-store-failed")
             reload()
         }
-        return ProfileMutation.Success(statusLocked(), restartRequired = false, message = "Imported ${document.displayName} ${document.version}.")
+        return ProfileMutation.Success(
+            statusLocked(),
+            restartRequired = false,
+            message = "Imported ${document.displayName} ${document.version}.",
+            presentation = ProfilePresentation(
+                "profile-imported",
+                mapOf("display_name" to document.displayName, "version" to document.version),
+            ),
+        )
     }
 
     @Synchronized
@@ -316,7 +339,7 @@ class RuntimeProfileRegistry internal constructor(
         if (expectedCatalogRevision != before.catalogRevision) {
             return rejectedBackupRestore(
                 before,
-                listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.catalog_revision", "Catalog changed; revalidate the backup and retry.")),
+                listOf(issue(ProfileIssueSeverity.ERROR, "profiles.catalog_revision", "Catalog changed; revalidate the backup and retry.", "backup-restore-catalog-stale")),
             )
         }
         val plan = planBackupRestoreLocked(payload)
@@ -331,7 +354,7 @@ class RuntimeProfileRegistry internal constructor(
             if (!bumpCatalogRevision()) {
                 return rejectedBackupRestore(
                     statusLocked(),
-                    listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.catalog_revision", "Could not reserve the catalog restore.")),
+                    listOf(issue(ProfileIssueSeverity.ERROR, "profiles.catalog_revision", "Could not reserve the catalog restore.", "backup-restore-reservation-failed")),
                     plan.alreadyPresent,
                 )
             }
@@ -344,6 +367,7 @@ class RuntimeProfileRegistry internal constructor(
                         ProfileIssueSeverity.ERROR,
                         "profiles.revisions[${ref.id}@${ref.revision}]",
                         "Could not store the immutable revision.",
+                        ProfilePresentation("backup-revision-store-failed"),
                     )
                 }
             }
@@ -357,6 +381,7 @@ class RuntimeProfileRegistry internal constructor(
                         ProfileIssueSeverity.ERROR,
                         "profiles.revisions[${ref.id}@${ref.revision}]",
                         "Stored revision did not pass the post-write coherency check.",
+                        ProfilePresentation("backup-post-write-coherency-failed"),
                     )
                 }
             }
@@ -371,6 +396,7 @@ class RuntimeProfileRegistry internal constructor(
                 selectionStaged = false,
                 restartRequired = false,
                 message = "Some profile revisions were imported inertly; selection was not changed.",
+                presentation = ProfilePresentation("backup-import-partial-selection-unchanged"),
             )
         }
 
@@ -385,6 +411,7 @@ class RuntimeProfileRegistry internal constructor(
                 selectionStaged = false,
                 restartRequired = false,
                 message = "Profile catalog restored; selection is unchanged.",
+                presentation = ProfilePresentation("backup-restored-selection-unchanged"),
             )
         }
 
@@ -400,6 +427,7 @@ class RuntimeProfileRegistry internal constructor(
                 selectionStaged = true,
                 restartRequired = selected.restartRequired,
                 message = "Profile catalog restored; selection staged for a health-gated restart.",
+                presentation = ProfilePresentation("backup-restored-selection-staged"),
             )
             is ProfileMutation.Rejected -> ProfileBackupRestoreResult(
                 outcome = if (imported.isEmpty()) ProfileBackupRestoreOutcome.REJECTED else ProfileBackupRestoreOutcome.PARTIAL,
@@ -414,6 +442,9 @@ class RuntimeProfileRegistry internal constructor(
                 } else {
                     "Profile revisions were imported inertly, but selection could not be staged."
                 },
+                presentation = ProfilePresentation(
+                    if (imported.isEmpty()) "backup-selection-restore-failed" else "backup-import-selection-stage-failed",
+                ),
             )
         }
     }
@@ -423,10 +454,19 @@ class RuntimeProfileRegistry internal constructor(
         ensureHydrated()
         if (expectedCatalogRevision != catalogRevision()) return staleCatalog()
         if (selection is ProfileSelection.Pinned) {
-            val entry = entries[selection.ref] ?: return rejected("selection", "Profile revision does not exist.")
+            val entry = entries[selection.ref] ?: return rejected("selection", "Profile revision does not exist.", "profile-revision-not-found")
             if (!entry.compatible) return ProfileMutation.Rejected(
                 statusLocked(),
-                entry.issues.ifEmpty { listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Profile revision is incompatible with this core.")) },
+                entry.issues.ifEmpty {
+                    listOf(
+                        ProfileIssue(
+                            ProfileIssueSeverity.ERROR,
+                            "selection",
+                            "Profile revision is incompatible with this core.",
+                            ProfilePresentation("profile-incompatible"),
+                        ),
+                    )
+                },
             )
             activationIssues(entry).takeIf { it.isNotEmpty() }?.let {
                 return ProfileMutation.Rejected(statusLocked(), it)
@@ -434,10 +474,15 @@ class RuntimeProfileRegistry internal constructor(
         }
         val state = readActivation()
         if (state.phase == ProfileActivationPhase.PENDING || state.phase == ProfileActivationPhase.APPLYING) {
-            return rejected("activation", "A profile activation is already in progress.")
+            return rejected("activation", "A profile activation is already in progress.", "activation-in-progress")
         }
         val current = readSelection()
-        if (selection == current) return ProfileMutation.Success(statusLocked(), false, "Profile selection is unchanged.")
+        if (selection == current) return ProfileMutation.Success(
+            statusLocked(),
+            false,
+            "Profile selection is unchanged.",
+            ProfilePresentation("profile-selection-unchanged"),
+        )
         val generation = maxOf(state.generation, preferences.getLong(KEY_GENERATION, 0L)) + 1
         val next = ProfileActivationState(
             phase = ProfileActivationPhase.PENDING,
@@ -445,6 +490,7 @@ class RuntimeProfileRegistry internal constructor(
             previous = current,
             desired = selection,
             message = "Selection staged; restart required.",
+            presentation = ProfilePresentation("activation-pending"),
         )
         if (!preferences.put(
                 *selectionState(selection),
@@ -453,16 +499,22 @@ class RuntimeProfileRegistry internal constructor(
                 KEY_PREVIOUS to encode(current),
                 KEY_DESIRED to encode(selection),
                 KEY_MESSAGE to next.message,
+                KEY_PRESENTATION_CODE to "activation-pending",
                 KEY_CATALOG_REVISION to catalogRevision() + 1,
-            )) return rejected("activation", "Could not persist the staged selection.")
-        return ProfileMutation.Success(statusLocked(), true, "Profile selection staged for restart.")
+            )) return rejected("activation", "Could not persist the staged selection.", "selection-persist-failed")
+        return ProfileMutation.Success(
+            statusLocked(),
+            true,
+            "Profile selection staged for restart.",
+            ProfilePresentation("profile-selection-staged"),
+        )
     }
 
     @Synchronized
     override fun rollbackToLastKnownGood(expectedCatalogRevision: Long): ProfileMutation {
         ensureHydrated()
         if (expectedCatalogRevision != catalogRevision()) return staleCatalog()
-        val target = readLastKnownGood() ?: return rejected("last_known_good", "No previous proven selection is available.")
+        val target = readLastKnownGood() ?: return rejected("last_known_good", "No previous proven selection is available.", "rollback-unavailable")
         return select(target, expectedCatalogRevision)
     }
 
@@ -470,23 +522,28 @@ class RuntimeProfileRegistry internal constructor(
     override fun deleteProfile(ref: ProfileRef, expectedCatalogRevision: Long): ProfileMutation {
         ensureHydrated()
         if (expectedCatalogRevision != catalogRevision()) return staleCatalog()
-        val entry = entries[ref] ?: return rejected("profile", "Profile revision does not exist.")
-        if (entry.origin != ProfileOrigin.IMPORTED) return rejected("profile", "Bundled profile revisions cannot be deleted.")
+        val entry = entries[ref] ?: return rejected("profile", "Profile revision does not exist.", "profile-revision-not-found")
+        if (entry.origin != ProfileOrigin.IMPORTED) return rejected("profile", "Bundled profile revisions cannot be deleted.", "bundled-profile-delete-forbidden")
         val state = readActivation()
         val referenced = listOfNotNull(readSelection(), state.previous, state.desired, readLastKnownGood())
             .any { selection -> selection is ProfileSelection.Pinned && selection.ref == ref }
         val active = statusLocked().active?.ref == ref
-        if (referenced || active) return rejected("profile", "Selected, active, or rollback profile revisions cannot be deleted.")
+        if (referenced || active) return rejected("profile", "Selected, active, or rollback profile revisions cannot be deleted.", "referenced-profile-delete-forbidden")
         val file = importedFile(ref)
         // As with import, advance the CAS token first. A failed delete can cause only a harmless extra
         // refresh; a successful delete can never be published under the old catalog revision.
-        if (!bumpCatalogRevision()) return rejected("catalog_revision", "Could not reserve the catalog change.")
+        if (!bumpCatalogRevision()) return rejected("catalog_revision", "Could not reserve the catalog change.", "catalog-reservation-failed")
         if (!deleteImmutable(file)) {
             reload()
-            return rejected("profile", "Could not durably delete the imported revision.")
+            return rejected("profile", "Could not durably delete the imported revision.", "profile-delete-failed")
         }
         reload()
-        return ProfileMutation.Success(statusLocked(), false, "Deleted imported profile revision.")
+        return ProfileMutation.Success(
+            statusLocked(),
+            false,
+            "Deleted imported profile revision.",
+            ProfilePresentation("profile-revision-deleted"),
+        )
     }
 
     /** Called once, before controllers are constructed for this process lifetime. */
@@ -513,11 +570,12 @@ class RuntimeProfileRegistry internal constructor(
                         KEY_PREVIOUS to previous?.let(::encode),
                         KEY_PHASE to ProfileActivationPhase.APPLYING.name,
                         KEY_MESSAGE to "Applying selected profile.",
+                        KEY_PRESENTATION_CODE to "activation-applying-selected",
                         KEY_CATALOG_REVISION to catalogRevision() + 1,
                     )) {
                     rollbackInvalidPending(
                         state,
-                        repinIssues + ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Could not persist the applying state."),
+                        repinIssues + issue(ProfileIssueSeverity.ERROR, "activation", "Could not persist the applying state.", "activation-applying-persist-failed"),
                         preferred = previous,
                         excluding = (desired as? ProfileSelection.Pinned)?.ref,
                     )
@@ -534,11 +592,12 @@ class RuntimeProfileRegistry internal constructor(
                 val persisted = persistRollback(
                     rollback,
                     "Previous activation did not report healthy; rolled back to ${describe(rollback)}.",
+                    rollbackPresentation("activation-rolled-back-unhealthy", rollback),
                 )
                 val issue = if (persisted) {
-                    ProfileIssue(ProfileIssueSeverity.WARNING, "activation", "Previous profile activation was rolled back after an unhealthy restart.")
+                    issue(ProfileIssueSeverity.WARNING, "activation", "Previous profile activation was rolled back after an unhealthy restart.", "activation-unhealthy-rollback-complete")
                 } else {
-                    ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Using the previous profile for this run, but the rollback could not be persisted and will be retried after restart.")
+                    issue(ProfileIssueSeverity.ERROR, "activation", "Using the previous profile for this run, but the rollback could not be persisted and will be retried after restart.", "activation-unhealthy-rollback-persist-failed")
                 }
                 resolved(rollback, null, listOf(issue))
             }
@@ -563,11 +622,12 @@ class RuntimeProfileRegistry internal constructor(
                                 KEY_PREVIOUS to encode(ProfileSelection.Pinned(previous)),
                                 KEY_DESIRED to encode(ProfileSelection.Auto),
                                 KEY_MESSAGE to "Applying updated automatically matched profile.",
+                                KEY_PRESENTATION_CODE to "activation-applying-auto-update",
                                 KEY_CATALOG_REVISION to catalogRevision() + 1,
                             )) {
                             resolved(selection, generation)
                         } else {
-                            resolved(ProfileSelection.Pinned(previous), null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "activation", "Could not stage the automatically updated profile; retained the previous revision.")))
+                            resolved(ProfileSelection.Pinned(previous), null, listOf(issue(ProfileIssueSeverity.ERROR, "activation", "Could not stage the automatically updated profile; retained the previous revision.", "activation-auto-update-stage-failed")))
                         }
                     } else {
                         resolved(selection, null)
@@ -605,6 +665,7 @@ class RuntimeProfileRegistry internal constructor(
             KEY_PREVIOUS to null,
             KEY_DESIRED to null,
             KEY_MESSAGE to null,
+            KEY_PRESENTATION_CODE to null,
             KEY_CATALOG_REVISION to catalogRevision() + 1,
         )
         if (persisted) pruneRollbackSnapshots(activeRef)
@@ -637,7 +698,9 @@ class RuntimeProfileRegistry internal constructor(
         val rollback = state.previous ?: readLastKnownGood() ?: ProfileSelection.Auto
         return persistRollback(
             rollback,
+            // Caller-owned teardown evidence is compatibility prose, not a stable semantic code.
             message.trim().take(240).ifBlank { "Profile restart was cancelled during teardown." },
+            null,
         )
     }
 
@@ -647,10 +710,16 @@ class RuntimeProfileRegistry internal constructor(
         val status = statusLocked()
         val issues = mutableListOf<ProfileIssue>()
         if (payload.schema != ProfileBackup.SCHEMA) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.schema", "Unsupported profile backup schema '${payload.schema}'.")
+            issues += issue(
+                ProfileIssueSeverity.ERROR,
+                "profiles.schema",
+                "Unsupported profile backup schema '${payload.schema}'.",
+                "backup-schema-version-unsupported",
+                mapOf("actual" to payload.schema.toString()),
+            )
         }
         if (payload.revisions.size > ProfileMetadata.MAX_IMPORTED_REVISIONS) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Profile backup exceeds the revision limit.")
+            issues += issue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Profile backup exceeds the revision limit.", "backup-revision-limit")
         }
         val seen = mutableSetOf<ProfileRef>()
         val validated = linkedMapOf<ProfileRef, ProfileBackupRevision>()
@@ -663,7 +732,7 @@ class RuntimeProfileRegistry internal constructor(
             .forEachIndexed { index, candidate ->
                 val path = "profiles.revisions[$index]"
                 if (!seen.add(candidate.ref)) {
-                    issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, "Duplicate immutable revision.")
+                    issues += issue(ProfileIssueSeverity.ERROR, path, "Duplicate immutable revision.", "backup-duplicate-revision")
                     return@forEachIndexed
                 }
                 val parsed = measuredParse(candidate.rawYaml)
@@ -675,16 +744,22 @@ class RuntimeProfileRegistry internal constructor(
                 val payloadIdCount = payloadById.getOrDefault(candidate.ref.id, 0) + 1
                 payloadById[candidate.ref.id] = payloadIdCount
                 if (payloadIdCount > ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID) {
-                    issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, "Profile '${candidate.ref.id}' exceeds the backup revision limit.")
+                    issues += issue(
+                        ProfileIssueSeverity.ERROR,
+                        path,
+                        "Profile '${candidate.ref.id}' exceeds the backup revision limit.",
+                        "backup-profile-revision-limit-plan",
+                        mapOf("id" to candidate.ref.id),
+                    )
                 }
                 if (parsed.contentSha256 != candidate.ref.revision) {
-                    issues += ProfileIssue(ProfileIssueSeverity.ERROR, "$path.revision", "Revision does not match the YAML SHA-256.")
+                    issues += issue(ProfileIssueSeverity.ERROR, "$path.revision", "Revision does not match the YAML SHA-256.", "backup-revision-hash-mismatch")
                 }
                 if (document != null && document.id != candidate.ref.id) {
-                    issues += ProfileIssue(ProfileIssueSeverity.ERROR, "$path.id", "Revision id does not match the YAML document id.")
+                    issues += issue(ProfileIssueSeverity.ERROR, "$path.id", "Revision id does not match the YAML document id.", "backup-revision-id-mismatch")
                 }
                 if (parsed.sourceBytes > ProfileMetadata.MAX_BYTES) {
-                    issues += ProfileIssue(ProfileIssueSeverity.ERROR, "$path.yaml", "Revision exceeds the per-file size limit.")
+                    issues += issue(ProfileIssueSeverity.ERROR, "$path.yaml", "Revision exceeds the per-file size limit.", "backup-revision-file-size-limit")
                 }
                 if (document == null || candidateIssues.any { it.severity == ProfileIssueSeverity.ERROR } ||
                     parsed.contentSha256 != candidate.ref.revision || document.id != candidate.ref.id
@@ -693,7 +768,7 @@ class RuntimeProfileRegistry internal constructor(
                 val existing = entries[candidate.ref]
                 if (existing != null) {
                     if (!existing.compatible || existing.rawYaml != candidate.rawYaml) {
-                        issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, "Existing immutable revision conflicts with the backup.")
+                        issues += issue(ProfileIssueSeverity.ERROR, path, "Existing immutable revision conflicts with the backup.", "backup-existing-revision-conflict")
                     } else {
                         alreadyPresent += candidate.ref
                         validated[candidate.ref] = candidate
@@ -707,27 +782,33 @@ class RuntimeProfileRegistry internal constructor(
             }
 
         if (payloadBytes > ProfileMetadata.MAX_IMPORTED_BYTES) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Profile backup exceeds the aggregate byte limit.")
+            issues += issue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Profile backup exceeds the aggregate byte limit.", "backup-aggregate-byte-limit")
         }
 
         val toImport = validated.keys.filterNot { it in alreadyPresent }.sortedRefs()
         if (importedDiskCount > ProfileMetadata.MAX_IMPORTED_REVISIONS - toImport.size) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Restored catalog would exceed the revision limit.")
+            issues += issue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Restored catalog would exceed the revision limit.", "backup-restored-catalog-revision-limit")
         }
         newById.toSortedMap().forEach { (id, count) ->
             if (importedDiskCountById.getOrDefault(id, 0) > ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID - count) {
-                issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Restored profile '$id' would exceed its revision limit.")
+                issues += issue(
+                    ProfileIssueSeverity.ERROR,
+                    "profiles.revisions",
+                    "Restored profile '$id' would exceed its revision limit.",
+                    "backup-restored-profile-revision-limit",
+                    mapOf("id" to id),
+                )
             }
         }
         if (importedDiskBytes > ProfileMetadata.MAX_IMPORTED_BYTES - newBytes) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Restored catalog would exceed the aggregate byte limit.")
+            issues += issue(ProfileIssueSeverity.ERROR, "profiles.revisions", "Restored catalog would exceed the aggregate byte limit.", "backup-restored-catalog-byte-limit")
         }
 
         val available = entries.filterValues { it.compatible }.keys + validated.keys
         fun requireSelection(selection: ProfileSelection?, path: String) {
             val ref = (selection as? ProfileSelection.Pinned)?.ref ?: return
             if (ref !in available) {
-                issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, "Referenced immutable revision is missing or incompatible.")
+                issues += issue(ProfileIssueSeverity.ERROR, path, "Referenced immutable revision is missing or incompatible.", "backup-referenced-revision-unavailable")
             }
         }
         requireSelection(payload.selection, "profiles.selection")
@@ -736,6 +817,7 @@ class RuntimeProfileRegistry internal constructor(
                 ProfileIssueSeverity.WARNING,
                 "profiles.last_known_good",
                 "The source rollback revision is not present in this core; the destination's current selection remains the rollback target.",
+                ProfilePresentation("backup-source-rollback-unavailable"),
             )
         }
         payload.active?.takeIf { it !in available }?.let {
@@ -743,11 +825,12 @@ class RuntimeProfileRegistry internal constructor(
                 ProfileIssueSeverity.WARNING,
                 "profiles.active",
                 "The source active revision is not present in this core; it will not be activated.",
+                ProfilePresentation("backup-source-active-unavailable"),
             )
         }
         val activation = readActivation()
         if (activation.phase == ProfileActivationPhase.PENDING || activation.phase == ProfileActivationPhase.APPLYING) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "profiles.activation", "A profile activation is already in progress.")
+            issues += issue(ProfileIssueSeverity.ERROR, "profiles.activation", "A profile activation is already in progress.", "activation-in-progress")
         }
         return ProfileBackupRestorePlan(
             status = status,
@@ -773,6 +856,7 @@ class RuntimeProfileRegistry internal constructor(
         selectionStaged = false,
         restartRequired = false,
         message = "Profile catalog restore was rejected before mutation.",
+        presentation = ProfilePresentation("backup-restore-rejected-before-mutation"),
     )
 
     private fun Iterable<ProfileRef>.sortedRefs(): List<ProfileRef> =
@@ -784,10 +868,10 @@ class RuntimeProfileRegistry internal constructor(
             val entry = entries[selection.ref]
             val activation = entry?.let(::activationIssues).orEmpty()
             when {
-                entry == null -> SelectionResolution(null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is missing.")))
+                entry == null -> SelectionResolution(null, listOf(issue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is missing.", "pinned-revision-missing")))
                 !entry.compatible -> SelectionResolution(
                     null,
-                    entry.issues.ifEmpty { listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is incompatible with this core.")) },
+                    entry.issues.ifEmpty { listOf(issue(ProfileIssueSeverity.ERROR, "selection", "Pinned revision is incompatible with this core.", "pinned-revision-incompatible")) },
                 )
                 activation.isNotEmpty() -> SelectionResolution(null, activation)
                 else -> SelectionResolution(entry, emptyList())
@@ -805,7 +889,7 @@ class RuntimeProfileRegistry internal constructor(
         // Local/community revisions are never activated from a fingerprint alone. Their match block is
         // preview information; an administrator must pin the immutable revision explicitly.
         return if (generic != null) SelectionResolution(generic, emptyList())
-        else SelectionResolution(null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing.")))
+        else SelectionResolution(null, listOf(issue(ProfileIssueSeverity.ERROR, "catalog", "Bundled generic fallback is missing.", "bundled-generic-fallback-missing")))
     }
 
     private fun highestUnique(candidates: List<StoredProfile>): SelectionResolution {
@@ -815,7 +899,21 @@ class RuntimeProfileRegistry internal constructor(
         val topProfilePriority = groupHighest.maxOf { it.document?.match?.priority ?: -1 }
         val highest = groupHighest.filter { it.document?.match?.priority == topProfilePriority }
         return if (highest.size == 1) SelectionResolution(highest.single(), emptyList())
-        else SelectionResolution(null, listOf(ProfileIssue(ProfileIssueSeverity.ERROR, "match", "Ambiguous automatic match at branch priority $topGroupPriority: ${highest.joinToString { it.ref.id }}.")))
+        else {
+            val ids = highest.joinToString { it.ref.id }
+            SelectionResolution(
+                null,
+                listOf(
+                    issue(
+                        ProfileIssueSeverity.ERROR,
+                        "match",
+                        "Ambiguous automatic match at branch priority $topGroupPriority: $ids.",
+                        "ambiguous-automatic-match",
+                        mapOf("priority" to topGroupPriority.toString(), "ids" to ids),
+                    ),
+                ),
+            )
+        }
     }
 
     private fun resolved(selection: ProfileSelection, generation: Long?, extraIssues: List<ProfileIssue> = emptyList()): ResolvedProfile {
@@ -830,6 +928,7 @@ class RuntimeProfileRegistry internal constructor(
                     ProfileIssueSeverity.ERROR,
                     "catalog",
                     "Using the capability-empty emergency profile because the bundled fallback is unavailable.",
+                    ProfilePresentation("emergency-profile-in-use"),
                 ),
             )
         }
@@ -862,15 +961,17 @@ class RuntimeProfileRegistry internal constructor(
         val persisted = persistRollback(
             rollback,
             "Selected profile could not be resolved; rolled back.",
+            ProfilePresentation("activation-rolled-back-unresolved"),
         )
         return resolved(
             rollback,
             generation = null,
-            extraIssues = problems + ProfileIssue(
+            extraIssues = problems + issue(
                 ProfileIssueSeverity.ERROR,
                 "activation",
                 if (persisted) "Selected profile could not be activated; the previous selection was restored."
                 else "Selected profile could not be activated; using the previous selection for this run, but the rollback could not be persisted.",
+                if (persisted) "activation-unresolved-selection-restored" else "activation-unresolved-rollback-persist-failed",
             ),
         )
     }
@@ -885,12 +986,13 @@ class RuntimeProfileRegistry internal constructor(
         val persisted = persistRollback(
             rollback,
             "Active profile became incompatible after a core change; restored the last known good selection.",
+            ProfilePresentation("activation-rolled-back-incompatible"),
             LastKnownGoodRollbackMutation.Set(keepLkg),
         )
         return resolved(
             rollback,
             generation = null,
-            extraIssues = problems + ProfileIssue(
+            extraIssues = problems + issue(
                 ProfileIssueSeverity.ERROR,
                 "activation",
                 if (persisted) {
@@ -898,6 +1000,8 @@ class RuntimeProfileRegistry internal constructor(
                 } else {
                     "Profile ${invalid.ref.id}@${invalid.ref.revision.take(12)} is incompatible; using the rollback selection for this run, but recovery could not be persisted."
                 },
+                if (persisted) "activation-incompatible-selection-restored" else "activation-incompatible-recovery-persist-failed",
+                mapOf("id" to invalid.ref.id, "revision" to invalid.ref.revision),
             ),
         )
     }
@@ -970,6 +1074,14 @@ class RuntimeProfileRegistry internal constructor(
             "selection",
             "Pinned profile '${pinned.ref.id}' is held at revision ${pinned.ref.revision.take(12)}; " +
                 "the current bundled revision ${current.ref.revision.take(12)} is not applied automatically. Select it to adopt it.",
+            ProfilePresentation(
+                "pinned-successor-held",
+                mapOf(
+                    "id" to pinned.ref.id,
+                    "retired_revision" to pinned.ref.revision,
+                    "current_revision" to current.ref.revision,
+                ),
+            ),
         )
     }
 
@@ -1005,6 +1117,14 @@ class RuntimeProfileRegistry internal constructor(
         "selection",
         "Pinned profile '${retired.ref.id}' revision ${retired.ref.revision.take(12)} was retired by this release; " +
             "following its current bundled revision ${successor.ref.revision.take(12)}.",
+        ProfilePresentation(
+            "pinned-revision-retired",
+            mapOf(
+                "id" to retired.ref.id,
+                "retired_revision" to retired.ref.revision,
+                "current_revision" to successor.ref.revision,
+            ),
+        ),
     )
 
     /**
@@ -1030,6 +1150,7 @@ class RuntimeProfileRegistry internal constructor(
             KEY_PREVIOUS to encode(rollback),
             KEY_DESIRED to encode(target),
             KEY_MESSAGE to "Applying the current bundled revision of the pinned profile.",
+            KEY_PRESENTATION_CODE to "activation-applying-bundled-revision",
             KEY_CATALOG_REVISION to catalogRevision() + 1,
         )
         return if (persisted) {
@@ -1046,6 +1167,7 @@ class RuntimeProfileRegistry internal constructor(
                         ProfileIssueSeverity.ERROR,
                         "activation",
                         "Could not persist the re-pinned bundled revision; kept ${describe(rollback)} for this run and will retry after restart.",
+                        rollbackPresentation("repin-persist-failed", rollback),
                     ),
                 ),
             )
@@ -1075,10 +1197,25 @@ class RuntimeProfileRegistry internal constructor(
         is ProfileSelection.Pinned -> "${selection.ref.id}@${selection.ref.revision.take(12)}"
     }
 
+    private fun rollbackPresentation(code: String, selection: ProfileSelection): ProfilePresentation = when (selection) {
+        ProfileSelection.Auto -> ProfilePresentation("$code-auto")
+        is ProfileSelection.Pinned -> ProfilePresentation(
+            "$code-pinned",
+            mapOf("id" to selection.ref.id, "revision" to selection.ref.revision),
+        )
+    }
+
+    private fun presentationState(presentation: ProfilePresentation?): Array<Pair<String, Any?>> = arrayOf(
+        KEY_PRESENTATION_CODE to presentation?.code,
+        KEY_PRESENTATION_PARAM_ID to presentation?.params?.get("id"),
+        KEY_PRESENTATION_PARAM_REVISION to presentation?.params?.get("revision"),
+    )
+
     /** The rollback transition is one atomic preference commit; callers retain recovery policy and diagnostics. */
     private fun persistRollback(
         rollback: ProfileSelection,
         message: String,
+        presentation: ProfilePresentation?,
         lastKnownGood: LastKnownGoodRollbackMutation = LastKnownGoodRollbackMutation.Preserve,
     ): Boolean {
         val values = mutableListOf<Pair<String, Any?>>(
@@ -1087,6 +1224,7 @@ class RuntimeProfileRegistry internal constructor(
             KEY_PREVIOUS to null,
             KEY_DESIRED to null,
             KEY_MESSAGE to message,
+            *presentationState(presentation),
         )
         if (lastKnownGood is LastKnownGoodRollbackMutation.Set) {
             values += KEY_LAST_KNOWN_GOOD to lastKnownGood.selection?.let(::encode)
@@ -1195,6 +1333,7 @@ class RuntimeProfileRegistry internal constructor(
                     ProfileIssueSeverity.ERROR,
                     "catalog",
                     "Bundled generic fallback is missing or invalid; the capability-empty emergency profile will be used.",
+                    ProfilePresentation("catalog-fallback-invalid-emergency-used"),
                 )
             }
             catalogIssues = issues
@@ -1268,6 +1407,7 @@ class RuntimeProfileRegistry internal constructor(
                 ProfileIssueSeverity.ERROR,
                 "catalog[${file.path}]",
                 "Could not read required profile revision.",
+                ProfilePresentation("required-profile-read-failed"),
             )
             return
         }
@@ -1306,26 +1446,26 @@ class RuntimeProfileRegistry internal constructor(
         orderedFiles.forEach { file ->
             val expected = expectedRef(file)
             if (expected == null) {
-                issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", "Imported revision path is not canonical <id>/<sha256>.yaml.")
+                issues += issue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", "Imported revision path is not canonical <id>/<sha256>.yaml.", "imported-path-noncanonical")
                 return@forEach
             }
             val length = file.length()
-            val quotaMessage = when {
-                length < 0 || length > ProfileMetadata.MAX_BYTES -> "Imported revision exceeds the per-file size limit."
-                admittedCount >= ProfileMetadata.MAX_IMPORTED_REVISIONS -> "Imported revision skipped: catalog count quota exceeded."
-                admittedById.getOrDefault(expected.id, 0) >= ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID -> "Imported revision skipped: per-profile revision quota exceeded."
-                admittedBytes + length > ProfileMetadata.MAX_IMPORTED_BYTES -> "Imported revision skipped: aggregate byte quota exceeded."
+            val quotaIssue = when {
+                length < 0 || length > ProfileMetadata.MAX_BYTES -> "Imported revision exceeds the per-file size limit." to "imported-file-size-limit"
+                admittedCount >= ProfileMetadata.MAX_IMPORTED_REVISIONS -> "Imported revision skipped: catalog count quota exceeded." to "imported-catalog-count-quota"
+                admittedById.getOrDefault(expected.id, 0) >= ProfileMetadata.MAX_IMPORTED_REVISIONS_PER_ID -> "Imported revision skipped: per-profile revision quota exceeded." to "imported-profile-count-quota"
+                admittedBytes + length > ProfileMetadata.MAX_IMPORTED_BYTES -> "Imported revision skipped: aggregate byte quota exceeded." to "imported-catalog-byte-quota"
                 else -> null
             }
-            if (quotaMessage != null) {
-                issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", quotaMessage)
+            if (quotaIssue != null) {
+                issues += issue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", quotaIssue.first, quotaIssue.second)
                 return@forEach
             }
             admittedCount++
             admittedBytes += length
             admittedById[expected.id] = admittedById.getOrDefault(expected.id, 0) + 1
             val raw = runCatching { readCatalogFile(file) }.getOrElse {
-                issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", "Could not read imported profile.")
+                issues += issue(ProfileIssueSeverity.ERROR, "catalog[${file.path}]", "Could not read imported profile.", "imported-profile-read-failed")
                 return@forEach
             }
             loadEntry(raw, ProfileOrigin.IMPORTED, file.path, loaded, issues, expectedRef = expected)
@@ -1356,6 +1496,7 @@ class RuntimeProfileRegistry internal constructor(
                 ProfileIssueSeverity.ERROR,
                 "selection.match",
                 "Imported profile does not match this device's immutable build identity.",
+                ProfilePresentation("activation-device-mismatch"),
             ))
         }
         return document.input.evdevButtons.mapIndexedNotNull { index, button ->
@@ -1364,6 +1505,7 @@ class RuntimeProfileRegistry internal constructor(
                     ProfileIssueSeverity.ERROR,
                     "input.evdev_buttons[$index].grab",
                     "Imported profiles cannot exclusively grab a touchscreen input device.",
+                    ProfilePresentation("activation-touchscreen-grab-forbidden"),
                 )
             } else {
                 null
@@ -1391,11 +1533,17 @@ class RuntimeProfileRegistry internal constructor(
         }
         val ref = expectedRef ?: computedRef ?: return
         if (expectedRef != null && parsed.contentSha256 != expectedRef.revision) {
-            issues += ProfileIssue(ProfileIssueSeverity.ERROR, "catalog[$source]", "Imported filename does not match the content SHA-256; revision ignored.")
+            issues += issue(ProfileIssueSeverity.ERROR, "catalog[$source]", "Imported filename does not match the content SHA-256; revision ignored.", "imported-filename-hash-mismatch")
             return
         }
         val identityIssue = if (expectedRef != null && document != null && document.id != expectedRef.id) {
-            ProfileIssue(ProfileIssueSeverity.ERROR, "id", "Document id '${document.id}' does not match storage id '${expectedRef.id}'.")
+            issue(
+                ProfileIssueSeverity.ERROR,
+                "id",
+                "Document id '${document.id}' does not match storage id '${expectedRef.id}'.",
+                "imported-document-id-mismatch",
+                mapOf("document_id" to document.id, "storage_id" to expectedRef.id),
+            )
         } else null
         val storedIssues = allIssues + listOfNotNull(identityIssue)
         if (storedIssues.any { it.severity == ProfileIssueSeverity.ERROR }) {
@@ -1406,7 +1554,7 @@ class RuntimeProfileRegistry internal constructor(
             ref,
             StoredProfile(ref, origin, raw, parsed.sourceBytes, storedDocument, storedIssues, rollbackOnly),
         )
-        if (previous != null) issues += ProfileIssue(ProfileIssueSeverity.WARNING, "catalog[$source]", "Duplicate immutable revision ignored.")
+        if (previous != null) issues += issue(ProfileIssueSeverity.WARNING, "catalog[$source]", "Duplicate immutable revision ignored.", "duplicate-revision-ignored")
     }
 
     private fun measuredParse(raw: String): ProfileParseResult {
@@ -1564,12 +1712,25 @@ class RuntimeProfileRegistry internal constructor(
     private fun readActivation(): ProfileActivationState {
         val phase = runCatching { ProfileActivationPhase.valueOf(preferences.getString(KEY_PHASE, ProfileActivationPhase.ACTIVE.name)) }
             .getOrDefault(ProfileActivationPhase.ACTIVE)
+        val message = preferences.getString(KEY_MESSAGE, "").ifBlank { null }
+        val presentation = preferences.getString(KEY_PRESENTATION_CODE, "").ifBlank { null }
+            ?.let { code ->
+                val params = when {
+                    code.endsWith("-pinned") -> mapOf(
+                        "id" to preferences.getString(KEY_PRESENTATION_PARAM_ID, ""),
+                        "revision" to preferences.getString(KEY_PRESENTATION_PARAM_REVISION, ""),
+                    )
+                    else -> emptyMap()
+                }
+                runCatching { ProfilePresentation(code, params) }.getOrNull()
+            }
         return ProfileActivationState(
             phase = phase,
             generation = preferences.getLong(KEY_GENERATION, 0L),
             previous = decode(preferences.getString(KEY_PREVIOUS, "")),
             desired = decode(preferences.getString(KEY_DESIRED, "")),
-            message = preferences.getString(KEY_MESSAGE, "").ifBlank { null },
+            message = message,
+            presentation = presentation.takeIf { message != null },
         )
     }
 
@@ -1592,11 +1753,28 @@ class RuntimeProfileRegistry internal constructor(
 
     private fun bumpCatalogRevision(): Boolean = preferences.put(KEY_CATALOG_REVISION to catalogRevision() + 1)
 
-    private fun staleCatalog() = rejected("catalog_revision", "Catalog changed; reload and retry with the current revision.")
+    private fun staleCatalog() = rejected("catalog_revision", "Catalog changed; reload and retry with the current revision.", "catalog-stale")
 
-    private fun rejected(path: String, message: String) = ProfileMutation.Rejected(
+    /** Presentation is additive: oversized opaque evidence must never turn a compatibility issue into a throw. */
+    private fun issue(
+        severity: ProfileIssueSeverity,
+        path: String,
+        message: String,
+        presentationCode: String,
+        presentationParams: Map<String, String> = emptyMap(),
+    ) = ProfileIssue(
+        severity,
+        path,
+        message,
+        runCatching { ProfilePresentation(presentationCode, presentationParams) }.getOrNull(),
+    )
+
+    private fun rejected(path: String, message: String, presentationCode: String) =
+        rejected(path, message, ProfilePresentation(presentationCode))
+
+    private fun rejected(path: String, message: String, presentation: ProfilePresentation) = ProfileMutation.Rejected(
         statusLocked(),
-        listOf(ProfileIssue(ProfileIssueSeverity.ERROR, path, message)),
+        listOf(ProfileIssue(ProfileIssueSeverity.ERROR, path, message, presentation)),
     )
 
     companion object {
@@ -1609,6 +1787,9 @@ class RuntimeProfileRegistry internal constructor(
         private const val KEY_PREVIOUS = "activation_previous"
         private const val KEY_DESIRED = "activation_desired"
         private const val KEY_MESSAGE = "activation_message"
+        private const val KEY_PRESENTATION_CODE = "activation_presentation_code"
+        private const val KEY_PRESENTATION_PARAM_ID = "activation_presentation_param_id"
+        private const val KEY_PRESENTATION_PARAM_REVISION = "activation_presentation_param_revision"
         private const val KEY_CATALOG_REVISION = "catalog_revision"
         private const val KEY_LAST_KNOWN_GOOD = "last_known_good"
         private const val KEY_ACTIVE_REF = "active_ref"

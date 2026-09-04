@@ -16,11 +16,11 @@ class ProfileUiSourceTest {
         assertTrue("tab(\"profiles\", \"/profiles\", strings.get(\"shell.nav.profile\"))" in server)
         assertTrue("get(\"/profiles\")" in server)
         assertTrue("profile-workspace" in server)
-        assertTrue("Confirm and restart" in script)
-        assertTrue("last-known-good" in script)
+        assertTrue("t(\"profiles.action.confirm_restart\", \"Confirm and restart\")" in script)
+        assertTrue("t(\"profiles.modal.restart_warning\", \"The panel service will restart. If the revision does not become healthy, ha-paneld will return to the last-known-good profile.\")" in script)
         assertTrue("grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(272px,1fr) auto" in css)
         assertTrue("vendor/profile-editor/codemirror.js" in server)
-        assertFalse("https://" in server.substringAfter("private fun profilesBody()").substringBefore("private fun installBody"))
+        assertFalse("https://" in server.substringAfter("private fun profilesBody(strings: AppStrings)").substringBefore("private fun installBody"))
     }
 
     @Test
@@ -42,7 +42,7 @@ class ProfileUiSourceTest {
         assertTrue("window.getComputedStyle(wrap).paddingBottom" in script)
         assertTrue("window.innerHeight - documentTop - Math.max(12, bottomInset)" in script)
         assertTrue("Math.max(minWorkspaceHeight, availableHeight)" in script)
-        assertTrue("status === \"observed\" ? string(fact.value) : status + \" · \" + string(fact.value)" in script)
+        assertTrue("rawStatus.toLowerCase() === \"observed\" ? string(fact.value) : status + \" · \" + string(fact.value)" in script)
         assertTrue("window.ResizeObserver" in script)
         assertTrue("bindProfileLayout();" in script.substringAfter("initEditor(); bind();"))
         assertTrue("#profile-catalog-issues,.profile-report{grid-template-columns:repeat(2,minmax(0,1fr))" in css)
@@ -56,8 +56,8 @@ class ProfileUiSourceTest {
 
     @Test
     fun shieldedProfileActionsExplainPhysicalApprovalInTheirConfirmation() {
-        assertTrue("Shielded action: when Hardened mode is enabled, approve this request on the physical panel." in script)
-        assertTrue("openModal(action === \"rollback\" ? \"Roll back profile?\" : \"Activate profile?\"" in script)
+        assertTrue("t(\"profiles.modal.hardened_body\", \"Shielded action: when Hardened mode is enabled, approve this request on the physical panel.\")" in script)
+        assertTrue("openModal(action === \"rollback\" ? t(\"profiles.modal.rollback_title\", \"Roll back profile?\") : t(\"profiles.modal.activate_title\", \"Activate profile?\")" in script)
     }
 
     @Test
@@ -71,24 +71,28 @@ class ProfileUiSourceTest {
         assertTrue(script.indexOf("file.size > model.maxBytes") < script.indexOf("file.text()"))
         assertTrue("id=\"profile-generic-draft\" hidden" in server)
         assertTrue("active.ref.id === \"generic\"" in script)
-        assertTrue("shizuku === \"recommended\"" in script)
-        assertFalse("shizuku === \"optional\" ||" in script)
+        assertTrue("shizuku.toLowerCase() === \"recommended\"" in script)
+        assertFalse("shizuku.toLowerCase() === \"optional\" ||" in script)
         assertTrue("id=\"profile-shizuku-guidance\" hidden" in server)
-        assertTrue("This profile declares a specific shell-level fallback" in server)
+        assertTrue("strings.get(\"profiles.shizuku.body\")" in server)
         assertTrue("review.content_version" in script)
         assertTrue("review.author" in script)
         assertTrue(script.substringAfter("function importFile").substringBefore("function exportSource").contains("model.originalSource = \"\""))
         assertTrue(script.substringAfter("function loadTemplate").substringBefore("function loadDeviceDraft").contains("model.originalSource = \"\""))
         assertTrue("jsonFetch(API + \"/report\")" in script)
-        assertTrue("model.editor.setSchema(schema.fields || [])" in script)
+        assertTrue("model.editor.setSchema(localizedSchemaFields(schema.fields))" in script)
         assertTrue("setSchema: function () {}" in script)
         assertTrue("postYaml(\"/probe\", source)" in script)
+        assertTrue("X-Profile-Presentation-Code" in script)
+        assertTrue("X-Profile-Presentation-Params" in script)
+        assertTrue("application/yaml, text/yaml, text/plain" in script)
+        assertTrue("typeof owner.presentation_code !== \"string\"" in script)
         assertTrue("generation !== model.viewGeneration || source !== model.source" in script)
         assertTrue("refKey(model.selected) !== refKey(ref)" in script)
         assertTrue(script.substringAfter("function saveProfile").substringBefore("function beginEdit").contains("model.preview = null"))
         assertTrue("function reviewedSummary()" in script)
         assertTrue("model.preview.summary" in script)
-        assertTrue("activation.state === \"applying\"" in script)
+        assertTrue("applying: function () { return t(\"profiles.activation.applying\", \"applying\"); }" in script)
         assertTrue("activation.state === \"active\"" in script)
         assertTrue(script.substringAfter("function setEditor").substringBefore("function isDirty").contains("useDraft.hidden = true"))
         assertTrue("id=\"profile-auto\"" in server)
@@ -102,7 +106,7 @@ class ProfileUiSourceTest {
         assertTrue("summary.compatible === false" in script)
         assertTrue("summary && summary.issues || []" in script)
         assertFalse("matches_this_device=false" in script)
-        assertTrue("it is intended for different hardware" in script)
+        assertTrue("t(\"profiles.status.valid_wrong_hardware\", \"Valid profile, but it is intended for different hardware. You can save it here, but you cannot activate it on this panel.\")" in script)
     }
 
     @Test
@@ -110,7 +114,7 @@ class ProfileUiSourceTest {
         assertTrue("dashboard.profile_note.prefix" in server)
         assertFalse("if one looks wrong, that's where to correct it" in server)
         assertTrue("id=\"profile-links\"" in server)
-        assertTrue("aria-label=\"Profile references\"" in server)
+        assertTrue("aria-label=\"${'$'}{esc(strings.get(\"profiles.references.label\"))}\"" in server)
         assertTrue("function renderProfileLinks(summary)" in script)
         assertTrue("new URL(raw)" in script)
         assertTrue("parsed.protocol !== \"https:\"" in script)

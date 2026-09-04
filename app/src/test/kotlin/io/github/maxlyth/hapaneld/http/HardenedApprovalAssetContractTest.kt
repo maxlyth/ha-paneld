@@ -189,9 +189,9 @@ class HardenedApprovalAssetContractTest {
         assertTrue("API approval narrative must follow the endpoint catalog", api.indexOf("<div id=\"root\"></div>") < api.indexOf("<p class=\"approval-key\">"))
 
         listOf(
-            "id=\"profile-activate\" type=\"button\"\${hardenedApprovalAttrs()}",
-            "id=\"profile-auto\" type=\"button\"\${hardenedApprovalAttrs()}",
-            "id=\"profile-rollback\" type=\"button\"\${hardenedApprovalAttrs()}",
+            "id=\"profile-activate\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
+            "id=\"profile-auto\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
+            "id=\"profile-rollback\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
             "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"healWebView(this)\">⬇ Update WebView now",
             "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"installComp('companion','update',this)\">⬇ Install HA Companion",
             "<button class=\"pbtn\"\${hardenedApprovalAttrs()} onclick=\"repairCompUrl(this)\">⚙ \${esc(strings.get(\"dashboard.banner.companion_url.repair\"))}",
@@ -269,7 +269,11 @@ class HardenedApprovalAssetContractTest {
         assertTrue(modal.contains("confirm.setAttribute(\"aria-describedby\", \"hardened-approval-description\")"))
         assertTrue(modal.contains("confirm.removeAttribute(\"data-hardened-approval\")"))
         val activation = profiles.substringAfter("function activate").substringBefore("function pollAfterRestart")
-        assertTrue(activation.contains("\"Confirm and restart\", true"))
+        assertTrue(
+            activation.contains(
+                "t(\"profiles.action.confirm_restart\", \"Confirm and restart\"), true",
+            ),
+        )
 
         val attrs = source.substringAfter("private fun hardenedApprovalAttrs(").substringBefore("private fun hardenedApprovalDescription")
         assertFalse(attrs.contains("hardenedSecurityEnabled"))

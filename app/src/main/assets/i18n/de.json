@@ -3353,14 +3353,59 @@
       "sourceHash": "cbd643272d6e1a58b031a7fabd38d256b9f99cb469f80990e5f286fde3c55b32",
       "state": "machine-cross-checked"
     },
+    "dashboard.runtime.ha_network_failing": {
+      "text": "gestört; {evidence}",
+      "sourceHash": "6f6d79370acaca16ce643baf92f423497ffa6ac5091490b6892d5ccc8782d337",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_failing_slow": {
+      "text": "gestört; Home Assistant antwortet langsam; {evidence}",
+      "sourceHash": "0c4343bac1746d7045d16a513c6b7ae5ec6defdd15ad250d2c3f49b5826b112b",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_failing_very_slow": {
+      "text": "gestört; Home Assistant antwortet sehr langsam; {evidence}",
+      "sourceHash": "df107af05db2d7602d2d0d328109255984d31dedfcfb46a0d388df8074504c2c",
+      "state": "machine-cross-checked"
+    },
     "dashboard.runtime.ha_network_healthy": {
       "text": "stabil; {evidence}",
       "sourceHash": "bc9986678384fbf5e9ce507e7d1a91d76e34b08bf58a8a20eb366b0982245703",
       "state": "machine-cross-checked"
     },
+    "dashboard.runtime.ha_network_healthy_slow": {
+      "text": "stabil; Home Assistant antwortet langsam; {evidence}",
+      "sourceHash": "78143bc4e451242c36bb5a2c1c943e945f51b17b49e369174bd70c254136d43f",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_healthy_very_slow": {
+      "text": "stabil; Home Assistant antwortet sehr langsam; {evidence}",
+      "sourceHash": "9284011dde06ac10f4d06d1c6a7668da3f6dc951897ca3bd4ec48c080bb895f8",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes": {
+      "text": "Abfragen gehen verloren; {evidence}",
+      "sourceHash": "80879344403c1f1f32cefbcb1eb4604dfd85b99a366f1ac4a49b95d4fc4475ad",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes_slow": {
+      "text": "Abfragen gehen verloren; Home Assistant antwortet langsam; {evidence}",
+      "sourceHash": "c7eb828d98e083fe6edeaf656eaabfa8f9d313f4d00714ad94658ab1fa00f3a7",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_losing_probes_very_slow": {
+      "text": "Abfragen gehen verloren; Home Assistant antwortet sehr langsam; {evidence}",
+      "sourceHash": "3b9ae1fd448e2a1cd254e170b929e3166077f3a8b7c52537414e1197b0d6a579",
+      "state": "machine-cross-checked"
+    },
     "dashboard.runtime.ha_network_not_measured": {
       "text": "nicht gemessen; dieses Panel hat keinen authentifizierten Home Assistant-Socket",
       "sourceHash": "0cecb6edb9d044c440671a9fab915ce705b495fd6d898e9d7db9bb02981fbb67",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_settling": {
+      "text": "stabilisiert sich nach dem Start; noch keine Bewertung",
+      "sourceHash": "c45b8d624d6e049fe75cf223a5860df0b642f1e46fc31613b41465176c12511c",
       "state": "machine-cross-checked"
     },
     "dashboard.runtime.ha_network_severe": {
@@ -4092,6 +4137,1731 @@
       "text": "Das Panel konnte die Anmeldung nicht abschließen. Prüfe seine Verbindung zu Home Assistant und versuche es erneut.",
       "sourceHash": "b82711df2e8cca03acbe44eb3d653f4de11b47e54170f363ac5474dc91f853ef",
       "state": "machine-cross-checked"
+    },
+    "profiles.action.activate": {
+      "text": "Aktivieren",
+      "sourceHash": "24433c70eba5b15368fe2e1dda94fe3d61db2357aa144363b9ab487e60235ab2",
+      "state": "machine-draft"
+    },
+    "profiles.action.cancel": {
+      "text": "Abbrechen",
+      "sourceHash": "19766ed6ccb2f4a32778eed80d1928d2c87a18d7c275ccb163ec6709d3eb2e27",
+      "state": "machine-draft"
+    },
+    "profiles.action.compare": {
+      "text": "Vergleichen",
+      "sourceHash": "e888155d8c7d2e3c3f9eb1bf57e8d81ba1a3c182b5e94b01e09de2cb2cca81f9",
+      "state": "machine-draft"
+    },
+    "profiles.action.confirm": {
+      "text": "Bestätigen",
+      "sourceHash": "eebdd24a77d9ad32222660c07777163bf5f6732df2b172351f3f8d5783e4f529",
+      "state": "machine-draft"
+    },
+    "profiles.action.confirm_restart": {
+      "text": "Bestätigen und neu starten",
+      "sourceHash": "acaaded18333f207fd4295f1fc8f5258236341051e2d2b542ec3e62d01fc5d1d",
+      "state": "machine-draft"
+    },
+    "profiles.action.confirm_rollback": {
+      "text": "Rollback bestätigen",
+      "sourceHash": "294bceb0244a2f4aedefc8213cfddb6647f09493c58308ff2481fd3ee1ddf2b1",
+      "state": "machine-draft"
+    },
+    "profiles.action.copy_draft": {
+      "text": "Entwurf zum Bearbeiten kopieren",
+      "sourceHash": "2e79c38a5baffb1dbf4ced3cdc5bf4376fbebdd108ebe2d1d1772d99edce0b8c",
+      "state": "machine-draft"
+    },
+    "profiles.action.delete": {
+      "text": "Löschen",
+      "sourceHash": "e2d0a54968ead24efc0dffa6ac78fc606dceec34a0f586177a74a54cc2272cf8",
+      "state": "machine-draft"
+    },
+    "profiles.action.delete_revision": {
+      "text": "Revision löschen",
+      "sourceHash": "e5adf5d185178d413602a82dac83850d755b5bbb2ed59330a2968dbf78716be0",
+      "state": "machine-draft"
+    },
+    "profiles.action.edit": {
+      "text": "Bearbeiten",
+      "sourceHash": "464c4ffd019e1e9691dcf0537c797353ef2b1c1d4833d3d463e5b74ae4547344",
+      "state": "machine-draft"
+    },
+    "profiles.action.export": {
+      "text": "Exportieren",
+      "sourceHash": "3664895579f0a7e68c4aa09c91316e20239bc74499010e6423ece40cad7c28f7",
+      "state": "machine-draft"
+    },
+    "profiles.action.fork": {
+      "text": "Abzweigen",
+      "sourceHash": "8e5b1a73152cf01c1ce614f31711fc4159e8ecc177cd4c02975ed0145b3d3d45",
+      "state": "machine-draft"
+    },
+    "profiles.action.generate_draft": {
+      "text": "Geräteentwurf erstellen",
+      "sourceHash": "bcecae09789b6ba68b4901ebb2e3db9766d4f1ddbc9cdd5568c9a63b6981cf23",
+      "state": "machine-draft"
+    },
+    "profiles.action.import": {
+      "text": "Importieren",
+      "sourceHash": "2cff9baabf56ca002610e113bc94deb6ededddfc3c130365b6e88ed5195bf774",
+      "state": "machine-draft"
+    },
+    "profiles.action.new": {
+      "text": "Neu",
+      "sourceHash": "18fdd549b2ed367ac0c74cbec1214644728515b30edbcb78e7d322757a7c8359",
+      "state": "machine-draft"
+    },
+    "profiles.action.rollback": {
+      "text": "Zurücksetzen",
+      "sourceHash": "c591f5574995c7403a2883c4d68c74b4d1e1b12e0a3689d0383ff28887bc0efe",
+      "state": "machine-draft"
+    },
+    "profiles.action.save_revision": {
+      "text": "Revision speichern",
+      "sourceHash": "eb074fcae339a541f74c2d85c18a4720e883249aa98c215df93ac2c29412f97a",
+      "state": "machine-draft"
+    },
+    "profiles.action.use_automatic": {
+      "text": "Automatische Auswahl verwenden",
+      "sourceHash": "539ca38b10265667d2ecca6424e6bec15d47aaed08577648ad463be14c6b75b2",
+      "state": "machine-draft"
+    },
+    "profiles.action.validate_yaml": {
+      "text": "YAML validieren",
+      "sourceHash": "679c47605ba71c0f34b0d814e33481caf9be394b2dcd02077eadd7640ccea284",
+      "state": "machine-draft"
+    },
+    "profiles.activation.applying": {
+      "text": "wird angewendet",
+      "sourceHash": "61c1c8cded1d1a291011fa526f8332d7b515decf6398f0a31953862c661c88ad",
+      "state": "machine-draft"
+    },
+    "profiles.activation.pending": {
+      "text": "ausstehend",
+      "sourceHash": "62a2fed3d6e08c44835fce71f02210b1ddabfb066e39edf1e6c261988f824dd3",
+      "state": "machine-draft"
+    },
+    "profiles.approval.retry": {
+      "text": "Bestätige diese Anfrage am Panel und versuche es dann erneut.",
+      "sourceHash": "be7545a353d7b786a59ce8893679e105d9fe23794cee284b5127c4037408f353",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.healthy": {
+      "text": "Katalog und aktive Laufzeit sind fehlerfrei.",
+      "sourceHash": "c37b62f14e325aa02d6f8b3761a4cc2c21f066f946e4b3a9f1b300a6e0e6eafc",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.issue_default": {
+      "text": "Problem im Profilkatalog",
+      "sourceHash": "a9201c818ae19bfabfef129c251584ec3ee61176b33a8ddad1e9b9a7fcaa59f2",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.bundled": {
+      "text": "{name} · Mitgeliefert · {revision}",
+      "sourceHash": "974d26d6979cf8f927f7bfedc571a6762397de407c9a0644a05d570accdea6da",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.bundled_active": {
+      "text": "{name} · Mitgeliefert · {revision} · aktiv",
+      "sourceHash": "e40f9da453bd6281cbc8d80f4d030b5dbe70d6eebbb4823adbb57df335295043",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.bundled_incompatible": {
+      "text": "{name} · Mitgeliefert · {revision} · inkompatibel",
+      "sourceHash": "5af211d221e803b4d5accebc92cace6ab7887f82ee1dc6d9db9ef8b34f34fb6f",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.bundled_selected": {
+      "text": "{name} · Mitgeliefert · {revision} · ausgewählt",
+      "sourceHash": "3b29302ce7b3d2320c8d7af86962c2e88b23ef1343392d09cbf82bad1774f623",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.local": {
+      "text": "{name} · Lokal · {revision}",
+      "sourceHash": "8fb7621488010cee3f989d62ad35efe1142e8f83283be1f3b4a07334dbc24f3f",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.local_active": {
+      "text": "{name} · Lokal · {revision} · aktiv",
+      "sourceHash": "b28e45fa41be9dca65cd397191e5a31cc8c61b4cff92314d310ba77d32f7d560",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.local_incompatible": {
+      "text": "{name} · Lokal · {revision} · inkompatibel",
+      "sourceHash": "23af9d85eb19b94121c5487cdd1f3981a47aaefa4331e47ed5b169354f5d1c16",
+      "state": "machine-draft"
+    },
+    "profiles.catalog.option.local_selected": {
+      "text": "{name} · Lokal · {revision} · ausgewählt",
+      "sourceHash": "83a8e2a6543e412563059a4c0ff5d89b16d7238593bec804ae34f8bd9d7e8ab1",
+      "state": "machine-draft"
+    },
+    "profiles.compare.item_default": {
+      "text": "Profil",
+      "sourceHash": "1900eab6c028483d7126599ee6f50de0d27907b5c65fa90524580b4b0f9852b0",
+      "state": "machine-draft"
+    },
+    "profiles.compare.no_changes": {
+      "text": "Keine semantischen Änderungen gegenüber dem aktiven Profil.",
+      "sourceHash": "a5d62d5ba498a421a1f6dc8e7d219758bebbab90927c5f610d6d5836be418caa",
+      "state": "machine-draft"
+    },
+    "profiles.compare.pending": {
+      "text": "Validiere das aktuelle YAML, um es mit dem aktiven Profil zu vergleichen.",
+      "sourceHash": "d6c6bcf15db2984b35c081e3e3872b2c04aa6d0347da3c35bebcf3e16e791a6c",
+      "state": "machine-draft"
+    },
+    "profiles.compare.unset": {
+      "text": "(nicht festgelegt)",
+      "sourceHash": "4d993827d064c5caeffa781f62bf1bdd765dfcb53d763412aeb23f5ad3ad5811",
+      "state": "machine-draft"
+    },
+    "profiles.confirm.discard": {
+      "text": "Diese nicht gespeicherte Profiländerung verwerfen?",
+      "sourceHash": "26f8182f9cb49c87468e93b8b9828b23c83786eb94a55eb41303c5decc55b6a5",
+      "state": "machine-draft"
+    },
+    "profiles.editor.none_selected": {
+      "text": "Kein Profil ausgewählt",
+      "sourceHash": "d87214dc92810b75837786634d2d69ffb7e0b6b12981dace2c5823839dbedf66",
+      "state": "machine-draft"
+    },
+    "profiles.editor.title": {
+      "text": "Profil-YAML",
+      "sourceHash": "a9bdf306d886599f44b06558ebb6b7b7a1920018d6ce9e943a13994faad4501d",
+      "state": "machine-draft"
+    },
+    "profiles.editor.unsaved": {
+      "text": "Nicht gespeichertes Profil",
+      "sourceHash": "964b668e53a234e345ed1baf6482fedb7c654894af88673f4c36ee7bcdfe9197",
+      "state": "machine-draft"
+    },
+    "profiles.error.activation_catalog_changed": {
+      "text": "Der Profilkatalog wurde in einem anderen Tab geändert. Lade neu und bestätige erneut.",
+      "sourceHash": "0716bcb535cf64b7517b71031ec1f8f8215f117f32d17aa9d6c88cd15d646e95",
+      "state": "machine-draft"
+    },
+    "profiles.error.activation_failed": {
+      "text": "Aktivierung fehlgeschlagen: {error}",
+      "sourceHash": "5a21d4f81c0f4e6d08025ce49dafc5d5eb287eac47c088a21b113dfe30a50e9d",
+      "state": "machine-draft"
+    },
+    "profiles.error.activation_wrong_device": {
+      "text": "Aktivierung blockiert: Dieses importierte Profil entspricht nicht der unveränderlichen Build-Identität dieses Geräts.",
+      "sourceHash": "4b7e21806ed40bcf34f0604610805002d92144677fe4fc49d8b46bb6dc750428",
+      "state": "machine-draft"
+    },
+    "profiles.error.auto_rollback": {
+      "text": "Der Kandidat wurde nicht fehlerfrei; ha-paneld hat automatisch das zuletzt als fehlerfrei bekannte Profil wiederhergestellt.",
+      "sourceHash": "9351181f754e82d7edb3b3c89c24d2e7f67fd4688e1c17983f4bc1a79818e666",
+      "state": "machine-draft"
+    },
+    "profiles.error.build_draft": {
+      "text": "Der passive Entwurf konnte nicht erstellt werden: {error}",
+      "sourceHash": "c8b730122d1ca3eaf1f0e9667215ce13d2fe469876be1a98b97a36f0367c151d",
+      "state": "machine-draft"
+    },
+    "profiles.error.create_template": {
+      "text": "Eine Vorlage konnte nicht erstellt werden: {error}",
+      "sourceHash": "bc677f949da2c83fc3dcd5536ba48a31ad9b3858a4261a26c370d8cff78e8a79",
+      "state": "machine-draft"
+    },
+    "profiles.error.delete_catalog_changed": {
+      "text": "Der Katalog wurde geändert. Lade neu, bevor du löschst.",
+      "sourceHash": "cfee6dc954ee34e78c4d4dfbe7ed6f2bb368181c4d2acc7b41a0ad92ab9bbf9d",
+      "state": "machine-draft"
+    },
+    "profiles.error.delete_failed": {
+      "text": "Löschen fehlgeschlagen: {error}",
+      "sourceHash": "04bd5a33edf887482af19bada696d6d470991b8a900b867f64faba49192bc16e",
+      "state": "machine-draft"
+    },
+    "profiles.error.http": {
+      "text": "HTTP-Status {status}",
+      "sourceHash": "d9df8d88fd764eaa40677f0612d7e4983588c7698a9f43c6a4c76c10112f9b26",
+      "state": "machine-draft"
+    },
+    "profiles.error.load_catalog": {
+      "text": "Profile konnten nicht geladen werden: {error}",
+      "sourceHash": "a856264b55e0d7c154b75aae0dddb4ddbeed2401499c38f3324d0ef517c5dc8b",
+      "state": "machine-draft"
+    },
+    "profiles.error.load_profile": {
+      "text": "Profil konnte nicht geladen werden: {error}",
+      "sourceHash": "1347c80a39b758ddf59a3edf3ab76dfb8d01a3d31d9c0c078ec2294e2f6112cd",
+      "state": "machine-draft"
+    },
+    "profiles.error.must_validate": {
+      "text": "Das Profil muss vor dem Speichern erfolgreich validiert werden",
+      "sourceHash": "481d9b91ba9125d86b9a808e0d35c0d90638d50c0aa5e1dbd5aff39f18485c2a",
+      "state": "machine-draft"
+    },
+    "profiles.error.read_file": {
+      "text": "Profil konnte nicht gelesen werden: {error}",
+      "sourceHash": "cb71bdeb76675f671de3a755ff244be09a9897b9bf686f0668e7b8b8d370160c",
+      "state": "machine-draft"
+    },
+    "profiles.error.restart_slow": {
+      "text": "Der Neustart dauert länger als erwartet. Lade neu, um das aktive Profil zu prüfen.",
+      "sourceHash": "27fc3e61492dee6b8a0d3b60c126eae440ed79b51f9910a1b48fcf4811f46be4",
+      "state": "machine-draft"
+    },
+    "profiles.error.save_failed": {
+      "text": "Speichern fehlgeschlagen: {error} Behebe das Problem und validiere dann erneut.",
+      "sourceHash": "d3527caef1b39a8d11c6345604d18ee58a3accefb05973f04c2c0d929ccaa6ef",
+      "state": "machine-draft"
+    },
+    "profiles.error.stale_preview": {
+      "text": "Diese Vorschau oder Katalogrevision ist veraltet. Validiere vor dem Speichern erneut.",
+      "sourceHash": "02b3cad9f516301a115486d9012f28059a0598771d521459b584c3571a458f02",
+      "state": "machine-draft"
+    },
+    "profiles.error.too_large": {
+      "text": "Das Profil ist zu groß. Die Grenze liegt bei {bytes} Byte.",
+      "sourceHash": "caf4d79b67e7f7cbb849043b1a307e8ae3e1a4c27a8629faa607e2af67276419",
+      "state": "machine-draft"
+    },
+    "profiles.error.validation_failed": {
+      "text": "Validierung fehlgeschlagen: {error}",
+      "sourceHash": "00a71a2a8b65edd0c02515f5c6dcb95bf9eccd0216cad1232175b09dc2abe884",
+      "state": "machine-draft"
+    },
+    "profiles.generic.body": {
+      "text": "Erstelle aus passiven Android-Fakten einen schreibgeschützten Entwurf. Unbekannte Hardware bleibt mit TODO markiert; dabei werden keine privilegierten, Eingabe- oder Hardwarebefehle ausgeführt.",
+      "sourceHash": "80d4ceb11f2148ab2b32d02aaee66183866b15f20c1a1b5e993464b77062c9ec",
+      "state": "machine-draft"
+    },
+    "profiles.generic.title": {
+      "text": "Mit Generic beginnen?",
+      "sourceHash": "31cf80c74c6314ae243640e72ffe01cdb24f10397b7530828496a9ef26a34486",
+      "state": "machine-draft"
+    },
+    "profiles.inspector.title": {
+      "text": "Prüfung",
+      "sourceHash": "aff0766a5290e117b8433c351bae7b7b23bed682b2369bd822d88a647cc58512",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-applying-persist-failed": {
+      "text": "Der Status „wird angewendet“ konnte nicht dauerhaft gespeichert werden.",
+      "sourceHash": "53b84bdf65a6de2efc908bee965ec044df3de270b577e2da5cfc44472a3d3a5b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-auto-update-stage-failed": {
+      "text": "Das automatisch aktualisierte Profil konnte nicht vorgemerkt werden; die vorherige Revision wurde beibehalten.",
+      "sourceHash": "f9a558c41c8a2edefe060b1faca0717adb411745a90a85a64e2157d4aa18462b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-device-mismatch": {
+      "text": "Das importierte Profil entspricht nicht der unveränderlichen Build-Identität dieses Geräts.",
+      "sourceHash": "803a8a72d48933f8471295da61e5dc1e708e154c948cbf3acc63756ed871f562",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-incompatible-recovery-persist-failed": {
+      "text": "Profil {id}@{revision} ist inkompatibel; für diesen Lauf wird die Rollback-Auswahl verwendet, die Wiederherstellung konnte jedoch nicht dauerhaft gespeichert werden.",
+      "sourceHash": "364d3f68b8536527a8aa81433ab372a3ae5c915c63bedaa4083ad36472f02eb9",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-incompatible-selection-restored": {
+      "text": "Profil {id}@{revision} ist inkompatibel; die zuletzt als fehlerfrei bekannte Auswahl wurde wiederhergestellt.",
+      "sourceHash": "fd0e4b32d184f43c16eaa6ea15b71220d22ef08b981fbc7fa1ea6a91649ad176",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-touchscreen-grab-forbidden": {
+      "text": "Importierte Profile dürfen ein Touchscreen-Eingabegerät nicht exklusiv belegen.",
+      "sourceHash": "a342985c3211893d29e1fbde3a97684440e75b3c5461e08871974516f8f239d6",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-unhealthy-rollback-complete": {
+      "text": "Die vorherige Profilaktivierung wurde nach einem fehlerhaften Neustart zurückgesetzt.",
+      "sourceHash": "2cd0cbd11c9acb352e4e6105336fc93052f67e336e5b222d2455a8a0f7ac74ac",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-unhealthy-rollback-persist-failed": {
+      "text": "Für diesen Lauf wird das vorherige Profil verwendet, aber der Rollback konnte nicht dauerhaft gespeichert werden und wird nach dem Neustart erneut versucht.",
+      "sourceHash": "1c2aabbdfab8feac68aa16d4b4b9fbf5ba991dd914d224a6a1ebf2ebc1454c5f",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-unresolved-rollback-persist-failed": {
+      "text": "Das ausgewählte Profil konnte nicht aktiviert werden; für diesen Lauf wird die vorherige Auswahl verwendet, aber der Rollback konnte nicht dauerhaft gespeichert werden.",
+      "sourceHash": "303a062ea735aa8195a477d0f494c33265e1fc2178264ab832415caf4c69d9b8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.activation-unresolved-selection-restored": {
+      "text": "Das ausgewählte Profil konnte nicht aktiviert werden; die vorherige Auswahl wurde wiederhergestellt.",
+      "sourceHash": "932b768d27abb75b12fbb230d7c7ee8e4898b52789fcbe24c14867fa23ba7580",
+      "state": "machine-draft"
+    },
+    "profiles.issue.ambiguous-automatic-match": {
+      "text": "Mehrdeutige automatische Übereinstimmung bei Zweigpriorität {priority}: {ids}.",
+      "sourceHash": "f1e3a97f333651dae2dfa9c9ef8b651aae074a7cdf7ed19b29daad9fb313047b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.android-package-name-invalid": {
+      "text": "Ungültiger Android-Paketname.",
+      "sourceHash": "5b48ea23aaec88247ba0e9b05d9019534b14c14923d3f06aebc23f1e824d8d8d",
+      "state": "machine-draft"
+    },
+    "profiles.issue.app-su-needs-su-form": {
+      "text": "Kann nicht true sein, wenn su_form auf none gesetzt ist.",
+      "sourceHash": "e16c9a59b32c1ce95abca9a55f7eab71713357f1b84fcb041fecebed14a76a17",
+      "state": "machine-draft"
+    },
+    "profiles.issue.bounded-text": {
+      "text": "Muss {min}–{max} Zeichen ohne Steuerzeichen enthalten.",
+      "sourceHash": "0df36c9e0f46b7bdc6e7f8e62b0ab1731387af8bd6bc41528fbd081a58adb476",
+      "state": "machine-draft"
+    },
+    "profiles.issue.bounded-text-basic": {
+      "text": "Muss {min}–{max} Zeichen enthalten.",
+      "sourceHash": "3958e2b9d396f734c99a0118667ff257e9afc95176be1f72a9dd87212e668c52",
+      "state": "machine-draft"
+    },
+    "profiles.issue.bundled-generic-fallback-missing": {
+      "text": "Der mitgelieferte generische Fallback fehlt.",
+      "sourceHash": "8e4ca2fb74394d9b13ffb3592f27c17c2e68fca3ee0eea1ea9df0f04f675d1c8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.capability-driver-required": {
+      "text": "Die Fähigkeit erfordert den Core-Treiber '{value}'.",
+      "sourceHash": "3ff0a52ca2217daa24abe939e76b9ff53b3cad8e4f26ffa806024a89951f4b75",
+      "state": "machine-draft"
+    },
+    "profiles.issue.catalog-fallback-invalid-emergency-used": {
+      "text": "Der mitgelieferte generische Fallback fehlt oder ist ungültig; das Notfallprofil ohne Fähigkeiten wird verwendet.",
+      "sourceHash": "7956b121f11112bebb98fee152debc5f1ad804cb336313b30034782411bd1a37",
+      "state": "machine-draft"
+    },
+    "profiles.issue.core-version-required": {
+      "text": "Erfordert ha-paneld {required} oder neuer; dieser Core ist {current}.",
+      "sourceHash": "473b036af900c9ff8dd133a0bace84cb8ba61150c2f94db7645bd3914d1d671f",
+      "state": "machine-draft"
+    },
+    "profiles.issue.cpu-cluster-count-limit": {
+      "text": "Es sind höchstens 8 CPU-Kerncluster zulässig.",
+      "sourceHash": "76e67d73c6c2e084b74aad1aa83d3e85e003aa44b44d471f399c488063132b16",
+      "state": "machine-draft"
+    },
+    "profiles.issue.cpu-core-count-range": {
+      "text": "Es müssen zwischen 1 und 128 Kerne sein.",
+      "sourceHash": "fdc2c1cbe01dfe2409cf8cd0393acb03f797bfb2c432fd68df266dcf96c1f1f7",
+      "state": "machine-draft"
+    },
+    "profiles.issue.cpu-total-count-limit": {
+      "text": "Es sind insgesamt höchstens 256 CPU-Kerne zulässig.",
+      "sourceHash": "4c7eba242fac83af6d4ae24730078d096610c1e1ea67e6f6de6df7a84b6a4cbb",
+      "state": "machine-draft"
+    },
+    "profiles.issue.daemon-blpower-sandbox-only": {
+      "text": "daemon-blpower ist für Profile mit Sandbox-Abschirmung reserviert.",
+      "sourceHash": "420e9642e5a31d67479fcbb0caa72af7dfd28fc2cbf2e2d3b0be377ee8101701",
+      "state": "machine-draft"
+    },
+    "profiles.issue.daemon-led-sandbox-only": {
+      "text": "Nur für Daemons vorgesehene LED-Pfade sind für Profile mit Sandbox-Abschirmung reserviert.",
+      "sourceHash": "39c4bdc0afab7d3f0cd4c25aa1e581a0d92aaed66740404a32d6c6ca1ab5f023",
+      "state": "machine-draft"
+    },
+    "profiles.issue.density-range": {
+      "text": "Die Dichte muss zwischen 80 und 640 dpi liegen.",
+      "sourceHash": "1625bf8ef923d238548f956c43c57a920741ee682be625ff2fc9bfe6b0bfe990",
+      "state": "machine-draft"
+    },
+    "profiles.issue.dotted-release-version-required": {
+      "text": "Erwartet wurde eine begrenzte, durch Punkte getrennte Release-Version.",
+      "sourceHash": "922627d4dc899617b9dbc8ecb2344e94cdf89b479a9d485e6b6bdcef6bd89205",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-cpu-architecture": {
+      "text": "CPU-Kernarchitekturen müssen innerhalb der SoC-Beschreibung eindeutig sein.",
+      "sourceHash": "20932b7216036254cd42bff8a864c7ba6af087ecf545a1b634a625811e8de586",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-evdev-mapping": {
+      "text": "Doppelte Zuordnung (sw, code).",
+      "sourceHash": "95499e918aee9a0de72a1197a435e816a17fca968293c6f192d13cb9006144ce",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-package-desired-state": {
+      "text": "Doppelter gewünschter Paketstatus.",
+      "sourceHash": "fa8ce22b3c875e572de7a26712eb83841427561b4dd9b7540137175efd00b2d4",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-profile-link-label": {
+      "text": "Beschriftungen von Profilverweisen müssen eindeutig sein.",
+      "sourceHash": "2fa81ad14e17d0e926078cf99bd8c5e0c7cb3ba0989909b80d7941210f8c07e2",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-profile-link-url": {
+      "text": "Doppelte URL des Profilverweises.",
+      "sourceHash": "a887c4540ffcf7cd9528eccb49c13636129c8a7671a3d83db62ed1e03831d5de",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-recipe-selection": {
+      "text": "Doppelte Rezeptauswahl.",
+      "sourceHash": "2c446e605be495cb396965cd9858af5275f270681d74d2a5a4b970417242daec",
+      "state": "machine-draft"
+    },
+    "profiles.issue.duplicate-revision-ignored": {
+      "text": "Doppelte unveränderliche Revision ignoriert.",
+      "sourceHash": "875a97a23717e850dabe8dcf5592b2628d26dc24b2544c24566b3e67bd79e19c",
+      "state": "machine-draft"
+    },
+    "profiles.issue.emergency-profile-in-use": {
+      "text": "Das Notfallprofil ohne Fähigkeiten wird verwendet, weil der mitgelieferte Fallback nicht verfügbar ist.",
+      "sourceHash": "500a169e514dacb40d8c8aadf58c1b678790fa4df713d3ef2b3e4f2ecdfeb2a9",
+      "state": "machine-draft"
+    },
+    "profiles.issue.evdev-device-node-invalid": {
+      "text": "Es werden nur Geräteknoten im Format /dev/input/eventN unterstützt.",
+      "sourceHash": "a2d9c427bddea131798fd6ef0eb27f722416b65d74ad490e5dc3d0eb82a172d6",
+      "state": "machine-draft"
+    },
+    "profiles.issue.evdev-mapping-count-limit": {
+      "text": "Es sind höchstens 32 evdev-Zuordnungen zulässig.",
+      "sourceHash": "a163cfc90774fce2d415518380b122e2b3f0a34b8bfac344267d5816ce9ee20c",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-32-bit-integer-or-strategy": {
+      "text": "Erwartet wurde eine 32-Bit-Ganzzahl oder eine benannte Strategie.",
+      "sourceHash": "b81e64d72bc5a4de164cd02fc6ac4b4ab215cbe8aae281a3c37af968a46f3cd8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-boolean": {
+      "text": "Erwartet wurde ein boolescher Wert.",
+      "sourceHash": "e7e4ed486bcbd6e9205dd0674fb23d9d70373481c6e9661641e3742eede70873",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-finite-number": {
+      "text": "Erwartet wurde eine endliche Zahl.",
+      "sourceHash": "54f44ee48971f729ff3409c3f192e4c3b6dd870f67fc9e7366ea6a9ce4f3ed98",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-integer": {
+      "text": "Erwartet wurde eine 32-Bit-Ganzzahl.",
+      "sourceHash": "76977fbe78230151dafd78994d3edc012ba5c6313c406462d616645e02a1ffad",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-integer-or-strategy": {
+      "text": "Erwartet wurde eine Ganzzahl oder eine benannte Strategie.",
+      "sourceHash": "6e4d4db3a504560dab0324e5aa071de43e2d67504300071ee053cdb7af05f06d",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-list": {
+      "text": "Erwartet wurde eine Liste.",
+      "sourceHash": "566c7408d200975d6cc4cbda061c4c8765366ea7b2fc3557198863b8814e6be5",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-mapping": {
+      "text": "Erwartet wurde eine Zuordnung.",
+      "sourceHash": "fca9765060a662a5a9cf2016bb0184af9156a2199cae99c97b1f86a3307d550b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.expected-string": {
+      "text": "Erwartet wurde eine Zeichenfolge.",
+      "sourceHash": "754e36f268414d23e4deb3d0b952ec976432ffc9d83b33500380d8205067a624",
+      "state": "machine-draft"
+    },
+    "profiles.issue.font-scale-range": {
+      "text": "Die Schriftskalierung muss zwischen 0,5 und 1,5 liegen.",
+      "sourceHash": "15900ed56a3cb5a4957e9afc7ecf369ab8897136ea3fe43459cf58383bec3351",
+      "state": "machine-draft"
+    },
+    "profiles.issue.generic-fallback-only": {
+      "text": "Nur das mitgelieferte generische Profil darf als Fallback dienen.",
+      "sourceHash": "a96ce38fd13cc1b58dfdf2c02c1f3c3c76f26e2d606b089db14aadfaa1f34b51",
+      "state": "machine-draft"
+    },
+    "profiles.issue.gpio-block-base-range": {
+      "text": "Die GPIO-Blockbasis muss zwischen 0 und 4092 liegen.",
+      "sourceHash": "ed057cfeed7d0a5751ba99cc17b77faed872494116906e0eba49beb6df7f4a2e",
+      "state": "machine-draft"
+    },
+    "profiles.issue.gpio-range": {
+      "text": "GPIO muss zwischen 0 und 4095 liegen.",
+      "sourceHash": "c14ab4b4de7475285b0b67c868b8936bd88ac8983f35d620013288f16b2752a8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-catalog-byte-quota": {
+      "text": "Importierte Revision übersprungen: Gesamtkontingent für Bytes überschritten.",
+      "sourceHash": "4b3196ee04aa669c352b8aa64e879d7c2d7f72991361bcbfbdc30cd950e747ba",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-catalog-count-quota": {
+      "text": "Importierte Revision übersprungen: Kontingent für die Kataloganzahl überschritten.",
+      "sourceHash": "c61ee4ce322c0425fcf4f9fc88726227ec9b2a7e5f2e77491c28798299b11365",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-document-id-mismatch": {
+      "text": "Dokument-ID '{document_id}' stimmt nicht mit Speicher-ID '{storage_id}' überein.",
+      "sourceHash": "1e601c4ec30da79526a540ba571d8711c1c7b713b1e31bb3a11af6a54c0a13d8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-file-size-limit": {
+      "text": "Die importierte Revision überschreitet die Größenbegrenzung pro Datei.",
+      "sourceHash": "b5429ffcdc312d00d152706a0e140083642cb3d51dd3b7d1a13fe9568f09930b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-filename-hash-mismatch": {
+      "text": "Der importierte Dateiname stimmt nicht mit dem SHA-256 des Inhalts überein; die Revision wurde ignoriert.",
+      "sourceHash": "92b4e19fa98c72fce4bd63fc50880eeeb5292e8031ada3d9692f654c64d71ae8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-path-noncanonical": {
+      "text": "Der Pfad der importierten Revision entspricht nicht dem kanonischen Format <id>/<sha256>.yaml.",
+      "sourceHash": "40e41fa4e64a3674549a7f4a6af764acd44cd5e5fbe396526eb13b73aee96f95",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-profile-count-quota": {
+      "text": "Importierte Revision übersprungen: Kontingent für Revisionen pro Profil überschritten.",
+      "sourceHash": "44411b2cd1ec5c6138abfe86e83ff4d5789ad9caf0430187120ee98d0d4b9336",
+      "state": "machine-draft"
+    },
+    "profiles.issue.imported-profile-read-failed": {
+      "text": "Das importierte Profil konnte nicht gelesen werden.",
+      "sourceHash": "4eb624e171de4d4051c592accc776e2ae4e2d5850aa74ac8cc162de5a4bf7391",
+      "state": "machine-draft"
+    },
+    "profiles.issue.introduced-year-range": {
+      "text": "Muss zwischen 1970 und 2100 liegen.",
+      "sourceHash": "62ecffc860970a2b4e9ed2d55abbdd11cc3b8e59e951e4bdd50cbff2bd061882",
+      "state": "machine-draft"
+    },
+    "profiles.issue.invalid-https-url": {
+      "text": "Muss eine absolute HTTPS-URL ohne Benutzerinformationen mit höchstens 500 Zeichen sein.",
+      "sourceHash": "5fc5bdd1ecc36b756c8c2212179e40733222ed859e11b9717ce5f60b39887764",
+      "state": "machine-draft"
+    },
+    "profiles.issue.keycode-format-invalid": {
+      "text": "Verwende KEYCODE_ gefolgt von Großbuchstaben, Ziffern oder Unterstrichen, insgesamt höchstens 64 Zeichen.",
+      "sourceHash": "2d0e78b815ce92ba923d64367689394f0a7eb258ad87e21ca297b912f336749b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.license-expression-invalid": {
+      "text": "Erwartet wurde ein begrenzter Lizenzausdruck im SPDX-Stil.",
+      "sourceHash": "aafed991ae300ed702ee5fe2dcbb9549e51135fd8a44745b17d761e11e27478b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.limitations-bounds": {
+      "text": "Verwende höchstens 32 nicht leere Einträge mit jeweils höchstens 500 Zeichen.",
+      "sourceHash": "f856db07f091a0cf444865064363bfc86e453f11b85a420eabbde071fb22b1bf",
+      "state": "machine-draft"
+    },
+    "profiles.issue.line": {
+      "text": "Zeile {line}",
+      "sourceHash": "29e158eafb9386032b19151dd72505feb54479fbd231f362bb4518e4e9c1ac95",
+      "state": "machine-draft"
+    },
+    "profiles.issue.line_column": {
+      "text": "Zeile {line}:{column}",
+      "sourceHash": "ed1701a0d37848ab4f471fd58208eeefe901360a74d0007d9ade792ad71dfc7b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.linux-governor-name-invalid": {
+      "text": "Ungültiger Linux-Governor-Name.",
+      "sourceHash": "fe6619d49e6a59c692fa25780e6f050cb23cb70e8291123768d14e4698ef5426",
+      "state": "machine-draft"
+    },
+    "profiles.issue.linux-input-code-range": {
+      "text": "Der Linux-Eingabecode muss zwischen 1 und 767 liegen.",
+      "sourceHash": "4ae0390463ddc4d4b97295ad5c9e8d31194bb86972c6e07ea9827cb724b713fd",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-group-count-limit": {
+      "text": "Es sind höchstens 64 Abgleichsgruppen zulässig.",
+      "sourceHash": "54fdd88f2b9e6017ab20daa0c13bf87bfb8c1ebe5f8ebc4e104e7676dfc32466",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-group-required": {
+      "text": "Mindestens eine Abgleichsgruppe ist erforderlich.",
+      "sourceHash": "f788c93321924498351a2441f1dd0ec8d542b2d1c1e59afca734d94217f06a44",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-predicate-count-limit": {
+      "text": "Pro Gruppe sind höchstens 8 Prädikate zulässig.",
+      "sourceHash": "37ffeca7b320b95e29c1615a3fd9c192df6d58146c66b7098560ab0d6838dd8f",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-predicate-required": {
+      "text": "Eine Gruppe muss mindestens ein Prädikat enthalten.",
+      "sourceHash": "85a8430766aad190a0af6bc3702fa197362885c53d007ab92845c93b6f26d85e",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-priority-range": {
+      "text": "Muss zwischen 0 und 1000 liegen.",
+      "sourceHash": "ae25c8722652f7f5aeec6187567425b564c1dfc4cbdddab204e626914c5c40fb",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-value-invalid": {
+      "text": "Werte müssen nicht leere Kleinbuchstaben-Zeichenfolgen ohne Steuerzeichen mit höchstens 100 Zeichen sein.",
+      "sourceHash": "0770106f2c8b217adfaf186ab8e396835e28d130c1b7f2756f994f1a0c937b2e",
+      "state": "machine-draft"
+    },
+    "profiles.issue.match-values-count-range": {
+      "text": "Gib 1–32 Werte an.",
+      "sourceHash": "c083a0d95c329b0420949afdbc34a126802c2c86496c20e56c9bcf77974abebe",
+      "state": "machine-draft"
+    },
+    "profiles.issue.package-count-limit": {
+      "text": "Es sind höchstens 128 Einträge für gewünschte Paketstatus zulässig.",
+      "sourceHash": "870cb3ba46285022d36f8f8c0cfb9521f1f3b62e3788658d3c854a04b239a8bb",
+      "state": "machine-draft"
+    },
+    "profiles.issue.package-note-length-limit": {
+      "text": "Der Hinweis darf 500 Zeichen nicht überschreiten.",
+      "sourceHash": "bda769fc8a4743bc431eca07264ad988b821800503e4ab775d45274e27cb2258",
+      "state": "machine-draft"
+    },
+    "profiles.issue.package-tag-bounds": {
+      "text": "Verwende höchstens 8 kleingeschriebene Tags mit jeweils höchstens 24 Zeichen.",
+      "sourceHash": "e8ddb87f342f6191d79477057a94a0c44ef0dc4910d69863abe9b3709402fe71",
+      "state": "machine-draft"
+    },
+    "profiles.issue.physical-ppi-range": {
+      "text": "Die physische PPI muss zwischen 50 und 1000 liegen.",
+      "sourceHash": "acb105ce000f923c4b962599719e02613b68b65a2848be62ca8ef148d271656a",
+      "state": "machine-draft"
+    },
+    "profiles.issue.pinned-revision-incompatible": {
+      "text": "Die angeheftete Revision ist mit diesem Core inkompatibel.",
+      "sourceHash": "0410f495d48a580480d26a8778ccb36869804742bfbf4811a9ed28138a5e8f93",
+      "state": "machine-draft"
+    },
+    "profiles.issue.pinned-revision-missing": {
+      "text": "Die angeheftete Revision fehlt.",
+      "sourceHash": "1756c919586b8a1c906460f9e59129e2646995c1d8f553fe5e81f7f617882976",
+      "state": "machine-draft"
+    },
+    "profiles.issue.pinned-revision-retired": {
+      "text": "Die Revision {retired_revision} des angehefteten Profils '{id}' wurde mit dieser Version eingestellt; es wird dessen aktuelle mitgelieferte Revision {current_revision} verwendet.",
+      "sourceHash": "f82d5f3d830fb2872cc2374f3f79f5d320d75c91176eeaee4484f9c833f1a62a",
+      "state": "machine-draft"
+    },
+    "profiles.issue.pinned-successor-held": {
+      "text": "Das angeheftete Profil '{id}' bleibt bei Revision {retired_revision}; die aktuelle mitgelieferte Revision {current_revision} wird nicht automatisch angewendet. Wähle sie aus, um sie zu übernehmen.",
+      "sourceHash": "5ff641a417ef9d3850708812059068507b7a5f4cdc1412a46cd30d56bae2d545",
+      "state": "machine-draft"
+    },
+    "profiles.issue.profile-id-invalid": {
+      "text": "Verwende 1–128 Kleinbuchstaben oder Ziffern mit Punkten und Bindestrichen im Inneren; aufeinanderfolgende Punkte sind nicht zulässig.",
+      "sourceHash": "fe2bfc9d7a2fdbdd95efaca295b352df9910db9c46f887965657ffc0fbe3bb03",
+      "state": "machine-draft"
+    },
+    "profiles.issue.profile-link-count-limit": {
+      "text": "Es sind höchstens 8 Anzeigelinks zulässig.",
+      "sourceHash": "a5301f134d7bb24cf1b3858006224a4f2c5316fc954521764d2c0100dff97f00",
+      "state": "machine-draft"
+    },
+    "profiles.issue.profile-source-byte-limit": {
+      "text": "Das Profil überschreitet {max} Byte.",
+      "sourceHash": "ff61aa08a67657e36766c94da7224fd6ee27224ef981c1c51567f1c34d7b5e26",
+      "state": "machine-draft"
+    },
+    "profiles.issue.profile-source-empty": {
+      "text": "Das Profil ist leer.",
+      "sourceHash": "5a316ffc74046db56a6030380e6a3ee5f2d93a40a691ada3d44a1cf1a5650689",
+      "state": "machine-draft"
+    },
+    "profiles.issue.recipe-count-limit": {
+      "text": "Es sind höchstens 32 Rezepte zulässig.",
+      "sourceHash": "3477b66168b93360d1836c60edbb19119b7ca086ab6b25380b9889d981b6f03a",
+      "state": "machine-draft"
+    },
+    "profiles.issue.relay-fallback-count-limit": {
+      "text": "Es sind höchstens 3 Fallback-Klassen zulässig.",
+      "sourceHash": "1b49db295d03d9ade380e31fc2cbd9cd0cfc97bdabd1e4fdb8721d7e19e9fe82",
+      "state": "machine-draft"
+    },
+    "profiles.issue.relay-paths-unique": {
+      "text": "Pfade von Relaisklassen müssen eindeutig sein.",
+      "sourceHash": "c6cce47d401041f5142b6f60e875ee22ab784518a3fb2539ede56a18c2b9565a",
+      "state": "machine-draft"
+    },
+    "profiles.issue.repin-persist-failed-auto": {
+      "text": "Die erneut angeheftete mitgelieferte Revision konnte nicht dauerhaft gespeichert werden; für diesen Lauf bleibt die automatische Zuordnung bestehen und nach dem Neustart wird es erneut versucht.",
+      "sourceHash": "faf3c9e87c465d3e8e7918af31d170ee16306d4ee24dac3695a95ef9ea804ada",
+      "state": "machine-draft"
+    },
+    "profiles.issue.repin-persist-failed-pinned": {
+      "text": "Die erneut angeheftete mitgelieferte Revision konnte nicht dauerhaft gespeichert werden; für diesen Lauf bleibt {id}@{revision} bestehen und nach dem Neustart wird es erneut versucht.",
+      "sourceHash": "97d2cdb414db84dae1c7fe2211af81813323a9b3eb0c38bf0c769557ea420285",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-boolean": {
+      "text": "Erforderlicher boolescher Wert fehlt.",
+      "sourceHash": "72f325b9b524e371a4c9a728b1a27f0a3463c8b9b3683eba4521d5a11612711e",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-integer": {
+      "text": "Erforderliche Ganzzahl fehlt.",
+      "sourceHash": "78c0ebef3687a92cbd73f84af09e7e9e50fb839040574a676eb0fe474e5d2f7b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-list": {
+      "text": "Erforderliche Liste fehlt.",
+      "sourceHash": "0646328ba1fc27d8e1eaa0a9bd4b26149c2cd5a3fd81aa6dd65a2dd43cfdeeac",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-mapping": {
+      "text": "Erforderliche Zuordnung fehlt.",
+      "sourceHash": "36c35dc32ba0da1fa74c97e8fb67da3b64876770cb88c96c42a3f57bed636194",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-profile-read-failed": {
+      "text": "Die erforderliche Profilrevision konnte nicht gelesen werden.",
+      "sourceHash": "39a0ac28543a1ea121360513b2fcc569b4465e477b5421fd3b27914dd5f0d524",
+      "state": "machine-draft"
+    },
+    "profiles.issue.required-string": {
+      "text": "Erforderliche Zeichenfolge fehlt.",
+      "sourceHash": "ed89e6dca9ac2fcc940525cca610126e341ec4369af05e5c88a46a2419184c49",
+      "state": "machine-draft"
+    },
+    "profiles.issue.room-temperature-offset-range": {
+      "text": "Der Versatz muss zwischen -30 und 30 °C liegen.",
+      "sourceHash": "2dcb2d56736098fff5e576cb60ec37c88f87934917310f26b4cb5b5007f24f71",
+      "state": "machine-draft"
+    },
+    "profiles.issue.semantic-version-required": {
+      "text": "Erwartet wurde die semantische Version MAJOR.MINOR.PATCH.",
+      "sourceHash": "1e7b7affff44ab909cea7371a7e78eb300f3090844ea211467126e963828f93b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.su-blpower-needs-app-su": {
+      "text": "su-blpower erfordert app_can_su: true.",
+      "sourceHash": "1fecec77638a1d98e8f17dbe3aeee5f7044d4657d94df684523a8fada2c62ed0",
+      "state": "machine-draft"
+    },
+    "profiles.issue.tested-firmware-bounds": {
+      "text": "Verwende höchstens 32 nicht leere Einträge mit jeweils höchstens 120 Zeichen.",
+      "sourceHash": "15b7e628d569e6c2ca36579b5b46b7ab61f3c1f85a0769adb55747d2c3411ad8",
+      "state": "machine-draft"
+    },
+    "profiles.issue.touch-click-gain-range": {
+      "text": "Die Verstärkung des Touch-Klicks muss zwischen 0,05 und 1,0 liegen.",
+      "sourceHash": "b4a5b05d432cde12ec8243281a3511cb6915ca450ec7f3e5eafd448ac7732cc3",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unicode-format-controls-forbidden": {
+      "text": "Darf keine Unicode-Formatierungssteuerzeichen enthalten.",
+      "sourceHash": "a4f6c5ef7f60cd8dc44c9180f487235a530ff4b978d128a26202f2d15976c3c5",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-core-driver": {
+      "text": "Unbekannter Core-Treiber '{value}'.",
+      "sourceHash": "1042e5e95b0698609f7977c22305ffe39a6056ec3bc16e684870f88ff2a7fd12",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-core-recipe": {
+      "text": "Unbekanntes Core-eigenes Rezept '{value}'.",
+      "sourceHash": "6532c70c4c95f0652f13a6f11489585aab37dbfff72a3f00f66583783116b309",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-core-strategy": {
+      "text": "Unbekannte Core-Strategie.",
+      "sourceHash": "98e4f9a758e61cdac9a2fab4aa0c0a67128541abcda250390e2a099a236ba391",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-core-strategy-value": {
+      "text": "Unbekannte Core-Strategie '{value}'.",
+      "sourceHash": "5c27683a05fe3646ecbecd345f8acbd8726c6ea32dd2554d7ee81b7d326d4a63",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-core-transfer": {
+      "text": "Unbekannte Core-Übertragung '{value}'.",
+      "sourceHash": "2832e210726cd7645445f526c1ff62970c8aee6026347dcb155cc327ce3b521c",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-field": {
+      "text": "Unbekanntes Feld.",
+      "sourceHash": "3840899c04d884ec5c1ce68ae92936057e0c7a2f0cf311b3dbef2e71e50512b0",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-ha-cpu-tier": {
+      "text": "Unbekannte HA-CPU-Stufe.",
+      "sourceHash": "8ec9aa7c609d80334044092604e1cbd8bc0fa9c285b37468622d04071305fb6b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-led-mechanism": {
+      "text": "Unbekannter LED-Mechanismus '{value}'.",
+      "sourceHash": "ac1ac9bec747c6720fd7ce3a6b1ddf0ae011af458a4a6b098e79857262e37783",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-screen-off-route": {
+      "text": "Unbekannter Pfad zum Ausschalten des Bildschirms '{value}'.",
+      "sourceHash": "cac1df56ea283f96ca17b90679d431dd41fb6e9a19efc2453a7a388356fd0c39",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-su-form": {
+      "text": "Unbekannte su-Form '{value}'.",
+      "sourceHash": "cdfed00c73902db89aa6dbde6a4daf2264ac8b1358c2e088e4d93533bbf3a579",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-value": {
+      "text": "Unbekannter Wert '{value}'.",
+      "sourceHash": "24b4bedb0ae06a14ad4c33f0d6ba29cfd8e4dc50910ad844b18fb8a7bc0dc875",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unknown-webview-artifact": {
+      "text": "Unbekanntes Core-eigenes WebView-Artefakt '{value}'.",
+      "sourceHash": "1a67a91f0321c4116b700359d695c791bdca0d48886e05f1ef2a1d21bf08972b",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unsupported-privileged-path": {
+      "text": "Nicht unterstützter privilegierter Pfad; zulässige Werte: {allowed}.",
+      "sourceHash": "c21981ce1dbdc3efe069b1a9dad326646bca62e09cf9c41294eb29a160ee0213",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unsupported-schema": {
+      "text": "Nicht unterstütztes Schema {actual}; erwartet wurde {expected}.",
+      "sourceHash": "17bd42b3e6a9189e3fbe5f2eee4d31909c3ebdbf226fea2ac0bed3c9c5390818",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unsupported-yaml-type": {
+      "text": "Nicht unterstützter YAML-Werttyp {type}.",
+      "sourceHash": "b4dc42b5a421d715d0dcaf366dca1ac2f66da43375822322dd8a437987d90f87",
+      "state": "machine-draft"
+    },
+    "profiles.issue.unused-driver-declared": {
+      "text": "Treiber '{value}' ist deklariert, wird derzeit aber von keinem Feld verwendet.",
+      "sourceHash": "f62eb8449947a2711017af61d1cc770143878420395ece9b6494c76e2cd4a867",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-list-entry-limit": {
+      "text": "Die Liste überschreitet {max} Einträge.",
+      "sourceHash": "0e443e849e365a3a8bc394a3a42da4373568c319f4960faa9f906a1d2464d531",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-map-entry-limit": {
+      "text": "Die Zuordnung überschreitet {max} Einträge.",
+      "sourceHash": "1fbc366693898301f90c206f72ff2b679a3839126f25f40818df69ae28ad0f40",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-mapping-key-string-required": {
+      "text": "Jeder Zuordnungsschlüssel muss eine Zeichenfolge sein.",
+      "sourceHash": "3589284fa44c56ef9bc47debdbe684a0dd707d3bd11643880dee850e7b3eadd1",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-nesting-depth-limit": {
+      "text": "Die Verschachtelung überschreitet {max} Ebenen.",
+      "sourceHash": "6d530e0004e3c237c3cfb21611a99a06275cbf50411107204f9385f7db1efc4c",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-nesting-too-deep": {
+      "text": "Die YAML-Verschachtelung ist zu tief.",
+      "sourceHash": "c447b6ac4359ee7cd28ce6f1b625bab573d484110db480ce5d6813569a8f9403",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-parser-event-limit": {
+      "text": "YAML enthält zu viele Parser-Ereignisse.",
+      "sourceHash": "37ec058b28e3b9200dea94af3c78617b24cefea8e08ab53e88ca885c0692735e",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-single-document-required": {
+      "text": "Es ist genau ein YAML-Dokument zulässig.",
+      "sourceHash": "3ac86ecc21271b25d39848bbc56ae487d92a62a2a84fa5aae5fa7cdb0a769cc3",
+      "state": "machine-draft"
+    },
+    "profiles.issue.yaml-string-length-limit": {
+      "text": "Die Zeichenfolge überschreitet {max} Zeichen.",
+      "sourceHash": "8dcc0f365a8b784611d40796c3fbf3a4939d47732150f588df1cf5c6cefea373",
+      "state": "machine-draft"
+    },
+    "profiles.maturity.draft": {
+      "text": "Entwurf",
+      "sourceHash": "7743ce348d9284d677a185f33295b92266cc435a5b5f775029b300066d26693a",
+      "state": "machine-draft"
+    },
+    "profiles.maturity.experimental": {
+      "text": "experimentell",
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-draft"
+    },
+    "profiles.maturity.verified_author": {
+      "text": "Autor: verifiziert",
+      "sourceHash": "cdf58d6ebda7aea8e6ee0d3d4f2843b092cdc94f37827d2f5750b50201b9a38f",
+      "state": "machine-draft"
+    },
+    "profiles.maturity.verified_trusted": {
+      "text": "✓ Verifiziert",
+      "sourceHash": "79b46a980fb01f245384e906d3625227c032be5bacd019030aa8c228cf5ad942",
+      "state": "machine-draft"
+    },
+    "profiles.modal.activate_title": {
+      "text": "Profil aktivieren?",
+      "sourceHash": "ac56d653cda06155eab8c306c769cd96cd766ca06a0e0b21f819cf2e74b97030",
+      "state": "machine-draft"
+    },
+    "profiles.modal.compare_title": {
+      "text": "Mit aktivem Profil vergleichen",
+      "sourceHash": "456ab4b961c8ed538ac3b99bcef537031b14adfbb63d8d9c6f4ca4e99849fff0",
+      "state": "machine-draft"
+    },
+    "profiles.modal.default_title": {
+      "text": "Bestätigen",
+      "sourceHash": "eebdd24a77d9ad32222660c07777163bf5f6732df2b172351f3f8d5783e4f529",
+      "state": "machine-draft"
+    },
+    "profiles.modal.delete_detail": {
+      "text": "{profile}\nsha256:{sha256}\n\nDies kann nicht rückgängig gemacht werden. Aktive, ausgewählte, mitgelieferte und zuletzt als fehlerfrei bekannte Revisionen können nicht gelöscht werden.",
+      "sourceHash": "4797115e10e60a6830bb0342e65763855f48f834d5e096571fa37a0fc392043d",
+      "state": "machine-draft"
+    },
+    "profiles.modal.delete_title": {
+      "text": "Inaktive Profilrevision löschen?",
+      "sourceHash": "795b8e62bdfa34949363beec88f202c706bb44d841c8b027264d5720134e7405",
+      "state": "machine-draft"
+    },
+    "profiles.modal.hardened_body": {
+      "text": "Geschützte Aktion: Wenn der Hardened-Modus aktiviert ist, bestätige diese Anfrage am physischen Panel.",
+      "sourceHash": "d7a635498b39f7becc2aeedb410c1f6903cc6cc9206021ed223f22c500009274",
+      "state": "machine-draft"
+    },
+    "profiles.modal.hardened_title": {
+      "text": "Erfordert für diese Aktion eine physische Bestätigung am Panel, wenn der Hardened-Modus aktiviert ist.",
+      "sourceHash": "767aa74fd80b54cf8f98cff7e097ab3c8344984f69e496be02fefc7fe4cb51aa",
+      "state": "machine-draft"
+    },
+    "profiles.modal.no_risks_line": {
+      "text": "Privilegierte/Risiko-Flags: keine deklariert",
+      "sourceHash": "058a077a112bcaf6030b110fcaf3f2dec2df3d44093026b3b2f5fd48b07eeead",
+      "state": "machine-draft"
+    },
+    "profiles.modal.profile_auto_line": {
+      "text": "Profil: automatische Gerätezuordnung",
+      "sourceHash": "ff5123bf9104a7dd83004fec2b2731da4ee50af00fac9a3832f31702da62d4a6",
+      "state": "machine-draft"
+    },
+    "profiles.modal.profile_line": {
+      "text": "Profil: {profile}",
+      "sourceHash": "d55d35ec5b3e8f7adaa02ab9dcb9f7b53697fdaa5f7d7c2e706f1b7f37ce36ba",
+      "state": "machine-draft"
+    },
+    "profiles.modal.restart_warning": {
+      "text": "Der Paneldienst wird neu gestartet. Wenn die Revision nicht fehlerfrei wird, kehrt ha-paneld zum zuletzt als fehlerfrei bekannten Profil zurück.",
+      "sourceHash": "fe3149830ccece16addc3efceb6139b7a5982b1735829871567c1bff519f544b",
+      "state": "machine-draft"
+    },
+    "profiles.modal.revision_auto_line": {
+      "text": "Revision: das beim Neustart ausgewählte beste kompatible Profil",
+      "sourceHash": "6b0bbe1c04809906049a2a7ee0be7e25513a77b63f482220f338e57e52b47f06",
+      "state": "machine-draft"
+    },
+    "profiles.modal.revision_line": {
+      "text": "Profilrevision: sha256:{sha256}",
+      "sourceHash": "ac2bf07cc8f5be2bce6a7cc7c8af8eae01c3e904f8fad5b0e7e9206b60054466",
+      "state": "machine-draft"
+    },
+    "profiles.modal.risks_line": {
+      "text": "Privilegierte/Risiko-Flags: {risks}",
+      "sourceHash": "debc03c985ce26a22f5f17e5a5e311b19a64693760cc24489b7aa9a68026ee90",
+      "state": "machine-draft"
+    },
+    "profiles.modal.rollback_title": {
+      "text": "Profil zurücksetzen?",
+      "sourceHash": "3cc17c41ff0e2a2c29ab8d6beb9949c17924c6e96c2bc8109b8fb654bf310a49",
+      "state": "machine-draft"
+    },
+    "profiles.observed.note": {
+      "text": "Nur Laufzeitbeobachtungen — dies sind keine YAML-Felder. Verwende sie, um passende Prädikate und unterstützte Profilfelder auszuwählen.",
+      "sourceHash": "ca3df739093d38d007d7eec57c053e79f6d7f14cf3e3ddabf6bcec3fdc87a448",
+      "state": "machine-draft"
+    },
+    "profiles.origin.bundled": {
+      "text": "Mitgeliefert",
+      "sourceHash": "79d3a1f108e8d9c37f573ce55f27741845eb61f64c3272f91608f653ee4439e5",
+      "state": "machine-draft"
+    },
+    "profiles.origin.local": {
+      "text": "Lokal",
+      "sourceHash": "8c31e6e7223097e2e4847773c47a4efab6aaf79deeecc92a7759891c74976dde",
+      "state": "machine-draft"
+    },
+    "profiles.reference.default": {
+      "text": "Referenz",
+      "sourceHash": "71bf90935fc231d20126e2087eeb583c6aa419fc3dd1b6847bfe376b9200eaa0",
+      "state": "machine-draft"
+    },
+    "profiles.references.label": {
+      "text": "Profilreferenzen",
+      "sourceHash": "a22cdd9db53e2b51659d1d4f451b1fc68700e602d2b7e27c34540cf8e288e1d0",
+      "state": "machine-draft"
+    },
+    "profiles.report.android_sdk": {
+      "text": "Android SDK",
+      "sourceHash": "bcae9171a255079a8f5efa836d8b793ebdbd916817bca2612bd82d35090fe96a",
+      "state": "machine-draft"
+    },
+    "profiles.report.board": {
+      "text": "Platine",
+      "sourceHash": "4816cbfd74aa8297b9c9cdaae89e2f0d2ced6041e952dfcd114e01b4c82e9c6d",
+      "state": "machine-draft"
+    },
+    "profiles.report.cpu_governors": {
+      "text": "Verfügbare CPU-Governors",
+      "sourceHash": "404daa9ffb584b9490517bab178949241b500f7b1efcf0e28f5a4f1022c6131a",
+      "state": "machine-draft"
+    },
+    "profiles.report.display_density": {
+      "text": "Aktuelle Displaydichte",
+      "sourceHash": "221e6f407f892a16e9a84bbfd008f30d01b50473fc6f090c6eb651f696fcc085",
+      "state": "machine-draft"
+    },
+    "profiles.report.display_height": {
+      "text": "Displayhöhe",
+      "sourceHash": "1751024789c808f1c7b0ec5b8c3300e7211cc0c179faef1dd430bd67d5df7dbb",
+      "state": "machine-draft"
+    },
+    "profiles.report.display_width": {
+      "text": "Displaybreite",
+      "sourceHash": "377b8eb2cbeb39bb8867a260ae07e7cdb4d9ad12870e21f787a18441c5e4a3f7",
+      "state": "machine-draft"
+    },
+    "profiles.report.hardware": {
+      "text": "Hardwareangaben",
+      "sourceHash": "7975300f01bc46f86e52e528b29955be87a361f05f2fb96e14629bc0a5495d03",
+      "state": "machine-draft"
+    },
+    "profiles.report.humidity_sensor": {
+      "text": "Feuchtigkeitssensor",
+      "sourceHash": "465307a8ed5923a9ac558423bc6a59c7be1041c015256cbb1cfb919ef6d2b242",
+      "state": "machine-draft"
+    },
+    "profiles.report.item_default": {
+      "text": "Fakt",
+      "sourceHash": "1e7dc6d6c16565406afd121a89164b990879f5f47695e03b9c3fd0f07395a4ca",
+      "state": "machine-draft"
+    },
+    "profiles.report.led_device_access": {
+      "text": "LED-Gerätezugriff",
+      "sourceHash": "9297a612984a37e0b866ed07355b870d385bc2201dd24f213f09f9f6894d0753",
+      "state": "machine-draft"
+    },
+    "profiles.report.led_sysfs_access": {
+      "text": "LED-sysfs-Zugriff",
+      "sourceHash": "9f98ba098dc544d89f650d4242d9d7cb6ecbae0f30392664bde5688df0aeca22",
+      "state": "machine-draft"
+    },
+    "profiles.report.light_sensor": {
+      "text": "Lichtsensor",
+      "sourceHash": "7cde7fa1b5d5e87a0259ed6ae848ca13727c41b8782079b6319f323f437fccac",
+      "state": "machine-draft"
+    },
+    "profiles.report.match_device": {
+      "text": "Abgleichsfeld: Gerät",
+      "sourceHash": "bbd07205f739bb4038f0f3681e89089de01cc0d137ff05db68ec48f0b63d99d2",
+      "state": "machine-draft"
+    },
+    "profiles.report.match_model": {
+      "text": "Abgleichsfeld: Modell",
+      "sourceHash": "3596374ed7a2b7fc3f0a5102027d059aeb277538b3c2cadd10fabc59bec4dcd4",
+      "state": "machine-draft"
+    },
+    "profiles.report.match_product_version": {
+      "text": "Abgleichsfeld: Produktversion",
+      "sourceHash": "8acedf92ffc0663dbdc83e0be709e6e5c1e33574ca6cccbf05aa17ba2cbca04d",
+      "state": "machine-draft"
+    },
+    "profiles.report.none": {
+      "text": "Für dieses Profil liegt kein passiver Gerätebericht vor.",
+      "sourceHash": "7c87b897e1169e79345f53d90e7e60ecef7daa00e6ae1b9c6f0d87eb6ea66cd1",
+      "state": "machine-draft"
+    },
+    "profiles.report.proximity_sensor": {
+      "text": "Näherungssensor",
+      "sourceHash": "b504a7559b1b9bc7f75cc7285dc9eb9fa6d14846fec14da252633ddcc231ed62",
+      "state": "machine-draft"
+    },
+    "profiles.report.status.observed": {
+      "text": "beobachtet",
+      "sourceHash": "604cee807f644af47487bf2bbab442b94212ac5119f36f995f78e9e4694dae8c",
+      "state": "machine-draft"
+    },
+    "profiles.report.status.unknown": {
+      "text": "unbekannt",
+      "sourceHash": "b23a6a8439c0dde5515893e7c90c1e3233b8616e634470f20dc4928bcf3609bc",
+      "state": "machine-draft"
+    },
+    "profiles.report.supported_abis": {
+      "text": "Unterstützte ABIs",
+      "sourceHash": "05063fc87c0908d3ba03fcd5a78dd2f67bfc91708ce6c6e9ecae2d6a44cab79d",
+      "state": "machine-draft"
+    },
+    "profiles.report.temperature_sensor": {
+      "text": "Temperatursensor",
+      "sourceHash": "d0f03acb6118292c67f157f4df68d0d1adf93c72e9408559eefaa62648bbe808",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-applying-auto-update": {
+      "text": "Das aktualisierte, automatisch zugeordnete Profil wird angewendet.",
+      "sourceHash": "8f5f796f0c1b6cd06c9c83c3640bc7953244eea023c681ad923670609c9f5002",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-applying-bundled-revision": {
+      "text": "Die aktuelle mitgelieferte Revision des angehefteten Profils wird angewendet.",
+      "sourceHash": "cc3b187fb09c3bb44833709609bce8d279a5893b632651c2908b152f0db67ce2",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-applying-selected": {
+      "text": "Das ausgewählte Profil wird angewendet.",
+      "sourceHash": "edc3825161fc54bedb25b66d600ef9a128d9e89418e5a18baa26c2161e1acae0",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-in-progress": {
+      "text": "Eine Profilaktivierung läuft bereits.",
+      "sourceHash": "c6009e0cb472fa68a6daf65053045463f9ea6bf00abc4ab2c83ebdc759ef5504",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-pending": {
+      "text": "Auswahl vorgemerkt; Neustart erforderlich.",
+      "sourceHash": "037cb7a9c3e6805d5ad99fcd7ade3efa0c27082e4b09bd0811cd6927d5821455",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-rolled-back-incompatible": {
+      "text": "Das aktive Profil wurde nach einer Core-Änderung inkompatibel; die zuletzt als fehlerfrei bekannte Auswahl wurde wiederhergestellt.",
+      "sourceHash": "f693f5afa79729e2869e2eba6e2bc2ef5745b7602b47d89becba4dd10a7257cc",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-rolled-back-unhealthy-auto": {
+      "text": "Die vorherige Aktivierung meldete keinen fehlerfreien Zustand; es wurde auf die automatische Zuordnung zurückgesetzt.",
+      "sourceHash": "5ce98d100de2c6f69c59ec8254a4f99dfcbdaf70b7fb7146c2a50b3d17156831",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-rolled-back-unhealthy-pinned": {
+      "text": "Die vorherige Aktivierung meldete keinen fehlerfreien Zustand; es wurde auf {id}@{revision} zurückgesetzt.",
+      "sourceHash": "bc731fb23c29c28dee9fee3be8917414dfbc75e2050abb1f86a5f24e71b33637",
+      "state": "machine-draft"
+    },
+    "profiles.result.activation-rolled-back-unresolved": {
+      "text": "Das ausgewählte Profil konnte nicht aufgelöst werden; es wurde zurückgesetzt.",
+      "sourceHash": "8b837640804bd7c728bc2b49109329b4df4b4aba221a92fbfe05b9c5713925bf",
+      "state": "machine-draft"
+    },
+    "profiles.result.bundled-profile-delete-forbidden": {
+      "text": "Mitgelieferte Profilrevisionen können nicht gelöscht werden.",
+      "sourceHash": "a2a525256aa742328bfdea814bed6f58165e7fd0faf2eac86d9276975b72400b",
+      "state": "machine-draft"
+    },
+    "profiles.result.catalog-reservation-failed": {
+      "text": "Die Katalogänderung konnte nicht reserviert werden.",
+      "sourceHash": "1a574d2b2c6fb9e2b3aa648016eedbcf010a439bed51db9dc8fc977b5bcdf90e",
+      "state": "machine-draft"
+    },
+    "profiles.result.catalog-stale": {
+      "text": "Der Katalog wurde geändert. Lade neu und versuche es mit der aktuellen Revision erneut.",
+      "sourceHash": "014eafc6e3523ed2ff1319e0f26b1c01ffdab9c5b9f8d5805a3ca4149dd47735",
+      "state": "machine-draft"
+    },
+    "profiles.result.destructive-operation-in-progress": {
+      "text": "Eine destruktive Installations- oder Wiederherstellungsaktion läuft. Versuche die Profilaktivierung nach deren Abschluss erneut.",
+      "sourceHash": "358ffb5e6d4003b76ec8953d1f30de939ef8a81ccea330528e7e20265b5fe53b",
+      "state": "machine-draft"
+    },
+    "profiles.result.expected-catalog-revision-required": {
+      "text": "Die erwartete Katalogrevision ist erforderlich.",
+      "sourceHash": "7b57c99561e73bfeae4aa840536258d2cdb5cca949c5804775e943919fc1fa70",
+      "state": "machine-draft"
+    },
+    "profiles.result.explicit-confirmation-required": {
+      "text": "Eine ausdrückliche Bestätigung ist erforderlich.",
+      "sourceHash": "d08001ebe74461eb2338e4faacb6a014bb4b1e36a96bf707a6a6eac3be03b309",
+      "state": "machine-draft"
+    },
+    "profiles.result.imported-catalog-byte-limit": {
+      "text": "Der importierte Katalog ist auf {max} Byte begrenzt.",
+      "sourceHash": "4ac04cbc786ea73fcd99faa6c3bd6d7dae9dd889493d72cb974a839b078adeaf",
+      "state": "machine-draft"
+    },
+    "profiles.result.imported-catalog-revision-limit": {
+      "text": "Der importierte Katalog ist auf {max} Revisionen begrenzt.",
+      "sourceHash": "ba805ad78da9cec2dd911c6424cc55aa7235931e8907f05d76ae820f85080815",
+      "state": "machine-draft"
+    },
+    "profiles.result.imported-profile-revision-limit": {
+      "text": "Das Profil '{id}' ist auf {max} Revisionen begrenzt.",
+      "sourceHash": "975f879cf8db399d5c59cca2d79d6842805b578f5c5e08beb8d9d3ef3709488a",
+      "state": "machine-draft"
+    },
+    "profiles.result.invalid-delete-request": {
+      "text": "Die Anfrage zum Löschen des Profils ist ungültig.",
+      "sourceHash": "3ffdbbe949ba796adc9360df1f68492da694745d9310124d1da9e01d65de4413",
+      "state": "machine-draft"
+    },
+    "profiles.result.invalid-json": {
+      "text": "Die Anfrage ist kein gültiges JSON.",
+      "sourceHash": "940db449cb4f4979a87f8770dbdd723887044e046facf801fac78f0fd0c927e3",
+      "state": "machine-draft"
+    },
+    "profiles.result.invalid-profile-ref": {
+      "text": "Der Verweis auf die Profilrevision ist ungültig.",
+      "sourceHash": "fe8e843197513e924f7e7d0410050eb1ea1de0491c7b1957e3f5381b1f187289",
+      "state": "machine-draft"
+    },
+    "profiles.result.invalid-utf8": {
+      "text": "Die Anfrage ist kein gültiges UTF-8.",
+      "sourceHash": "dd81eeec7b2f8abd0a8400a64b9756c4e5c95034d925de40e60517a9e582dbb3",
+      "state": "machine-draft"
+    },
+    "profiles.result.json-content-type-required": {
+      "text": "Ein JSON-Inhaltstyp ist erforderlich.",
+      "sourceHash": "dd44396e1db0e0b4dedc221865522a03d75b3f584bcc5db30c5bdcace40e9635",
+      "state": "machine-draft"
+    },
+    "profiles.result.passive-device-draft-unavailable": {
+      "text": "Passiver Geräteentwurf nicht verfügbar.",
+      "sourceHash": "b8bb6737f402799876f373a45b2c5ace7a87e7d1775ab7cc1c414269d5184086",
+      "state": "machine-draft"
+    },
+    "profiles.result.passive-report-unavailable": {
+      "text": "Passiver Bericht nicht verfügbar.",
+      "sourceHash": "c1fcd400d2248e11a54b301c15679543ddc6b4a44c5de719b84c199accfaa670",
+      "state": "machine-draft"
+    },
+    "profiles.result.preview-token-invalid": {
+      "text": "Das Vorschau-Token ist ungültig, abgelaufen, bereits verwendet oder gehört zu anderen Inhalten.",
+      "sourceHash": "fc3ce429238298f346439d1595ea2aa91440387fcaa0d068b1ce9e5792fcb5d5",
+      "state": "machine-draft"
+    },
+    "profiles.result.preview-token-required": {
+      "text": "Validiere das Profil vor dem Speichern.",
+      "sourceHash": "46bfda5a67a75f1b29d4e6604b0d17ca709fb634df0daad528d4c901b88ceb35",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-action-too-large": {
+      "text": "Die Anfrage für die Profilaktion ist zu groß.",
+      "sourceHash": "c341bcd9b57b8cf062ce7b646fe051bc0478aee7f150b6cc0a3cf79e119c4e67",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-activation-abort-persist-failed": {
+      "text": "Der Profilneustart konnte nicht geplant und die ausstehende Aktivierung nicht dauerhaft zurückgesetzt werden. Die Aktivierung bleibt ausstehend und kann beim nächsten Prozessneustart angewendet werden.",
+      "sourceHash": "51736e644ada8cf2e4e04884ea7c92562af09e5bb2046703c8d36ae76af7a45d",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-administration-unavailable": {
+      "text": "Profilverwaltung nicht verfügbar.",
+      "sourceHash": "e2c6f362f8b53656ff6af0ee8868ac73e27e20f9626e4674b01cb7a169ace5da",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-body-timeout": {
+      "text": "Beim Lesen des Anfragetexts für das Profil wurde das Zeitlimit überschritten.",
+      "sourceHash": "b1dbd03281eab338b25d8023622adfaf9ca329792692eb95c27af4747d22d95e",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-delete-failed": {
+      "text": "Die importierte Revision konnte nicht dauerhaft gelöscht werden.",
+      "sourceHash": "79f7b8fa7103fcd76f34d3299a11555d0dc4c8d225bc96e30e75c1048423763c",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-imported": {
+      "text": "{display_name} {version} wurde importiert.",
+      "sourceHash": "3642429e73ee5dc4597ee94981476f92368c02f1f47d53d4ad149487480205b5",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-incompatible": {
+      "text": "Die Profilrevision ist mit diesem Core inkompatibel.",
+      "sourceHash": "9699ce8f86c496618c872c877ca3419ebc8b7f0a9889e7e656b52e3c835eb872",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-restart-unavailable": {
+      "text": "Der Profilneustart konnte nicht geplant werden. Versuche es erneut.",
+      "sourceHash": "c99af13857c3c56eaf384f110113a0ac5e393e44b6d9197b209412f089d1b339",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-revision-deleted": {
+      "text": "Importierte Profilrevision gelöscht.",
+      "sourceHash": "00fe4be455bbfae4189cfbcd80a51be90c0a8bd77b1bd4c4c03ab86bb5c116fb",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-revision-not-found": {
+      "text": "Die Profilrevision ist nicht vorhanden.",
+      "sourceHash": "19c5cec45559a2bde195235619dad657ef6bc4ded9468f727d9a331a36c8022c",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-selection-staged": {
+      "text": "Die Profilauswahl wurde für den Neustart vorgemerkt.",
+      "sourceHash": "e4e2d554b6a9538c26a629a24ad6d6b8f4b7a16f79073cc43e2afba7a1e03b99",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-selection-unchanged": {
+      "text": "Die Profilauswahl ist unverändert.",
+      "sourceHash": "94c956ecca059af12127498e97ebc47f1bb4728c2f9ab0afb9e55274f935bf38",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-store-failed": {
+      "text": "Die unveränderliche Profilrevision konnte nicht gespeichert werden.",
+      "sourceHash": "e8011df250f2deae98f4f975467064e90fa3dfe83d101e5783b7c8ffe158daf8",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-template-unavailable": {
+      "text": "Profilvorlage nicht verfügbar.",
+      "sourceHash": "e81d5f8e96852b0f85f3b80463233a20747bc2df59a7481a58f6aa8608923b3c",
+      "state": "machine-draft"
+    },
+    "profiles.result.profile-yaml-too-large": {
+      "text": "Das Profil-YAML ist zu groß.",
+      "sourceHash": "4a07b5c4de70faec73d65fd42d78dffa83237b9772435c28ef1b827122daddcd",
+      "state": "machine-draft"
+    },
+    "profiles.result.referenced-profile-delete-forbidden": {
+      "text": "Ausgewählte, aktive oder Rollback-Profilrevisionen können nicht gelöscht werden.",
+      "sourceHash": "b1261534b587db1852f88d1af30acc7af141b8b0824beb1366fca81fc7ae6039",
+      "state": "machine-draft"
+    },
+    "profiles.result.rollback-unavailable": {
+      "text": "Es ist keine zuvor bewährte Auswahl verfügbar.",
+      "sourceHash": "e0fc7f6179d43a7cf66abf0dfc38b909ae49f187452d1d66aa18ada69e18eb1e",
+      "state": "machine-draft"
+    },
+    "profiles.result.selection-persist-failed": {
+      "text": "Die vorgemerkte Auswahl konnte nicht dauerhaft gespeichert werden.",
+      "sourceHash": "1f32848586368c7199e89c4447d78102a7651b5da1aa4c4851af3d93090c8b15",
+      "state": "machine-draft"
+    },
+    "profiles.result.yaml-content-type-required": {
+      "text": "Ein YAML-Inhaltstyp ist erforderlich.",
+      "sourceHash": "e6d52ad7452e2714e0e4692ed5ecbec08d7559f0b80c12a1e5f0371c2e6f1795",
+      "state": "machine-draft"
+    },
+    "profiles.risk.evdev_grab": {
+      "text": "evdev-Zugriffssperre",
+      "sourceHash": "97e9718b523627243120eb0b090b1cf3f2e63b925532fc1569304387967b5d6e",
+      "state": "machine-draft"
+    },
+    "profiles.risk.evdev_read": {
+      "text": "evdev-Lesezugriff",
+      "sourceHash": "97ae274f45ab8922be2fe11917eae10aa89f896ec6af365fd82da18489dbe5e2",
+      "state": "machine-draft"
+    },
+    "profiles.risk.overrides_bundled": {
+      "text": "überschreibt mitgeliefertes Profil",
+      "sourceHash": "2ff7db59d7914f099280d0909705f738006911ffab7d8d295baa5db58a240f99",
+      "state": "machine-draft"
+    },
+    "profiles.risk.package_disable_recommendations": {
+      "text": "Empfehlungen zum Deaktivieren von Paketen",
+      "sourceHash": "d2c652d89c00a5cd2f5b46ecb8337ff2ce195b5316b1883ed9b4776875e7b98d",
+      "state": "machine-draft"
+    },
+    "profiles.risk.relay_or_gpio_writes": {
+      "text": "Relais- oder GPIO-Schreibzugriffe",
+      "sourceHash": "1fc3354eb22e02939b159ec332afcefd3d7c138f44a9558c09f2f995d69d8039",
+      "state": "machine-draft"
+    },
+    "profiles.risk.root_paths": {
+      "text": "root-Pfade",
+      "sourceHash": "1a4f141bd1ac2de9be9b61182df4a2af3e793b5dff991918c4b91cf5ab6bc628",
+      "state": "machine-draft"
+    },
+    "profiles.risk.webview_install": {
+      "text": "WebView-Installation",
+      "sourceHash": "23af1b69bc509ca30eb38272a0616c7e1f98ba5fbf59ff9120b1474b04820c91",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.led_mechanism": {
+      "text": "Integrierter LED-Pfad.",
+      "sourceHash": "64df66b0af2db5c505affa4024d34157ddaa59335753724d899dfff0d2e1dcd3",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.led_transfer": {
+      "text": "Vom Core verwaltete LED-Übertragungsfunktion; Standardwert: identity.",
+      "sourceHash": "990306bef8439dcc883229290f1c706a70e1c6e3f6142352cbb2ad7b4a804473",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.match_field": {
+      "text": "Unveränderlicher Build-Fakt.",
+      "sourceHash": "533e58fbf16df9ea4854c44acf81d2a5658c3ffa159cd340cb515462608163de",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.match_operator": {
+      "text": "Begrenzter Zeichenfolgenvergleich.",
+      "sourceHash": "67a09d7291201311762ffda12dc296bcfd3ea63fa905f073d0dda3971a65d9c6",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.metadata_maturity": {
+      "text": "Vom Autor deklarierter Reifegrad der Evidenz; kein Herkunfts- oder Vertrauenssignal.",
+      "sourceHash": "6be5e22f5f65b1526cdb9bc41d2cdbf3bd32c46a1e4eb48700bdedf95736c4eb",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.model_label_strategy": {
+      "text": "Vom Core verwaltete lokale Beschriftungsstrategie.",
+      "sourceHash": "7136f1a6d0605edafec45bba2994d73e2d1a1627348c1fccf1b12be4a00acc63",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.package_desired_state": {
+      "text": "Gewünschter Paketstatus; niemals eine implizite Zustimmung.",
+      "sourceHash": "b79f5d18c9b084a444ec1972767a095bb8e90ada19a2b9a27ec79eadf8ab425e",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.package_importance": {
+      "text": "Nur Darstellungspriorität.",
+      "sourceHash": "acdfda276090176ecc062b4f51c891d6221f87944f1b4a1678b62e9c09a062a8",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.recipe_id": {
+      "text": "Vom Core verwaltete Bereitstellungsrezept-ID; keine Argumente oder Befehle.",
+      "sourceHash": "c9dacf1be7b297f1cf8c67a170111e44e2839741f5e08c1de01342445fb77380",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.screen_off": {
+      "text": "Bevorzugter Pfad zum Ausschalten des Bildschirms.",
+      "sourceHash": "752e7c9a135d7bda6a4bfc06731d3c40ac02d235ecc292c564571ef5a0641272",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.shizuku_recommendation": {
+      "text": "Nur Empfehlung des Autors, niemals Live-Bereitschaft oder Zustimmung.",
+      "sourceHash": "d9923d81100c264134d703555a7a7ea41e81f3f01f348ff52207de7d24032aed",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.su_form": {
+      "text": "Unterstützte su-Aufrufkonvention.",
+      "sourceHash": "c59b1eee40a674144215cd402e07eb6b989182bdd2458cbedace47fc5f6eb763",
+      "state": "machine-draft"
+    },
+    "profiles.schema.description.webview_artifact": {
+      "text": "Vom Core verwaltetes APK-Artefakt und Vertrauensanker des Signierers.",
+      "sourceHash": "139ebdeeda56385d56e264d1551ba06f4a507eb4ffefba9056b927362fc7d1a1",
+      "state": "machine-draft"
+    },
+    "profiles.section.catalog_runtime": {
+      "text": "Katalog und Laufzeit",
+      "sourceHash": "f6935b911b686f274dca1971e421494b5b95001dfb521d625a35aeb099c39d60",
+      "state": "machine-draft"
+    },
+    "profiles.section.compared_active": {
+      "text": "Mit aktivem Profil verglichen",
+      "sourceHash": "3454e4507ae7650b4ae943ee8365b0ea21ba62faf54217b8a35c071c469d8ace",
+      "state": "machine-draft"
+    },
+    "profiles.section.observed": {
+      "text": "Beobachtete Gerätefakten",
+      "sourceHash": "30291cd703a6156ffaf45e1643331b2e7f04015b5b05f7f99d50ebeff3bdd759",
+      "state": "machine-draft"
+    },
+    "profiles.section.validation": {
+      "text": "Validierung",
+      "sourceHash": "68e1ca575295bb5604fea711b5d2eff44006ce4bd985481083a76b71fce0daef",
+      "state": "machine-draft"
+    },
+    "profiles.severity.error": {
+      "text": "Fehler",
+      "sourceHash": "ca00fccfb408989eddc401062c4d1219a6aceb6b9b55412357f1790862e8f178",
+      "state": "machine-draft"
+    },
+    "profiles.severity.info": {
+      "text": "Hinweis",
+      "sourceHash": "06271baf49532c879aa3c58b48671884bcc858f09197412d682750496c33e1e1",
+      "state": "machine-draft"
+    },
+    "profiles.severity.warning": {
+      "text": "Warnung",
+      "sourceHash": "4bd9354bb652233497a0f42647464b81b83a83654fcf1511263a5d0120d74c91",
+      "state": "machine-draft"
+    },
+    "profiles.shizuku.body": {
+      "text": "Dieses Profil deklariert einen bestimmten Fallback auf Shell-Ebene. Es installiert, aktiviert oder genehmigt den separaten Zugriffsdienst nicht.",
+      "sourceHash": "f5e6ae0bc6233a2dcdd90801ec4aab0bbced0cfdf2e56ba262e4c44f337aedd4",
+      "state": "machine-draft"
+    },
+    "profiles.shizuku.guide": {
+      "text": "Erweiterte Einrichtungsanleitung lesen",
+      "sourceHash": "55878109cd662d28cb779e3ec2164d283a24a39bbba6e5ae24a765bc1bec0960",
+      "state": "machine-draft"
+    },
+    "profiles.shizuku.recommended": {
+      "text": "Shizuku: empfohlen",
+      "sourceHash": "d37bff97e12b6ca397f2487ebb1378cf4261cbbeee760e6370ebbf7fa6db8866",
+      "state": "machine-draft"
+    },
+    "profiles.shizuku.title": {
+      "text": "Anforderung für außergewöhnlichen Zugriff",
+      "sourceHash": "d8501ad35856c2d0c2429b3a7de56a36dad32278d82e53208d2fab136abbc8f3",
+      "state": "machine-draft"
+    },
+    "profiles.state.active": {
+      "text": "Aktiv",
+      "sourceHash": "92340695899bd2d86223e4a007620e0d6502fc0e08809773634c7e0743764a9c",
+      "state": "machine-draft"
+    },
+    "profiles.state.does_not_match": {
+      "text": "Passt nicht zu diesem Gerät",
+      "sourceHash": "deaea6df3b48541ef017ec6c6c19c97065bf2b29163bf56def023e0854f05d67",
+      "state": "machine-draft"
+    },
+    "profiles.state.incompatible": {
+      "text": "Inkompatibel",
+      "sourceHash": "8777e3a9e3ec54a016500ed03f79cdcbebe135d6505cca8fa5dc6c4d6767d72a",
+      "state": "machine-draft"
+    },
+    "profiles.state.label": {
+      "text": "Profilstatus",
+      "sourceHash": "6f1d5befd2ffa600d40d2e5d377425c1dda51b4509448bf52999178fdcf70f85",
+      "state": "machine-draft"
+    },
+    "profiles.state.last_known_good": {
+      "text": "Zuletzt als fehlerfrei bekannt",
+      "sourceHash": "f352aca110ce966b98af6211665ab16a127210a9b397d9cb50d4f009cf2537ea",
+      "state": "machine-draft"
+    },
+    "profiles.state.no_profiles": {
+      "text": "Es sind keine Profile verfügbar.",
+      "sourceHash": "d0501e246b22c5ffff9bcabf7bb715500a6b298dd840c38a5bdf5363d765ff4a",
+      "state": "machine-draft"
+    },
+    "profiles.state.selected": {
+      "text": "Ausgewählt",
+      "sourceHash": "57fd7a0cf33f2666eede69e44f8857159653f2f28e4fd7482a5e16d4af628d2a",
+      "state": "machine-draft"
+    },
+    "profiles.status.activating": {
+      "text": "Profil wird aktiviert…",
+      "sourceHash": "32e115cfe78b0d2eeb09595c07b0954643a91bc484f26d2135bb29200c85ffa6",
+      "state": "machine-draft"
+    },
+    "profiles.status.active_healthy": {
+      "text": "Das Profil ist aktiv und fehlerfrei.",
+      "sourceHash": "d096359d35956b7ee6fa95e303fb32ec41f4ca116a5dee0333b61917c5ffd393",
+      "state": "machine-draft"
+    },
+    "profiles.status.deleted": {
+      "text": "Profil gelöscht.",
+      "sourceHash": "b9a52154180b4282c4b65837593c33c8dd0c2c5b552b5ef36ab2367d1882888c",
+      "state": "machine-draft"
+    },
+    "profiles.status.draft_copied": {
+      "text": "Der Entwurf wurde in ein neues, nicht gespeichertes Profil kopiert. Behebe vor der Aktivierung jedes TODO.",
+      "sourceHash": "3d89421ede096b727ad03473c4ac0deaef1dc26580778dd03eab72d11c0c323b",
+      "state": "machine-draft"
+    },
+    "profiles.status.editing_fork": {
+      "text": "Ein eigenständiger lokaler Abzweig wird bearbeitet. Die mitgelieferte Revision wird nicht geändert.",
+      "sourceHash": "93181d80b2c7ba8be6d49f80d3bd6714e274805c789481b92f47488c198eb826",
+      "state": "machine-draft"
+    },
+    "profiles.status.editing_revision": {
+      "text": "Wird als neue unveränderliche lokale Revision bearbeitet.",
+      "sourceHash": "5f90f128dd65eb29028f07b2da1b62e359695ab988eb9935f1527c59ef6da9a6",
+      "state": "machine-draft"
+    },
+    "profiles.status.imported_preview": {
+      "text": "Lokal zur Vorschau importiert; es wurde nichts gespeichert oder aktiviert.",
+      "sourceHash": "4bcfcb23ed3ebe2a3ec35c36fc8d4bd5d264521e1d9c426256511822c7df2e76",
+      "state": "machine-draft"
+    },
+    "profiles.status.incompatible": {
+      "text": "Das Profil ist nicht kompatibel. Behebe die gemeldeten Probleme.",
+      "sourceHash": "1f1966898c27b3db2d4b64795097ae2403379e3c49ebc90c9d073d3ab35ea662",
+      "state": "machine-draft"
+    },
+    "profiles.status.loading_catalog": {
+      "text": "Profile werden geladen…",
+      "sourceHash": "16b0bbfd1d1194f9a0945fd375147f113cf0a53efff54cdfb07642aba2ad1570",
+      "state": "machine-draft"
+    },
+    "profiles.status.loading_profile": {
+      "text": "{id} wird geladen…",
+      "sourceHash": "55b0ded7e248acb17b82596a8937412fac9eb3a79bf8a2046feb1398c9a39ee8",
+      "state": "machine-draft"
+    },
+    "profiles.status.new_unsaved": {
+      "text": "Neues, nicht gespeichertes Profil. Validiere es vor dem Speichern.",
+      "sourceHash": "ed81016cef96137e8cd53beeb3083b40b72d54300e2f79ba0164a90e3ccea49f",
+      "state": "machine-draft"
+    },
+    "profiles.status.passive_draft": {
+      "text": "Passiver Generic-Entwurf · schreibgeschützt · unbekannte Hardware bleibt mit TODO markiert.",
+      "sourceHash": "86e4a415aa81649dc516c636f55d1833452124e77a938d6e890484745d34049a",
+      "state": "machine-draft"
+    },
+    "profiles.status.rollback_starting": {
+      "text": "Rollback wird gestartet…",
+      "sourceHash": "eae5ea3e45366eab4999c68790d0a1eaf14bdb42234f20b2efceed47b40adf03",
+      "state": "machine-draft"
+    },
+    "profiles.status.saved": {
+      "text": "Profilrevision gespeichert.",
+      "sourceHash": "2f3e54b7b64e95df6f4fb4180a1b245c4f137b22441b3e5c1d76ce7d29fe7bae",
+      "state": "machine-draft"
+    },
+    "profiles.status.saving": {
+      "text": "Unveränderliche Revision wird gespeichert…",
+      "sourceHash": "8f24c49de2a7a8e15cb0e529555b2e87d2c33f97b0436901e55742571918b348",
+      "state": "machine-draft"
+    },
+    "profiles.status.selection_saved": {
+      "text": "Auswahl gespeichert; warte auf den Neustart des Paneldienstes.",
+      "sourceHash": "199716428c521ddcaff134cb1c9249987690802e8ce6ad48e1915fc57b684514",
+      "state": "machine-draft"
+    },
+    "profiles.status.valid_hash": {
+      "text": "Gültiges Profil · sha256:{sha256}",
+      "sourceHash": "0f2eb65e017e26b0530f6405e41d63939dcfcd8e611f50111192cbf51772cb34",
+      "state": "machine-draft"
+    },
+    "profiles.status.valid_wrong_hardware": {
+      "text": "Gültiges Profil, aber es ist für andere Hardware vorgesehen. Du kannst es hier speichern, aber nicht auf diesem Panel aktivieren.",
+      "sourceHash": "377c183d8f8a14a8d76e33d1175cf610b15ec82779e21a55d46e23c1ff3679fc",
+      "state": "machine-draft"
+    },
+    "profiles.status.validating": {
+      "text": "YAML wird validiert…",
+      "sourceHash": "6ab4da31d56011b6a457d6d19ed456423a336c92454359e865951a3375b5d269",
+      "state": "machine-draft"
+    },
+    "profiles.status.viewing_revision": {
+      "text": "Unveränderliche Revision {revision} wird angezeigt.",
+      "sourceHash": "f87ea475d6914cb63bd88faa660327c1a6630bd28196f4d403c67e9ffa93a1e7",
+      "state": "machine-draft"
+    },
+    "profiles.status.yaml_changed": {
+      "text": "YAML wurde geändert. Validiere vor dem Speichern oder Aktivieren.",
+      "sourceHash": "88bd5abcac4bc306872e83a3487eee8b6669c4a875640419bd4819f48b659a66",
+      "state": "machine-draft"
+    },
+    "profiles.status.yaml_changed_issue": {
+      "text": "YAML wurde geändert. Validiere es, um Probleme und Vergleich zu aktualisieren.",
+      "sourceHash": "6191d73daeae7558c61491e343a0a24283573283a2ca831dcadda453251e03a0",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.actions_label": {
+      "text": "Profilaktionen",
+      "sourceHash": "f29b9c8f1c7debdd08f1f247b53a75c651b9e2238cf235e74f92cc0842a6de90",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.activation_label": {
+      "text": "Profilaktivierung",
+      "sourceHash": "ecdfb510d18095e2d0f2545cc150dd0ec8c78f66f95826b60a797ce217d186b2",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.editing_label": {
+      "text": "Profilbearbeitung",
+      "sourceHash": "c442c3184b76da21881088b7ea5f84a11b4d2d041f55f4da5aefab1d12db5c41",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.review_label": {
+      "text": "Profilprüfung",
+      "sourceHash": "b19653ed8d27808ae09e132f14f2ccf6bf9bf4809910ba82817f5b74f790cfcd",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.revision": {
+      "text": "Profilrevision",
+      "sourceHash": "2e516d68f42f3e351f273a6127f89f4d323a606a3656e34e52b14b746ed27404",
+      "state": "machine-draft"
+    },
+    "profiles.toolbar.revision_label": {
+      "text": "Profilrevision",
+      "sourceHash": "e32d92ca67311957e26a16144a0f1017b93543890544507c353cb0d84978f270",
+      "state": "machine-draft"
+    },
+    "profiles.validation.invalid_profile": {
+      "text": "Ungültiges Profil",
+      "sourceHash": "f48e372cc3ae5e58783e229ba563e2edbbeb13af014134f9e26ca685e9f82288",
+      "state": "machine-draft"
+    },
+    "profiles.validation.none": {
+      "text": "Keine Validierungsprobleme.",
+      "sourceHash": "21d05437fb5bf4d6620ad3feb0a477b311e4fe078083dd371c526972feaeef5c",
+      "state": "machine-draft"
     },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
@@ -6023,66 +7793,6 @@
       "sourceHash": "5dd303715b690c9ae7eee858506460c7b6aad6f57cb148b71d916186b435f51e",
       "state": "machine-cross-checked"
     },
-    "shell.setup_progress.next": {
-      "text": "Als Nächstes folgt die Dashboard-Einrichtung.",
-      "sourceHash": "272d0261ca0dc2b0e2a88f17d7c7589b4c1f21ae1e9ae9596e10128a156d609b",
-      "state": "machine-cross-checked"
-    },
-    "shell.setup_progress.publishing": {
-      "text": "MQTT verbunden — Home Assistant-Discovery wird veröffentlicht.",
-      "sourceHash": "91badffcf3f64548ae77c2860e1ea840212f96d595e4f00ad17d768e1232c201",
-      "state": "machine-cross-checked"
-    },
-    "shell.setup_progress.verifying": {
-      "text": "MQTT-Einstellungen gespeichert — Broker-Verbindung wird geprüft. Dies kann nach dem Speichern einen Moment dauern.",
-      "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_failing": {
-      "text": "gestört; {evidence}",
-      "sourceHash": "6f6d79370acaca16ce643baf92f423497ffa6ac5091490b6892d5ccc8782d337",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_failing_slow": {
-      "text": "gestört; Home Assistant antwortet langsam; {evidence}",
-      "sourceHash": "0c4343bac1746d7045d16a513c6b7ae5ec6defdd15ad250d2c3f49b5826b112b",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_failing_very_slow": {
-      "text": "gestört; Home Assistant antwortet sehr langsam; {evidence}",
-      "sourceHash": "df107af05db2d7602d2d0d328109255984d31dedfcfb46a0d388df8074504c2c",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_healthy_slow": {
-      "text": "stabil; Home Assistant antwortet langsam; {evidence}",
-      "sourceHash": "78143bc4e451242c36bb5a2c1c943e945f51b17b49e369174bd70c254136d43f",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_healthy_very_slow": {
-      "text": "stabil; Home Assistant antwortet sehr langsam; {evidence}",
-      "sourceHash": "9284011dde06ac10f4d06d1c6a7668da3f6dc951897ca3bd4ec48c080bb895f8",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_losing_probes": {
-      "text": "Abfragen gehen verloren; {evidence}",
-      "sourceHash": "80879344403c1f1f32cefbcb1eb4604dfd85b99a366f1ac4a49b95d4fc4475ad",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_losing_probes_slow": {
-      "text": "Abfragen gehen verloren; Home Assistant antwortet langsam; {evidence}",
-      "sourceHash": "c7eb828d98e083fe6edeaf656eaabfa8f9d313f4d00714ad94658ab1fa00f3a7",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_losing_probes_very_slow": {
-      "text": "Abfragen gehen verloren; Home Assistant antwortet sehr langsam; {evidence}",
-      "sourceHash": "3b9ae1fd448e2a1cd254e170b929e3166077f3a8b7c52537414e1197b0d6a579",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_settling": {
-      "text": "stabilisiert sich nach dem Start; noch keine Bewertung",
-      "sourceHash": "c45b8d624d6e049fe75cf223a5860df0b642f1e46fc31613b41465176c12511c",
-      "state": "machine-cross-checked"
-    },
     "shell.panel_switcher.title": {
       "text": "Zu einem anderen ha-paneld-Panel wechseln (aktuelle Ansicht bleibt erhalten)",
       "sourceHash": "18099935ffa7e381e72b5614358626beac066ee14193dbccb31826af8f30abef",
@@ -6161,6 +7871,21 @@
     "shell.settings_changed.externally": {
       "text": "Einstellungen wurden außerhalb dieser Seite geändert",
       "sourceHash": "8324516c95d16846ef9c995a13bb55f3f6523b39a779e6d678bab9f791f47682",
+      "state": "machine-cross-checked"
+    },
+    "shell.setup_progress.next": {
+      "text": "Als Nächstes folgt die Dashboard-Einrichtung.",
+      "sourceHash": "272d0261ca0dc2b0e2a88f17d7c7589b4c1f21ae1e9ae9596e10128a156d609b",
+      "state": "machine-cross-checked"
+    },
+    "shell.setup_progress.publishing": {
+      "text": "MQTT verbunden — Home Assistant-Discovery wird veröffentlicht.",
+      "sourceHash": "91badffcf3f64548ae77c2860e1ea840212f96d595e4f00ad17d768e1232c201",
+      "state": "machine-cross-checked"
+    },
+    "shell.setup_progress.verifying": {
+      "text": "MQTT-Einstellungen gespeichert — Broker-Verbindung wird geprüft. Dies kann nach dem Speichern einen Moment dauern.",
+      "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
       "state": "machine-cross-checked"
     }
   }

@@ -77,7 +77,14 @@ object ProfileDraftFactory {
         )
         val issues = buildList {
             addAll(report?.issues.orEmpty())
-            add(ProfileIssue(ProfileIssueSeverity.INFO, "metadata.limitations", "Draft TODOs are recorded as limitations; unsupported capabilities remain disabled."))
+            add(
+                ProfileIssue(
+                    ProfileIssueSeverity.INFO,
+                    "metadata.limitations",
+                    "Draft TODOs are recorded as limitations; unsupported capabilities remain disabled.",
+                    ProfilePresentation("draft-todos-recorded-as-limitations"),
+                ),
+            )
         }
         return PassiveProfileDraft(ProfileYaml.serialize(document), report ?: emptyReport(facts), issues)
     }

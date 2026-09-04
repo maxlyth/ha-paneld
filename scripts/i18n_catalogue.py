@@ -48,6 +48,9 @@ MAX_REPLACEMENT_FILE_BYTES = MAX_TARGET_TEXT_BYTES + 2
 TARGET_PARAGRAPH_COUNTS = {
     "configure.zigbee.join_confirm": 3,
 }
+TARGET_NEWLINE_RUNS = {
+    "profiles.modal.delete_detail": (1, 2),
+}
 UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "configure.group.dashboard"): "Dashboard",
     ("de", "configure.group.system"): "System",
@@ -214,11 +217,18 @@ def validate_target_text_hygiene(key: str, text: str) -> None:
         len(paragraphs) == TARGET_PARAGRAPH_COUNTS.get(key)
         and all(paragraph and "\n" not in paragraph for paragraph in paragraphs)
     )
+    expected_runs = TARGET_NEWLINE_RUNS.get(key)
+    newline_parts = re.split(r"\n+", text)
+    allows_structured_breaks = (
+        expected_runs is not None
+        and tuple(len(run) for run in re.findall(r"\n+", text)) == expected_runs
+        and all(newline_parts)
+    )
     unsafe = sorted({
         f"U+{ord(character):04X}"
         for character in text
         if unicodedata.category(character) in {"Cc", "Cf"}
-        and not (character == "\n" and allows_paragraph_breaks)
+        and not (character == "\n" and (allows_paragraph_breaks or allows_structured_breaks))
     })
     if unsafe:
         raise CatalogueError(f"{key}: target contains unsafe control or format characters: {', '.join(unsafe)}")

@@ -59,7 +59,7 @@ class HealthWarningAuthoritySourceTest {
     @Test fun configureTabSurfacesMissingRendererNextStepInPlace() {
         val configure = server.substring(
             server.indexOf("private fun configureBody(strings: AppStrings)"),
-            server.indexOf("private fun profilesBody()"),
+            server.indexOf("private fun profilesBody(strings: AppStrings)"),
         )
         assertTrue(configure.contains("configureSetupBanners(strings)"))
         assertTrue(configure.contains("private fun configureSetupBanners(strings: AppStrings)"))

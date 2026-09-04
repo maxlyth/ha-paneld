@@ -50,16 +50,23 @@ internal object ProfileYaml {
         val encoded = raw.toByteArray(StandardCharsets.UTF_8)
         val hash = sha256(encoded)
         if (encoded.size > ProfileMetadata.MAX_BYTES) {
-            return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Profile exceeds ${ProfileMetadata.MAX_BYTES} bytes.")))
+            return ProfileParseResult(
+                null,
+                hash,
+                encoded.size,
+                listOf(error("$", "Profile exceeds ${ProfileMetadata.MAX_BYTES} bytes.", "profile-source-byte-limit", mapOf("max" to ProfileMetadata.MAX_BYTES.toString()))),
+            )
         }
         preflight(raw)?.let { issue -> return ProfileParseResult(null, hash, encoded.size, listOf(issue)) }
         val root = try {
             val values = load.loadAllFromString(raw).iterator()
-            if (!values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Profile is empty.")))
+            if (!values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Profile is empty.", "profile-source-empty")))
             val first = values.next()
-            if (values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Exactly one YAML document is allowed.")))
+            if (values.hasNext()) return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "Exactly one YAML document is allowed.", "yaml-single-document-required")))
             first
         } catch (failure: RuntimeException) {
+            // SnakeYAML owns this bounded diagnostic text. It is deliberately compatibility-only:
+            // presentation codes describe deterministic core outcomes, never parser exception prose.
             return ProfileParseResult(
                 null,
                 hash,
@@ -67,7 +74,7 @@ internal object ProfileYaml {
                 listOf(error("$", "Invalid YAML: ${safeMessage(failure)}")),
             )
         } catch (_: StackOverflowError) {
-            return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "YAML nesting is too deep.")))
+            return ProfileParseResult(null, hash, encoded.size, listOf(error("$", "YAML nesting is too deep.", "yaml-nesting-too-deep")))
         }
         val issues = mutableListOf<ProfileIssue>()
         audit(root, "$", 0, issues)
@@ -95,30 +102,35 @@ internal object ProfileYaml {
 
     private fun audit(value: Any?, path: String, depth: Int, issues: MutableList<ProfileIssue>) {
         if (depth > ProfileMetadata.MAX_DEPTH) {
-            issues += error(path, "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.")
+            issues += error(path, "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.", "yaml-nesting-depth-limit", mapOf("max" to ProfileMetadata.MAX_DEPTH.toString()))
             return
         }
         when (value) {
             null, is Boolean, is Number -> Unit
             is String -> if (value.length > ProfileMetadata.MAX_STRING_LENGTH) {
-                issues += error(path, "String exceeds ${ProfileMetadata.MAX_STRING_LENGTH} characters.")
+                issues += error(path, "String exceeds ${ProfileMetadata.MAX_STRING_LENGTH} characters.", "yaml-string-length-limit", mapOf("max" to ProfileMetadata.MAX_STRING_LENGTH.toString()))
             }
             is Map<*, *> -> {
                 if (value.size > ProfileMetadata.MAX_COLLECTION_SIZE) {
-                    issues += error(path, "Map exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.")
+                    issues += error(path, "Map exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.", "yaml-map-entry-limit", mapOf("max" to ProfileMetadata.MAX_COLLECTION_SIZE.toString()))
                 }
                 value.forEach { (key, child) ->
-                    if (key !is String) issues += error(path, "Every mapping key must be a string.")
+                    if (key !is String) issues += error(path, "Every mapping key must be a string.", "yaml-mapping-key-string-required")
                     audit(child, if (key is String) "$path.$key" else path, depth + 1, issues)
                 }
             }
             is List<*> -> {
                 if (value.size > ProfileMetadata.MAX_COLLECTION_SIZE) {
-                    issues += error(path, "List exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.")
+                    issues += error(path, "List exceeds ${ProfileMetadata.MAX_COLLECTION_SIZE} entries.", "yaml-list-entry-limit", mapOf("max" to ProfileMetadata.MAX_COLLECTION_SIZE.toString()))
                 }
                 value.forEachIndexed { index, child -> audit(child, "$path[$index]", depth + 1, issues) }
             }
-            else -> issues += error(path, "Unsupported YAML value type ${value::class.simpleName}.")
+            else -> issues += error(
+                path,
+                "Unsupported YAML value type ${value::class.simpleName}.",
+                "unsupported-yaml-type",
+                mapOf("type" to value::class.simpleName.orEmpty()),
+            )
         }
     }
 
@@ -129,24 +141,25 @@ internal object ProfileYaml {
             var events = 0
             for (event in parse.parseString(raw)) {
                 events++
-                if (events > MAX_EVENTS) return error("$", "YAML contains too many parser events.")
+                if (events > MAX_EVENTS) return error("$", "YAML contains too many parser events.", "yaml-parser-event-limit")
                 when (event) {
                     is DocumentStartEvent -> {
                         documents++
-                        if (documents > 1) return error("$", "Exactly one YAML document is allowed.")
+                        if (documents > 1) return error("$", "Exactly one YAML document is allowed.", "yaml-single-document-required")
                     }
                     is CollectionStartEvent -> {
                         depth++
-                        if (depth > ProfileMetadata.MAX_DEPTH) return error("$", "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.")
+                        if (depth > ProfileMetadata.MAX_DEPTH) return error("$", "Nesting exceeds ${ProfileMetadata.MAX_DEPTH} levels.", "yaml-nesting-depth-limit", mapOf("max" to ProfileMetadata.MAX_DEPTH.toString()))
                     }
                     is CollectionEndEvent -> depth--
                 }
             }
             null
         } catch (failure: RuntimeException) {
+            // Preserve the same arbitrary SnakeYAML boundary as the full parse path above.
             error("$", "Invalid YAML: ${safeMessage(failure)}")
         } catch (_: StackOverflowError) {
-            error("$", "YAML nesting is too deep.")
+            error("$", "YAML nesting is too deep.", "yaml-nesting-too-deep")
         }
     }
 
@@ -228,7 +241,12 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         ).orEmpty()
         val schema = integer(root, "schema", "$", required = true) ?: 0
         if (schema != ProfileMetadata.SCHEMA) {
-            issues += error("schema", "Unsupported schema $schema; expected ${ProfileMetadata.SCHEMA}.")
+            issues += error(
+                "schema",
+                "Unsupported schema $schema; expected ${ProfileMetadata.SCHEMA}.",
+                "unsupported-schema",
+                mapOf("actual" to schema.toString(), "expected" to ProfileMetadata.SCHEMA.toString()),
+            )
         }
         return ProfileDocument(
             schema = schema,
@@ -436,7 +454,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val raw = map(value, "cpu.governors", emptySet(), allowAnyKeys = true) ?: return null
         return raw.mapValues { (key, item) ->
             if (item !is String) {
-                issues += error("cpu.governors.$key", "Expected a string.")
+                issues += error("cpu.governors.$key", "Expected a string.", "expected-string")
                 ""
             } else item
         }
@@ -447,12 +465,12 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         is Number -> if (value.toDouble().isFinite() && value.toDouble() % 1.0 == 0.0 && value.toLong() in Int.MIN_VALUE..Int.MAX_VALUE) {
             ProfileDensity.Fixed(value.toInt())
         } else {
-            issues += error("provisioning.display.density", "Expected a 32-bit integer or named strategy.")
+            issues += error("provisioning.display.density", "Expected a 32-bit integer or named strategy.", "expected-32-bit-integer-or-strategy")
             null
         }
         is String -> ProfileDensity.Strategy(value)
         else -> {
-            issues += error("provisioning.display.density", "Expected an integer or named strategy.")
+            issues += error("provisioning.display.density", "Expected an integer or named strategy.", "expected-integer-or-strategy")
             null
         }
     }
@@ -466,27 +484,27 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         allowAnyKeys: Boolean = false,
     ): Map<String, Any?>? {
         if (value == null) {
-            if (required) issues += error(path, "Required mapping is missing.")
+            if (required) issues += error(path, "Required mapping is missing.", "required-mapping")
             return null
         }
         if (value !is Map<*, *>) {
-            issues += error(path, "Expected a mapping.")
+            issues += error(path, "Expected a mapping.", "expected-mapping")
             return null
         }
         val result = value as Map<String, Any?>
         if (!allowAnyKeys) result.keys.filterNot { it in allowed }.forEach {
-            issues += error(if (path == "$") it else "$path.$it", "Unknown field.")
+            issues += error(if (path == "$") it else "$path.$it", "Unknown field.", "unknown-field")
         }
         return result
     }
 
     private fun list(value: Any?, path: String, required: Boolean = false): List<Any?> {
         if (value == null) {
-            if (required) issues += error(path, "Required list is missing.")
+            if (required) issues += error(path, "Required list is missing.", "required-list")
             return emptyList()
         }
         if (value !is List<*>) {
-            issues += error(path, "Expected a list.")
+            issues += error(path, "Expected a list.", "expected-list")
             return emptyList()
         }
         return value
@@ -495,7 +513,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
     private fun stringList(value: Any?, path: String, required: Boolean = false): List<String> =
         list(value, path, required).mapIndexed { index, item ->
             if (item !is String) {
-                issues += error("$path[$index]", "Expected a string.")
+                issues += error("$path[$index]", "Expected a string.", "expected-string")
                 ""
             } else item
         }
@@ -503,11 +521,11 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
     private fun string(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): String? {
         val fullPath = if (path == "$") key else "$path.$key"
         if (!map.containsKey(key) || map[key] == null) {
-            if (required) issues += error(fullPath, "Required string is missing.")
+            if (required) issues += error(fullPath, "Required string is missing.", "required-string")
             return null
         }
         return (map[key] as? String) ?: run {
-            issues += error(fullPath, "Expected a string.")
+            issues += error(fullPath, "Expected a string.", "expected-string")
             null
         }
     }
@@ -515,12 +533,12 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
     private fun integer(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Int? {
         val fullPath = if (path == "$") key else "$path.$key"
         if (!map.containsKey(key) || map[key] == null) {
-            if (required) issues += error(fullPath, "Required integer is missing.")
+            if (required) issues += error(fullPath, "Required integer is missing.", "required-integer")
             return null
         }
         val number = map[key] as? Number
         if (number == null || number.toDouble() % 1.0 != 0.0 || number.toLong() !in Int.MIN_VALUE..Int.MAX_VALUE) {
-            issues += error(fullPath, "Expected a 32-bit integer.")
+            issues += error(fullPath, "Expected a 32-bit integer.", "expected-integer")
             return null
         }
         return number.toInt()
@@ -532,7 +550,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val number = map[key] as? Number
         val converted = number?.toFloat()
         if (number == null || !number.toDouble().isFinite() || converted == null || !converted.isFinite()) {
-            issues += error(fullPath, "Expected a finite number.")
+            issues += error(fullPath, "Expected a finite number.", "expected-finite-number")
             return null
         }
         return converted
@@ -541,11 +559,11 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
     private fun boolean(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Boolean? {
         val fullPath = "$path.$key"
         if (!map.containsKey(key) || map[key] == null) {
-            if (required) issues += error(fullPath, "Required boolean is missing.")
+            if (required) issues += error(fullPath, "Required boolean is missing.", "required-boolean")
             return null
         }
         return (map[key] as? Boolean) ?: run {
-            issues += error(fullPath, "Expected a boolean.")
+            issues += error(fullPath, "Expected a boolean.", "expected-boolean")
             null
         }
     }
@@ -561,7 +579,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         val raw = if (map.containsKey(key)) string(map, key, path, required = true) else default
         if (raw == null) return null
         return values.firstOrNull { yamlName(it) == raw } ?: run {
-            issues += error("$path.$key", "Unknown value '$raw'.")
+            issues += error("$path.$key", "Unknown value '$raw'.", "unknown-value", mapOf("value" to raw))
             null
         }
     }
@@ -685,5 +703,14 @@ private fun <K, V> LinkedHashMap<K, V?>.withoutNullValues(): LinkedHashMap<K, V>
     return result
 }
 
-private fun error(path: String, message: String) =
-    ProfileIssue(ProfileIssueSeverity.ERROR, path.removePrefix("$."), message)
+private fun error(
+    path: String,
+    message: String,
+    presentationCode: String? = null,
+    presentationParams: Map<String, String> = emptyMap(),
+) = ProfileIssue(
+    ProfileIssueSeverity.ERROR,
+    path.removePrefix("$."),
+    message,
+    presentationCode?.let { runCatching { ProfilePresentation(it, presentationParams) }.getOrNull() },
+)

@@ -254,10 +254,13 @@ class RuntimeProfileRegistryTest {
 
         val selected = registry.select(ProfileSelection.Pinned(ref), beforeSelectRevision)
         assertTrue(selected is ProfileMutation.Success && selected.restartRequired)
+        assertEquals("profile-selection-staged", (selected as ProfileMutation.Success).presentation?.code)
         assertEquals(ProfileActivationPhase.PENDING, registry.status().activation.phase)
+        assertEquals("activation-pending", registry.status().activation.presentation?.code)
         assertEquals("generic", registry.status().active!!.ref.id)
 
         val applying = registry.resolveForStartup()
+        assertEquals("activation-applying-selected", registry.status().activation.presentation?.code)
         assertEquals(ref, applying.summary.ref)
         assertNotNull(applying.activationGeneration)
         assertTrue(registry.markActivationHealthy(applying.activationGeneration!!))

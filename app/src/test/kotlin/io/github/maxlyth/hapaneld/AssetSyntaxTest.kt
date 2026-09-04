@@ -607,7 +607,7 @@ class AssetSyntaxTest {
             global.model={profiles:[summary],selected:summary.ref,status:{selection:{mode:'pinned'}},sourceLoaded:true,editable:false,loading:false,preview:null,source:'',originalSource:''};
             global.selectedSummary=()=>summary;global.reviewedSummary=()=>summary;global.byId=id=>nodes[id]||(nodes[id]={disabled:false,hidden:false,textContent:''});
             global.isDirty=()=>false;global.renderBadges=()=>{};global.summaryForRef=()=>summary;global.setStatus=m=>{status=m};
-            global.string=v=>v==null?'':String(v);global.openModal=()=>{throw new Error('wrong-device activation opened confirmation')};
+            global.string=v=>v==null?'':String(v);global.t=(key,fallback)=>fallback;global.openModal=()=>{throw new Error('wrong-device activation opened confirmation')};
             global.postJson=()=>{posts++;return Promise.resolve({})};
             const updateStart=source.indexOf('function updateActions()'),updateEnd=source.indexOf('function loadCatalog(');
             const activateStart=source.indexOf('function activate(ref, action)'),activateEnd=source.indexOf('function pollAfterRestart(');

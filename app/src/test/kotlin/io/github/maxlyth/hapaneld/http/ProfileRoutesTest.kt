@@ -18,6 +18,7 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileIssueSeverity
 import io.github.maxlyth.hapaneld.device.profile.ProfileLink
 import io.github.maxlyth.hapaneld.device.profile.ProfileMutation
 import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
+import io.github.maxlyth.hapaneld.device.profile.ProfilePresentation
 import io.github.maxlyth.hapaneld.device.profile.ProfilePreview
 import io.github.maxlyth.hapaneld.device.profile.ProfileRef
 import io.github.maxlyth.hapaneld.device.profile.ProfileRisk
@@ -49,6 +50,60 @@ import org.junit.Test
 import java.security.MessageDigest
 
 class ProfileRoutesTest {
+    @Test
+    fun presentationMetadataIsAdditiveBoundedAndUnknownIssuesRemainRaw() = testApplication {
+        val admin = FakeProfileAdmin()
+        application { routing { route("/api/v1") { profileRoutes(ProfileRouteDependencies(admin)) } } }
+
+        val contentTypeError = JSONObject(
+            client.post("/api/v1/profiles/preview") {
+                contentType(ContentType.Application.Json)
+                setBody("{}")
+            }.bodyAsText(),
+        )
+        assertEquals("yaml-content-type-required", contentTypeError.getString("error"))
+        assertEquals("yaml-content-type-required", contentTypeError.getString("presentation_code"))
+        assertEquals(0, contentTypeError.getJSONObject("presentation_params").length())
+
+        val preview = JSONObject(
+            client.post("/api/v1/profiles/preview") {
+                contentType(ContentType.parse("application/yaml"))
+                setBody("presentation-test")
+            }.bodyAsText(),
+        )
+        val known = preview.getJSONArray("issues").getJSONObject(0)
+        assertEquals("Original compatibility prose.", known.getString("message"))
+        assertEquals("unknown-value", known.getString("presentation_code"))
+        assertEquals("opaque", known.getJSONObject("presentation_params").getString("value"))
+        val raw = preview.getJSONArray("issues").getJSONObject(1)
+        assertEquals("Arbitrary failure remains raw.", raw.getString("message"))
+        assertFalse(raw.has("presentation_code"))
+        assertFalse(raw.has("presentation_params"))
+    }
+
+    @Test
+    fun presentationContractRejectsUnknownCodesMissingOrExtraParametersAndOversizedValues() {
+        assertTrue(runCatching { ProfilePresentation("Not Stable") }.isFailure)
+        assertTrue(runCatching { ProfilePresentation("unknown-value") }.isFailure)
+        assertTrue(runCatching { ProfilePresentation("invalid-json", mapOf("value" to "extra")) }.isFailure)
+        assertTrue(runCatching { ProfilePresentation("unknown-value", mapOf("value" to "x".repeat(513))) }.isFailure)
+    }
+
+    @Test
+    fun plainTextCompatibilityErrorsExposeAdditivePresentationHeaders() = testApplication {
+        application {
+            routing {
+                route("/api/v1") { profileRoutes(ProfileRouteDependencies(FakeProfileAdmin())) }
+            }
+        }
+
+        val response = client.get("/api/v1/profiles/template")
+        assertEquals(HttpStatusCode.NotImplemented, response.status)
+        assertEquals("profile template unavailable\n", response.bodyAsText())
+        assertEquals("profile-template-unavailable", response.headers["X-Profile-Presentation-Code"])
+        assertEquals("{}", response.headers["X-Profile-Presentation-Params"])
+    }
+
     @Test
     fun catalogSchemaAndDriversExposeOnlyStableAuthoringMetadata() = testApplication {
         val admin = FakeProfileAdmin()
@@ -131,8 +186,11 @@ class ProfileRoutesTest {
             setBody(yaml)
         }
         assertEquals(HttpStatusCode.OK, imported.status)
-        val importedRef = JSONObject(imported.bodyAsText()).getJSONObject("imported_ref")
+        val importedBody = JSONObject(imported.bodyAsText())
+        val importedRef = importedBody.getJSONObject("imported_ref")
         assertEquals(sha256(yaml), importedRef.getString("revision"))
+        assertEquals("profile-imported", importedBody.getString("presentation_code"))
+        assertEquals("imported.test", importedBody.getJSONObject("presentation_params").getString("display_name"))
         assertEquals(yaml, admin.importedYaml)
 
         val exported = client.get("/api/v1/profiles/${admin.bundled.ref.id}/revisions/${admin.bundled.ref.revision}")
@@ -389,7 +447,17 @@ class ProfileRoutesTest {
                 ref = ProfileRef("imported.test", sha256(rawYaml)),
                 compatible = previewCompatible,
             ),
-            issues = emptyList(),
+            issues = if (rawYaml == "presentation-test") {
+                listOf(
+                    ProfileIssue(
+                        ProfileIssueSeverity.ERROR,
+                        "field",
+                        "Original compatibility prose.",
+                        ProfilePresentation("unknown-value", mapOf("value" to "opaque")),
+                    ),
+                    ProfileIssue(ProfileIssueSeverity.ERROR, "field", "Arbitrary failure remains raw."),
+                )
+            } else emptyList(),
             diffFromActive = listOf(ProfileDiff("identity.id", "generic", "imported.test")),
             compatible = previewCompatible,
         )
@@ -399,7 +467,15 @@ class ProfileRoutesTest {
             importedYaml = rawYaml
             local = local.copy(ref = ProfileRef("imported.test", sha256(rawYaml)))
             profiles = mutableListOf(bundled, local)
-            return ProfileMutation.Success(status(), restartRequired = false, message = "saved")
+            return ProfileMutation.Success(
+                status(),
+                restartRequired = false,
+                message = "saved",
+                presentation = ProfilePresentation(
+                    "profile-imported",
+                    mapOf("display_name" to "imported.test", "version" to "1.0.0"),
+                ),
+            )
         }
 
         override fun exportProfile(ref: ProfileRef): String? = if (ref == bundled.ref) bundledYaml else null

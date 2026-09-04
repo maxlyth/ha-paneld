@@ -139,6 +139,26 @@ class CatalogueTest(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(i18n.CatalogueError):
                 i18n.validate_target_text_hygiene(candidate_key, text)
 
+    def test_profile_delete_detail_requires_one_line_then_one_paragraph_break(self):
+        key = "profiles.modal.delete_detail"
+        i18n.validate_target_text_hygiene(
+            key,
+            "{profile}\nsha256:{sha256}\n\nThis cannot be undone.",
+        )
+
+        invalid = {
+            "wrong key": ("profiles.modal.other", "Profile\nsha256:value\n\nWarning."),
+            "only paragraph break": (key, "Profile\n\nsha256:value\n\nWarning."),
+            "only line breaks": (key, "Profile\nsha256:value\nWarning."),
+            "reversed runs": (key, "Profile\n\nsha256:value\nWarning."),
+            "extra line": (key, "Profile\nsha256:value\nextra\n\nWarning."),
+            "leading line break": (key, "\nProfile\nsha256:value\n\nWarning."),
+            "trailing line break": (key, "Profile\nsha256:value\n\nWarning.\n"),
+        }
+        for name, (candidate_key, text) in invalid.items():
+            with self.subTest(name=name), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_text_hygiene(candidate_key, text)
+
     def test_web_surface_is_admitted_but_unknown_surface_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = Path(directory) / "en.json"

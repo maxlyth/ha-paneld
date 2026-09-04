@@ -1,0 +1,165 @@
+package io.github.maxlyth.hapaneld.i18n
+
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.json.JSONArray
+
+/** Exact catalogue boundary for the Profiles HTML authoring surface. */
+class ProfilesI18nContractTest {
+    private val assets = File("src/main/assets")
+    private val sourceFile = File(assets, "i18n/en.json")
+    private val profilesScript = File(assets, "profiles.js")
+    private val server = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt")
+    private val releaseTargetLocales = AppLocale.RELEASE_LOCALES.filterNot { it == AppLocale.ENGLISH }
+
+    @Test fun `English Profiles records are exactly the server and browser consumer union`() {
+        val source = SourceCatalogue.parse(sourceFile.readText())
+        val records = source.strings.keys.filterTo(sortedSetOf()) { it.startsWith("profiles.") }
+        val consumers = quotedProfileKeys(server.readText()) + quotedProfileKeys(profilesScript.readText())
+
+        assertFalse("Profiles must retain a finite non-empty catalogue surface", consumers.isEmpty())
+        assertEquals(
+            "English Profiles records and visible server-browser consumers diverged",
+            consumers,
+            records,
+        )
+    }
+
+    @Test fun `closed presentation maps have exact namespaces and parameter metadata`() {
+        val source = SourceCatalogue.parse(sourceFile.readText())
+        val script = profilesScript.readText()
+        val bindings = presentationBindings(objectLiteral(script, "PRESENTATIONS"))
+        val issue = bindings.filterValues { it.startsWith("profiles.issue.") }
+        val result = bindings.filterValues { it.startsWith("profiles.result.") }
+        val parameters = presentationParameters(objectLiteral(script, "PRESENTATION_PARAMS"))
+        val expectedParameterizedCodes = bindings.mapNotNullTo(sortedSetOf()) { (code, key) ->
+            code.takeIf { checkNotNull(source.strings[key]).placeholders.isNotEmpty() }
+        }
+
+        assertTrue("Profiles must expose backend issue presentation codes", issue.isNotEmpty())
+        assertTrue("Profiles must expose backend result presentation codes", result.isNotEmpty())
+        assertEquals("the closed Profiles issue presentation vocabulary changed", 123, issue.size)
+        assertEquals("the closed Profiles result presentation vocabulary changed", 46, result.size)
+        assertEquals("the closed Profiles parameterized vocabulary changed", 34, parameters.size)
+        assertTrue("one presentation code must not be assigned to issue and result namespaces", issue.keys.intersect(result.keys).isEmpty())
+        assertTrue("issue codes must map only to profiles.issue records", issue.values.all { it.startsWith("profiles.issue.") })
+        assertTrue("result codes must map only to profiles.result records", result.values.all { it.startsWith("profiles.result.") })
+        assertEquals(
+            "parameter metadata must name every and only parameterized presentation code",
+            expectedParameterizedCodes,
+            parameters.keys,
+        )
+
+        bindings.forEach { (code, key) ->
+            val record = checkNotNull(source.strings[key]) { "$code maps to missing English record $key" }
+            val expected = record.placeholders.map { it.removePrefix("{").removeSuffix("}") }.sorted()
+            assertEquals("$code parameter contract drifted from $key placeholders", expected, parameters[code].orEmpty().sorted())
+        }
+    }
+
+    @Test fun `literal browser fallbacks equal their authoritative English records`() {
+        val source = SourceCatalogue.parse(sourceFile.readText())
+        val bindings = Regex("""\bt\(\s*(\"(?:\\.|[^\"\\])*\")\s*,\s*(\"(?:\\.|[^\"\\])*\")""")
+            .findAll(profilesScript.readText())
+            .map { match -> JSONArray("[${match.groupValues[1]},${match.groupValues[2]}]") }
+            .map { values -> values.getString(0) to values.getString(1) }
+            .filter { (key, _) -> key.startsWith("profiles.") }
+            .toList()
+
+        assertTrue("Profiles browser must expose literal English-safe fallback bindings", bindings.isNotEmpty())
+        bindings.forEach { (key, fallback) ->
+            assertEquals(
+                "$key browser fallback drifted from the authoritative English record",
+                checkNotNull(source.strings[key]) { "browser consumes missing English record $key" }.text,
+                fallback,
+            )
+        }
+    }
+
+    @Test fun `every target carries a current staged Profiles translation`() {
+        val source = SourceCatalogue.parse(sourceFile.readText())
+        val profiles = source.strings.filterKeys { it.startsWith("profiles.") }
+
+        releaseTargetLocales.forEach { locale ->
+            val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
+            assertEquals("$locale Profiles key set must be exact", profiles.keys, target.strings.keys.filterTo(sortedSetOf()) { it.startsWith("profiles.") })
+            profiles.forEach { (key, english) ->
+                val translated = checkNotNull(target.strings[key]) { "$locale is missing $key" }
+                assertEquals("$locale has stale source text for $key", english.sourceHash, translated.sourceHash)
+                // Profiles remains explicitly pre-review here. The final reviewed candidate tightens this
+                // to MACHINE_CROSS_CHECKED or COMMUNITY_CORRECTED before release.
+                assertTrue(
+                    "$locale $key is an unresolved English fallback rather than a staged translation",
+                    translated.state == TranslationState.MACHINE_DRAFT ||
+                        translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                )
+            }
+        }
+    }
+
+    @Test fun `Profiles route projects its body locale and declares mixed fallback languages`() {
+        val route = routeBody(server.readText(), "profiles")
+        assertTrue("Profiles must resolve the requested locale", route.contains("requestStrings(call)"))
+        assertTrue("Profiles must render with request-local strings", route.contains("profilesBody(strings)"))
+        assertTrue(
+            "Profiles Content-Language must account for shell, hardened approval and Profiles projections",
+            route.contains("strings.languages(setOf(\"shell.\", \"configure.hardened.\", \"profiles.\"))"),
+        )
+        assertTrue("Profiles route must identify its active surface to the shared page shell", route.contains("page(\"profiles\""))
+        assertTrue(
+            "shared page shell must project the active surface's complete namespace",
+            server.readText().contains("translationPrefixes = setOf(\"shell.\", \"\$active.\")"),
+        )
+    }
+
+    private fun quotedProfileKeys(source: String): Set<String> =
+        Regex("[\\\"'](profiles\\.[a-z0-9._-]+)[\\\"']")
+            .findAll(source)
+            .mapTo(sortedSetOf()) { it.groupValues[1] }
+
+    private fun presentationBindings(body: String): Map<String, String> =
+        Regex("[\\\"']([a-z0-9-]+)[\\\"']\\s*:\\s*[\\\"'](profiles\\.(?:issue|result)\\.[a-z0-9._-]+)[\\\"']")
+            .findAll(body)
+            .map { it.groupValues[1] to it.groupValues[2] }
+            .toList()
+            .also { pairs ->
+                assertEquals("presentation codes must be unique", pairs.size, pairs.map { it.first }.toSet().size)
+                assertEquals("presentation catalogue keys must be unique", pairs.size, pairs.map { it.second }.toSet().size)
+            }
+            .toMap()
+
+    private fun presentationParameters(body: String): Map<String, List<String>> {
+        val pairs = Regex("""["']([a-z0-9-]+)["']\s*:\s*Object\.freeze\(\[([^\]]*)\]\)""")
+            .findAll(body)
+            .map { match ->
+                match.groupValues[1] to Regex("[\\\"']([a-z][a-z0-9_]*)[\\\"']")
+                    .findAll(match.groupValues[2])
+                    .map { it.groupValues[1] }
+                    .toList()
+            }
+            .toList()
+        assertEquals("presentation parameter codes must be unique", pairs.size, pairs.map { it.first }.toSet().size)
+        pairs.forEach { (code, names) ->
+            assertEquals("$code presentation parameter names must be unique", names.size, names.toSet().size)
+        }
+        return pairs.toMap()
+    }
+
+    private fun objectLiteral(source: String, name: String): String {
+        val marker = "var $name = Object.freeze({"
+        val start = source.indexOf(marker).also { require(it >= 0) { "missing $name" } } + marker.length
+        val end = source.indexOf("\n  });", start).also { require(it >= 0) { "unterminated $name" } }
+        return source.substring(start, end)
+    }
+
+    private fun routeBody(source: String, path: String): String {
+        val marker = "get(\"/$path\")"
+        val start = source.indexOf(marker).also { require(it >= 0) { "missing /$path route" } }
+        val end = source.indexOf("\n                get(\"/", start + marker.length).takeIf { it >= 0 } ?: source.length
+        return source.substring(start, end)
+    }
+}

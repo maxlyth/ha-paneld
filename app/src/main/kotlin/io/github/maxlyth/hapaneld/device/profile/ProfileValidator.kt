@@ -12,11 +12,26 @@ internal object ProfileValidator {
 
     fun validate(document: ProfileDocument, coreVersion: String, bundled: Boolean): List<ProfileIssue> {
         val issues = mutableListOf<ProfileIssue>()
-        fun reject(path: String, message: String) { issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, message) }
-        fun warn(path: String, message: String) { issues += ProfileIssue(ProfileIssueSeverity.WARNING, path, message) }
+        fun reject(
+            path: String,
+            message: String,
+            code: String? = null,
+            params: Map<String, String> = emptyMap(),
+        ) { issues += ProfileIssue(ProfileIssueSeverity.ERROR, path, message, code?.let { runCatching { ProfilePresentation(it, params) }.getOrNull() }) }
+        fun warn(
+            path: String,
+            message: String,
+            code: String? = null,
+            params: Map<String, String> = emptyMap(),
+        ) { issues += ProfileIssue(ProfileIssueSeverity.WARNING, path, message, code?.let { runCatching { ProfilePresentation(it, params) }.getOrNull() }) }
         fun boundedText(value: String?, path: String, max: Int = 100) {
             if (value != null && (value.isBlank() || value.length > max || value.any { it.code < 0x20 || it.code == 0x7f })) {
-                reject(path, "Must contain 1-$max characters without control characters.")
+                reject(
+                    path,
+                    "Must contain 1-$max characters without control characters.",
+                    "bounded-text",
+                    mapOf("min" to "1", "max" to max.toString()),
+                )
             }
         }
         fun containsFormatControl(value: String): Boolean {
@@ -34,17 +49,32 @@ internal object ProfileValidator {
                 value.length > 500 || uri?.scheme != "https" || uri.host.isNullOrBlank() ||
                 uri.userInfo != null
             ) {
-                reject(path, "Must be an absolute HTTPS URL without user information, at most 500 characters.")
+                reject(path, "Must be an absolute HTTPS URL without user information, at most 500 characters.", "invalid-https-url")
             }
         }
-        if (document.schema != ProfileMetadata.SCHEMA) reject("schema", "Unsupported schema ${document.schema}; expected ${ProfileMetadata.SCHEMA}.")
-        if (!idPattern.matches(document.id) || ".." in document.id) reject("id", "Use 1-128 lowercase letters or digits with interior dots and hyphens; consecutive dots are not allowed.")
-        if (!contentVersionPattern.matches(document.version)) reject("version", "Expected semantic version MAJOR.MINOR.PATCH.")
-        if (document.displayName.isBlank() || document.displayName.length > 100) reject("display_name", "Must contain 1-100 characters.")
-        if (document.socClass.isBlank() || document.socClass.length > 100) reject("soc_class", "Must contain 1-100 characters.")
-        if (document.metadata.author.isBlank() || document.metadata.author.length > 100) reject("metadata.author", "Must contain 1-100 characters.")
+        if (document.schema != ProfileMetadata.SCHEMA) reject(
+            "schema",
+            "Unsupported schema ${document.schema}; expected ${ProfileMetadata.SCHEMA}.",
+            "unsupported-schema",
+            mapOf("actual" to document.schema.toString(), "expected" to ProfileMetadata.SCHEMA.toString()),
+        )
+        if (!idPattern.matches(document.id) || ".." in document.id) reject("id", "Use 1-128 lowercase letters or digits with interior dots and hyphens; consecutive dots are not allowed.", "profile-id-invalid")
+        if (!contentVersionPattern.matches(document.version)) reject("version", "Expected semantic version MAJOR.MINOR.PATCH.", "semantic-version-required")
+        fun boundedRequiredText(value: String, path: String, max: Int = 100) {
+            if (value.isBlank() || value.length > max) {
+                reject(
+                    path,
+                    "Must contain 1-$max characters.",
+                    "bounded-text-basic",
+                    mapOf("min" to "1", "max" to max.toString()),
+                )
+            }
+        }
+        boundedRequiredText(document.displayName, "display_name")
+        boundedRequiredText(document.socClass, "soc_class")
+        boundedRequiredText(document.metadata.author, "metadata.author")
         document.metadata.source?.let { validHttpsUrl(it, "metadata.source") }
-        if (document.metadata.links.size > 8) reject("metadata.links", "At most 8 display links are allowed.")
+        if (document.metadata.links.size > 8) reject("metadata.links", "At most 8 display links are allowed.", "profile-link-count-limit")
         val seenLinkUrls = mutableSetOf<String>()
         val seenLinkLabels = mutableSetOf<String>()
         document.metadata.source?.let {
@@ -55,68 +85,73 @@ internal object ProfileValidator {
             val path = "metadata.links[$index]"
             boundedText(link.label, "$path.label", 48)
             if (containsFormatControl(link.label)) {
-                reject("$path.label", "Must not contain Unicode format controls.")
+                reject("$path.label", "Must not contain Unicode format controls.", "unicode-format-controls-forbidden")
             }
             validHttpsUrl(link.url, "$path.url")
-            if (!seenLinkUrls.add(link.url)) reject("$path.url", "Duplicate profile link URL.")
-            if (!seenLinkLabels.add(link.label.lowercase())) reject("$path.label", "Profile link labels must be unique.")
+            if (!seenLinkUrls.add(link.url)) reject("$path.url", "Duplicate profile link URL.", "duplicate-profile-link-url")
+            if (!seenLinkLabels.add(link.label.lowercase())) reject("$path.label", "Profile link labels must be unique.", "duplicate-profile-link-label")
         }
         document.soc?.let { soc ->
             boundedText(soc.model, "soc.model", 100)
             soc.introducedYear?.let { year ->
-                if (year !in 1970..2100) reject("soc.introduced_year", "Must be between 1970 and 2100.")
+                if (year !in 1970..2100) reject("soc.introduced_year", "Must be between 1970 and 2100.", "introduced-year-range")
             }
-            if (soc.cpuCores.size > 8) reject("soc.cpu_cores", "At most 8 CPU core clusters are allowed.")
+            if (soc.cpuCores.size > 8) reject("soc.cpu_cores", "At most 8 CPU core clusters are allowed.", "cpu-cluster-count-limit")
             val architectures = mutableSetOf<String>()
             var totalCores = 0
             soc.cpuCores.forEachIndexed { index, cluster ->
                 val path = "soc.cpu_cores[$index]"
                 boundedText(cluster.architecture, "$path.architecture", 64)
-                if (cluster.count !in 1..128) reject("$path.count", "Must be between 1 and 128 cores.")
+                if (cluster.count !in 1..128) reject("$path.count", "Must be between 1 and 128 cores.", "cpu-core-count-range")
                 totalCores += cluster.count.coerceAtLeast(0)
                 if (!architectures.add(cluster.architecture.lowercase())) {
-                    reject("$path.architecture", "CPU core architectures must be unique within the SoC description.")
+                    reject("$path.architecture", "CPU core architectures must be unique within the SoC description.", "duplicate-cpu-architecture")
                 }
             }
-            if (totalCores > 256) reject("soc.cpu_cores", "At most 256 total CPU cores are allowed.")
+            if (totalCores > 256) reject("soc.cpu_cores", "At most 256 total CPU cores are allowed.", "cpu-total-count-limit")
         }
-        if (!licensePattern.matches(document.metadata.license)) reject("metadata.license", "Expected a bounded SPDX-style license expression.")
-        if (document.metadata.testedFirmware.size > 32 || document.metadata.testedFirmware.any { it.isBlank() || it.length > 120 }) reject("metadata.tested_firmware", "Use at most 32 non-empty entries of at most 120 characters.")
-        if (document.metadata.limitations.size > 32 || document.metadata.limitations.any { it.isBlank() || it.length > 500 }) reject("metadata.limitations", "Use at most 32 non-empty entries of at most 500 characters.")
-        if (document.match.priority !in 0..1000) reject("match.priority", "Must be between 0 and 1000.")
-        if (document.match.fallback && (!bundled || document.id != "generic")) reject("match.fallback", "Only the bundled generic profile may be a fallback.")
-        if (!document.match.fallback && document.match.any.isEmpty()) reject("match.any", "At least one match group is required.")
-        if (document.match.any.size > 64) reject("match.any", "At most 64 match groups are allowed.")
+        if (!licensePattern.matches(document.metadata.license)) reject("metadata.license", "Expected a bounded SPDX-style license expression.", "license-expression-invalid")
+        if (document.metadata.testedFirmware.size > 32 || document.metadata.testedFirmware.any { it.isBlank() || it.length > 120 }) reject("metadata.tested_firmware", "Use at most 32 non-empty entries of at most 120 characters.", "tested-firmware-bounds")
+        if (document.metadata.limitations.size > 32 || document.metadata.limitations.any { it.isBlank() || it.length > 500 }) reject("metadata.limitations", "Use at most 32 non-empty entries of at most 500 characters.", "limitations-bounds")
+        if (document.match.priority !in 0..1000) reject("match.priority", "Must be between 0 and 1000.", "match-priority-range")
+        if (document.match.fallback && (!bundled || document.id != "generic")) reject("match.fallback", "Only the bundled generic profile may be a fallback.", "generic-fallback-only")
+        if (!document.match.fallback && document.match.any.isEmpty()) reject("match.any", "At least one match group is required.", "match-group-required")
+        if (document.match.any.size > 64) reject("match.any", "At most 64 match groups are allowed.", "match-group-count-limit")
         document.match.any.forEachIndexed { groupIndex, group ->
-            if (group.priority !in 0..1000) reject("match.any[$groupIndex].priority", "Must be between 0 and 1000.")
-            if (group.all.isEmpty()) reject("match.any[$groupIndex].all", "A group must contain at least one predicate.")
-            if (group.all.size > 8) reject("match.any[$groupIndex].all", "At most 8 predicates are allowed per group.")
+            if (group.priority !in 0..1000) reject("match.any[$groupIndex].priority", "Must be between 0 and 1000.", "match-priority-range")
+            if (group.all.isEmpty()) reject("match.any[$groupIndex].all", "A group must contain at least one predicate.", "match-predicate-required")
+            if (group.all.size > 8) reject("match.any[$groupIndex].all", "At most 8 predicates are allowed per group.", "match-predicate-count-limit")
             group.all.forEachIndexed { predicateIndex, predicate ->
                 val path = "match.any[$groupIndex].all[$predicateIndex].values"
-                if (predicate.values.isEmpty() || predicate.values.size > 32) reject(path, "Provide 1-32 values.")
+                if (predicate.values.isEmpty() || predicate.values.size > 32) reject(path, "Provide 1-32 values.", "match-values-count-range")
                 predicate.values.forEach {
-                    if (it.isBlank() || it.length > 100 || it != it.lowercase() || it.any { char -> char.code < 0x20 || char.code == 0x7f }) reject(path, "Values must be non-empty lowercase strings without controls, at most 100 characters.")
+                    if (it.isBlank() || it.length > 100 || it != it.lowercase() || it.any { char -> char.code < 0x20 || char.code == 0x7f }) reject(path, "Values must be non-empty lowercase strings without controls, at most 100 characters.", "match-value-invalid")
                 }
             }
         }
         document.requires.minCoreVersion?.let {
-            if (it.length > 64 || !versionPattern.matches(it)) reject("requires.min_core_version", "Expected a bounded dotted release version.")
-            else if (compareVersions(coreVersion, it) < 0) reject("requires.min_core_version", "Requires ha-paneld $it or newer; this core is $coreVersion.")
+            if (it.length > 64 || !versionPattern.matches(it)) reject("requires.min_core_version", "Expected a bounded dotted release version.", "dotted-release-version-required")
+            else if (compareVersions(coreVersion, it) < 0) reject(
+                "requires.min_core_version",
+                "Requires ha-paneld $it or newer; this core is $coreVersion.",
+                "core-version-required",
+                mapOf("required" to it, "current" to coreVersion),
+            )
         }
         val knownDrivers = ProfileMetadata.drivers.mapTo(mutableSetOf()) { it.id }
         document.requires.drivers.forEach {
-            if (it !in knownDrivers) reject("requires.drivers", "Unknown core driver '$it'.")
+            if (it !in knownDrivers) reject("requires.drivers", "Unknown core driver '$it'.", "unknown-core-driver", mapOf("value" to it))
         }
-        if (document.platform.suForm !in setOf("none", "android", "toolbox")) reject("platform.su_form", "Unknown su form '${document.platform.suForm}'.")
-        if (document.platform.suForm == "none" && document.platform.appCanSu) reject("platform.app_can_su", "Cannot be true when su_form is none.")
+        if (document.platform.suForm !in setOf("none", "android", "toolbox")) reject("platform.su_form", "Unknown su form '${document.platform.suForm}'.", "unknown-su-form", mapOf("value" to document.platform.suForm))
+        if (document.platform.suForm == "none" && document.platform.appCanSu) reject("platform.app_can_su", "Cannot be true when su_form is none.", "app-su-needs-su-form")
         if (document.hardware.led.mechanism !in setOf("none", "autodetect", "rk3576-ioctl", "rk3576-ioctl-daemon", "sysfs-daemon")) {
-            reject("hardware.led.mechanism", "Unknown LED mechanism '${document.hardware.led.mechanism}'.")
+            reject("hardware.led.mechanism", "Unknown LED mechanism '${document.hardware.led.mechanism}'.", "unknown-led-mechanism", mapOf("value" to document.hardware.led.mechanism))
         }
-        if (document.hardware.led.transfer !in setOf("identity", "rk3576-four-bit")) reject("hardware.led.transfer", "Unknown core transfer '${document.hardware.led.transfer}'.")
-        if (document.hardware.screenOff !in setOf("brightness-zero", "su-blpower", "daemon-blpower", "keyevent")) reject("hardware.screen_off", "Unknown screen-off route '${document.hardware.screenOff}'.")
-        if (document.hardware.screenOff == "su-blpower" && !document.platform.appCanSu) reject("hardware.screen_off", "su-blpower requires app_can_su: true.")
-        if (document.hardware.screenOff == "daemon-blpower" && document.platform.appCanSu) reject("hardware.screen_off", "daemon-blpower is reserved for sandbox-walled profiles.")
-        if (document.hardware.led.mechanism in setOf("rk3576-ioctl-daemon", "sysfs-daemon") && document.platform.appCanSu) reject("hardware.led.mechanism", "Daemon-only LED routes are reserved for sandbox-walled profiles.")
+        if (document.hardware.led.transfer !in setOf("identity", "rk3576-four-bit")) reject("hardware.led.transfer", "Unknown core transfer '${document.hardware.led.transfer}'.", "unknown-core-transfer", mapOf("value" to document.hardware.led.transfer))
+        if (document.hardware.screenOff !in setOf("brightness-zero", "su-blpower", "daemon-blpower", "keyevent")) reject("hardware.screen_off", "Unknown screen-off route '${document.hardware.screenOff}'.", "unknown-screen-off-route", mapOf("value" to document.hardware.screenOff))
+        if (document.hardware.screenOff == "su-blpower" && !document.platform.appCanSu) reject("hardware.screen_off", "su-blpower requires app_can_su: true.", "su-blpower-needs-app-su")
+        if (document.hardware.screenOff == "daemon-blpower" && document.platform.appCanSu) reject("hardware.screen_off", "daemon-blpower is reserved for sandbox-walled profiles.", "daemon-blpower-sandbox-only")
+        if (document.hardware.led.mechanism in setOf("rk3576-ioctl-daemon", "sysfs-daemon") && document.platform.appCanSu) reject("hardware.led.mechanism", "Daemon-only LED routes are reserved for sandbox-walled profiles.", "daemon-led-sandbox-only")
         validateAllowedPath(
             document.hardware.zigbeeGatewayDir,
             "hardware.zigbee_gateway_dir",
@@ -128,80 +163,80 @@ internal object ProfileValidator {
         document.hardware.relayBaseFallbacks.forEachIndexed { index, path ->
             validateAllowedPath(path, "hardware.relay_base_fallbacks[$index]", relayClasses, issues)
         }
-        if (document.hardware.relayBaseFallbacks.size > 3) reject("hardware.relay_base_fallbacks", "At most 3 fallback classes are allowed.")
+        if (document.hardware.relayBaseFallbacks.size > 3) reject("hardware.relay_base_fallbacks", "At most 3 fallback classes are allowed.", "relay-fallback-count-limit")
         if (document.hardware.relayBaseFallbacks.size != document.hardware.relayBaseFallbacks.toSet().size || document.hardware.relayBase in document.hardware.relayBaseFallbacks) {
-            reject("hardware.relay_base_fallbacks", "Relay class paths must be unique.")
+            reject("hardware.relay_base_fallbacks", "Relay class paths must be unique.", "relay-paths-unique")
         }
-        document.hardware.buttonLedGpioBase?.let { if (it !in 0..4092) reject("hardware.button_led_gpio_base", "GPIO block base must be between 0 and 4092.") }
+        document.hardware.buttonLedGpioBase?.let { if (it !in 0..4092) reject("hardware.button_led_gpio_base", "GPIO block base must be between 0 and 4092.", "gpio-block-base-range") }
         document.sensors.proximityGpio?.let {
-            if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.")
+            if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.", "gpio-range")
         }
-        if (document.sensors.roomTempOffsetC !in -30f..30f) reject("sensors.room_temp_offset_c", "Offset must be between -30 and 30 °C.")
+        if (document.sensors.roomTempOffsetC !in -30f..30f) reject("sensors.room_temp_offset_c", "Offset must be between -30 and 30 °C.", "room-temperature-offset-range")
         boundedText(document.sensors.proximityTechnology, "sensors.proximity_technology")
         boundedText(document.sensors.lightTechnology, "sensors.light_technology")
-        if (document.identity.modelLabelStrategy !in setOf("display-name", "nspanel-product-version")) reject("identity.model_label_strategy", "Unknown core strategy.")
+        if (document.identity.modelLabelStrategy !in setOf("display-name", "nspanel-product-version")) reject("identity.model_label_strategy", "Unknown core strategy.", "unknown-core-strategy")
         boundedText(document.identity.manufacturer, "identity.manufacturer")
         boundedText(document.identity.model, "identity.model")
         when (val density = document.provisioning.display.density) {
-            is ProfileDensity.Fixed -> if (density.value !in 80..640) reject("provisioning.display.density", "Density must be between 80 and 640 dpi.")
-            is ProfileDensity.Strategy -> if (density.id != "nspanel-variant") reject("provisioning.display.density", "Unknown core strategy '${density.id}'.")
+            is ProfileDensity.Fixed -> if (density.value !in 80..640) reject("provisioning.display.density", "Density must be between 80 and 640 dpi.", "density-range")
+            is ProfileDensity.Strategy -> if (density.id != "nspanel-variant") reject("provisioning.display.density", "Unknown core strategy '${density.id}'.", "unknown-core-strategy-value", mapOf("value" to density.id))
             null -> Unit
         }
         document.provisioning.display.fontScale?.let {
-            if (it !in 0.5f..1.5f) reject("provisioning.display.font_scale", "Font scale must be between 0.5 and 1.5.")
+            if (it !in 0.5f..1.5f) reject("provisioning.display.font_scale", "Font scale must be between 0.5 and 1.5.", "font-scale-range")
         }
-        document.display.physicalPpi?.let { if (it !in 50..1000) reject("display.physical_ppi", "Physical PPI must be between 50 and 1000.") }
+        document.display.physicalPpi?.let { if (it !in 50..1000) reject("display.physical_ppi", "Physical PPI must be between 50 and 1000.", "physical-ppi-range") }
         document.hardware.touchClickGain?.let {
-            if (it !in 0.05f..1f) reject("hardware.touch_click_gain", "Touch-click gain must be between 0.05 and 1.0.")
+            if (it !in 0.05f..1f) reject("hardware.touch_click_gain", "Touch-click gain must be between 0.05 and 1.0.", "touch-click-gain-range")
         }
-        if (document.input.evdevButtons.size > 32) reject("input.evdev_buttons", "At most 32 evdev mappings are allowed.")
+        if (document.input.evdevButtons.size > 32) reject("input.evdev_buttons", "At most 32 evdev mappings are allowed.", "evdev-mapping-count-limit")
         val evdevCodes = mutableSetOf<Pair<Boolean, Int>>()
         document.input.evdevButtons.forEachIndexed { index, button ->
             val path = "input.evdev_buttons[$index]"
             if (!Regex("^/dev/input/event[0-9]{1,3}$").matches(button.node)) {
-                reject("$path.node", "Only /dev/input/eventN device nodes are supported.")
+                reject("$path.node", "Only /dev/input/eventN device nodes are supported.", "evdev-device-node-invalid")
             }
-            if (button.code !in 1..767) reject("$path.code", "Linux input code must be between 1 and 767.")
-            if (button.eventType.length > 64 || !eventTypePattern.matches(button.eventType)) reject("$path.event_type", "Use KEYCODE_ plus uppercase letters, digits, or underscores, at most 64 characters.")
-            if (!evdevCodes.add(button.sw to button.code)) reject(path, "Duplicate (sw, code) mapping.")
+            if (button.code !in 1..767) reject("$path.code", "Linux input code must be between 1 and 767.", "linux-input-code-range")
+            if (button.eventType.length > 64 || !eventTypePattern.matches(button.eventType)) reject("$path.event_type", "Use KEYCODE_ plus uppercase letters, digits, or underscores, at most 64 characters.", "keycode-format-invalid")
+            if (!evdevCodes.add(button.sw to button.code)) reject(path, "Duplicate (sw, code) mapping.", "duplicate-evdev-mapping")
         }
         document.cpu.governors?.forEach { (tier, governor) ->
-            if (tier !in setOf("Performance", "Efficiency", "Auto")) reject("cpu.governors.$tier", "Unknown HA CPU tier.")
-            if (!Regex("^[a-z][a-z0-9_-]{0,31}$").matches(governor)) reject("cpu.governors.$tier", "Invalid Linux governor name.")
+            if (tier !in setOf("Performance", "Efficiency", "Auto")) reject("cpu.governors.$tier", "Unknown HA CPU tier.", "unknown-ha-cpu-tier")
+            if (!Regex("^[a-z][a-z0-9_-]{0,31}$").matches(governor)) reject("cpu.governors.$tier", "Invalid Linux governor name.", "linux-governor-name-invalid")
         }
         document.provisioning.software.webView?.artifact?.let { artifact ->
             if (artifact !in ProfileArtifacts.webViews) {
-                reject("provisioning.software.webview.artifact", "Unknown core-owned WebView artifact '$artifact'.")
+                reject("provisioning.software.webview.artifact", "Unknown core-owned WebView artifact '$artifact'.", "unknown-webview-artifact", mapOf("value" to artifact))
             }
         }
         document.provisioning.software.companion?.maxVersion?.let { version ->
             if (version.length > 64 || !versionPattern.matches(version)) {
-                reject("provisioning.software.companion.max_version", "Expected a bounded dotted release version.")
+                reject("provisioning.software.companion.max_version", "Expected a bounded dotted release version.", "dotted-release-version-required")
             }
         }
         if (document.provisioning.packages.size > 128) {
-            reject("provisioning.packages", "At most 128 package desired-state entries are allowed.")
+            reject("provisioning.packages", "At most 128 package desired-state entries are allowed.", "package-count-limit")
         }
         val seenPackages = mutableSetOf<String>()
         document.provisioning.packages.forEachIndexed { index, candidate ->
             val path = "provisioning.packages[$index]"
-            if (!packagePattern.matches(candidate.packageName)) reject("$path.package", "Invalid Android package name.")
-            if (!seenPackages.add(candidate.packageName)) reject("$path.package", "Duplicate package desired state.")
-            if (candidate.tags.size > 8 || candidate.tags.any { !Regex("^[a-z][a-z0-9-]{0,23}$").matches(it) }) reject("$path.tags", "Use at most 8 lowercase tags of at most 24 characters.")
-            if (candidate.note.length > 500) reject("$path.note", "Note must not exceed 500 characters.")
+            if (!packagePattern.matches(candidate.packageName)) reject("$path.package", "Invalid Android package name.", "android-package-name-invalid")
+            if (!seenPackages.add(candidate.packageName)) reject("$path.package", "Duplicate package desired state.", "duplicate-package-desired-state")
+            if (candidate.tags.size > 8 || candidate.tags.any { !Regex("^[a-z][a-z0-9-]{0,23}$").matches(it) }) reject("$path.tags", "Use at most 8 lowercase tags of at most 24 characters.", "package-tag-bounds")
+            if (candidate.note.length > 500) reject("$path.note", "Note must not exceed 500 characters.", "package-note-length-limit")
         }
-        if (document.provisioning.recipes.size > 32) reject("provisioning.recipes", "At most 32 recipes are allowed.")
+        if (document.provisioning.recipes.size > 32) reject("provisioning.recipes", "At most 32 recipes are allowed.", "recipe-count-limit")
         val seenRecipes = mutableSetOf<String>()
         document.provisioning.recipes.forEachIndexed { index, recipe ->
             val path = "provisioning.recipes[$index].id"
-            if (!seenRecipes.add(recipe.id)) reject(path, "Duplicate recipe selection.")
-            if (recipe.id !in ProfileMetadata.recipes) reject(path, "Unknown core-owned recipe '${recipe.id}'.")
+            if (!seenRecipes.add(recipe.id)) reject(path, "Duplicate recipe selection.", "duplicate-recipe-selection")
+            if (recipe.id !in ProfileMetadata.recipes) reject(path, "Unknown core-owned recipe '${recipe.id}'.", "unknown-core-recipe", mapOf("value" to recipe.id))
         }
         expectedDrivers(document).forEach { driver ->
-            if (driver !in document.requires.drivers) reject("requires.drivers", "Capability requires core driver '$driver'.")
+            if (driver !in document.requires.drivers) reject("requires.drivers", "Capability requires core driver '$driver'.", "capability-driver-required", mapOf("value" to driver))
         }
         document.requires.drivers.filterNot { it in expectedDrivers(document) }.forEach {
-            warn("requires.drivers", "Driver '$it' is declared but no field currently uses it.")
+            warn("requires.drivers", "Driver '$it' is declared but no field currently uses it.", "unused-driver-declared", mapOf("value" to it))
         }
         return issues
     }
@@ -249,6 +284,10 @@ internal object ProfileValidator {
                 ProfileIssueSeverity.ERROR,
                 path,
                 "Unsupported privileged path; allowed values: ${allowed.sorted().joinToString()}.",
+                ProfilePresentation(
+                    "unsupported-privileged-path",
+                    mapOf("allowed" to allowed.sorted().joinToString()),
+                ),
             )
         }
     }

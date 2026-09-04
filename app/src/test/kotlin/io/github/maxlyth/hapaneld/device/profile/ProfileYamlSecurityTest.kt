@@ -9,6 +9,39 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProfileYamlSecurityTest {
+    @Test fun `controlled parser and validator outcomes carry additive stable presentation metadata`() {
+        val wrongType = ProfileYaml.parse(ProfileYaml.serialize(testProfileDocument()).replace("schema: 2", "schema: wrong"))
+        val parserIssue = requireNotNull(wrongType.issues.firstOrNull { it.message == "Expected a 32-bit integer." })
+        assertEquals("Expected a 32-bit integer.", parserIssue.message)
+        assertEquals("expected-integer", parserIssue.presentation?.code)
+        assertEquals(emptyMap<String, String>(), parserIssue.presentation?.params)
+
+        val validatorIssue = requireNotNull(
+            ProfileValidator.validate(testProfileDocument().copy(schema = 99), "1.0.0", bundled = false)
+                .singleOrNull { it.path == "schema" },
+        )
+        assertEquals("Unsupported schema 99; expected 2.", validatorIssue.message)
+        assertEquals("unsupported-schema", validatorIssue.presentation?.code)
+        assertEquals(mapOf("actual" to "99", "expected" to "2"), validatorIssue.presentation?.params)
+
+        val arbitraryParserFailure = requireNotNull(ProfileYaml.parse(": invalid").issues.firstOrNull())
+        assertNull(arbitraryParserFailure.presentation)
+    }
+
+    @Test fun `oversized presentation parameter preserves the compatibility issue without throwing`() {
+        val oversizedValue = "x".repeat(513)
+        val raw = ProfileYaml.serialize(testProfileDocument()).replace(
+            "maturity: draft",
+            "maturity: $oversizedValue",
+        )
+
+        val parsed = ProfileYaml.parse(raw)
+        val issue = requireNotNull(parsed.issues.singleOrNull { it.message == "Unknown value '$oversizedValue'." })
+
+        assertNull(issue.presentation)
+        assertTrue(parsed.sourceBytes < ProfileMetadata.MAX_BYTES)
+    }
+
     @Test fun `valid document round trips through strict yaml`() {
         val document = testProfileDocument()
         val parsed = ProfileYaml.parse(ProfileYaml.serialize(document))
