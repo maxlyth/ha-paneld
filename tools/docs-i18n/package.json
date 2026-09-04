@@ -10,6 +10,7 @@
   },
   "scripts": {
     "apply": "node cli.mjs apply",
+    "export-plan": "node cli.mjs export-plan",
     "plan": "node cli.mjs plan",
     "test": "node --test test/*.test.mjs",
     "validate": "node cli.mjs validate"

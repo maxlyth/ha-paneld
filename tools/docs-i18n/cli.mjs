@@ -7,17 +7,19 @@ import { pathToFileURL } from "node:url";
 import {
   applyLocaleReceipt,
   buildSourceManifest,
+  buildTranslationPlan,
   canonicalJson,
   readCanonicalJson,
   validateRepository,
 } from "./lib/contract.mjs";
 
-const COMMANDS = new Set(["plan", "apply", "validate"]);
+const COMMANDS = new Set(["plan", "export-plan", "apply", "validate"]);
 
 function usage() {
   return [
     "Usage:",
     "  node cli.mjs plan --repository ROOT --source-revision SHA --output docs/i18n/manifest.json",
+    "  node cli.mjs export-plan --repository ROOT --manifest docs/i18n/manifest.json --output PRIVATE_FILE",
     "  node cli.mjs apply --repository ROOT --manifest docs/i18n/manifest.json --locale LOCALE --results FILE",
     "  node cli.mjs validate --repository ROOT --manifest docs/i18n/manifest.json",
   ].join("\n");
@@ -43,6 +45,7 @@ export function parseArguments(argv) {
   }
   const required = {
     plan: ["repository", "source-revision", "output"],
+    "export-plan": ["repository", "manifest", "output"],
     apply: ["repository", "manifest", "locale", "results"],
     validate: ["repository", "manifest"],
   }[command];
@@ -83,6 +86,18 @@ export function main(argv = process.argv.slice(2)) {
     });
     writeExclusive(target.resolved, canonicalJson(manifest));
     process.stdout.write(`documentation localization plan: ${manifest.documents[0].segments.length} segments, ${manifest.packets.length} packets\n`);
+    return 0;
+  }
+  if (command === "export-plan") {
+    const root = fs.realpathSync(options.repository);
+    const output = path.resolve(options.output);
+    if (output === root || output.startsWith(`${root}${path.sep}`)) {
+      throw new Error("expanded translation plans contain source text and must stay outside the public repository");
+    }
+    const manifest = readCanonicalJson(path.resolve(options.manifest));
+    const plan = buildTranslationPlan(manifest, { repository: root });
+    writeExclusive(output, canonicalJson(plan));
+    process.stdout.write(`private translation plan: ${plan.packets.length} packets\n`);
     return 0;
   }
   if (command === "apply") {

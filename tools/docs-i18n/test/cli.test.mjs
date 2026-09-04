@@ -24,4 +24,7 @@ test("CLI plan and apply require exact explicit inputs", () => {
   assert.throws(() => parseArguments([
     "apply", "--repository", ".", "--manifest", "manifest.json", "--locale", "de",
   ]), /missing --results/);
+  assert.deepEqual(parseArguments([
+    "export-plan", "--repository", ".", "--manifest", "manifest.json", "--output", "/private/plan.json",
+  ]).command, "export-plan");
 });
