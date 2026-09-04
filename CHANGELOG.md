@@ -1,60 +1,150 @@
 # Changelog
 
-## v0.9.7 - 2026-09-03
+## v0.9.7-rc3 - 2026-09-04
 
-0.9.7 makes the built-in dashboard quicker to start and recover, adds a six-language interface, separates network loss from slow Home Assistant responses, strengthens installation and upgrade recovery, and adds an experimental privacy-gated camera path on supported panels.
-
-Use the normal installer for an in-place update from v0.9.6; no configuration reset or Home Assistant entity cleanup is expected, and existing auto-brightness settings are converted automatically. The Automatic, Prefer IPv4 and Force IPv4 setting now also applies to the Home Assistant WebSocket, so review it after updating if you previously changed it specifically for MQTT.
+This release candidate adds a six-language interface, experimental camera streaming and clearer Home Assistant network diagnostics. It also improves recovery when an update changes a pinned device profile or leaves a dashboard waiting for an entity-filter decision. The changes below are since v0.9.7-rc2.
 
 ### Added
 
-- **The ha-paneld Dashboard, Configure, Logs and Fleet pages can now use six languages.** Configure → System → Interface language offers English, German, French, Italian, Spanish and Simplified Chinese. Automatic follows the Home Assistant user's language when available, then the browser or device language; shared navigation, setting labels and help follow the same choice, with per-string English fallback where a translation is unavailable.
+- **The Dashboard, Configure, Logs, Fleet and guided setup pages can now use six languages.** Configure → System → Interface language offers English, German, French, Italian, Spanish and Simplified Chinese. Automatic follows the Home Assistant user's language when available, then the browser or device language. Shared navigation, setting labels, help and supported runtime messages follow the same choice, with per-string English fallback where a translation is unavailable.
 
-- **Experimental camera streaming and snapshots are available on the Tuya TPA10 and Electron WF1589T.** The off-by-default Camera setting serves a shared video-only H.264 stream at `rtsp://<panel>:8554/live` and a JPEG from `GET /api/v1/camera/snapshot.jpg`, with configurable resolution, frame rate, bitrate and exposure. Android asks for camera permission only after the feature is enabled; microphone access is not used, and the camera stays closed unless a client is reading it. A pulsing red on-screen indicator, or the status LED while the screen is off, is mandatory whenever the camera is open; if the indicator cannot be shown, the camera remains closed. Home Assistant receives an optional Camera switch and on-demand image entity through MQTT, while `/api/v1/status` and `/api/v1/diag` report operational state without carrying image data.
+- **Experimental camera streaming and snapshots are available on the Tuya TPA10 and Electron WF1589T.** The off-by-default Camera setting serves a shared video-only H.264 stream at `rtsp://<panel>:8554/live` and a JPEG from `GET /api/v1/camera/snapshot.jpg`, with configurable resolution, frame rate, bitrate and exposure. Android asks for camera permission only after the feature is enabled; microphone access is not used, and the camera stays closed unless a client is reading it. A pulsing red on-screen indicator, or the status LED while the screen is off, is mandatory whenever the camera is open; if the indicator cannot be shown, the camera remains closed. Home Assistant receives an optional Camera switch and on-demand image entity through MQTT, while status and diagnostics report camera state without carrying image data.
 
-- **Network diagnostics now distinguish the LAN path from Home Assistant response time.** Lightweight probes on the authenticated Home Assistant WebSocket measure the complete request path and track latency, jitter and missed replies; separate intermittent ICMP bursts measure the network path alone when the panel and server support them. ICMP is reported as unsupported rather than loss until at least one echo succeeds. The WebSocket-loss verdict drives the dashboard warning and touch-through on-panel chip, while both measurements appear in Runtime diagnostics, `/api/v1/status` and `/api/v1/diag` without exposing the Home Assistant address, Wi-Fi name or individual samples.
+- **Network diagnostics separate Home Assistant response time from the network path.** Lightweight probes on the authenticated Home Assistant WebSocket measure the complete request path and track latency, jitter and missed replies. Separate intermittent ICMP bursts measure the network path when the panel and server support them; unanswered echoes are not reported as loss until at least one echo has succeeded. Missed WebSocket replies, not slow replies alone, can raise the dashboard warning and touch-through on-panel chip. Both measurements appear in Runtime diagnostics, `/api/v1/status` and `/api/v1/diag` without exposing the Home Assistant address, Wi-Fi name or individual samples.
 
-- **Dashboard setup has more direct choices.** Guided setup, Configure and scripted installs can select a specific dashboard tab and prepare entity filtering before the first load. Sign-in and reauthentication screens can show a phone-readable code for the panel's own Home Assistant setting when its address is reachable. The built-in renderer can also force Dark or Light without changing the Home Assistant account's saved theme, and reports when an explicit Home Assistant user preference overrides that choice. [Issue #61](https://github.com/maxlyth/ha-paneld/issues/61)
+- **Dashboard theme can be chosen on the panel.** Configure → Built-in renderer offers Follow Home Assistant, Dark and Light without changing the Home Assistant account's saved theme. An explicit Light or Dark preference in Home Assistant still takes priority, and Runtime diagnostics now explains when that overrides the panel's choice. [Issue #61](https://github.com/maxlyth/ha-paneld/issues/61)
 
-- **Panels can recover more software from their own Install and status pages.** The Install page can download and verify an APK from HTTPS; Hardened mode still requires someone at the panel to approve it physically, and that approval cannot be given remotely. A panel with a pinned, known-good Android System WebView and verified install capability can reinstall or update it directly, then restart ha-paneld once to bind the new provider.
+- **Sign-in and reauthentication screens can hand the job to a phone.** A phone-readable code opens the panel's own Home Assistant sign-in setting when the panel has a reachable address, so credentials need not be typed on the wall panel.
 
-- **Hardware support now includes a verified native Android navbar on the Electron WF1589T and more ZHICAI SMT1019 capabilities.** Where the required access exists, the SMT1019 can fully turn off its screen, report temperature and humidity, and use experimental proximity detection. The raw temperature and humidity encoding is confirmed, but physical accuracy has not been checked against a reference sensor; proximity has not yet executed on hardware and needs reporter testing. [Issue #106](https://github.com/maxlyth/ha-paneld/issues/106)
+- **A panel with a pinned, known-good Android System WebView can repair it directly.** Where ha-paneld has verified installation capability, recovery offers to download and install that build, then restart ha-paneld once to bind it. When automatic repair is unavailable, the screen explains whether the missing requirement is a pinned build or installation access.
 
-- **The installer warns about a time-zone mismatch between the panel and installation computer.** Equivalent names are accepted, and an unreadable or different zone never blocks installation or changes either clock.
-
-### Changed
-
-- **Dashboard startup and Home Assistant outage recovery are faster and self-healing.** The account-default dashboard can reopen its last verified destination while the catalogue refreshes in the background. Temporary catalogue, connection and Home Assistant startup failures retry with a visible widening countdown, including when the panel starts before Home Assistant; administrator accounts can also see the stopping, starting and ready lifecycle, while other accounts can use configured MQTT availability.
-
-- **MQTT and Home Assistant WebSocket connections can fall back between IPv4 and IPv6.** Automatic, Prefer IPv4 and Force IPv4 apply to both persistent connections, and MQTT remembers the family that worked for its next reconnect. Ordinary HTTPS requests are unchanged.
-
-- **Auto-brightness sensitivity has a useful full range and a clearer history chart.** Zero follows the learned pattern alone, increasing the setting raises the response to measured light, legacy values up to 50 are converted to retain their effective response while higher legacy values become full sensitivity, and the Minimum level can be set to 99%. The earlier `auto_brightness_sensitivity` API name remains accepted and is converted instead of invalidating the rest of a configuration request. Recent days stay as separate chart lines and older history is shown as a shaded range.
-
-- **Status and recovery pages provide clearer, consistent guidance.** Dashboard connection state, retry cause, 24-hour Wi-Fi stability, application uptime and update age are available on the panel and in machine diagnostics; the Wi-Fi summary now agrees with `/diag`. Full-screen setup and error pages identify ha-paneld, fit small panels and large text, distinguish automatic retry from settings that need attention, and use clearer actions. Entity search reports match counts and brings the first matching section into view. [Issue #114](https://github.com/maxlyth/ha-paneld/issues/114)
+- **Release downloads include signed installation metadata.** A bounded descriptor binds the APK's checksum, size, signer, package, version, supported architectures, minimum Android version and database compatibility to the release, so installers can check compatibility before downloading and installing the APK.
 
 ### Fixed
 
-- **Entity filters survive upgrades and dashboard changes without briefly subscribing to everything.** Stored view-based ownership is migrated to the dashboard identity, pinned and excluded entities remain available for review, and a changed dashboard is scanned before its filter is applied. A previously working account-default filter resumes only when its complete retained catalogue remains valid; otherwise the panel keeps the explicit safety question. A completed scan waiting for that decision checks for dashboard changes with a widening interval instead of re-reading the whole entity catalogue, and template advisories now explain that Home Assistant evaluates templates rather than reporting their condition entities as missing. [Issue #113](https://github.com/maxlyth/ha-paneld/issues/113)
+- **An account-default dashboard can recover its working entity filter after an update.** The retained filter resumes only when its complete catalogue remains valid; otherwise the explicit safety question remains. A completed scan waiting only for that decision checks for dashboard changes with a widening interval instead of re-reading the whole entity catalogue.
 
-- **Rooted upgrades fail earlier and explain the real blocker.** Helper shutdown escalates through the available service controls, replacement checks the target filesystem, free space, ownership, permissions, SELinux context, staged checksum and embedded build identity, and each failure names its step and panel-reported error. If the old helper cannot be stopped or the replacement cannot be admitted, the app and helper remain unchanged without a misleading rollback or manual-repair instruction. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
-
-- **Desktop installer compatibility is more reliable.** Git Bash on Windows no longer rewrites panel-side Android paths, and computers with several Android SDK build-tools versions choose the newest working `aapt` while still respecting a working tool on `PATH`. Clean-install failures also distinguish a missing app, an unresponsive package manager, a read-only system and a missing Java runtime from signature or helper failures. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24)
-
-- **Android System WebView repairs take effect without reinstalling ha-paneld.** The renderer notices a newly installed provider and restarts to bind it, while unrecoverable screens distinguish reinstalling the vendor's newest build from updating it and explain when the panel lacks a pinned build or verified install route.
-
-- **Older dashboard and backup values are migrated consistently.** A saved full dashboard URL is normalized for reload and restore without silently repointing another server, and scripted `--home-dashboard` works when the built-in renderer is already the resolved default. Backups now include Home Assistant Companion only when a supported variant exists unless explicitly required, reject unknown choices, and restore archives produced before the dashboard-path migration. Installed Companion variants also remain visible in the dashboard picker.
+- **Pinned built-in device profiles advance safely when their bundled revision changes.** ha-paneld validates the replacement, rolls back to the retained revision if activation fails, and falls back explicitly rather than silently changing pinning mode. Imported profiles are never replaced by a built-in profile with the same name.
 
 - **A redundant Screen On command no longer dims a panel that is already lit.** A command without brightness preserves the active level, while an explicit brightness or a genuine wake still behaves as requested. [Issue #137](https://github.com/maxlyth/ha-paneld/issues/137)
 
-- **Pinned built-in device profiles advance safely when their bundled revision changes.** ha-paneld validates the new revision, rolls back to the retained revision if activation fails, and falls back explicitly rather than silently changing pinning mode; imported profiles are never replaced by a built-in profile with the same name.
+- **Git Bash on Windows no longer rewrites panel-side Android paths.** The installer keeps paths on the panel literal while preserving the conversion needed for files on the installation computer. macOS and Linux are unchanged. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24)
 
-- **Reboot and storage recovery are verified before success is reported.** Reboot tries the next available method when one stalls or does not restart the panel. Temporary database-busy errors recover only after integrity and a later write are both confirmed.
+- **Rooted upgrades explain why a helper replacement cannot proceed.** Before replacement, the installer checks the target filesystem, free space, ownership, permissions, SELinux context and staged checksum. A failed copy carries the panel-reported error, and a replacement refused before mutation leaves the app and helper unchanged. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
 
-- **Device controls should behave more consistently after updating.** Smatek S9E relay and button-LED commands should respond promptly without sending stale state, but this fix has not been tested on S9E hardware and needs reporter acceptance. Newer Android panels can change the Always on navbar mode again; panels that cannot reserve space for the bar still expose Native, swipe-reveal and Off alternatives.
+- **Status distinguishes an old dashboard check from an old application build.** Runtime diagnostics names the age of the dashboard check, while `/api/v1/status` also reports application uptime and time since installation or update.
+
+- **Database maintenance can return unused pages to the filesystem.** Reclamation is bounded, defers when a reader prevents the checkpoint, and reports the specific database operation that failed rather than a generic storage failure.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update from v0.9.7-rc2. No configuration reset or Home Assistant entity cleanup is expected. This remains a release candidate; camera support is experimental, and the existing S9E and SMT1019 hardware-testing limits still apply.
+
+## v0.9.7-rc2 - 2026-08-26
+
+### Fixed
+
+- **An entity filter you chose by hand keeps working after the upgrade.** The record that says which dashboard a filter belongs to now names the dashboard rather than the individual view, and a filter saved before this release named the view. On upgrade the filter read as belonging to nothing, reported itself as off, and the panel went back to subscribing to every entity Home Assistant would show it: the exact load the filter exists to avoid, with nothing on screen to say so. Stored filters are corrected on first start.
+
+- **A panel that restarts before Home Assistant no longer waits for you.** While it checks which entities your dashboard uses, the panel holds the dashboard rather than open it unfiltered. That check could not finish while Home Assistant was still starting, and it was only retried once, so a panel that came back first could sit on a waiting or problem screen long after Home Assistant returned. It now keeps retrying on a widening interval and opens as soon as the check succeeds.
+
+- **A failed helper replacement no longer tells you to repair a panel it never touched.** The installer stops the old helper before replacing anything, so a panel where that fails still has its previous helper and app exactly as they were. It used to report a failed install, attempt to undo work it had not done, and end by telling you to restore the helper by hand. It now says the upgrade did not start and that nothing changed.
+
+- **The reload button returns the panel to your dashboard again.** A home dashboard saved before this release could be stored as a full address rather than a path, because the setting accepted anything then. The reload command built a link out of the whole address and went nowhere. Stored values are corrected on first start, and a saved address pointing at a different server is left alone rather than silently repointed.
+
+- **A backup taken with an earlier release restores again.** A restore is all or nothing, so a single home dashboard saved in the older form failed the whole archive, precisely when you need it. That value is now read the same way an upgrade reads it.
+
+- **The screens that say your web viewer is too old name the fix that works.** They asked you to update Android System WebView, which is no help on a panel already carrying the newest build its vendor ships; reinstalling the same build is what repairs a damaged one, and the screens now say so. The screen you reach when nothing can render also stopped claiming that no dashboard app can work, which contradicted the screen beside it.
+
+- **Installing from a computer with more than one Android SDK build-tools version works again.** The installer picked the oldest usable one, and an older `aapt` that cannot read a modern APK made it report that the package could not be identified. It now prefers the newest that runs, and a tool you put on your PATH still wins.
+
+- **`auto_brightness_sensitivity` is accepted again by `POST /api/v1/config`.** The setting was replaced by one on a different scale, and because that request is applied as a whole, sending the old name discarded every other setting in the same call. The old name is now accepted and converted, so an automation written against an earlier release keeps working.
+
+- **Updating Android System WebView now takes effect without reinstalling ha-paneld.** A WebView provider binds once per process, so a panel showing "Secure dashboard bridge unavailable" stayed on that screen however many times WebView was updated or Retry was pressed. The panel now notices the newly installed provider and restarts its renderer to bind it, and no longer abandons that pending restart while the verdict is briefly out of view during the switch.
+
+- **Rooted upgrades no longer stall on a helper that will not exit.** The installer now stops the old helper through Android's own service control, escalates if the process ignores the first request, and if it still cannot retire it reports exactly which process survived and what Android believes the service state to be. Every other step of a helper replacement that used to fail with one generic message now names itself, so a failed install tells you what failed. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
+
+- **A release's helper asset must match what the release says it is.** The installer reads the identity stamped inside the downloaded helper and refuses to stage it if it disagrees with the identity the signed provisioner records, so a mismatch is caught before the helper is staged or replaced rather than discovered after the swap and rolled back. The standalone helper installer reads the staged binary's own identity the same way, so a helper staged from a different build can no longer fail a good install afterwards.
+
+- **Scripted installs no longer refuse `--home-dashboard` on a panel already using the built-in renderer.** The check used to require the renderer to be named explicitly, so a panel on the default selection was told it was not using a renderer it was in fact using. The panel now reports which renderer it resolves to and the installer asks that instead.
+
+- **Entity catalog search tells you what it found.** Typing in the search box on the Entities page used to change the tables silently, and the matches often sat below the fold, so a search that worked looked like it had done nothing. A status line now acknowledges each keystroke and reports the match count for every section, and the first section with matches scrolls into view once. [Issue #114](https://github.com/maxlyth/ha-paneld/issues/114)
+
+- **Backups no longer assume a Companion login exists.** `POST /api/v1/backup` read a missing `include_companion` as `true`, so the simplest backup request failed on any panel without the Home Assistant Companion. Omitting the parameter now means "include it if a supported Companion is installed"; asking for it explicitly on a panel with none still refuses, and an unrecognised value is now rejected instead of quietly producing a config-only archive.
+
+- **Dashboard filter advisories no longer treat a template as a missing entity.** ha-paneld deliberately does not evaluate filter templates; Home Assistant renders them itself. The advisory now says exactly that, and which entities a template does and does not add, instead of reporting the template's own condition entities as a discovery failure. [Issue #113](https://github.com/maxlyth/ha-paneld/issues/113)
+
+- **Status screen actions look like the buttons they are.** Actions on the panel's own status screens now use the same control style as the standing screen, with real padding and spacing between a pair of actions and clear separation from the surrounding text.
+
+- **Recovery screens now say what went wrong and where to fix it.** Setup, sign-in, WebView, dashboard-selection, and entity-filter failures now distinguish automatic retries from repairs in Configure, Entities, Home Assistant, or Android System WebView, so Retry is only shown where it can help.
+
+- **The Wi-Fi stability row and the diagnostics dump agree.** The Dashboard row derived its wording from the raw outage count while `/diag` used the chronic classification, so a panel whose history had been compacted could show a low number on its own card while a pasted report called it chronic. Both now use the same classification, and a saturated count reads as the floor it is.
+
+## v0.9.7-rc1 - 2026-08-19
+
+### Panels reach their dashboards faster and recover from Home Assistant outages
+
+0.9.7-rc1 includes a lot of changes. The most noticeable improvement for many users will be how quickly the built-in renderer gets back to the dashboard. When the account default is selected, it can reopen the last verified dashboard while it refreshes Home Assistant's dashboard list in the background instead of making you wait for that work to finish.
+
+I also wanted to improve what happens when Home Assistant is unavailable. A wall panel should recover by itself when it can and tell you what it is waiting for when it cannot. The built-in renderer can tell the difference between Home Assistant restarting and an ordinary connection failure, retries problems that may clear by themselves and reports whether the dashboard itself is connected.
+
+Several other problems turned up while I was working on this. You can choose a specific dashboard tab, and scripted installs can select the dashboard and entity filter before the first load. Manual entity subscription pins and exclusions are no longer lost when you change dashboards. MQTT and Home Assistant connections try IPv4 or IPv6 if the first one does not work.
+
+This is still a release candidate. I have tested it on the hardware available to me, but I do not own an S9E and the SMT1019 proximity support has not run end to end on a real panel. Please report any problems with panels recovering after Home Assistant goes offline, rooted upgrades, S9E controls or SMT1019 support.
+
+### Added
+
+- **Specific dashboard tabs.** You can enter a tab path in guided setup or Configure. ha-paneld warns if the signed-in account cannot currently see the dashboard containing that tab, but still lets you save it so a panel can be prepared before the dashboard is ready. Scripted installs can make the same choice with `--home-dashboard` and set entity filtering with `--entity-filter` before the first dashboard load.
+
+- **Built-in dashboard and Wi-Fi diagnostics.** The panel, diagnostics dump and `GET /api/v1/status` show whether the built-in dashboard connected, whether a retry is pending and why a connection failed. A separate 24-hour Wi-Fi outage count helps distinguish panel network problems from Home Assistant or MQTT failures. Panels with no recorded outages show no warning.
+
+- **APK downloads from HTTPS addresses.** The Install page can download an APK and check it before installation. Hardened security mode requires physical access to the panel. Someone must approve the download on the panel's screen; it cannot be approved remotely. Cancelling stops the download. If an APK has been downloaded and checked but not installed, it survives a page or app restart and can be discarded or replaced without leaving the Install page stuck.
+
+- **Native Android navbar support.** Panels with a verified native Android navbar can use it instead of ha-paneld drawing another bar. This is currently enabled for the Electron WF1589T. Hiding Android's system bars also hides the native navbar.
+
+- **More ZHICAI SMT1019 support.** On panels where ha-paneld has the required access, the SMT1019 can turn its screen fully off, report room temperature and humidity, and use experimental proximity detection. The raw temperature and humidity values have been confirmed, but I have not checked their accuracy against a reference sensor. I have not yet been able to test proximity detection on the panel itself, so reports on [issue #106](https://github.com/maxlyth/ha-paneld/issues/106) would be useful.
+
+- **A time-zone warning during installation.** The installer warns if the panel and the computer running it use different time zones. The warning does not block installation or change either clock. Equivalent time-zone names are accepted, and no warning is shown if either zone cannot be read reliably.
+
+### Changed
+
+- **Faster dashboard startup and recovery.** When the account default dashboard is selected, the built-in renderer can return to the last verified dashboard without waiting for Home Assistant's dashboard list to refresh. It checks that choice in the background, removing an unnecessary delay from ordinary startup and helping the panel recover sooner after an outage. Temporary failures while checking Home Assistant or starting the dashboard connection are retried with a visible countdown. Problems that need a new sign-in or a software update still wait for you.
+
+- **Home Assistant restart status.** The built-in renderer shows when Home Assistant is stopping, starting or offline and removes the message when the server is ready again. Administrator accounts receive the full stopping and starting sequence. Other accounts can use configured MQTT availability to show that Home Assistant is offline and back online.
+
+- **Automatic IPv4 and IPv6 fallback.** If MQTT or the Home Assistant WebSocket cannot connect over IPv4 or IPv6, it tries the other one. The existing `Automatic`, `Prefer IPv4` and `Force IPv4` setting applies to both connections, and MQTT remembers which one worked for the next reconnect. Ordinary HTTPS requests are unchanged.
+
+- **A useful auto-brightness Sensitivity range.** At zero, brightness follows the learned pattern alone. Higher values respond more strongly to the difference between the learned and measured light levels. Existing values up to 50 are converted to keep the same effective response, while higher values become full sensitivity because the old top half exaggerated changes. The auto-brightness Minimum level can be set as high as 99%; manual brightness can still be set lower.
+
+- **Clearer full-screen status pages.** ha-paneld's startup, setup and error messages clearly identify themselves instead of looking as though they came from Home Assistant. They follow the selected theme, fit 480×480 panels and remain usable with larger text. Progress updates no longer make the top of the page jump.
+
+### Fixed
+
+- **Dashboard entity choices survive a dashboard change.** Pinned and excluded entities remain visible for review after you switch dashboards. Automatic filtering also waits until the new dashboard has been checked instead of briefly applying the entity list from the previous one.
+
+- **Reboot verification.** ha-paneld confirms that a requested reboot actually happened and tries the next available method if it did not. A stuck command no longer blocks the remaining methods, and failure is reported after they have all been tried.
+
+- **Temporary database-busy errors.** A temporary busy error no longer leaves storage permanently marked as failed. ha-paneld retries the health check and clears the warning only after the database passes an integrity check and a later setting write succeeds.
+
+- **Smatek S9E controls.** Relay and button-LED commands should respond promptly, and rapid changes should no longer send an older state to Home Assistant. I do not own an S9E on which to confirm this fix, so reports are welcome.
+
+- **The `Always on` navbar can be changed again on newer Android panels.** Updating fixes a problem that could leave earlier versions unable to switch back to `Off`. On panels where Android cannot reserve space for the bar, it is drawn over the bottom of the dashboard. Controls underneath it cannot be tapped, so use `Native`, swipe-reveal or `Off` if the overlap matters.
+
+- **Clearer installation and rooted-update failures.** A clean install now distinguishes a missing app from an Android package manager that did not answer. Rooted updates try the root methods available on the panel, replace stale helper processes and verify that the replacement helper belongs to the selected APK. The installer now gives the correct recovery steps when `/system` is read-only, and a missing Java runtime is no longer reported as a bad APK signature. Package, helper and signature checks remain enforced.
+
+- **Home Assistant Companion choices in the Dashboard picker.** Installed Companion variants no longer disappear after you select the built-in renderer. The other renderer choices are unchanged.
+
+- **A more readable ambient-light history chart.** Today, yesterday and two days ago remain separate lines. Earlier days appear as a shaded range. This only changes the chart display; stored readings, the learned pattern and brightness decisions are unchanged.
 
 ### Docs
 
-- **The NSPanel Pro firmware index includes 4.8.0.** The hardware guide distinguishes versions tested on panels from versions only verified on the vendor CDN, and automated checks continue to look for newly published files.
+- **The known NSPanel Pro firmware index includes 4.8.0.** The complete index is available in the repository, and automated checks look for newly published vendor versions. The hardware guide records where each file came from and which versions have actually been tested on hardware.
+
+### Upgrade notes
+
+- Use the normal installer for an in-place update. No configuration reset or Home Assistant entity cleanup is expected. Existing auto-brightness settings are converted automatically.
+
+- If you previously changed the IPv4 or IPv6 setting for MQTT, check it after upgrading because it now also applies to Home Assistant WebSockets.
 
 ## v0.9.6 - 2026-08-02
 
