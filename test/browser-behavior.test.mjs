@@ -1717,6 +1717,67 @@ browserTest('OAuth, auto-brightness and proximity journeys use their bounded loc
   assert.ok(calls.includes('POST /api/v1/proximity/test'));
 });
 
+browserTest('Proximity learning localizes controlled UI while preserving opaque evidence as safe English text', async (t) => {
+  const calls = [];
+  const translations = {
+    'configure.proximity.title': '存在与唤醒',
+    'configure.proximity.experimental': '实验性',
+    'configure.proximity.phase.ready': '就绪 — 已学习主动挥手动作',
+    'configure.proximity.message.normalized_ready': '已为 HA 规范化接近状态；唤醒需要一次完整的主动挥手动作。',
+    'configure.proximity.mode.graded': '分级',
+    'configure.proximity.evidence_level': '检测模式：{mode} · 已接受挥手 {seen}/{required} · 当前级别 {level}%',
+    'configure.proximity.action.test': '测试挥手动作',
+    'configure.proximity.action.forget': '清除已学习的接近数据',
+    'configure.proximity.confirm.forget': '请先远离面板，然后删除已学习的接近历史记录？',
+    'configure.proximity.status.working': '正在处理…',
+  };
+  const ready = {
+    present: true, phase: 'ready', health: 'healthy', signalMode: 'graded', normalizedLevel: 71,
+    requiredGestures: 3, acceptedGestures: 3,
+    message: 'Proximity is normalized for HA and wake requires a complete deliberate wave.',
+    session: { active: false },
+  };
+  const harness = await startHarness((path, request) => {
+    calls.push(`${request.method} ${path}`);
+    if (path === '/api/v1/config/schema') return json([]);
+    if (path === '/api/v1/config') return json({ settings: {}, ha_expose: {}, ha_auth: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json(ready);
+    if (path === '/api/v1/proximity/test') return json({
+      ...ready, session: { active: true, kind: 'test', message: '<opaque diagnostic & exact evidence>' },
+    });
+    if (path === '/api/v1/proximity/relearn') return json(ready);
+  }, () => fixture(translations, 'zh-Hans'));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  await page.getByText('就绪 — 已学习主动挥手动作').waitFor();
+  assert.equal(await page.locator('.prox-learning .note').first().textContent(), '已为 HA 规范化接近状态；唤醒需要一次完整的主动挥手动作。');
+  assert.equal(await page.locator('.prox-learning-evidence').textContent(), '检测模式：分级 · 已接受挥手 3/3 · 当前级别 71%');
+
+  await page.getByRole('button', { name: '测试挥手动作' }).click();
+  const result = page.locator('.prox-learning [role=status]');
+  await result.getByText('<opaque diagnostic & exact evidence>', { exact: true }).waitFor();
+  assert.equal(await result.getAttribute('lang'), 'en');
+  assert.equal(await result.locator('diagnostic').count(), 0);
+
+  page.once('dialog', async (dialog) => {
+    assert.equal(dialog.message(), '请先远离面板，然后删除已学习的接近历史记录？');
+    await dialog.dismiss();
+  });
+  await page.getByRole('button', { name: '清除已学习的接近数据' }).click();
+  assert.equal(calls.filter((call) => call === 'POST /api/v1/proximity/relearn').length, 0);
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: '清除已学习的接近数据' }).click();
+  await page.waitForFunction(() => true);
+  assert.equal(calls.filter((call) => call === 'POST /api/v1/proximity/relearn').length, 1);
+});
+
 browserTest('Loaded screenshot opens a fitted modal and one exact click replaces both images', async (t) => {
   const calls = [];
   const harness = await startHarness(screenshotRoutes({ calls }), () => screenshotFixture());

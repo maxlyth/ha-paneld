@@ -32,7 +32,8 @@ class HtmlUiCatalogueContractTest {
                 ).filterTo(sortedSetOf()) { it.startsWith("dashboard.") },
             "configure" to (
                 literalKeys(server.readText(), "strings\\.get") +
-                    literalKeys(File(assets, "configure.js").readText(), "i18nText")
+                    literalKeys(File(assets, "configure.js").readText(), "i18nText") +
+                    literalKeys(File(assets, "proximity-learning.js").readText(), "t").filterNot { it.endsWith(".") }
                 ).filterTo(sortedSetOf()) { it.startsWith("configure.") },
             "profiles" to (
                 literalKeys(server.readText(), "strings\\.get") +
@@ -59,13 +60,13 @@ class HtmlUiCatalogueContractTest {
         val prefixes = listOf("shell.", "dashboard.", "configure.", "profiles.", "entities.")
         val expected = source.strings.filterKeys { key -> prefixes.any(key::startsWith) }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 1804, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1390, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 1867, source.strings.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1453, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
-                "$locale must contain the complete 1804-key release catalogue",
-                1804,
+                "$locale must contain the complete release catalogue",
+                1867,
                 target.strings.size,
             )
             assertEquals(

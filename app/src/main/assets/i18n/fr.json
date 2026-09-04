@@ -1068,6 +1068,321 @@
       "sourceHash": "7d6b4370772768097a87613b0af4c0681f124f9c02dbbd5a55b7ce8e982aa34b",
       "state": "machine-cross-checked"
     },
+    "configure.proximity.action.cancel_teaching": {
+      "text": "Annuler l’apprentissage",
+      "sourceHash": "ad661665ed155a3a035fc1fe7b20240364695b1fbf2ca09fad9f3717050b6813",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.action.cancel_test": {
+      "text": "Annuler le test",
+      "sourceHash": "f730c75d143a282732e8dc9877674289fce72909ba390d952e010ec8f464c626",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.action.forget": {
+      "text": "Effacer la proximité apprise",
+      "sourceHash": "927b237d21171bc190bb81d522ccb3d7fa3d7cd7ca4853cc7fed49379993b308",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.action.teach": {
+      "text": "Apprendre un geste",
+      "sourceHash": "c3ce1f1ebb479291e2a6c9b790d389ae27fa94edee81cdfa95d16f37310d1eae",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.action.test": {
+      "text": "Tester un geste",
+      "sourceHash": "ee35b5ba6bbec49d91a9e6ea8738f3bf366490c750ef14712585693584857581",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.confirm.forget": {
+      "text": "Éloignez-vous du panneau, puis supprimer l’historique de proximité appris pour ce capteur ? Le toucher pour réveiller reste disponible pendant le réapprentissage.",
+      "sourceHash": "e4ed73da8434174e02d6aa4413c24c088aad8fc6b39f214146bc5f74813288e5",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.detail.local": {
+      "text": "L’apprentissage s’effectue localement. Le toucher pour réveiller reste disponible pendant l’apprentissage.",
+      "sourceHash": "ff3e4e04eb0ec954515fa15931aa7054f7e9b9506c9319cb3cf03544822ac207",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.detail.with_health": {
+      "text": "{detail} · {health}",
+      "sourceHash": "c6963df97dd5ad3f6755a614da94cd9efec9c9f4a80a7b58543c9b9a5308e62a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.error.not_available": {
+      "text": "Cette action n’est pas encore disponible.",
+      "sourceHash": "42c46d9868454892617f3c5dbbb213c9de4244e22f929485c8b1db8a0a58d20d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.error.rejected": {
+      "text": "Le panneau n’a pas accepté cette action.",
+      "sourceHash": "55ddb5d1f8e307a60e0209ba1f8c9082649275d810a70313b26e9f96db673413",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.evidence": {
+      "text": "Mode observé : {mode} · gestes acceptés {seen}/{required}",
+      "sourceHash": "d9fed30f5f765714535781664c2c97a950c2d3ece4a2fbd80233d1dfe0bfc59c",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.evidence_level": {
+      "text": "Mode observé : {mode} · gestes acceptés {seen}/{required} · niveau actuel {level}%",
+      "sourceHash": "bab0085f5995d31af3019e1a5546e1884ec41a8e3ed5b8a8707ea9e387fd9cfd",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.experimental": {
+      "text": "expérimental",
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.clock_regression": {
+      "text": "erreur d’horloge",
+      "sourceHash": "2183ca54dfca554a864bc4deb8d480602fd99fafca3bd29a347bec83ca6cb09f",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.invalid_sample": {
+      "text": "mesure non valide",
+      "sourceHash": "abc0a63eb98de5b12afcda6941cb5ebdf6d5de56ef8ccc201c57436df3e7c142",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.learning": {
+      "text": "apprentissage",
+      "sourceHash": "edd95740e339e6aa0a1dab45741b0521185680b051631a7c265b5630da4f2158",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.model_shift": {
+      "text": "signal modifié",
+      "sourceHash": "4b542b4909a7aaefe5e84b90e61cecec3407ff641803307a33ff66253116a3e3",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.no_data": {
+      "text": "aucune donnée",
+      "sourceHash": "492b95abbcff8a283406537a2fe137bb485d03a4d950a04e4b344b2f8b896e65",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.source_unavailable": {
+      "text": "source indisponible",
+      "sourceHash": "44c6277bb469eb998a03b2e5e050f5095ff47a8f177d039c7a2b39ecc5364fae",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.health.stale": {
+      "text": "obsolète",
+      "sourceHash": "a03f2386ae06b21109577020844df367857b72c2fcce384c1896fed98a89c82b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.checking_previous": {
+      "text": "Une plage précédente a été trouvée et est vérifiée avec les mesures actuelles d’une pièce dégagée.",
+      "sourceHash": "5d60de1f3671ac47cb6c50a451f4fce201f137e1bdf481b4a6b0e7adfa43445b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.clear_failed": {
+      "text": "Impossible d’effacer l’historique de proximité ; le modèle existant reste inchangé.",
+      "sourceHash": "2473034f5750212d7d622823322d1ce10a6e8451550f6e39d49a990f15a34b0b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.clear_safely_failed": {
+      "text": "Impossible d’effacer en toute sécurité l’historique de proximité ; le modèle existant reste inchangé.",
+      "sourceHash": "51c2e6b636842da7c9ca7763425f174d767bd02d82cdb7ae74542abd16c6612f",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.cleared": {
+      "text": "L’historique de proximité appris a été effacé. L’apprentissage a redémarré.",
+      "sourceHash": "ae0015059a409e4fc04f8f92d73307645ef268433c4a495c24e720b7732b37dd",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.learning_clear_baseline": {
+      "text": "Aucune configuration requise. Laissez brièvement la zone dégagée pour que le panneau apprenne sa référence.",
+      "sourceHash": "f14cf2497d96832b03c9b3442247990bf8e72648d8802d9c50cdb4d375a08455",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.movement_not_armed": {
+      "text": "Mouvement détecté, mais ce n’était pas un geste volontaire armé. Éloignez-vous deux secondes, puis réessayez.",
+      "sourceHash": "7a9e061dc272218bd2b9d8ab7c199fa3fcdb5e03aafece54180f0702d99b0e1d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.movement_partial": {
+      "text": "Mouvement détecté, mais il était partiel, trop rapide ou trop long. Éloignez-vous, attendez deux secondes, puis réessayez.",
+      "sourceHash": "6c7ba25eae4f8647f7344ba8032612f69b0196d51e1d7595122f45ffe105fd49",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.normalized_learning": {
+      "text": "La présence est normalisée pour HA. Quelques gestes complets supplémentaires activeront le réveil par geste.",
+      "sourceHash": "cd5edcc884a4c9c5bbcd0832097bf37d0afd916b21fe33f450b3d6ffb1675deb",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.normalized_ready": {
+      "text": "La proximité est normalisée pour HA et le réveil exige un geste volontaire complet.",
+      "sourceHash": "da8688f783adb9300e349cf7aa949f3829d9ff32182355af4e1a951dd245d148",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.safety_reset_failed": {
+      "text": "Les gestes de réveil sont désactivés car leur réinitialisation de sécurité n’a pas pu être enregistrée.",
+      "sourceHash": "55bb82eb35b87d2b225546553ab840b4f2334c5dd08eabf69f717560cf3e5ead",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.signal_changed_paused": {
+      "text": "Le signal a changé. Les rapports HA et le réveil par geste sont suspendus pendant l’apprentissage d’une nouvelle plage sûre.",
+      "sourceHash": "bf8faf8c9e9301d0148a23658617f21884b3d0cdf98a4ce0fc47ae963b4e219c",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.signal_changed_restart": {
+      "text": "Le signal de proximité a changé. Éloignez-vous brièvement, puis recommencez les gestes volontaires.",
+      "sourceHash": "d8a9caf85e0e234df680e0b9ea81a471baadef083322a0d1dd2367d0c48b22d2",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.teach_instruction": {
+      "text": "Laissez brièvement la zone dégagée, faites un geste volontaire, puis éloignez-vous de nouveau.",
+      "sourceHash": "4ff0bd8149854f23a250825b02589c3e2b8dc2e22e573e020e925a01d85b69ec",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.teaching_cancelled": {
+      "text": "Apprentissage annulé.",
+      "sourceHash": "ae7ec0fba98e202fa471d4f9344d0d75ee940031bbd155719cc45ac775025a7e",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.teaching_complete": {
+      "text": "Apprentissage terminé. Les gestes volontaires de réveil sont prêts.",
+      "sourceHash": "6212f20aa3e340739226a5ce2d6389b88c0e0b28e2a083563db2373c4cc1b2f0",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.teaching_timed_out": {
+      "text": "Délai d’apprentissage dépassé. Aucun réglage dangereux n’a été activé ; réessayez quand vous le souhaitez.",
+      "sourceHash": "a2cfd8723f61c19910f98c5ffaa1787877ae669073a39d7528777073eee854af",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.test_cancelled": {
+      "text": "Test du geste annulé.",
+      "sourceHash": "25b91195b85bd43485cd148518a8e4fb6247294b2ae36d0fd7d5f98dbd9e9f72",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.test_instruction": {
+      "text": "Éloignez-vous deux secondes, faites un geste une fois, puis éloignez-vous de nouveau.",
+      "sourceHash": "5693506fc01c3d423c82245de21ec2bd42dff5f3e85309ae2be4dd29d8f754c6",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.test_no_wave": {
+      "text": "Aucun geste complet n’a été détecté pendant le test.",
+      "sourceHash": "571b5b2ffb9ef0caacb18f9d8e6030bdb31169090c9b9500f965df8d44d1c288",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.touch_until_ready": {
+      "text": "Aucune configuration requise. Touchez l’écran pour le réveiller jusqu’à la fin de l’apprentissage.",
+      "sourceHash": "4f35417beb53edd5c6cf243e99715270cd1b458e0f0c5fbd8c92db6377409d07",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.use_normally": {
+      "text": "Utilisez le panneau normalement ou choisissez « Apprendre un geste » pour terminer plus vite.",
+      "sourceHash": "b9c3c88a57c501beb1bf93674a1ead5fcb42df0b3b7e8cb1095c7c3e5ded34a5",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.waiting_trustworthy": {
+      "text": "En attente d’une mesure fiable de la source de proximité du panneau.",
+      "sourceHash": "0840e1126e15a510d0b8b587ef7ee68d998919adab5d1f7c9caf962a5fdee649",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.wave_accepted": {
+      "text": "Geste accepté ({seen}/{required}). Éloignez-vous, attendez deux secondes, puis recommencez.",
+      "sourceHash": "013f7396cc1d09581949a6c69cd3195b348af4a5e33a04710d1a284f017fa076",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.message.wave_detected": {
+      "text": "Geste détecté avec succès.",
+      "sourceHash": "8a4c9034c9fb8da8161a0c8a2e8d9550f388cf8eca8e699b270c3fab983deba1",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.mode.binary": {
+      "text": "binaire",
+      "sourceHash": "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.mode.graded": {
+      "text": "gradué",
+      "sourceHash": "a20f6f9419f532136fc52d02e13fb6e194821d6289cbaf84d6e0884b4240d0da",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.mode.identifying": {
+      "text": "identification",
+      "sourceHash": "a5bed2020bd1f4ea3eca933398c4f0d07a24548ea54c7f3bdbc60612c8384935",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.no_source.detail": {
+      "text": "Le réveil par geste est indisponible ; le toucher pour réveiller reste inchangé.",
+      "sourceHash": "99d78923cc8f2ddc3779dc461178e7979607ef37b34afe5d1e18e3d27166e4c0",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.no_source.title": {
+      "text": "Aucune source de proximité n’est disponible sur ce panneau",
+      "sourceHash": "a84e41ef34d04d952e385684f256856d38829285843d7588049295bba39e809a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.degraded": {
+      "text": "En pause — le signal de proximité nécessite une intervention",
+      "sourceHash": "4dafa860246f38989bc4870d910de88191dd287fbd1efaf42e81ab07dcdc25c7",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.identifying": {
+      "text": "Identification du mode de détection de proximité du capteur",
+      "sourceHash": "ae5044054bdea6377e01fec56ce7549cdc5dd737f1613722960d5d80c01f92d6",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.learning_baseline": {
+      "text": "Apprentissage de la référence de la pièce",
+      "sourceHash": "d8d545301a5616fef5fcf3cf3848744f39c89662963c3acf80a1f9c43328882e",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.learning_gestures": {
+      "text": "Apprentissage d’un geste volontaire",
+      "sourceHash": "1648c4dc0eeccfedd636c4414a7cac88871c7daf72aa863e2ba68dea020f4f3f",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.ready": {
+      "text": "Prêt — geste volontaire appris",
+      "sourceHash": "be77a278191c612d48b21acd25a4b92b4f42da681dd93a21de93dd51e0386ba5",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.rebasing": {
+      "text": "Adaptation à un changement de pièce ou de capteur",
+      "sourceHash": "34b2195dd8edc9d5ead3aea7232f21d2ee782d6beca635cf4c6987bd0534ce72",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.validating": {
+      "text": "Vérification du modèle appris en utilisation normale",
+      "sourceHash": "211f3a7a2446382fc6db365e7283e10bb861d176c9805aa2787eedb24ee4d378",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.phase.waiting_for_reading": {
+      "text": "En attente de la première mesure du capteur",
+      "sourceHash": "f1a509223c30161c772c1b1fa564ef00f55f2ec1c0aa02630e9eeed613bd1672",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.unavailable": {
+      "text": "L’état de l’apprentissage de proximité est indisponible",
+      "sourceHash": "db261933ff311133bb00c4203464d98f6041b8fcd6014c9ee6a4facaed2cb8b9",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting": {
+      "text": "En attente de l’état du capteur…",
+      "sourceHash": "9b41a512c3d01fe96fa05a91f39ba09c2c4ab0d6aad4a173879859801f1f2044",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting_deliberate": {
+      "text": "En attente d’un geste volontaire…",
+      "sourceHash": "48d53c6f1fb366031c973bf2fd97eafca703f15f36169fa1b0bf83b5f9bdcf1a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting_one": {
+      "text": "En attente d’un geste…",
+      "sourceHash": "0f6151ff6e1a70b753564d84e87d83a3cc92ca37344925348e302b01d60d5f8b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.working": {
+      "text": "Traitement en cours…",
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.title": {
+      "text": "Présence et réveil",
+      "sourceHash": "285ddd52ae6ab42b287d85dbaa0dd509fece2d3cb53dbb3cde9c1c7915e5b4f8",
+      "state": "machine-cross-checked"
+    },
     "configure.renderer.builtin": {
       "text": "Moteur de rendu intégré (ha-paneld)",
       "sourceHash": "838a46e057e83db8885d0761337db9d0f2a7ffb8bd723bfc33fcf495cde873a9",
