@@ -258,7 +258,7 @@ browserTest('Install APK and uninstall results localize their controlled summary
     }
     if (url.pathname === '/api/v1/uninstall') {
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ ok: true, presentation: { code: 'package-uninstalled', params: { package: 'io.example.app' } } })); return true;
+      response.end(JSON.stringify({ ok: false, result: '<i>exact uninstall failure</i>', presentation: { code: 'package-uninstall-failed', params: { package: 'io.example.app' } } })); return true;
     }
     return false;
   };
@@ -268,16 +268,17 @@ browserTest('Install APK and uninstall results localize their controlled summary
     html: '<div id="apk-msg"></div><div id="apk-preview"><button data-token="token"></button></div><select id="uninst-pkg"><option value="io.example.app">Example</option></select><div id="uninst-msg"></div>',
   });
   await page.evaluate(() => window.apkInstall(document.querySelector('#apk-preview button')));
-  await page.waitForFunction(() => document.querySelector('#apk-msg [lang="en"]'));
+  await page.waitForFunction(() => document.getElementById('apk-msg').textContent.includes('LOC:managed-install-committed:'));
   assert.match(await page.locator('#apk-msg').textContent(), /^LOC result: LOC:managed-install-committed:/);
-  assert.equal(await page.locator('#apk-msg [lang="en"]').textContent(), '<b>exact APK result</b>');
+  assert.equal(await page.locator('#apk-msg [lang="en"]').count(), 0, 'non-raw completion must show only the localized controlled result');
   assert.equal(await page.locator('#apk-msg b').count(), 0, 'raw APK evidence must remain inert text');
 
   page.on('dialog', (dialog) => dialog.accept());
   await page.evaluate(() => window.doUninstall(document.createElement('button')));
   await page.waitForFunction(() => document.querySelector('#uninst-msg [lang="en"]'));
-  assert.match(await page.locator('#uninst-msg').textContent(), /^LOC:package-uninstalled:/);
-  assert.equal(await page.locator('#uninst-msg [lang="en"]').textContent(), 'Uninstalled io.example.app');
+  assert.match(await page.locator('#uninst-msg').textContent(), /^LOC:package-uninstall-failed:/);
+  assert.equal(await page.locator('#uninst-msg [lang="en"]').textContent(), 'Failed: <i>exact uninstall failure</i>');
+  assert.equal(await page.locator('#uninst-msg i').count(), 0, 'raw uninstall evidence must remain inert text');
 });
 
 browserTest('Install protected-form success keeps the supported explicit language in its card redirect', async (t) => {

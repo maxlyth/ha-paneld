@@ -123,7 +123,7 @@
     if (value.fallback) appendEnglishEvidence(node, exact, '');
     else {
       var controlled = document.createElement('span'); controlled.textContent = value.text; node.appendChild(controlled);
-      if (exact && exact !== value.text) appendEnglishEvidence(node, exact, ' — ');
+      if (value.rawEvidence && exact && exact !== value.text) appendEnglishEvidence(node, exact, ' — ');
     }
   }
   function renderFailure(node, key, fallback, diagnostic) {
