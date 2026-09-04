@@ -76,6 +76,20 @@ class InstallPresentationTest {
 
         assertEquals("paneld", presentation.params["owner"])
         assertFalse(presentation.params === mutable)
+
+        val parameterMutation = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (presentation.params as MutableMap<String, String>)["owner"] = "companion"
+        }.exceptionOrNull()
+        assertTrue(parameterMutation is UnsupportedOperationException)
+        assertEquals("paneld", JSONObject(presentation.json()).getJSONObject("params").getString("owner"))
+
+        val vocabularyMutation = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            (InstallPresentation.SUPPORTED_CODES as MutableSet<String>).add("attacker-code")
+        }.exceptionOrNull()
+        assertTrue(vocabularyMutation is UnsupportedOperationException)
+        assertNull(InstallPresentation.create("attacker-code"))
     }
 
     @Test fun installOutcomeKeepsLegacyConstructionAndAddsOptionalPresentation() {

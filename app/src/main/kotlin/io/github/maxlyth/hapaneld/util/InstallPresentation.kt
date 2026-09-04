@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.util
 
+import java.util.Collections
 import org.json.JSONObject
 
 /**
@@ -13,7 +14,7 @@ class InstallPresentation(
     val code: String,
     params: Map<String, String> = emptyMap(),
 ) {
-    val params: Map<String, String> = params.toMap()
+    val params: Map<String, String> = Collections.unmodifiableMap(LinkedHashMap(params))
 
     init {
         require(code in SUPPORTED_CODES) { "Unknown Install presentation code." }
@@ -59,7 +60,7 @@ class InstallPresentation(
         const val MAX_PARAM_LENGTH = 512
         const val MAX_SERIALIZED_BYTES = 2_048
 
-        val SUPPORTED_CODES: Set<String> = setOf(
+        val SUPPORTED_CODES: Set<String> = Collections.unmodifiableSet(linkedSetOf(
             "version-install",
             "version-upgrade",
             "version-downgrade",
@@ -172,7 +173,7 @@ class InstallPresentation(
             "status-mdns-stale-address",
             "status-mdns-unresponsive",
             "status-mdns-recovering",
-        )
+        ))
 
         private val REQUIRED_PARAMS_BY_CODE: Map<String, Set<String>> = mapOf(
             "operation-working" to setOf("owner"),
