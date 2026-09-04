@@ -82,7 +82,7 @@ class BundledProfileParityTest {
         // A camera is not a microphone. The WF1589T now declares both, so the witness that the two
         // keys are independent on real catalog content is the TPA10: it carries a camera, and its
         // capture chain has never produced audio, so it must declare the one and not the other.
-        assertTrue(bundledById.getValue("tpa10").document.hardware.hasCamera)
+        assertEquals(true, bundledById.getValue("tpa10").document.hardware.cameraDeclared)
         assertFalse(bundledById.getValue("tpa10").document.hardware.hasMicrophone)
         assertFalse(bundledById.getValue("tpa10").profile().hasMicrophone)
     }
@@ -92,21 +92,30 @@ class BundledProfileParityTest {
      * reachable at all: `hardware.camera` is the gate in front of the camera settings, the foreground
      * service, the snapshot route, the RTSP transport and the two Home Assistant entities. Both of
      * these panels were probed on 2026-08-28 and each carries a GalaxyCore sensor with a working
-     * hardware AVC encoder behind it. Every other bundled profile omits the key and stays closed.
+     * hardware AVC encoder behind it.
+     *
+     * Every other bundled profile omits the key, which since 2026-09-04 means "ask Android" rather than
+     * "no camera": a declaration forces the capability on or off, and its absence defers to enumeration
+     * so that a camera the platform can already see does not need a hand-written profile. What this test
+     * pins is therefore the declarations themselves, not the resolved capability, which no longer lives
+     * in the profile at all.
      */
     @Test fun onlyHardwareWithACameraDeclaresOne() {
         assertEquals(
             setOf("tpa10", "wf1589t"),
-            bundled.filter { it.document.hardware.hasCamera }.map { it.document.id }.toSet(),
+            bundled.filter { it.document.hardware.cameraDeclared == true }.map { it.document.id }.toSet(),
         )
-        // Unknown hardware stays conservative, and the NSPanel Pro line has no camera to declare.
-        assertFalse(bundledById.getValue("generic").document.hardware.hasCamera)
-        assertFalse(bundledById.getValue("nspanel-pro").document.hardware.hasCamera)
-        // The declaration must reach the capability the camera surfaces gate on, not stop at the
-        // document: a profile that parses a camera but resolves without one enables nothing.
-        assertTrue(bundledById.getValue("tpa10").profile().hasCamera)
-        assertTrue(bundledById.getValue("wf1589t").profile().hasCamera)
-        assertFalse(bundledById.getValue("nspanel-pro").profile().hasCamera)
+        // Neither declares the key. For the generic fallback that is the point of the change: an
+        // unknown board is exactly the one whose camera nobody has written a profile for, so it must
+        // defer to Android rather than assert an absence it cannot know. `false` would be a claim.
+        assertNull(bundledById.getValue("generic").document.hardware.cameraDeclared)
+        assertNull(bundledById.getValue("nspanel-pro").document.hardware.cameraDeclared)
+        // The declaration must reach the resolved profile, not stop at the document: a profile that
+        // parses a camera but resolves without one enables nothing. Resolution into the capability the
+        // camera surfaces gate on happens above this layer, where enumeration is combined in.
+        assertEquals(true, bundledById.getValue("tpa10").profile().cameraDeclared)
+        assertEquals(true, bundledById.getValue("wf1589t").profile().cameraDeclared)
+        assertNull(bundledById.getValue("nspanel-pro").profile().cameraDeclared)
     }
 
     /**
@@ -124,7 +133,7 @@ class BundledProfileParityTest {
      * the arc visibly missed on each until they were declared. A board with no camera declares nothing.
      */
     @Test fun everyCameraPanelDeclaresWhereItsLensIs() {
-        val cameras = bundled.filter { it.document.hardware.hasCamera }
+        val cameras = bundled.filter { it.document.hardware.cameraDeclared == true }
         assertTrue("this test is vacuous without a camera profile", cameras.isNotEmpty())
         cameras.forEach {
             val offset = it.document.hardware.cameraLensOffsetPx
@@ -162,14 +171,15 @@ class BundledProfileParityTest {
             assertFalse("hardware without the part must be able to omit $path", descriptor.required)
         }
 
-        // Absent means false, which is what every bundled profile without the part relies on. The
-        // generic profile declares neither key, so it is the witness that omission reads as absence
-        // both when parsed from the catalog and after a round trip.
+        // The generic profile declares neither key, so it is the witness for what omission means.
+        // The two keys differ deliberately: an absent microphone is false because nothing can enumerate
+        // a microphone, while an absent camera is null because Android can. Serialization must preserve
+        // that difference, or a round trip would turn "ask Android" into an explicit refusal.
         val none = bundledById.getValue("generic").document
-        assertFalse(none.hardware.hasCamera)
+        assertNull(none.hardware.cameraDeclared)
         assertFalse(none.hardware.hasMicrophone)
         val noneReparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(none)).document)
-        assertFalse("an omitted camera key must not become true across a round trip", noneReparsed.hardware.hasCamera)
+        assertNull("an omitted camera key must not gain a value across a round trip", noneReparsed.hardware.cameraDeclared)
         assertFalse("an omitted microphone key must not become true across a round trip", noneReparsed.hardware.hasMicrophone)
 
         // A microphone without a camera is the case that matters, and it must survive serialization.
@@ -177,7 +187,7 @@ class BundledProfileParityTest {
         val micOnly = base.copy(hardware = base.hardware.copy(hasMicrophone = true))
         val reparsed = requireNotNull(ProfileYaml.parse(ProfileYaml.serialize(micOnly)).document)
         assertTrue("a microphone declaration must survive the round trip", reparsed.hardware.hasMicrophone)
-        assertFalse("a microphone must not imply a camera", reparsed.hardware.hasCamera)
+        assertNull("a microphone must not imply a camera", reparsed.hardware.cameraDeclared)
         assertEquals(micOnly, reparsed)
 
         // The declaration must reach the capability the settings gate on, not stop at the document.
@@ -185,7 +195,7 @@ class BundledProfileParityTest {
             document = micOnly, productVersion = "", revision = "test", trustedBundledContent = true,
         )
         assertTrue(micProfile.hasMicrophone)
-        assertFalse(micProfile.hasCamera)
+        assertNull(micProfile.cameraDeclared)
 
         // Adding two keys must not open the hardware block to a third.
         val rejected = ProfileYaml.parse(
@@ -463,7 +473,7 @@ class BundledProfileParityTest {
         assertEquals("keyevent", candidate.hardware.screenOff)
         assertEquals("none", candidate.hardware.led.mechanism)
         assertFalse("no panel button backlight was reported", candidate.hardware.hasButtonBacklight)
-        assertFalse("the community firmware camera path has not been proved", candidate.hardware.hasCamera)
+        assertNull("the community firmware camera path is undeclared, so Android decides", candidate.hardware.cameraDeclared)
         assertFalse("the community firmware microphone path has not been proved", candidate.hardware.hasMicrophone)
         assertEquals("Android proximity sensor", candidate.sensors.proximityTechnology)
         assertEquals("Ambient light", candidate.sensors.lightTechnology)
@@ -523,7 +533,7 @@ class BundledProfileParityTest {
         assertEquals("brightness-zero", candidate.hardware.screenOff)
         assertEquals("none", candidate.hardware.led.mechanism)
         assertFalse("the product has no panel backlight button", candidate.hardware.hasButtonBacklight)
-        assertFalse("the reporter says the finished panel has no camera", candidate.hardware.hasCamera)
+        assertNull("the reporter's panel has no camera to enumerate, so the profile claims nothing", candidate.hardware.cameraDeclared)
         assertFalse("the audio capture chain has not been proved", candidate.hardware.hasMicrophone)
         assertNull("the firmware node does not prove a fitted proximity sensor", candidate.sensors.proximityTechnology)
         assertNull("the firmware node does not prove a usable ambient sensor", candidate.sensors.lightTechnology)

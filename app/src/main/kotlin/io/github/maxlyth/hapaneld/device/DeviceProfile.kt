@@ -101,14 +101,19 @@ interface DeviceProfile {
      *  no `/sys/class/leds/button-backlight` node. */
     val hasButtonBacklight: Boolean get() = false
 
-    /** Board carries a usable camera. Default false: only declare it once verified on the hardware. */
-    val hasCamera: Boolean get() = false
+    /**
+      * The board's camera declaration: `true` forces the capability on, `false` suppresses it even where
+      * Android enumerates a camera, and null defers to runtime enumeration. Null is the default because
+      * a camera Android can enumerate should not need a hand-written profile before it can be used.
+      */
+    val cameraDeclared: Boolean? get() = null
 
     /** Screen pixels from the top of the active area up to the lens centre; null when unmeasured. */
     val cameraLensOffsetPx: Int? get() = null
 
-    /** Board carries a usable microphone, independent of [hasCamera] — some hardware has one without
-     *  the other. Default false: only declare it once verified on the hardware. */
+    /** Board carries a usable microphone, independent of [cameraDeclared] — some hardware has one
+     *  without the other. Default false: unlike the camera a microphone cannot be enumerated, so it is
+     *  only ever true once declared and verified on the hardware. */
     val hasMicrophone: Boolean get() = false
 
     /** SoundPool gain for the physical-speaker click. This is deliberately profile-owned because the

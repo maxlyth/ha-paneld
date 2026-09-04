@@ -12,6 +12,7 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.database.ContentObserver
+import android.hardware.camera2.CameraManager
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -496,6 +497,23 @@ internal fun zigbeeCapabilityPresent(
     declaredGateway: Boolean,
     observation: ZigbeeObservation,
 ): Boolean = declaredGateway && (!observation.probeSucceeded || observation.present)
+
+/**
+ * Whether this panel offers a camera at all. [declared] is the profile's tri-state `hardware.camera`
+ * and [observed] is what enumerating Android's cameras found, or null while that probe has not answered.
+ *
+ * The direction is deliberately the opposite of [zigbeeCapabilityPresent]. A zigbee gateway lives at a
+ * profile-supplied path that nothing can discover, so there an observation may only veto a declaration.
+ * A camera is enumerated by `CameraManager`, which is Android's authoritative and universal answer, so
+ * here an observation may grant one: a board whose profile says nothing still offers the camera Android
+ * can see, instead of every owner of camera hardware having to author a profile first.
+ *
+ * A declaration still wins in both directions. The two boards that declare a camera are unaffected by a
+ * probe that throws, and a board whose enumerated device is not a usable room camera is suppressed with
+ * an explicit `camera: false`.
+ */
+internal fun cameraCapabilityPresent(declared: Boolean?, observed: Boolean?): Boolean =
+    declared ?: (observed == true)
 
 internal fun commitBorrowedRendererTarget(
     commit: () -> Boolean,
@@ -1216,7 +1234,7 @@ class PaneldService : Service() {
         )
         camera = io.github.maxlyth.hapaneld.camera.CameraSessionOwner(
             context = this,
-            hasCamera = profile.hasCamera,
+            hasCamera = { cameraPresent() },
             enabled = { config.cameraEnabled },
             defaultResolution = { config.cameraResolution },
             defaultFps = { config.cameraFps },
@@ -1653,7 +1671,7 @@ class PaneldService : Service() {
             // SMT1019 also uses SocketLedController for RGB but has no button-backlight node.
             profile.hasButtonBacklight,
             hasMicrophone = profile.hasMicrophone,
-            hasCamera = profile.hasCamera,
+            hasCamera = { cameraPresent() },
             autoBright = autoBright,
             onAutoBrightnessConfigChanged = { refreshAdaptiveBrightnessInputs() },
             autoSleepActivity = { autoSleep.activitySnapshot() },
@@ -2563,6 +2581,28 @@ class PaneldService : Service() {
 
     // MQTT recovery runs each heartbeat. Preserve the established positive-sticky/backoff contract so
     // a declared gateway is discovered after late root startup without spawning a root process forever.
+    /**
+     * Whether Android enumerates any camera on this board.
+     *
+     * Sticky in BOTH directions, unlike the zigbee probe: camera hardware does not appear or vanish at
+     * runtime, so an empty list is a definitive answer rather than a failed probe. Only a throw is
+     * retried, which is the camera service not yet being up early in boot. That keeps the privacy
+     * contract's "idle cost is zero" promise — a panel without a camera enumerates once, not forever.
+     *
+     * The acceptance rule is exactly the one the session's own `chooseCamera` applies: any enumerated
+     * camera counts, because that function prefers a front-facing lens but never filters on it. So the
+     * panel cannot offer a camera that the session would then refuse to open as `no_camera_id`.
+     */
+    private val cameraPresence = SuccessStickyProbe(
+        probe = { getSystemService(CameraManager::class.java)?.cameraIdList?.isNotEmpty() },
+        initialBackoffMs = 5_000L,
+        maxBackoffMs = 300_000L,
+    )
+
+    /** The profile's declaration, or what Android enumerates when the profile is silent. */
+    private fun cameraPresent(): Boolean =
+        cameraCapabilityPresent(profile.cameraDeclared, cameraPresence.get())
+
     private val zigbeePresence = SuccessStickyProbe(
         probe = {
             zigbee.observe(includeRole = false)
@@ -2620,7 +2660,7 @@ class PaneldService : Service() {
                 hasWifi = wifiAvailable.rssi,
                 hasWifiSsid = wifiAvailable.ssid,
                 hasCht8305 = profile.hasCht8305,
-                hasCamera = profile.hasCamera,
+                hasCamera = cameraPresent(),
                 hasMicrophone = profile.hasMicrophone,
                 appCanSu = profile.appCanSu,
                 hasRecents = profile.hasRecents,

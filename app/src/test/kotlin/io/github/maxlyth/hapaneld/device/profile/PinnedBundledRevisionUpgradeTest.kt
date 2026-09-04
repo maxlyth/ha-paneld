@@ -821,7 +821,7 @@ class PinnedBundledRevisionUpgradeTest {
         assertEquals(expected.ledMechanism, resolved.profile.ledMechanism)
         assertEquals(expected.screenOff, resolved.profile.screenOff)
         assertEquals(expected.proximityTech, resolved.profile.proximityTech)
-        assertEquals(expected.hasCamera, resolved.profile.hasCamera)
+        assertEquals(expected.cameraDeclared, resolved.profile.cameraDeclared)
         assertNotEquals("generic", resolved.profile.id)
         assertEquals(listOf(repinWarning(rc2Ref, currentRef)), resolved.issues.filter { it.path == "selection" })
         assertTrue(upgraded.markActivationHealthy(generationOf(resolved)))

@@ -52,7 +52,7 @@ class DataDeviceProfile internal constructor(
         else -> ScreenOff.BRIGHTNESS_ZERO
     }
     override val hasButtonBacklight = document.hardware.hasButtonBacklight
-    override val hasCamera = document.hardware.hasCamera
+    override val cameraDeclared = document.hardware.cameraDeclared
     override val hasMicrophone = document.hardware.hasMicrophone
     override val cameraLensOffsetPx = document.hardware.cameraLensOffsetPx
     override val touchClickGain = document.hardware.touchClickGain ?: 0.2f

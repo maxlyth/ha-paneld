@@ -61,7 +61,9 @@ class CameraStreamContractTest {
         assertTrue("both drains exist", transportStop > 0 && cameraStop > 0)
         assertTrue("the transport is drained before the camera owner", transportStop < cameraStop)
         assertFalse("listening is the owner's decision, made from the switch", service.contains("cameraStream.setListening"))
-        assertTrue(owner.contains("transport.setListening(hasCamera && enabled())"))
+        // The switch is read before the capability: the capability may enumerate Android's cameras
+        // and this runs from the owner's init while the service constructs on the main thread.
+        assertTrue(owner.contains("transport.setListening(enabled() && hasCamera())"))
         assertEquals("the transport only ever learns the camera through the field", 1, Regex("source = \\{ camera \\}").findAll(service).count())
     }
 

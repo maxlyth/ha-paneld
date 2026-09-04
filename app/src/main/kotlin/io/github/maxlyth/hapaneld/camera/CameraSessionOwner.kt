@@ -68,7 +68,12 @@ fun interface EncoderFactory {
  */
 class CameraSessionOwner(
     private val context: Context,
-    private val hasCamera: Boolean,
+    /**
+     * Whether this panel has a camera. A supplier rather than a value because the answer may come from
+     * enumerating Android's cameras, which must not happen while the service is constructing on the
+     * main thread; every call site below reads the cheap switch first so an off panel never enumerates.
+     */
+    private val hasCamera: () -> Boolean,
     private val enabled: () -> Boolean,
     // Configured defaults, not ceilings: an omitted URL parameter takes these, a supplied one wins.
     // See StreamRequest for why the clamping was removed.
@@ -219,7 +224,7 @@ class CameraSessionOwner(
 
     init {
         publishPermissionPrompt(freshEnable = false)
-        transport.setListening(hasCamera && enabled())
+        transport.setListening(enabled() && hasCamera())
     }
 
     /** A subscriber's claim on the open session. Close exactly once; closing the last one closes the device. */
@@ -253,12 +258,15 @@ class CameraSessionOwner(
     // ---- CameraSurface ---------------------------------------------------------------------------
 
     override fun presentation(): CameraPresentation {
-        // Both the transport's facts and the interface walk stay outside the owner lock.
+        // Both the transport's facts and the interface walk stay outside the owner lock, and so does
+        // the camera capability: it may enumerate Android's cameras, which is not a read to make under
+        // this lock. It is safe to read early because camera presence does not change at runtime.
         val facts = transport.facts()
         val address = facts.port?.let { localAddress() }
+        val present = hasCamera()
         return synchronized(lock) {
             when {
-                !hasCamera -> CameraPresentation.absent()
+                !present -> CameraPresentation.absent()
                 state.phase == Phase.STOPPING -> current(facts, address)
                 !enabled() -> CameraPresentation.disabled()
                 !permissionGranted() -> CameraPresentation.permissionNeeded(streamPort = facts.port)
@@ -343,7 +351,7 @@ class CameraSessionOwner(
                 }
             }
             publishPermissionPrompt(freshEnable = true)
-            transport.setListening(hasCamera)
+            transport.setListening(hasCamera())
             return
         }
         publishPermissionPrompt(freshEnable = false)
@@ -408,14 +416,18 @@ class CameraSessionOwner(
         val leaseId: Long
         val pending: CompletableFuture<CameraRefusal?>?
         var startEncoderFor: Long? = null
+        // Read outside the lock, like the presentation's: the capability may enumerate Android's
+        // cameras. Unlike the switch below it cannot change while the panel runs, so reading it early
+        // cannot produce the stale-observation defect the critical section beneath exists to prevent.
+        val present = hasCamera()
         synchronized(lock) {
-            // Observed and applied in ONE critical section. Split across two, an enable landing in the
-            // gap let a caller that had already read the switch as off store `camera-disabled` over the
-            // enable's own reset, putting back the very refusal this class exists to clear — and this
-            // time on a camera that was on. Both reads are the same cheap non-blocking reads the
-            // presentation already makes under this lock.
+            // The switch and the permission are observed and applied in ONE critical section. Split
+            // across two, an enable landing in the gap let a caller that had already read the switch as
+            // off store `camera-disabled` over the enable's own reset, putting back the very refusal
+            // this class exists to clear — and this time on a camera that was on. Both reads are the
+            // same cheap non-blocking reads the presentation already makes under this lock.
             val gate = when {
-                !hasCamera -> CameraRefusal.ABSENT
+                !present -> CameraRefusal.ABSENT
                 admissionClosed -> CameraRefusal.STOPPING
                 !enabled() -> CameraRefusal.DISABLED
                 !permissionGranted() -> CameraRefusal.PERMISSION
@@ -1172,8 +1184,8 @@ class CameraSessionOwner(
 
     private fun publishPermissionPrompt(freshEnable: Boolean) {
         CameraPermissionPrompt.publish(
-            wantsPermission = hasCamera && enabled() && !permissionGranted(),
-            freshEnable = freshEnable && hasCamera,
+            wantsPermission = enabled() && hasCamera() && !permissionGranted(),
+            freshEnable = freshEnable && hasCamera(),
         )
     }
 

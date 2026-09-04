@@ -112,9 +112,17 @@ data class ProfileHardware(
     val relayBaseFallbacks: List<String> = emptyList(),
     val buttonLedGpioBase: Int? = null,
     val touchClickGain: Float? = null,
-    // Whether the panel has a usable camera / microphone at all. Declared independently because some
-    // hardware has one without the other (e.g. a microphone with no camera).
-    val hasCamera: Boolean = false,
+    /**
+     * Whether the board is declared to carry a usable camera, as three states rather than two.
+     *
+     * `true` forces the capability on, `false` suppresses it even where Android enumerates a camera,
+     * and null leaves the answer to runtime enumeration. Null is the common case and the reason this is
+     * not a plain boolean: an owner whose panel has a camera Android can already see should not have to
+     * author a profile before the panel will offer it.
+     */
+    val cameraDeclared: Boolean? = null,
+    // Whether the panel has a usable microphone. Declared independently of the camera because some
+    // hardware has one without the other, and unlike the camera it is not enumerable.
     val hasMicrophone: Boolean = false,
     /**
      * How far the camera lens centre sits above the top of the active display area, in screen pixels.

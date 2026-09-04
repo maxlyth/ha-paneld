@@ -1151,7 +1151,7 @@ internal class MqttBridge(
     private val hasMicrophone: Boolean = false,
     // Profile-authoritative camera capability. Discovery visibility is not a write guard because the
     // wildcard command subscription still receives direct camera_enabled publications.
-    private val hasCamera: Boolean = false,
+    private val hasCamera: () -> Boolean = { false },
     // Optional service-owned adaptive-brightness engine.
     private val autoBright: AutoBrightnessController,
     private val onAutoBrightnessConfigChanged: () -> Unit = {},
@@ -2886,7 +2886,7 @@ internal class MqttBridge(
      *  camera into service. Disabling ends a live session immediately. */
     private fun handleCameraEnabled(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        requireCameraEnableAdmission(on, hasCamera) {
+        requireCameraEnableAdmission(on, hasCamera()) {
             authorizeMqttSensitive(
                 SensitiveOperation.CAMERA_ENABLE,
                 "camera_enabled\u0000enable",
