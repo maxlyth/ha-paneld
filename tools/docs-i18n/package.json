@@ -9,7 +9,10 @@
     "npm": "10.8.2"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs"
+    "apply": "node cli.mjs apply",
+    "plan": "node cli.mjs plan",
+    "test": "node --test test/*.test.mjs",
+    "validate": "node cli.mjs validate"
   },
   "dependencies": {
     "github-slugger": "2.0.0",

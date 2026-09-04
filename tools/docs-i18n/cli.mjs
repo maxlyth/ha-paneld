@@ -1,0 +1,116 @@
+#!/usr/bin/env node
+
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import {
+  applyLocaleReceipt,
+  buildSourceManifest,
+  canonicalJson,
+  readCanonicalJson,
+  validateRepository,
+} from "./lib/contract.mjs";
+
+const COMMANDS = new Set(["plan", "apply", "validate"]);
+
+function usage() {
+  return [
+    "Usage:",
+    "  node cli.mjs plan --repository ROOT --source-revision SHA --output docs/i18n/manifest.json",
+    "  node cli.mjs apply --repository ROOT --manifest docs/i18n/manifest.json --locale LOCALE --results FILE",
+    "  node cli.mjs validate --repository ROOT --manifest docs/i18n/manifest.json",
+  ].join("\n");
+}
+
+export function parseArguments(argv) {
+  if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
+    return { help: true };
+  }
+  const [command, ...tokens] = argv;
+  if (!COMMANDS.has(command)) throw new Error(`unknown command: ${command}`);
+  if (tokens.length % 2 !== 0) throw new Error("every option requires one value");
+  const options = {};
+  for (let index = 0; index < tokens.length; index += 2) {
+    const option = tokens[index];
+    const value = tokens[index + 1];
+    if (!/^--[a-z-]+$/.test(option) || !value || value.startsWith("--")) {
+      throw new Error(`invalid option/value pair: ${option} ${value ?? ""}`);
+    }
+    const key = option.slice(2);
+    if (key in options) throw new Error(`duplicate option: ${option}`);
+    options[key] = value;
+  }
+  const required = {
+    plan: ["repository", "source-revision", "output"],
+    apply: ["repository", "manifest", "locale", "results"],
+    validate: ["repository", "manifest"],
+  }[command];
+  if (Object.keys(options).some((key) => !required.includes(key))) {
+    throw new Error(`unsupported option for ${command}`);
+  }
+  for (const key of required) if (!(key in options)) throw new Error(`missing --${key}`);
+  return { command, options };
+}
+
+function canonicalManifestPath(repository, requested) {
+  const root = fs.realpathSync(repository);
+  const resolved = path.resolve(requested);
+  if (resolved !== path.join(root, "docs", "i18n", "manifest.json")) {
+    throw new Error("manifest output must be docs/i18n/manifest.json below the repository root");
+  }
+  return { root, resolved };
+}
+
+function writeExclusive(file, content) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, { encoding: "utf8", flag: "wx", mode: 0o644 });
+}
+
+export function main(argv = process.argv.slice(2)) {
+  const parsed = parseArguments(argv);
+  if (parsed.help) {
+    process.stdout.write(`${usage()}\n`);
+    return 0;
+  }
+  const { command, options } = parsed;
+  if (command === "plan") {
+    const target = canonicalManifestPath(options.repository, options.output);
+    const manifest = buildSourceManifest({
+      repository: target.root,
+      sourceRevision: options["source-revision"],
+      documents: ["README.md"],
+    });
+    writeExclusive(target.resolved, canonicalJson(manifest));
+    process.stdout.write(`documentation localization plan: ${manifest.documents[0].segments.length} segments, ${manifest.packets.length} packets\n`);
+    return 0;
+  }
+  if (command === "apply") {
+    const manifest = readCanonicalJson(path.resolve(options.manifest));
+    const results = readCanonicalJson(path.resolve(options.results));
+    const receipt = applyLocaleReceipt({
+      repository: options.repository,
+      manifest,
+      locale: options.locale,
+      results,
+    });
+    process.stdout.write(`localized documentation applied: ${receipt.locale}, ${receipt.documents.length} document(s)\n`);
+    return 0;
+  }
+  const manifest = validateRepository({
+    repository: options.repository,
+    manifestPath: path.resolve(options.manifest),
+  });
+  process.stdout.write(`localized documentation valid: ${manifest.documents.length} document(s), ${manifest.locales.length} locale(s)\n`);
+  return 0;
+}
+
+const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invoked) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    process.stderr.write(`docs-i18n: ${error.message}\n`);
+    process.exitCode = 1;
+  }
+}
