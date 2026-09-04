@@ -4,10 +4,12 @@ import io.github.maxlyth.hapaneld.http.SelfUpdateChannelMutation
 import io.github.maxlyth.hapaneld.http.selfUpdateChannelMutation
 import io.github.maxlyth.hapaneld.http.restoreChangesUpdateChannel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Test
 import kotlinx.coroutines.test.runTest
 import io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult
+import io.github.maxlyth.hapaneld.util.InstallPresentation
 
 class SelfUpdateChannelAdmissionTest {
     @Test
@@ -156,6 +158,25 @@ class SelfUpdateChannelAdmissionTest {
 
         assertEquals(true, result.installed)
         assertEquals(emptyList<String>(), events)
+    }
+
+    @Test
+    fun `channel result adapter preserves exact prose and producer presentation`() {
+        val presentation = InstallPresentation(
+            "managed-downgrade-committed",
+            mapOf("component" to "paneld", "version" to "0.9.6"),
+        )
+
+        val adapted = selfUpdateChannelOperationResult(
+            SelfUpdateChannelInstallResult(
+                message = "updating ha-paneld -> 0.9.6",
+                installed = true,
+                presentation = presentation,
+            ),
+        )
+
+        assertEquals("updating ha-paneld -> 0.9.6", adapted.message)
+        assertSame(presentation, adapted.presentation)
     }
 
     @Test

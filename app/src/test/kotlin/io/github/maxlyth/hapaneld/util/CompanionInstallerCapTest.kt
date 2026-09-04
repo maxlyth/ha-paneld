@@ -90,6 +90,25 @@ class CompanionInstallerCapTest {
         assertTrue(capped[1].installable)
     }
 
+    @Test fun committedPresentationIsClassifiedFromVersionStateNotEnglishProse() {
+        assertEquals(
+            "managed-install-committed",
+            CompanionInstaller.committedCode("", "2026.5.4"),
+        )
+        assertEquals(
+            "managed-update-committed",
+            CompanionInstaller.committedCode("2026.5.3-minimal", "2026.5.4"),
+        )
+        assertEquals(
+            "managed-update-committed",
+            CompanionInstaller.committedCode("2026.5.4-minimal", "2026.5.4"),
+        )
+        assertEquals(
+            "managed-downgrade-committed",
+            CompanionInstaller.committedCode("2026.6.5-minimal", "2026.5.4"),
+        )
+    }
+
     private fun version(version: String, apk: String?) = ReleaseCatalog.Version(
         version = version,
         tag = version,

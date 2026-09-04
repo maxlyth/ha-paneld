@@ -28,7 +28,7 @@ object UpdateChecker {
             currentVersion: String,
             latestVersion: String,
             releaseUrl: String,
-        ) : this(label, currentVersion, latestVersion, releaseUrl, componentToken(label))
+        ) : this(label, currentVersion, latestVersion, releaseUrl, component = "")
     }
 
     internal data class CompanionPolicy(val channel: String, val maxVersion: String?)
@@ -88,7 +88,9 @@ object UpdateChecker {
             val previous = available
             val current = BuildConfig.VERSION_NAME
             val paneldResolution = ComponentUpdater.resolveUpdate(current) { SelfUpdater.resolveTarget(channel) }
-                .toResolution { target -> UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl) }
+                .toResolution { target ->
+                    UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, "paneld")
+                }
 
             val companion = installedCompanion(context)
             val companionResolution = if (companion == null) {
@@ -97,7 +99,15 @@ object UpdateChecker {
                 ComponentUpdater.resolveUpdate(companion.second, installedNormalize = ::stripVariant) {
                     CompanionInstaller.target(companionChannel, companionMaxVersion)
                         ?.let { ComponentUpdater.Target(it.version, it.apkUrl, it.releaseUrl) }
-                }.toResolution { target -> UpdateInfo(COMPANION_LABEL, companion.second, target.version, target.releaseUrl) }
+                }.toResolution { target ->
+                    UpdateInfo(
+                        COMPANION_LABEL,
+                        companion.second,
+                        target.version,
+                        target.releaseUrl,
+                        "companion",
+                    )
+                }
             }
 
             val requestedPolicies = RequestedPolicies(channel, CompanionPolicy(companionChannel, companionMaxVersion))
@@ -199,12 +209,6 @@ object UpdateChecker {
 
     /** HA Companion version names carry a variant suffix that is not a prerelease marker. */
     internal fun stripVariant(v: String): String = Regex("-(?:full|minimal|wear)$").replace(v.trim(), "")
-
-    internal fun componentToken(label: String): String = when (label) {
-        PANELD_LABEL -> "paneld"
-        COMPANION_LABEL -> "companion"
-        else -> ""
-    }
 
     private data class ParsedVersion(val numeric: List<Int>, val suffix: String)
 

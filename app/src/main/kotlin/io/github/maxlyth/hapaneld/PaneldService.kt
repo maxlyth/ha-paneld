@@ -237,6 +237,11 @@ internal suspend fun installCommittedSelfUpdateChannel(
     }
 }
 
+/** Preserve producer-selected metadata while adapting the server-owned channel result to progress. */
+internal fun selfUpdateChannelOperationResult(
+    result: io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult,
+): InstallOperationResult = InstallOperationResult(result.message, result.presentation)
+
 /** A scope canceled before the promoted install body starts still owes cleanup before ticket release. */
 internal fun cleanupCanceledCommittedSelfUpdateChannel(
     cause: Throwable?,
@@ -1564,6 +1569,7 @@ class PaneldService : Service() {
             // Report the current advertiser rather than a startup snapshot: DHCP may not have completed
             // when the service began, and the operator needs to see a later failed/deferred advertisement.
             mdnsWarning = { mdnsHealthWarning(mdns.health()) },
+            mdnsWarningPresentation = { mdnsHealthPresentation(mdns.health()) },
             configDiscoverySuggestions = {
                 val active = runtime.current()
                 val existingOrActiveBroker = config.mqttBroker.ifBlank { active.mqtt.activeBroker }
@@ -2832,12 +2838,11 @@ class PaneldService : Service() {
             owner = "companion-url-repair",
             logLabel = "Companion internal_url repair",
             operation = {
-                InstallOperationResult(
-                    io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrl(
-                        this@PaneldService,
-                        io.github.maxlyth.hapaneld.control.Su,
-                    ),
+                val result = io.github.maxlyth.hapaneld.control.CompanionDb.repairInternalUrlResult(
+                    this@PaneldService,
+                    io.github.maxlyth.hapaneld.control.Su,
                 )
+                InstallOperationResult(result.message, result.presentation)
             },
         )
     }
@@ -2850,11 +2855,20 @@ class PaneldService : Service() {
             SelfUpdater.prepareChannelUpdate(this@PaneldService, requested, force),
         )) {
             is SelfUpdater.ChannelPreparation.Unresolved ->
-                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved(prepared.message)
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved(
+                    prepared.message,
+                    prepared.presentation,
+                )
             is SelfUpdater.ChannelPreparation.UpToDate ->
-                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.UpToDate(prepared.message)
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.UpToDate(
+                    prepared.message,
+                    prepared.presentation,
+                )
             is SelfUpdater.ChannelPreparation.Refused ->
-                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused(prepared.message)
+                io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused(
+                    prepared.message,
+                    prepared.presentation,
+                )
             is SelfUpdater.ChannelPreparation.Ready -> {
                 val candidate = prepared.prepared
                 io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Ready(
@@ -2872,10 +2886,12 @@ class PaneldService : Service() {
                             io.github.maxlyth.hapaneld.http.SelfUpdateChannelInstallResult(
                                 message = it.message,
                                 installed = it.installed,
+                                presentation = it.presentation,
                             )
                         }
                     },
                     discardPrepared = candidate::close,
+                    presentation = prepared.presentation,
                 )
             }
         }
@@ -2886,7 +2902,7 @@ class PaneldService : Service() {
         owner = "paneld",
         logLabel = "self-update channel $previous -> $requested",
         operation = {
-            val message = when (val preflight = prepareSelfUpdateChannel(
+            when (val preflight = prepareSelfUpdateChannel(
                 requested,
                 force = previous == "prerelease" && requested == "stable",
             )) {
@@ -2924,26 +2940,34 @@ class PaneldService : Service() {
                         )
                     }
                     mqtt.publishSelfUpdateChannelState()
-                    installCommittedSelfUpdateChannel(
+                    val result = installCommittedSelfUpdateChannel(
                         install = it.install,
                         rollback = { rollbackSelfUpdateChannel(requested, previous) },
-                    ).message
+                    )
+                    selfUpdateChannelOperationResult(result)
                 }
                 is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.UpToDate -> {
                     if (!config.synchronizedTransaction {
                             if (config.updateChannel != previous || !config.selfUpdate) false
                             else config.applyBatch { config.setUpdateChannel(requested) }
                         }
-                    ) "refused: update channel changed during compatibility preflight"
+                    ) InstallOperationResult(
+                        "refused: update channel changed during compatibility preflight",
+                        InstallPresentation(
+                            "install-durable-rejection",
+                            mapOf("component" to "paneld"),
+                        ),
+                    )
                     else {
                         mqtt.publishSelfUpdateChannelState()
-                        preflight.message
+                        InstallOperationResult(preflight.message, preflight.presentation)
                     }
                 }
-                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused -> preflight.message
-                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved -> preflight.message
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Refused ->
+                    InstallOperationResult(preflight.message, preflight.presentation)
+                is io.github.maxlyth.hapaneld.http.SelfUpdateChannelPreflight.Unresolved ->
+                    InstallOperationResult(preflight.message, preflight.presentation)
             }
-            InstallOperationResult(message)
         },
         after = { mqtt.publishSelfUpdateChannelState() },
     )
@@ -2975,7 +2999,7 @@ class PaneldService : Service() {
                             onInstalled = { installed.set(true) },
                         )
                     }
-                    InstallOperationResult(result.message)
+                    selfUpdateChannelOperationResult(result)
                 },
             )
         }

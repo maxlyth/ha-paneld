@@ -151,6 +151,7 @@ object CompanionInstaller {
             "skipped: full Companion present (Play-managed)",
             "managed-play-managed",
         )
+        val installed = AppInstaller.installedVersion(context, MINIMAL_PKG)
         val version = UpdateChecker.stripVariant(tag.removePrefix("v"))
         exactVersionRefusal(tag, maxVersion)?.let { refusal ->
             return@withContext managed(
@@ -175,7 +176,7 @@ object CompanionInstaller {
         }
         managed(
             "installing HA Companion $version",
-            "managed-install-committed",
+            committedCode(installed, version),
             "version" to version,
         )
     }
@@ -230,6 +231,7 @@ object CompanionInstaller {
             "channel" to channel,
         )
         val installedAboveCap = !missing && exceedsCap(installed, maxVersion)
+        val committedCode = committedCode(installed, target.version)
 
         if (installedAboveCap && !force) {
             return@withContext managed(
@@ -271,13 +273,23 @@ object CompanionInstaller {
         Log.i(TAG, "Companion $verb -> $now${if (capApplied) " (capped at $maxVersion)" else ""}")
         managed(
             "$verb HA Companion app ($now)${if (capApplied) " — pinned to the $maxVersion cap for this panel" else ""}",
-            when (verb) {
-                "installed" -> "managed-install-committed"
-                "downgraded" -> "managed-downgrade-committed"
-                else -> "managed-update-committed"
-            },
-            "version" to now,
+            committedCode,
+            "version" to target.version,
         )
+    }
+
+    /** Stable committed-operation semantics selected before installation, independent of compatibility prose. */
+    internal fun committedCode(installedVersion: String, targetVersion: String): String {
+        if (installedVersion.isBlank()) return "managed-install-committed"
+        val comparison = UpdateChecker.compareVersions(
+            UpdateChecker.stripVariant(targetVersion),
+            UpdateChecker.stripVariant(installedVersion),
+        )
+        return if (comparison != null && comparison < 0) {
+            "managed-downgrade-committed"
+        } else {
+            "managed-update-committed"
+        }
     }
 
     private fun presentation(code: String, vararg params: Pair<String, String>): InstallPresentation? =

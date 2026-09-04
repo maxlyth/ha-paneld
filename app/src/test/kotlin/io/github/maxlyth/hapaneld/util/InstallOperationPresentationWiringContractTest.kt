@@ -10,6 +10,7 @@ class InstallOperationPresentationWiringContractTest {
     private val companionInstaller = TestSources.kotlin("util/CompanionInstaller.kt").readText()
     private val selfUpdater = TestSources.kotlin("util/SelfUpdater.kt").readText()
     private val webViewInstaller = TestSources.kotlin("util/WebViewInstaller.kt").readText()
+    private val updateChecker = TestSources.kotlin("util/UpdateChecker.kt").readText()
     private val service = TestSources.kotlin("PaneldService.kt").readText()
 
     @Test fun installerFailureFamiliesAreSelectedBeforeCompatibilityProseLeavesTheProducer() {
@@ -62,5 +63,32 @@ class InstallOperationPresentationWiringContractTest {
         assertTrue(companionInstaller.contains("installOrUpdateResult(context, force, channel, maxVersion).message"))
         assertTrue(service.contains("InstallProgress.finish(progress, result, presentation = resultPresentation)"))
         assertTrue(service.contains("InstallPresentation(\"operation-working\", mapOf(\"owner\" to owner))"))
+    }
+
+    @Test fun updateProducersSupplyStableComponentsWithoutConsultingCompatibilityLabels() {
+        assertTrue(
+            updateChecker.contains(
+                "UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, \"paneld\")",
+            ),
+        )
+        assertTrue(updateChecker.contains("target.releaseUrl,\n                        \"companion\","))
+    }
+
+    @Test fun selfUpdateAndRepairAdaptersCarryProducerMetadataWithoutParsingMessages() {
+        assertTrue(Regex("prepared\\.presentation").findAll(service).count() >= 4)
+        assertTrue(service.contains("presentation = it.presentation"))
+        assertTrue(Regex("InstallOperationResult\\(preflight\\.message, preflight\\.presentation\\)")
+            .findAll(service).count() >= 3)
+        assertTrue(service.contains("selfUpdateChannelOperationResult(result)"))
+        assertTrue(service.contains("InstallOperationResult(result.message, result.presentation)"))
+        assertTrue(service.contains("CompanionDb.repairInternalUrlResult("))
+    }
+
+    @Test fun companionCommitSitesUseVersionStateRatherThanTheLegacyVerb() {
+        assertTrue(companionInstaller.contains("committedCode(installed, version)"))
+        assertTrue(companionInstaller.contains("val committedCode = committedCode(installed, target.version)"))
+        val terminal = companionInstaller.substringAfter("Log.i(TAG, \"Companion ${'$'}verb")
+            .substringBefore("private fun presentation(")
+        assertTrue(!terminal.contains("when (verb)"))
     }
 }
