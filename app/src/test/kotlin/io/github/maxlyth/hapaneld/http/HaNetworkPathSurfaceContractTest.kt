@@ -170,7 +170,7 @@ class HaNetworkPathSurfaceContractTest {
         assertTrue(chip.contains("isClickable = false"))
         assertTrue(chip.contains("isFocusable = false"))
         assertFalse(chip.contains("setOnClickListener"))
-        assertTrue(chip.contains("view.text = HaNetworkPathPresentation.PANEL_TEXT"))
+        assertTrue(chip.contains("view.context.getString(R.string.ha_network_unreliable)"))
         assertFalse("no drawable resource is added for the glyph", chip.contains("R.drawable"))
     }
 

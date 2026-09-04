@@ -413,10 +413,17 @@ class DashboardActivity : AppCompatActivity() {
      * full-bleed layout read no better than the toast (maintainer, round 11).
      */
     private fun announceDeliberateRestart(reason: String) {
+        val shownReason = when (reason) {
+            "applying the entity filter", "updating the entity filter" ->
+                getString(R.string.optimizing_entities_restart)
+            "applying your settings", "clearing the dashboard’s stored data" ->
+                getString(R.string.applying_changes)
+            else -> reason.ifBlank { getString(R.string.applying_changes) }
+        }
         runCatching {
             android.widget.Toast.makeText(
                 this,
-                getString(R.string.dashboard_restart_announcement, reason.ifBlank { getString(R.string.applying_changes) }),
+                getString(R.string.dashboard_restart_announcement, shownReason),
                 android.widget.Toast.LENGTH_LONG,
             ).show()
         }
