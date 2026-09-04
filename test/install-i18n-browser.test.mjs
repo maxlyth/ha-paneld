@@ -52,6 +52,7 @@ test('Install browser copies the exact frozen v3 presentation and direct-token t
   assert.equal(digest(frozenObject(source, 'RESTORE_OUTCOME')), '69226bae3ec367703099c6136b4ff7b7ef264d8ad6efe6a02428bb155e7662b1');
   assert.equal(digest(frozenObject(source, 'RADIO_STATE')), '9e383eec164a6462adc21aceab958e6e023503e21ddcb16a1a4d3671ebfeec9d');
   assert.equal(digest(frozenObject(source, 'CONFIG_IMPORT_STATUS')), 'b28e9c65c69c405fc4576d46a08920a3272b303624d436fa00883ecf8298ea23');
+  assert.deepEqual(frozenObject(source, 'COMPONENT_LABEL'), { paneld: 'ha-paneld', companion: 'HA Companion', webview: 'System WebView', apk: 'APK' });
 });
 
 const samples = Object.freeze({
@@ -130,6 +131,19 @@ browserTest('Install rejects malformed, unknown, unsafe and untranslated metadat
   assert.ok(outcomes.every((item) => item.fallback && item.text === fallback));
 });
 
+browserTest('Install substitutes exact visible names for closed component parameters', async (t) => {
+  const { page } = await rig(t, { extraStrings: { 'install.presentation.status_update_available': 'Update {component}: {current} to {latest} at {release_url}' } });
+  const outcomes = await page.evaluate(() => ['paneld', 'companion', 'webview', 'apk'].map((component) => window.HaPaneldInstallPresentation.present({
+    code: 'status-update-available', params: { component, current: '1', latest: '2', release_url: 'https://example.invalid/release' },
+  }, 'fallback').text));
+  assert.deepEqual(outcomes, [
+    'Update ha-paneld: 1 to 2 at https://example.invalid/release',
+    'Update HA Companion: 1 to 2 at https://example.invalid/release',
+    'Update System WebView: 1 to 2 at https://example.invalid/release',
+    'Update APK: 1 to 2 at https://example.invalid/release',
+  ]);
+});
+
 browserTest('Install presentation rendering keeps hostile values as text, raw evidence English and HTTPS links explicit', async (t) => {
   const { page } = await rig(t);
   const outcome = await page.evaluate(() => {
@@ -191,6 +205,37 @@ browserTest('Install warning overlay localizes valid entries and preserves exact
   assert.equal(rows[1].text, 'legacy unknown');
   assert.equal(rows[1].lang, 'en');
   assert.equal(await page.locator('#audit-out i').count(), 1, 'legacy fallback retains its byte-compatible server HTML path');
+});
+
+browserTest('Install power warnings require matching typed advisory state and retain its dynamic prose as exact evidence', async (t) => {
+  const typed = {
+    state: 'caution', warning: true,
+    summary: '<img src=x onerror=window.__powerSummaryOwned=1>',
+    action: '<b>typed acknowledgement action</b>',
+  };
+  const status = {
+    warnings: ['<i>legacy power warning</i>'],
+    warning_presentations: [{ code: 'status-power-caution', params: {} }],
+    power_safety: typed,
+  };
+  const { page } = await rig(t, { status });
+  await page.evaluate(() => healthAudit({ disabled: false }));
+  await page.waitForFunction(() => document.querySelectorAll('#audit-out .setup').length === 1);
+  const rendered = await page.locator('#audit-out .setup').evaluate((node) => ({
+    text: node.textContent,
+    english: Array.from(node.querySelectorAll('[lang="en"]')).map((part) => part.textContent),
+    images: node.querySelectorAll('img').length,
+  }));
+  assert.match(rendered.text, /^LOC:status-power-caution:/);
+  assert.deepEqual(rendered.english, [typed.summary, typed.action]);
+  assert.equal(rendered.images, 0);
+  assert.equal(await page.evaluate(() => typeof window.__powerSummaryOwned), 'undefined');
+
+  const mismatch = await rig(t, { status: { ...status, power_safety: { ...typed, state: 'at_risk' } } });
+  await mismatch.page.evaluate(() => healthAudit({ disabled: false }));
+  await mismatch.page.waitForFunction(() => document.querySelectorAll('#audit-out .setup').length === 1);
+  assert.equal(await mismatch.page.locator('#audit-out .setup').getAttribute('lang'), 'en');
+  assert.equal(await mismatch.page.locator('#audit-out .setup').innerHTML(), '<i>legacy power warning</i>');
 });
 
 browserTest('Install remains usable in exact English when the shared helper is absent', async (t) => {

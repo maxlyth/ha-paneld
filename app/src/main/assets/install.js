@@ -40,6 +40,8 @@
   var RESTORE_OUTCOME = Object.freeze({"succeeded":"install.restore_outcome.succeeded","partial":"install.restore_outcome.partial","failed":"install.restore_outcome.failed","skipped":"install.restore_outcome.skipped","rolled_back":"install.restore_outcome.rolled_back","rollback_failed":"install.restore_outcome.rollback_failed"});
   var RADIO_STATE = Object.freeze({"off":"install.radio_state.off","starting":"install.radio_state.starting","healthy":"install.radio_state.healthy","degraded_unjoined":"install.radio_state.degraded_unjoined","degraded_high_cpu":"install.radio_state.degraded_high_cpu","runaway":"install.radio_state.runaway","contained":"install.radio_state.contained","containment_failed":"install.radio_state.containment_failed","unknown":"install.radio_state.unknown"});
   var CONFIG_IMPORT_STATUS = Object.freeze({"too-large":"install.config_import_status.too_large","timeout":"install.config_import_status.timeout","bad-bundle":"install.config_import_status.bad_bundle","wrong-kind-or-schema":"install.config_import_status.wrong_kind_or_schema","bad-expected-cfg":"install.config_import_status.bad_expected_cfg","rejected":"install.config_import_status.rejected","dry_run":"install.config_import_status.dry_run","no-op":"install.config_import_status.no_op","stale-preview":"install.config_import_status.stale_preview","error":"install.config_import_status.error","database-compatibility-refused":"install.config_import_status.database_compatibility_refused","applied":"install.config_import_status.applied","partial":"install.config_import_status.partial","restored":"install.config_import_status.restored"});
+  var COMPONENT_LABEL = Object.freeze({paneld:'ha-paneld',companion:'HA Companion',webview:'System WebView',apk:'APK'});
+  var POWER_PRESENTATION_STATE = Object.freeze({'status-power-at-risk':'at_risk','status-power-caution':'caution','status-power-unknown':'unknown'});
   function closedToken(table, value) {
     var raw = String(value == null ? '' : value), key = table[raw];
     return key && localized(key) ? t(key, raw) : raw;
@@ -80,7 +82,9 @@
       key = keySpec[category];
     }
     if (!localized(key)) return { text: fallback, fallback: true };
-    return { text: t(key, fallback, params), fallback: false, rawEvidence: !!rule.raw, compatibility: fallback };
+    var displayParams = Object.assign({}, params);
+    if (own.call(displayParams, 'component')) displayParams.component = COMPONENT_LABEL[displayParams.component];
+    return { text: t(key, fallback, displayParams), fallback: false, rawEvidence: !!rule.raw, compatibility: fallback };
   }
   function setPresented(node, envelope, compatibility) {
     if (!node) return;
@@ -134,14 +138,27 @@
     if (supported.indexOf(explicit) < 0) return '/install' + fragment;
     return '/install?lang=' + encodeURIComponent(explicit) + fragment;
   }
-  function renderWarnings(node, warnings, overlays) {
+  function renderPowerWarning(node, envelope, compatibility, advisory) {
+    var expected = envelope && POWER_PRESENTATION_STATE[envelope.code];
+    if (!expected || !advisory || typeof advisory !== 'object' || Array.isArray(advisory) || advisory.state !== expected || advisory.warning !== true || typeof advisory.summary !== 'string' || typeof advisory.action !== 'string' || advisory.summary.length > 2048 || advisory.action.length > 2048) return false;
+    var value = presentation(envelope, compatibility);
+    if (value.fallback) return false;
+    node.textContent = '';
+    var controlled = document.createElement('span'); controlled.textContent = value.text; node.appendChild(controlled);
+    if (advisory.summary) appendEnglishEvidence(node, advisory.summary, ' — ');
+    if (advisory.action) appendEnglishEvidence(node, advisory.action, ' ');
+    return true;
+  }
+  function renderWarnings(node, warnings, overlays, powerSafety) {
     var validOverlay = Array.isArray(overlays) && overlays.length === warnings.length && overlays.length <= 11;
     node.textContent = '';
     warnings.forEach(function (legacy, index) {
       var row = document.createElement('div'); row.className = 'setup';
       var envelope = validOverlay ? overlays[index] : null;
       var value = presentation(envelope, legacy);
-      if (!value.fallback) setPresented(row, envelope, legacy);
+      if (own.call(POWER_PRESENTATION_STATE, envelope && envelope.code)) {
+        if (!renderPowerWarning(row, envelope, legacy, powerSafety)) { row.setAttribute('lang', 'en'); row.innerHTML = String(legacy == null ? '' : legacy); }
+      } else if (!value.fallback) setPresented(row, envelope, legacy);
       else { row.setAttribute('lang', 'en'); row.innerHTML = String(legacy == null ? '' : legacy); }
       node.appendChild(row);
     });
@@ -338,7 +355,7 @@
       var w = (d && d.warnings) || [];
       if (!out) return;
       if (!w.length) { out.textContent = ''; var clean = document.createElement('p'); clean.className = 'note'; clean.textContent = '✓ ' + t('install.progress.audit_clean', 'No problems detected — this panel looks ready.'); out.appendChild(clean); }
-      else { renderWarnings(out, w, d.warning_presentations); }
+      else { renderWarnings(out, w, d.warning_presentations, d.power_safety); }
       btn.disabled = false; scheduleInstallColumnAlignment();
     }).catch(function () {
       if (out) { out.textContent = ''; var failure = document.createElement('p'); failure.className = 'note'; failure.textContent = t('install.progress.audit_failed', 'Audit failed — try again.'); out.appendChild(failure); }
