@@ -83,13 +83,18 @@ class ApiRouteSpecContractTest {
     }
 
     @Test fun explorerSupportsParametersAndStructuredOrBinaryBodies() {
-        val source = asset("api.html").readText()
-        assertTrue("path parameters must be substituted", "where==='path'" in source)
-        assertTrue("query parameters must be encoded", "where==='query'" in source)
-        assertTrue("header parameters must be sent", "where==='header'" in source)
-        assertTrue("JSON bodies must be selectable", "'application/json'" in source)
-        assertTrue("YAML bodies must be selectable", "'application/yaml'" in source)
-        assertTrue("binary restore/APK bodies must use a file input", "file.type='file'" in source)
+        val html = asset("api.html").readText()
+        val script = asset("api.js").readText()
+        assertTrue(
+            "the explorer behavior must load from its shipped external script",
+            html.contains("<script src=\"/assets/api.js\"></script>"),
+        )
+        assertTrue("path parameters must be substituted", "where === \"path\"" in script)
+        assertTrue("query parameters must be encoded", "where === \"query\"" in script)
+        assertTrue("header parameters must be sent", "where === \"header\"" in script)
+        assertTrue("JSON bodies must be selectable", "\"application/json\"" in script)
+        assertTrue("YAML bodies must be selectable", "\"application/yaml\"" in script)
+        assertTrue("binary restore/APK bodies must use a file input", "file.type = \"file\"" in script)
     }
 
     @Test fun peersSpecDescribesThePersistentRosterWithoutAnIgnoredRefreshParameter() {

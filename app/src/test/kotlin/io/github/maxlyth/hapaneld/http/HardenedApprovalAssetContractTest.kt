@@ -151,7 +151,8 @@ class HardenedApprovalAssetContractTest {
         val info = asset("info.js")
         val install = asset("install.js")
         val configure = asset("configure.js")
-        val api = asset("api.html")
+        val apiHtml = asset("api.html")
+        val apiScript = asset("api.js")
 
         assertTrue(css.contains("[data-hardened-approval]::after"))
         assertTrue(css.contains(".hardened-approval-key"))
@@ -159,7 +160,7 @@ class HardenedApprovalAssetContractTest {
         val infoMarkerSize = Regex("""\[data-hardened-approval]::after\{[^}]*width:([^;]+);height:([^;]+)""")
             .find(css)?.destructured?.let { (width, height) -> width to height }
         val apiMarkerSize = Regex("""\[data-hardened-approval]::after\{[^}]*width:([^;]+);height:([^;]+)""")
-            .find(api)?.destructured?.let { (width, height) -> width to height }
+            .find(apiHtml)?.destructured?.let { (width, height) -> width to height }
         assertEquals("standard shield should remain legible without dominating its label", ".81rem" to ".95rem", infoMarkerSize)
         assertEquals("API explorer must use the same shield size", infoMarkerSize, apiMarkerSize)
         val compactMarkerSize = Regex("""\.pbtn\[data-hardened-approval]::after\{width:([^;]+);height:([^;]+)""")
@@ -186,7 +187,15 @@ class HardenedApprovalAssetContractTest {
         assertTrue(info.contains("Hardened mode requires physical approval on this panel; it cannot be approved remotely."))
         assertTrue(info.contains("note.setAttribute('role','status');note.setAttribute('aria-live','polite')"))
         assertTrue(source.contains("Approve this request physically on the panel, then retry it; it cannot be approved remotely."))
-        assertTrue("API approval narrative must follow the endpoint catalog", api.indexOf("<div id=\"root\"></div>") < api.indexOf("<p class=\"approval-key\">"))
+        assertTrue(
+            "API explorer behavior must load from its shipped external script",
+            apiHtml.contains("<script src=\"/assets/api.js\"></script>"),
+        )
+        assertTrue(
+            "API approval narrative must follow the endpoint catalog",
+            apiHtml.indexOf("<div id=\"root\"></div>") <
+                apiHtml.indexOf("<p id=\"api-approval-key\" class=\"approval-key\">"),
+        )
 
         listOf(
             "id=\"profile-activate\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
@@ -252,16 +261,32 @@ class HardenedApprovalAssetContractTest {
         assertTrue(configure.contains("class: \"pbtn\", text: i18nText(\"configure.renderer.clear_storage\", \"Clear renderer storage\")"))
         assertFalse(configure.contains("🧹"))
         assertFalse(configure.contains("text: \"🧹 Clear renderer storage\", \"data-hardened-approval\": \"\""))
-        assertTrue(api.contains("var approvalKind=JSON.stringify(op.responses||{}).indexOf('ApprovalRequired')>=0?'required':null"))
-        listOf(
-            "/api/v1/config",
-            "/api/v1/config/export",
-            "/api/v1/config/import",
-            "/api/v1/restore",
-            "/api/v1/action",
-        ).forEach { assertTrue("$it must be described as conditionally protected", api.contains("'$it'")) }
-        assertTrue(api.contains("approvalKind='conditional'"))
-        assertTrue(api.contains("approvalKind==='conditional'?'hardened-approval-conditional-description':'hardened-approval-description'"))
+        assertTrue(
+            apiScript.contains(
+                "var approvalKind = JSON.stringify(operation.responses || {}).indexOf(\"ApprovalRequired\") >= 0 ? \"required\" : null",
+            ),
+        )
+        val conditionalApprovalPaths = Regex("""\"(/api/v1/[^\"]+)\": true""")
+            .findAll(apiScript.substringAfter("var CONDITIONAL_APPROVAL_PATHS").substringBefore("});"))
+            .map { it.groupValues[1] }
+            .toSet()
+        assertEquals(
+            "the explorer's conditionally protected path classification must stay exact",
+            setOf(
+                "/api/v1/config",
+                "/api/v1/config/export",
+                "/api/v1/config/import",
+                "/api/v1/restore",
+                "/api/v1/action",
+            ),
+            conditionalApprovalPaths,
+        )
+        assertTrue(apiScript.contains("if (approvalKind && CONDITIONAL_APPROVAL_PATHS[path]) approvalKind = \"conditional\""))
+        assertTrue(
+            apiScript.contains(
+                "conditional ? \"hardened-approval-conditional-description\" : \"hardened-approval-description\"",
+            ),
+        )
 
         val profiles = asset("profiles.js")
         val modal = profiles.substringAfter("function openModal").substringBefore("function closeModal")
