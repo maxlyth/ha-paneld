@@ -498,6 +498,14 @@ internal data class CameraSnapshotPublication(val topic: String, val payload: St
  * URL is then cleared and availability goes offline, so a panel that moved to camera-less hardware leaves
  * no readable address behind for the entity the discovery prune is removing.
  */
+/** The `image` discovery payload for the camera snapshot: the discovery document while the entity is
+ *  announced, and the empty retained tombstone while it is not. The withdrawal has to be published
+ *  rather than skipped, because a config topic written earlier in the same bridge generation stays in
+ *  Home Assistant until something overwrites it. Pairs with [cameraSnapshotPublications], which
+ *  withdraws the retained URL and availability for the same transition. */
+internal fun cameraSnapshotConfigPayload(announced: Boolean, discoveryJson: () -> String): String =
+    if (announced) discoveryJson() else ""
+
 internal fun cameraSnapshotPublications(
     panel: String,
     announced: Boolean,
@@ -3758,12 +3766,18 @@ internal class MqttBridge(
         // capability alone published a permanently unavailable image beside no control able to arm it.
         cameraSnapshotAnnounced = capabilitySnapshot?.hasCamera == true &&
             config.haExposed("camera_enabled", false)
-        if (cameraSnapshotAnnounced) {
-            publishConfig(
-                "image", "${panel}_camera_snapshot",
-                cameraSnapshotDiscoveryJson(panel, cameraSnapshotAvail, device),
-            )
-        }
+        // Published unconditionally: the empty payload is the retained tombstone that actually removes
+        // the entity. Skipping the publish instead would leave an image announced earlier in this bridge
+        // generation live in Home Assistant, because published topics accumulate within a generation and
+        // stale pruning only runs when the discovery marker changes. `publishCameraSnapshot` below
+        // clears the retained URL and drives availability offline, so discovery and state withdraw
+        // together.
+        publishConfig(
+            "image", "${panel}_camera_snapshot",
+            cameraSnapshotConfigPayload(cameraSnapshotAnnounced) {
+                cameraSnapshotDiscoveryJson(panel, cameraSnapshotAvail, device)
+            },
+        )
         publishCameraSnapshot(refreshUrl = true)
         publishConfig(
             "sensor", "${panel}_storage_health",

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.cameraSnapshotAvailabilityTopic
+import io.github.maxlyth.hapaneld.cameraSnapshotConfigPayload
 import io.github.maxlyth.hapaneld.cameraSnapshotDiscoveryJson
 import io.github.maxlyth.hapaneld.cameraSnapshotPublications
 import io.github.maxlyth.hapaneld.cameraSnapshotUrlTopic
@@ -213,8 +214,44 @@ class CameraMqttSurfaceTest {
         // The switch is opt-in by the assertion above, so the image has to follow the same decision.
         // Announcing it on `hasCamera` alone left a fresh camera panel showing Home Assistant a
         // permanently unavailable image entity and no switch able to arm it.
-        val announce = slice(discovery, "cameraSnapshotAnnounced =", "if (cameraSnapshotAnnounced)")
+        val announce = slice(discovery, "cameraSnapshotAnnounced =", "publishCameraSnapshot(refreshUrl = true)")
         assertTrue(announce.contains("""config.haExposed("camera_enabled", false)"""))
+        // The withdrawal must be published, not skipped: a config topic written earlier in this bridge
+        // generation survives until something overwrites it.
+        assertTrue(announce.contains("cameraSnapshotConfigPayload(cameraSnapshotAnnounced)"))
+        assertFalse(announce.contains("if (cameraSnapshotAnnounced) {"))
+    }
+
+    @Test fun hidingTheCameraSwitchWithdrawsTheImageEntityAndItsRetainedState() {
+        val avail = dualAvailabilityFragment(panelAvailability, cameraSnapshotAvailabilityTopic(panel))
+        var built = 0
+        val discoveryJson = { built++; cameraSnapshotDiscoveryJson(panel, avail, device) }
+
+        // Exposed: the image is announced with a real discovery document.
+        val announced = cameraSnapshotConfigPayload(announced = true, discoveryJson = discoveryJson)
+        assertEquals("test_camera_snapshot", field(JSONObject(announced), "unique_id"))
+        assertEquals(1, built)
+
+        // Exposed -> hidden: an EMPTY payload, which is what removes a retained config from Home
+        // Assistant. A blank string here is the entire fix; anything non-empty leaves the entity live.
+        val withdrawn = cameraSnapshotConfigPayload(announced = false, discoveryJson = discoveryJson)
+        assertEquals("", withdrawn)
+        // Nothing is built for a withdrawal, so the tombstone cannot carry a stale document by accident.
+        assertEquals(1, built)
+
+        // The retained URL and availability withdraw with it, so no address survives the transition.
+        val cleanup = cameraSnapshotPublications(
+            panel, announced = false, enabled = false, url = "http://panel.invalid/snapshot.jpg",
+            refreshUrl = true,
+        )
+        assertEquals(2, cleanup.size)
+        assertEquals(cameraSnapshotAvailabilityTopic(panel), cleanup[0].topic)
+        assertEquals("offline", cleanup[0].payload)
+        assertEquals(cameraSnapshotUrlTopic(panel), cleanup[1].topic)
+        assertEquals("", cleanup[1].payload)
+
+        // A panel that was never exposed publishes the same withdrawal rather than nothing at all.
+        assertEquals("", cameraSnapshotConfigPayload(announced = false) { error("never built") })
     }
 
     @Test fun cameraOffNeverNeedsApprovalEvenWhenTheProfileHasNoCamera() {
