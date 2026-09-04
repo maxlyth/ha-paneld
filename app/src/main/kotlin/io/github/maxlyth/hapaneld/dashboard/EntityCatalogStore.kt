@@ -3066,7 +3066,15 @@ object EntityCatalogSchema {
 internal object EntityCatalogIssuePersistence {
     const val MAX_ISSUE_GROUPS = 64
     const val MAX_SOURCES_PER_GROUP = 8
-    const val MAX_PAYLOAD_BYTES = 64 * 1024
+    /**
+     * The prior 64 KiB bound plus room for one additive presentation code and typed synthetic-title
+     * markers on every retained issue. Empty presentation parameters are deliberately absent and
+     * require a fresh budget decision.
+     */
+    const val MAX_PAYLOAD_BYTES = 72 * 1024
+    const val MAX_PRESENTATION_CODE_BYTES = 32
+    const val MAX_VIEW_TITLE_INDEX = 10_000
+    private val PRESENTATION_CODE = Regex("[a-z0-9][a-z0-9_-]{0,31}")
     private const val MAX_ARRAY_ITEMS = 16
     private const val MAX_OBJECT_KEYS = 24
     private const val MAX_KEY_CHARS = 100
@@ -3144,7 +3152,10 @@ internal object EntityCatalogIssuePersistence {
 
     private fun sanitizeObject(input: JSONObject, depth: Int): JSONObject = JSONObject().apply {
         if (depth >= MAX_DEPTH) return@apply
-        input.keys().asSequence().toList().sorted().take(MAX_OBJECT_KEYS).forEach { rawKey ->
+        input.keys().asSequence().toList().sorted()
+            .filterNot { it == "presentation_params" }
+            .take(MAX_OBJECT_KEYS)
+            .forEach { rawKey ->
             val key = rawKey.take(MAX_KEY_CHARS)
             sanitizeValue(input.opt(rawKey), depth + 1, key)?.let { put(key, it) }
         }
@@ -3152,6 +3163,12 @@ internal object EntityCatalogIssuePersistence {
 
     private fun sanitizeValue(value: Any?, depth: Int, key: String): Any? = when {
         value == null || value === JSONObject.NULL -> JSONObject.NULL
+        value is String && key == "presentation_code" -> value.takeIf(::isValidPresentationCode)
+        key == "presentation_code" -> null
+        key == "view_title_index" -> (value as? Number)?.toDouble()?.takeIf {
+            it.isFinite() && it % 1.0 == 0.0 && it in 1.0..MAX_VIEW_TITLE_INDEX.toDouble()
+        }?.toInt()
+        key == "card_title_hacs_kiosk" -> true.takeIf { value == true }
         value is String -> value.take(MAX_STRING_CHARS)
         value is Boolean || value is Number -> value
         depth >= MAX_DEPTH -> null
@@ -3164,6 +3181,8 @@ internal object EntityCatalogIssuePersistence {
         }
         else -> value.toString().take(MAX_STRING_CHARS)
     }
+
+    internal fun isValidPresentationCode(value: String): Boolean = PRESENTATION_CODE.matches(value)
 }
 
 /** One route-keyed catalogue target and the root it collapses onto. */

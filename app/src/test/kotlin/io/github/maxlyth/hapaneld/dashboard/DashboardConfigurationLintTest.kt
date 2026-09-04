@@ -744,7 +744,7 @@ class DashboardConfigurationLintTest {
         assertTrue(result.blocking)
         assertEquals(2, result.issues.size)
         assertTrue(result.issues.all { it.ruleSummary.contains("typed row") })
-        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+        assertFalse(compatibilityText(result).contains("dynamic"))
     }
 
     @Test fun autoEntitiesCustomOrDynamicFilteredOptionsBlockStaticActivation() {
@@ -761,7 +761,7 @@ class DashboardConfigurationLintTest {
         assertTrue(result.blocking)
         assertEquals(2, result.issues.size)
         assertTrue(result.issues.all { it.ruleSummary.contains("options") })
-        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+        assertFalse(compatibilityText(result).contains("dynamic"))
     }
 
     @Test fun autoEntitiesCustomOrDynamicSeedRowsBlockStaticActivation() {
@@ -783,7 +783,7 @@ class DashboardConfigurationLintTest {
         assertTrue(result.blocking)
         assertEquals(2, result.issues.size)
         assertTrue(result.issues.all { it.ruleSummary.contains("seed row") })
-        assertFalse(result.issues.joinToString { it.toJson().toString() }.contains("dynamic"))
+        assertFalse(compatibilityText(result).contains("dynamic"))
     }
 
     @Test fun registryRequirementsAreCapabilityScopedToDashboardStructure() {
@@ -1173,17 +1173,16 @@ class DashboardConfigurationLintTest {
 
     @Test fun everyTemplateSelectorGroupSurvivesTheBoundedIssuePayload() {
         // The largest shape the diagnostics can carry: MAX_ISSUE_GROUPS views, each saturating
-        // MAX_SOURCES_PER_GROUP with templated auto-entities cards behind long titles and paths.
+        // MAX_SOURCES_PER_GROUP with templated auto-entities cards behind long owned paths.
         // Per-issue copy that pushes this past MAX_PAYLOAD_BYTES does not truncate a string, it drops
         // whole issues from the tail — and the blocking count is derived from the bounded payload, so
         // a dropped check would also stop blocking automatic activation. This is the size budget for
         // the template-specific reason and recommendation.
         val views = (0 until EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS).joinToString(",") { view ->
-            val cards = (0 until EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP).joinToString(",") {
-                """{"type":"custom:auto-entities","filter":{"template":"{{ states('sensor.hourly_tick') }}"}}"""
+            val cards = (0 until EntityCatalogIssuePersistence.MAX_SOURCES_PER_GROUP).joinToString(",") { card ->
+                """{"nested_key_$card":{"type":"custom:auto-entities","filter":{"template":"{{ states('sensor.hourly_tick') }}"}}}"""
             }
-            """{"path":"a-deliberately-long-dashboard-view-path-$view",""" +
-                """"title":"A deliberately long dashboard view title $view","cards":[$cards]}"""
+            """{"path":"a-deliberately-long-dashboard-view-path-$view","cards":[$cards]}"""
         }
         val result = DashboardConfigurationLint.analyze("""{"views":[$views]}""", emptyList(), emptyMap())
         val templateIssues = result.issues.filter {
@@ -1197,7 +1196,11 @@ class DashboardConfigurationLintTest {
 
         val bounded = JSONArray(
             EntityCatalogIssuePersistence.boundedJson(
-                result.issues.map(DashboardConfigurationLint.Issue::toJson),
+                result.issues.map(DashboardConfigurationLint.Issue::toJson).onEach {
+                    // Persistence admits this marker on every issue even though the current typed
+                    // producer can emit it only for the two HACS Kiosk findings.
+                    it.put("card_title_hacs_kiosk", true)
+                },
             ),
         )
 
@@ -1207,7 +1210,31 @@ class DashboardConfigurationLintTest {
             result.issues.size,
             bounded.length(),
         )
+        assertTrue("regression fixture must exercise the 64 KiB boundary at $bytes bytes", bytes > 64 * 1024)
+        assertTrue("regression fixture must kill the 68 KiB cap mutant at $bytes bytes", bytes > 68 * 1024)
         assertTrue("payload is $bytes bytes", bytes <= EntityCatalogIssuePersistence.MAX_PAYLOAD_BYTES)
+        assertTrue((0 until bounded.length()).all {
+            val issue = bounded.getJSONObject(it)
+            issue.getString("presentation_code") == "template-selector" &&
+                !issue.has("presentation_params") && issue.has("view_title_index") &&
+                issue.getBoolean("card_title_hacs_kiosk")
+        })
+
+        val effective = JSONArray(
+            EntityCatalogIssuePersistence.applyIgnores(
+                bounded,
+                result.issues.mapTo(mutableSetOf(), DashboardConfigurationLint.Issue::fingerprint),
+            ),
+        )
+        val effectiveBytes = effective.toString().toByteArray(Charsets.UTF_8).size
+        assertEquals(EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS, effective.length())
+        assertTrue("effective payload must still exercise the old cap at $effectiveBytes bytes", effectiveBytes > 64 * 1024)
+        assertTrue("effective payload must kill the 68 KiB cap mutant at $effectiveBytes bytes", effectiveBytes > 68 * 1024)
+        assertTrue("effective payload is $effectiveBytes bytes", effectiveBytes <= EntityCatalogIssuePersistence.MAX_PAYLOAD_BYTES)
+        assertTrue((0 until effective.length()).all {
+            val issue = effective.getJSONObject(it)
+            issue.getBoolean("ignored") && !issue.getBoolean("blocking") && issue.getBoolean("would_block")
+        })
     }
 
     @Test fun blockingDiagnosticOverflowCannotBeIgnored() {
@@ -1394,4 +1421,15 @@ class DashboardConfigurationLintTest {
     }
 
     private fun entities(domain: String, count: Int) = (1..count).map { "$domain.sample_$it" }
+
+    private fun compatibilityText(result: DashboardConfigurationLint.Result): String =
+        result.issues.flatMap { issue ->
+            listOfNotNull(
+                issue.viewTitle,
+                issue.cardTitle,
+                issue.ruleSummary,
+                issue.reason,
+                issue.recommendation,
+            ) + issue.sourceLocations
+        }.joinToString("\n")
 }

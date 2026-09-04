@@ -114,6 +114,7 @@ class EntityLearningProtocolTest {
             reason = "too many candidates",
             recommendation = "narrow the selector",
             fingerprint = fingerprint,
+            presentationCode = DashboardConfigurationLint.PresentationCode.SELECTOR_TOTAL_BUDGET,
         )
         val lint = DashboardConfigurationLint.Result(
             safeEntityIds = setOf("light.partial_selector_result"),

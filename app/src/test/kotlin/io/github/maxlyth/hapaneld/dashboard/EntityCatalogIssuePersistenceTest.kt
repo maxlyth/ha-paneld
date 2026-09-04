@@ -8,6 +8,66 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EntityCatalogIssuePersistenceTest {
+    @Test fun payloadBudgetIsExactlySeventyTwoKibibytes() {
+        assertEquals(72 * 1024, EntityCatalogIssuePersistence.MAX_PAYLOAD_BYTES)
+        assertEquals(32, EntityCatalogIssuePersistence.MAX_PRESENTATION_CODE_BYTES)
+        assertEquals(10_000, EntityCatalogIssuePersistence.MAX_VIEW_TITLE_INDEX)
+    }
+
+    @Test fun synthesizedTitleMarkersAreTypeAndRangeBounded() {
+        fun bounded(key: String, value: Any): JSONObject = JSONArray(
+            EntityCatalogIssuePersistence.boundedJson(listOf(JSONObject().put(key, value))),
+        ).getJSONObject(0)
+
+        val minimum = bounded("view_title_index", 1)
+        assertTrue(minimum.has("view_title_index"))
+        assertEquals(1, minimum.getInt("view_title_index"))
+        val maximum = bounded("view_title_index", 10_000L)
+        assertTrue(maximum.has("view_title_index"))
+        assertEquals(10_000, maximum.getInt("view_title_index"))
+        listOf(0, 10_001, 1.5, "1", true).forEach { value ->
+            assertFalse("unexpected view index $value", bounded("view_title_index", value).has("view_title_index"))
+        }
+
+        val kiosk = bounded("card_title_hacs_kiosk", true)
+        assertTrue(kiosk.has("card_title_hacs_kiosk"))
+        assertTrue(kiosk.getBoolean("card_title_hacs_kiosk"))
+        listOf(false, 1, "true").forEach { value ->
+            assertFalse("unexpected kiosk marker $value", bounded("card_title_hacs_kiosk", value).has("card_title_hacs_kiosk"))
+        }
+    }
+
+    @Test fun presentationCodesArePrintableAsciiBoundedAndParametersAreNotPersisted() {
+        fun boundedCode(value: String): JSONObject = JSONArray(
+            EntityCatalogIssuePersistence.boundedJson(
+                listOf(
+                    JSONObject()
+                        .put("blocking", true)
+                        .put("presentation_code", value)
+                        .put("presentation_params", JSONObject().put("future", "not-budgeted")),
+                ),
+            ),
+        ).getJSONObject(0)
+
+        val maximum = "x".repeat(EntityCatalogIssuePersistence.MAX_PRESENTATION_CODE_BYTES)
+        val accepted = boundedCode(maximum)
+        assertTrue(accepted.has("presentation_code"))
+        assertEquals(maximum, accepted.getString("presentation_code"))
+        assertFalse(accepted.has("presentation_params"))
+
+        val unknownValid = boundedCode("future-code_2")
+        assertTrue(unknownValid.has("presentation_code"))
+        assertEquals("future-code_2", unknownValid.getString("presentation_code"))
+
+        assertFalse(boundedCode("").has("presentation_code"))
+        assertFalse(boundedCode("x".repeat(EntityCatalogIssuePersistence.MAX_PRESENTATION_CODE_BYTES + 1)).has("presentation_code"))
+        assertFalse(boundedCode("selector-\u00e9").has("presentation_code"))
+        assertFalse(boundedCode("selector\ncode").has("presentation_code"))
+        assertFalse(boundedCode("Selector-code").has("presentation_code"))
+        assertFalse(boundedCode("selector.code").has("presentation_code"))
+        assertFalse(boundedCode("_selector-code").has("presentation_code"))
+    }
+
     @Test fun ignoredIssuesRemainVisibleButStopBlocking() {
         val fingerprint = "0123456789abcdef"
         val raw = JSONArray().put(

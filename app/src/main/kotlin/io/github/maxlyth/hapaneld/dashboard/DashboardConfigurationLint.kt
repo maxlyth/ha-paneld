@@ -11,7 +11,7 @@ import org.json.JSONObject
  * attribute, sorting, and display-limit clauses never make the superset smaller.
  */
 object DashboardConfigurationLint {
-    const val ANALYZER_POLICY_VERSION = 4
+    const val ANALYZER_POLICY_VERSION = 5
     const val SELECTOR_ENTITY_LIMIT = 64
     const val SELECTOR_TOTAL_LIMIT = 128
 
@@ -30,6 +30,39 @@ object DashboardConfigurationLint {
         RUNTIME_COVERAGE("runtime_coverage", severity = "warning", blocking = false, ignorable = false),
     }
 
+    /** Closed, prose-independent identities used only to select localized issue presentation. */
+    enum class PresentationCode(val wireName: String) {
+        DIAGNOSTIC_LIMIT("diagnostic-limit"),
+        TEMPLATE_SELECTOR("template-selector"),
+        AUTO_ENTITIES_SEED_ROW_DYNAMIC("auto-entities-seed-row-dynamic"),
+        AUTO_ENTITIES_TYPED_ROW_DYNAMIC("auto-entities-typed-row-dynamic"),
+        AUTO_ENTITIES_OPTIONS_DYNAMIC("auto-entities-options-dynamic"),
+        AUTO_ENTITIES_OPTIONS_JAVASCRIPT("auto-entities-options-javascript"),
+        SELECTOR_MISSING_INCLUDE("selector-missing-include"),
+        SELECTOR_UNBOUNDED_OR_DYNAMIC("selector-unbounded-or-dynamic"),
+        SELECTOR_REGISTRY_INCOMPLETE("selector-registry-incomplete"),
+        SELECTOR_BROAD("selector-broad"),
+        AREA_MISSING_ID("area-missing-id"),
+        AREA_REGISTRY_INCOMPLETE("area-registry-incomplete"),
+        AREA_BROAD("area-broad"),
+        MAP_DYNAMIC_ENUMERATION("map-dynamic-enumeration"),
+        MAP_ZONE_REGISTRY_INCOMPLETE("map-zone-registry-incomplete"),
+        MAP_ZONES_BROAD("map-zones-broad"),
+        STREAMLINE_RUNTIME_COVERAGE("streamline-runtime-coverage"),
+        DECLUTTERING_TEMPLATE_EXPANSION("decluttering-template-expansion"),
+        BUTTON_CARD_LIMITED_SUPPORT("button-card-limited-support"),
+        BUTTON_CARD_DYNAMIC_FEATURES("button-card-dynamic-features"),
+        BUBBLE_CARD_RUNTIME_COVERAGE("bubble-card-runtime-coverage"),
+        KIOSK_MODE_LIMITED_SUPPORT("kiosk_mode-limited-support"),
+        KIOSK_MODE_DYNAMIC_JAVASCRIPT("kiosk_mode-dynamic-javascript"),
+        DASHBOARD_STRATEGY("dashboard-strategy"),
+        SELECTOR_TOTAL_BUDGET("selector-total-budget");
+
+        init {
+            require(EntityCatalogIssuePersistence.isValidPresentationCode(wireName))
+        }
+    }
+
     data class Issue(
         val type: IssueType,
         val viewTitle: String,
@@ -42,6 +75,9 @@ object DashboardConfigurationLint {
         val reason: String,
         val recommendation: String,
         val fingerprint: String,
+        val presentationCode: PresentationCode,
+        val viewTitleIndex: Int? = null,
+        val cardTitleHacsKiosk: Boolean = false,
     ) {
         val severity: String get() = type.severity
         val blocking: Boolean get() = type.blocking
@@ -54,7 +90,9 @@ object DashboardConfigurationLint {
             .put("ignorable", ignorable)
             .put("view_title", viewTitle)
             .put("view_path", viewPath)
+            .apply { viewTitleIndex?.let { put("view_title_index", it) } }
             .put("card_title", cardTitle ?: JSONObject.NULL)
+            .apply { if (cardTitleHacsKiosk) put("card_title_hacs_kiosk", true) }
             .put("source_locations", JSONArray(sourceLocations))
             .put("rule_summary", ruleSummary)
             .put("candidate_count", candidateCount ?: JSONObject.NULL)
@@ -62,6 +100,7 @@ object DashboardConfigurationLint {
             .put("reason", reason)
             .put("recommendation", recommendation)
             .put("fingerprint", fingerprint)
+            .put("presentation_code", presentationCode.wireName)
     }
 
     data class Result(
@@ -95,11 +134,12 @@ object DashboardConfigurationLint {
         val labels: Set<String>,
         val friendlyName: String,
     )
-    private data class View(val title: String, val path: String)
+    private data class View(val title: String, val path: String, val titleIndex: Int? = null)
     private data class Source(
         val location: String,
         val cardTitle: String?,
         val injectedEntityIds: Set<String> = emptySet(),
+        val cardTitleHacsKiosk: Boolean = false,
     )
     private data class Rule(
         val domains: Set<String>,
@@ -123,6 +163,7 @@ object DashboardConfigurationLint {
         val limit: Int?,
         val reason: String? = null,
         val recommendation: String? = null,
+        val presentationCode: PresentationCode,
     )
 
     private data class FindingKey(val viewPath: String, val type: IssueType, val signature: String)
@@ -155,6 +196,7 @@ object DashboardConfigurationLint {
                                 limit = null,
                                 reason = "More than ${EntityCatalogIssuePersistence.MAX_ISSUE_GROUPS} distinct blocking checks were found.",
                                 recommendation = "Simplify the dashboard or split it into smaller dashboards before enabling automatic entity filtering.",
+                                presentationCode = PresentationCode.DIAGNOSTIC_LIMIT,
                             ),
                         ).also { it.sourceLocations += "dashboard" }
                     }
@@ -211,6 +253,7 @@ object DashboardConfigurationLint {
             signature: String,
             summary: String,
             candidates: Collection<String>,
+            presentationCode: PresentationCode,
         ): Set<String> {
             val normalized = candidates.asSequence().map(String::lowercase)
                 .filter(ENTITY_ID::matches).toSortedSet()
@@ -218,6 +261,7 @@ object DashboardConfigurationLint {
                 findings += Finding(
                     IssueType.BROAD_SELECTOR, view, source, signature,
                     summary, normalized.size, SELECTOR_ENTITY_LIMIT,
+                    presentationCode = presentationCode,
                 )
                 return emptySet()
             } else {
@@ -254,9 +298,15 @@ object DashboardConfigurationLint {
                     "Unbounded template entity selector", null, SELECTOR_ENTITY_LIMIT,
                     reason = TEMPLATE_SELECTOR_REASON,
                     recommendation = TEMPLATE_SELECTOR_RECOMMENDATION,
+                    presentationCode = PresentationCode.TEMPLATE_SELECTOR,
                 )
             }
-            fun reportUnsafeGeneratedRows(rows: Collection<JSONObject>, location: String, summary: String) {
+            fun reportUnsafeGeneratedRows(
+                rows: Collection<JSONObject>,
+                location: String,
+                summary: String,
+                presentationCode: PresentationCode,
+            ) {
                 rows.filter { row ->
                     row.optString("type").startsWith("custom:") || containsDynamicValue(row)
                 }.forEach { row ->
@@ -265,21 +315,25 @@ object DashboardConfigurationLint {
                         "$location:" + EntityLearningProtocol.hash(EntityLearningProtocol.canonical(row)),
                         summary,
                         null, SELECTOR_ENTITY_LIMIT,
+                        presentationCode = presentationCode,
                     )
                 }
             }
             reportUnsafeGeneratedRows(
                 objectValues(card.opt("entities")), "seed-row",
                 "Auto-entities seed row can generate entity dependencies at runtime",
+                PresentationCode.AUTO_ENTITIES_SEED_ROW_DYNAMIC,
             )
             reportUnsafeGeneratedRows(
                 directIncludes, "typed-row",
                 "Auto-entities typed row can generate entity dependencies at runtime",
+                PresentationCode.AUTO_ENTITIES_TYPED_ROW_DYNAMIC,
             )
             reportUnsafeGeneratedRows(
                 includes.mapNotNull { it.optJSONObject("options") }.filterNot { it.optBoolean("eval_js") },
                 "typed-options",
                 "Auto-entities options can generate entity dependencies at runtime",
+                PresentationCode.AUTO_ENTITIES_OPTIONS_DYNAMIC,
             )
             rawIncludes.filterNot { it.has("type") }.filter { rule ->
                 rule.optJSONObject("options")?.optBoolean("eval_js") == true
@@ -289,6 +343,7 @@ object DashboardConfigurationLint {
                     "options-eval-js:" + EntityLearningProtocol.hash(EntityLearningProtocol.canonical(rule)),
                     "Auto-entities options execute JavaScript that can replace entity dependencies",
                     null, SELECTOR_ENTITY_LIMIT,
+                    presentationCode = PresentationCode.AUTO_ENTITIES_OPTIONS_JAVASCRIPT,
                 )
             }
             // An exclude containing a runtime/dynamic refinement cannot safely remove its entire
@@ -305,6 +360,7 @@ object DashboardConfigurationLint {
                     findings += Finding(
                         IssueType.UNBOUNDED_SELECTOR, view, source, "missing-include", "Unbounded entity selector",
                         null, SELECTOR_ENTITY_LIMIT,
+                        presentationCode = PresentationCode.SELECTOR_MISSING_INCLUDE,
                     )
                 }
                 return generated
@@ -317,6 +373,7 @@ object DashboardConfigurationLint {
                     findings += Finding(
                         IssueType.UNBOUNDED_SELECTOR, view, source, effectiveSignature,
                         "Unbounded or dynamic entity selector", null, SELECTOR_ENTITY_LIMIT,
+                        presentationCode = PresentationCode.SELECTOR_UNBOUNDED_OR_DYNAMIC,
                     )
                     continue
                 }
@@ -324,12 +381,16 @@ object DashboardConfigurationLint {
                     findings += Finding(
                         IssueType.UNBOUNDED_SELECTOR, view, source, effectiveSignature,
                         "Entity selector requires incomplete registry metadata", null, SELECTOR_ENTITY_LIMIT,
+                        presentationCode = PresentationCode.SELECTOR_REGISTRY_INCOMPLETE,
                     )
                     continue
                 }
                 val universe = if (rule.requiresRegistry) knownIds else catalogIds
                 val candidates = match(rule, universe, metadata).filterNotTo(sortedSetOf(), excluded::contains)
-                generated += addCandidates(view, source, effectiveSignature, summary(rule), candidates)
+                generated += addCandidates(
+                    view, source, effectiveSignature, summary(rule), candidates,
+                    PresentationCode.SELECTOR_BROAD,
+                )
             }
             return generated
         }
@@ -343,12 +404,20 @@ object DashboardConfigurationLint {
                     if (area == null) "area-card-missing-area" else "area-card-incomplete-registry",
                     if (area == null) "Area card has no static area ID" else "Area card registry metadata is incomplete",
                     null, SELECTOR_ENTITY_LIMIT,
+                    presentationCode = if (area == null) {
+                        PresentationCode.AREA_MISSING_ID
+                    } else {
+                        PresentationCode.AREA_REGISTRY_INCOMPLETE
+                    },
                 )
                 return
             }
             val candidates = metadata.asSequence().filter { (_, entry) -> area in entry.areas }.map { it.key }.toMutableSet()
             candidates += areaRegistryEntities[area].orEmpty()
-            addCandidates(view, source, "area-card:$area", "Area card $area", candidates)
+            addCandidates(
+                view, source, "area-card:$area", "Area card $area", candidates,
+                PresentationCode.AREA_BROAD,
+            )
         }
 
         fun analyzeMap(card: JSONObject, view: View, source: Source) {
@@ -370,6 +439,7 @@ object DashboardConfigurationLint {
                 findings += Finding(
                     IssueType.UNBOUNDED_SELECTOR, view, source, "map-card:$mode",
                     "Map card dynamically enumerates $mode entities", null, SELECTOR_ENTITY_LIMIT,
+                    presentationCode = PresentationCode.MAP_DYNAMIC_ENUMERATION,
                 )
             }
 
@@ -381,6 +451,7 @@ object DashboardConfigurationLint {
                         IssueType.UNBOUNDED_SELECTOR, view, source, "map-card-incomplete-registry",
                         "Map person locations require complete zone registry metadata",
                         null, SELECTOR_ENTITY_LIMIT,
+                        presentationCode = PresentationCode.MAP_ZONE_REGISTRY_INCOMPLETE,
                     )
                     return
                 }
@@ -388,6 +459,7 @@ object DashboardConfigurationLint {
                     view, source, "map-person-zones",
                     "Map person locations may depend on zones",
                     knownIds.filter { it.startsWith("zone.") },
+                    PresentationCode.MAP_ZONES_BROAD,
                 )
             }
         }
@@ -399,6 +471,7 @@ object DashboardConfigurationLint {
             summary: String,
             reason: String,
             recommendation: String,
+            presentationCode: PresentationCode,
         ) {
             findings += Finding(
                 IssueType.LIMITED_SUPPORT,
@@ -410,6 +483,7 @@ object DashboardConfigurationLint {
                 limit = null,
                 reason = reason,
                 recommendation = recommendation,
+                presentationCode = presentationCode,
             )
         }
 
@@ -420,6 +494,7 @@ object DashboardConfigurationLint {
             summary: String,
             reason: String,
             recommendation: String,
+            presentationCode: PresentationCode,
         ) {
             findings += Finding(
                 IssueType.COMPATIBILITY_GAP,
@@ -433,6 +508,7 @@ object DashboardConfigurationLint {
                 limit = null,
                 reason = reason,
                 recommendation = recommendation,
+                presentationCode = presentationCode,
             )
         }
 
@@ -441,6 +517,7 @@ object DashboardConfigurationLint {
             signature: String,
             summary: String,
             reason: String,
+            presentationCode: PresentationCode,
         ) {
             findings += Finding(
                 IssueType.RUNTIME_COVERAGE,
@@ -452,6 +529,7 @@ object DashboardConfigurationLint {
                 limit = null,
                 reason = reason,
                 recommendation = "",
+                presentationCode = presentationCode,
             )
         }
 
@@ -462,6 +540,7 @@ object DashboardConfigurationLint {
                         source, "streamline-runtime-coverage",
                         "Streamline entity discovery depends on dashboard coverage",
                         "Static entity IDs are detected immediately. Other direct hass.states dependencies are learned automatically as Streamline templates run, so the detected entity list may remain incomplete until every relevant view, conditional state, popup, and interaction has been exercised.",
+                        PresentationCode.STREAMLINE_RUNTIME_COVERAGE,
                     )
                 }
                 "custom:decluttering-card" -> {
@@ -469,6 +548,7 @@ object DashboardConfigurationLint {
                         view, source, "decluttering-template-expansion", "Decluttering Card has limited entity discovery support",
                         "Static entity IDs and targets are scanned, but the referenced template, defaults, and variables can introduce dependencies absent from the invocation.",
                         "Keep dependencies explicit and pin every entity produced by the template.",
+                        PresentationCode.DECLUTTERING_TEMPLATE_EXPANSION,
                     )
                 }
                 "custom:button-card" -> {
@@ -476,6 +556,7 @@ object DashboardConfigurationLint {
                         view, source, "limited-support:button-card", "Button Card has limited entity discovery support",
                         "Static entity IDs and targets are scanned, but config-template inheritance, JavaScript, group expansion, and broad update triggers are not evaluated.",
                         "Keep dependencies explicit and pin any entities introduced through Button Card templates or JavaScript.",
+                        PresentationCode.BUTTON_CARD_LIMITED_SUPPORT,
                     )
                     val risks = buildList {
                         if (card.has("template") && !card.isNull("template")) add("config template inheritance")
@@ -491,6 +572,7 @@ object DashboardConfigurationLint {
                             "Button Card uses " + risks.joinToString(", "),
                             "These Button Card features can introduce dependencies that are not present as static entity IDs in the dashboard configuration.",
                             "Replace them with explicit entity IDs and update triggers, or pin every generated dependency.",
+                            PresentationCode.BUTTON_CARD_DYNAMIC_FEATURES,
                         )
                     }
                 }
@@ -499,6 +581,7 @@ object DashboardConfigurationLint {
                         source, "bubble-card-runtime-coverage",
                         "Bubble Card entity discovery depends on dashboard coverage",
                         "Static entity IDs are detected immediately. Other direct hass.states dependencies from Bubble Card popups, styles, sub-buttons, and modules are learned automatically as they run, so the detected entity list may remain incomplete until every relevant popup, conditional state, module path, and interaction has been exercised.",
+                        PresentationCode.BUBBLE_CARD_RUNTIME_COVERAGE,
                     )
                 }
             }
@@ -507,11 +590,16 @@ object DashboardConfigurationLint {
         fun analyzeKioskMode(value: Any?) {
             if (!containsKioskJavaScriptTemplate(value)) return
             val view = View("Dashboard", "dashboard")
-            val source = Source("dashboard.kiosk_mode", "HACS Kiosk Mode configuration")
+            val source = Source(
+                "dashboard.kiosk_mode",
+                "HACS Kiosk Mode configuration",
+                cardTitleHacsKiosk = true,
+            )
             addLimitedSupport(
                 view, source, "limited-support:kiosk-mode", "HACS Kiosk Mode JavaScript has limited entity-discovery support",
                 "Literal entity IDs in client-side templates are scanned, but computed references and entity, domain, or registry enumeration cannot be evaluated safely.",
                 "For automatic entity filtering, use literal entity IDs in HACS Kiosk Mode JavaScript and avoid enumeration; server-rendered Jinja settings do not require main-stream dependencies.",
+                PresentationCode.KIOSK_MODE_LIMITED_SUPPORT,
             )
             addDynamicCardCompatibilityGap(
                 view,
@@ -520,6 +608,7 @@ object DashboardConfigurationLint {
                 "HACS Kiosk Mode uses client-side JavaScript with unknown entity dependencies",
                 "These client-side expressions can depend on entities that are absent from the statically discovered subscription set.",
                 "For automatic entity filtering, remove client-side JavaScript or pin every dependency; this does not affect HACS presentation or Home Assistant's native kiosk command.",
+                PresentationCode.KIOSK_MODE_DYNAMIC_JAVASCRIPT,
             )
         }
 
@@ -529,6 +618,7 @@ object DashboardConfigurationLint {
                 findings += Finding(
                     IssueType.UNBOUNDED_SELECTOR, view, strategySource, "dashboard-strategy",
                     "Dashboard strategy generates entity dependencies at runtime", null, SELECTOR_ENTITY_LIMIT,
+                    presentationCode = PresentationCode.DASHBOARD_STRATEGY,
                 )
             }
             return when (card.optString("type")) {
@@ -553,9 +643,15 @@ object DashboardConfigurationLint {
         val views = root.optJSONArray("views")
         if (views != null) for (viewIndex in 0 until views.length()) {
             val viewObject = views.optJSONObject(viewIndex) ?: continue
+            val authoredTitle = safeText(viewObject.optString("title"))
             val view = View(
-                title = safeText(viewObject.optString("title")) ?: "View ${viewIndex + 1}",
+                title = authoredTitle ?: "View ${viewIndex + 1}",
                 path = safeIdentifier(viewObject.optString("path")) ?: "views[$viewIndex]",
+                titleIndex = if (authoredTitle == null) {
+                    (viewIndex + 1).takeIf { it <= EntityCatalogIssuePersistence.MAX_VIEW_TITLE_INDEX }
+                } else {
+                    null
+                },
             )
             walkCards(viewObject, "dashboard.views[$viewIndex]", view) { card, source ->
                 analyzeSource(card, view, source)
@@ -571,6 +667,7 @@ object DashboardConfigurationLint {
                 summary = "Bounded selectors collectively match ${safe.size} entities",
                 candidateCount = safe.size,
                 limit = SELECTOR_TOTAL_LIMIT,
+                presentationCode = PresentationCode.SELECTOR_TOTAL_BUDGET,
             )
         }
 
@@ -680,6 +777,9 @@ object DashboardConfigurationLint {
                 fingerprint = EntityLearningProtocol.hash(
                     "${first.view.path}|${first.type.wireName}|${first.signature}",
                 ),
+                presentationCode = first.presentationCode,
+                viewTitleIndex = first.view.titleIndex,
+                cardTitleHacsKiosk = first.source.cardTitleHacsKiosk,
             )
         }.sortedWith(compareBy<Issue>({ it.viewPath }, { it.type.wireName }, { it.fingerprint }))
 
