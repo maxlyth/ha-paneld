@@ -1984,6 +1984,12 @@ else
 fi
 
 # A settling profile returns 503. The portable client retries it and then displays the final plan.
+if grep -Fq 'local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-$APP_HEALTH_TIMEOUT_SECONDS}"' "$PROVISION" &&
+   grep -Fq 'timeout="$APP_HEALTH_TIMEOUT_SECONDS"' "$PROVISION"; then
+  pass "provisioning-plan readiness inherits the bounded app-health startup budget"
+else
+  fail_test "provisioning-plan readiness inherits the bounded app-health startup budget"
+fi
 MOCK_PLAN=transient run_provision "$MOCK_TARGET" --apk "$APK"
 assert_success "install waits through a transient provisioning-plan 503"
 assert_contains 'Detected panel: Test Panel' "transient plan readiness eventually renders guidance"

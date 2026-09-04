@@ -530,8 +530,8 @@ PROVISIONING_PLAN_AVAILABLE=0
 # remains useful against pre-0.9.4 panels: a legacy 404 is advisory and all established GET checks run.
 show_provisioning_plan() {
   local required="$1" label="$2"
-  local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-40}" deadline remaining request_timeout code="" body plan_text="" status=unavailable
-  case "$timeout" in ''|*[!0-9]*|0) timeout=40 ;; esac
+  local timeout="${PROVISIONING_PLAN_TIMEOUT_SECONDS:-$APP_HEALTH_TIMEOUT_SECONDS}" deadline remaining request_timeout code="" body plan_text="" status=unavailable
+  case "$timeout" in ''|*[!0-9]*|0) timeout="$APP_HEALTH_TIMEOUT_SECONDS" ;; esac
   deadline=$((SECONDS + timeout))
   body="$(mktemp)"
   step "🧭 panel profile" "$label"
