@@ -9,7 +9,7 @@
     <string name="close">Schließen</string>
     <string name="approve">Bestätigen</string>
     <string name="deny">Ablehnen</string>
-    <string name="configure">Konfiguration</string>
+    <string name="configure">Konfigurieren</string>
     <string name="try_again">Erneut versuchen</string>
     <string name="config_qr_description">QR-Code für %1$s</string>
 
@@ -151,7 +151,7 @@
     <string name="cannot_reach_ha">Das Panel kann Home Assistant nicht erreichen</string>
     <string name="cannot_reach_ha_detail">Das Panel konnte die Home Assistant-Version nicht lesen und hat deshalb kein Dashboard geöffnet. Prüfe, ob Home Assistant läuft und dieses Panel mit dem Netzwerk verbunden ist. Das Panel versucht es weiter. %1$s</string>
     <string name="ha_sign_in_page_failed">Die Home Assistant-Anmeldeseite konnte nicht geladen werden</string>
-    <string name="ha_sign_in_page_failed_detail">„Konfiguration“ öffnet die Einstellungen dieses Panels. Prüfe dort die Home Assistant-Adresse oder verwende auf derselben Seite die Browseranmeldung.</string>
+    <string name="ha_sign_in_page_failed_detail">„Konfigurieren“ öffnet die Einstellungen dieses Panels. Prüfe dort die Home Assistant-Adresse oder verwende auf derselben Seite die Browseranmeldung.</string>
     <string name="no_dashboard_title">Dieses Konto hat kein Dashboard, das geöffnet werden kann</string>
     <string name="no_dashboard_detail">Home Assistant führt kein Dashboard auf, das das Konto des Panels öffnen darf. Erstelle eines in Home Assistant oder gewähre dem Konto Zugriff auf ein vorhandenes Dashboard. Das Panel prüft weiter.</string>
     <string name="no_dashboard_cache_clear_detail">Home Assistant führt kein Dashboard auf, das das Konto des Panels öffnen darf. Das Panel konnte außerdem das gespeicherte Dashboard nicht löschen. Erstelle eines in Home Assistant oder gewähre dem Konto Zugriff auf ein vorhandenes Dashboard. Das Panel versucht es weiter.</string>
@@ -163,7 +163,7 @@
     <string name="home_assistant_could_not_open_detail">Die Webansicht des Panels konnte Home Assistant nicht starten. Das Panel versucht es weiter. Falls der Fehler anhält, muss die Webansicht aktualisiert oder repariert werden. Sie heißt Android System WebView; die Neuinstallation desselben Builds repariert eine beschädigte Version.</string>
     <string name="finish_questions_browser">Du musst die letzten wichtigen Fragen in deinem Browser beantworten, um die Leistung deiner Dashboards zu optimieren</string>
     <string name="skip_load_dashboard">Überspringen und Dashboard jetzt laden</string>
-    <string name="skip_entity_filter_detail">Beim Überspringen werden alle Entitäten von Home Assistant geladen, was auf diesem Panel langsamer ist. Du kannst die Filterung später unter Konfiguration → Dashboard aktivieren.</string>
+    <string name="skip_entity_filter_detail">Beim Überspringen werden alle Entitäten von Home Assistant geladen, was auf diesem Panel langsamer ist. Du kannst die Filterung später unter Konfigurieren → Dashboard aktivieren.</string>
     <string name="optimized_subscription_unavailable">Optimiertes Dashboard-Abonnement nicht verfügbar</string>
     <string name="entity_filter_attention">Entitätsfilter erfordert Aufmerksamkeit</string>
     <string name="ha_refused_entity_scan">Home Assistant hat die Entitätssuche abgelehnt</string>
@@ -179,7 +179,7 @@
     <string name="entity_filter_attention_detail">Mit Home Assistant ist alles in Ordnung. Das Panel benötigt eine Antwort zu den beim Lesen deiner Entitäten gefundenen Sicherheitsprüfungen, bevor es das Dashboard öffnen kann. Zu prüfen: %1$d.</string>
     <string name="entity_filter_attention_remote">Mit Home Assistant ist alles in Ordnung. Das Panel benötigt eine Antwort zu den beim Lesen deiner Entitäten gefundenen Sicherheitsprüfungen, bevor es das Dashboard öffnen kann. Zu prüfen: %1$d. Dieselben Auswahlmöglichkeiten sind über ein anderes Gerät unter %2$s verfügbar.</string>
     <string name="too_many_flagged_entities">Mit Home Assistant ist alles in Ordnung. Es wurden zu viele Entitäten zur Prüfung auf dem Panel markiert. Öffne die Entitätseinstellungen, um das Dashboard zu vereinfachen, oder tippe auf „Entitätsfilter deaktivieren“.</string>
-    <string name="entity_scan_auth_rejected">Home Assistant hat die Anmeldung dieses Panels abgelehnt, als das Panel die anzuzeigenden Entitäten abgefragt hat. Das Dashboard wurde nicht geöffnet. „Konfiguration“ öffnet die Einstellungen dieses Panels; unter „Home Assistant-Verbindung“ befindet sich die Anmeldung. Das Dashboard kehrt automatisch zurück, sobald sie funktioniert.</string>
+    <string name="entity_scan_auth_rejected">Home Assistant hat die Anmeldung dieses Panels abgelehnt, als das Panel die anzuzeigenden Entitäten abgefragt hat. Das Dashboard wurde nicht geöffnet. „Konfigurieren“ öffnet die Einstellungen dieses Panels; unter „Home Assistant-Verbindung“ befindet sich die Anmeldung. Das Dashboard kehrt automatisch zurück, sobald sie funktioniert.</string>
     <string name="entity_scan_failed_detail">Die Suche nach deinen Entitäten wurde nicht abgeschlossen, daher wurde das Dashboard nicht geöffnet. Prüfe, ob Home Assistant läuft und das Panel mit dem Netzwerk verbunden ist, und versuche es dann erneut.</string>
     <string name="entity_scan_preparing_detail">Home Assistant wird geöffnet, sobald die erste gefilterte Entitätsauswahl bereit ist.</string>
     <string name="entity_scan_taking_longer">Dies dauert länger als üblich – das Panel arbeitet noch daran. Falls der Vorgang nicht abgeschlossen wird, kann der Entitätsfilter in den Panel-Einstellungen deaktiviert werden.</string>
@@ -254,7 +254,7 @@
     <string name="database_io_body">Die Panel-Datenbank hat einen Datenträger-E/A-Fehler gemeldet%1$s. Öffne ha-paneld und versuche es erst nach Behebung der Ursache erneut.</string>
     <string name="database_corruption_body">Die Integritätsprüfung der Panel-Datenbank ist fehlgeschlagen%1$s. Bewahre sie auf und öffne die ha-paneld-Diagnose, bevor weitere Schreibvorgänge erfolgen.</string>
     <string name="database_busy_body">Die Panel-Datenbank blieb beschäftigt oder gesperrt%1$s. Öffne die ha-paneld-Diagnose und warte vor einem erneuten Versuch auf eine fehlerfreie Prüfung.</string>
-    <string name="database_failure_body">Die Panel-Datenbank hat einen Fehler gemeldet%1$s. Bewahre sie auf und öffne die ha-paneld-Diagnose, bevor weitere Schreibvorgänge erfolgen.</string>
+    <string name="database_failure_body">Die Panel-Datenbank hat einen Fehler gemeldet%1$s. Bewahre sie auf und öffne vor einem erneuten Versuch die ha-paneld-Diagnose.</string>
     <string name="database_recovery_channel">Datenbankwiederherstellung</string>
     <string name="database_recovery_notification">Die Wiederherstellung im selben Startvorgang ist aktiv; normale Panel-Dienste sind pausiert</string>
     <string name="starting">Wird gestartet…</string>
