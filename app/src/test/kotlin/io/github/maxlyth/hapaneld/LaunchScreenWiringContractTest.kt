@@ -151,8 +151,8 @@ class LaunchScreenWiringContractTest {
         assertTrue(
             source("StatusSurface.kt").contains("v${'$'}{BuildConfig.VERSION_NAME} · ${'$'}suffix"),
         )
-        assertTrue(!main.contains("running in the background"))
-        assertTrue(!main.contains("runs in the background so Home Assistant can control"))
+        assertTrue(!description.contains("running in the background"))
+        assertTrue(!description.contains("runs in the background so Home Assistant can control"))
     }
 
     @Test fun qrIntroDescribesTheOnPanelDashboardAndLauncher() {
@@ -163,6 +163,6 @@ class LaunchScreenWiringContractTest {
         assertTrue(description.contains("speaker and sensors to Home Assistant over your local network"))
         assertTrue(description.contains("Configure the panel from "))
         assertTrue(description.contains("a browser using the address below"))
-        assertTrue(!main.contains("runs in the background so Home Assistant can control"))
+        assertTrue(!description.contains("runs in the background so Home Assistant can control"))
     }
 }
