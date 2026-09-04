@@ -3,6 +3,162 @@
   "locale": "en",
   "sourceRevision": "271310c06ec572b4f7830b01af90711c31743fee",
   "strings": {
+    "api.action.send": {
+      "text": "Send {method}",
+      "sourceHash": "7365a088061c87f7f525e3a06863526ab9eafcf28af995c47c8854f5cf927e6a",
+      "surface": "api",
+      "context": "Endpoint request action; keep the HTTP method placeholder unchanged.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{method}"
+      ],
+      "frozen": [
+        "{method}"
+      ],
+      "softMaxChars": 28,
+      "hardMaxChars": 48
+    },
+    "api.approval.conditional": {
+      "text": "Some request values require physical on-panel approval when Hardened mode is enabled; other values may be ordinary or unavailable.",
+      "sourceHash": "2916fbdbb0372eb477cc499739145c72bd292b53044ea30adc345777c4be1bf9",
+      "surface": "api",
+      "context": "Tooltip and screen-reader explanation for API actions whose approval requirement depends on the request value.",
+      "risk": "consequential",
+      "siblings": [
+        "configure.hardened.action_approval"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Hardened"
+      ],
+      "softMaxChars": 176,
+      "hardMaxChars": 240
+    },
+    "api.error.load_spec": {
+      "text": "Could not load {path}: {error}",
+      "sourceHash": "a1a41d5d73294149e5c159405074dafa40e17ff4a15a341e44f36671c0a84c65",
+      "surface": "api",
+      "context": "OpenAPI specification load failure; the error placeholder is opaque browser evidence.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{path}",
+        "{error}"
+      ],
+      "frozen": [
+        "{path}",
+        "{error}"
+      ],
+      "softMaxChars": 76,
+      "hardMaxChars": 128
+    },
+    "api.group.other": {
+      "text": "other",
+      "sourceHash": "d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa",
+      "surface": "api",
+      "context": "Fallback endpoint group when the OpenAPI operation has no tag.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 16,
+      "hardMaxChars": 28
+    },
+    "api.header.back_to_panel": {
+      "text": "← back to panel",
+      "sourceHash": "3179fe433fe59423811c6a9c908cbf30f7ba7b766fdc8e2b413e8cac1a0d474c",
+      "surface": "api",
+      "context": "Header navigation link from the API Explorer to the panel dashboard.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "←"
+      ],
+      "softMaxChars": 28,
+      "hardMaxChars": 44
+    },
+    "api.intro.import": {
+      "text": "Import openapi.json into Swagger/Postman for fleet tooling.",
+      "sourceHash": "5c1b865cb71b0b5067fe0de28419ab19cae0e80198e900c31f4cf0b83bbfb85a",
+      "surface": "api",
+      "context": "Introductory link sentence for importing the exact machine specification.",
+      "risk": "ordinary",
+      "siblings": [
+        "api.intro.live",
+        "api.intro.network"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "openapi.json",
+        "Swagger/Postman"
+      ],
+      "softMaxChars": 80,
+      "hardMaxChars": 120
+    },
+    "api.intro.live": {
+      "text": "Live, on-panel API explorer.",
+      "sourceHash": "4c6b19a324019c78cd5ff3eccf1f1ecfa7bcab532ec28603dc5c378f28f85fb0",
+      "surface": "api",
+      "context": "First API Explorer introduction sentence.",
+      "risk": "ordinary",
+      "siblings": [
+        "api.intro.import",
+        "api.intro.network"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "API"
+      ],
+      "softMaxChars": 44,
+      "hardMaxChars": 68
+    },
+    "api.intro.network": {
+      "text": "No auth; LAN only.",
+      "sourceHash": "e7668612168c85895e82396278494d86417ce8ea9a061693d39cdc18638abff6",
+      "surface": "api",
+      "context": "API Explorer network exposure warning.",
+      "risk": "consequential",
+      "siblings": [
+        "api.intro.live",
+        "api.intro.import"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "LAN"
+      ],
+      "softMaxChars": 30,
+      "hardMaxChars": 48
+    },
+    "api.request.body": {
+      "text": "request body ({type})",
+      "sourceHash": "7fee98b74029a31776212fad2d26b6e5dde5accfa5a1096746c6ac5bcbcbdf39",
+      "surface": "api",
+      "context": "Endpoint request-body input label; type is an exact media type.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{type}"
+      ],
+      "frozen": [
+        "{type}"
+      ],
+      "softMaxChars": 42,
+      "hardMaxChars": 68
+    },
+    "api.status.error": {
+      "text": "error",
+      "sourceHash": "ca00fccfb408989eddc401062c4d1219a6aceb6b9b55412357f1790862e8f178",
+      "surface": "api",
+      "context": "Request failure status label shown before opaque browser error evidence.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 16,
+      "hardMaxChars": 28
+    },
     "configure.action.failed": {
       "text": "Action failed ({error}).",
       "sourceHash": "4acca2deec62ac51cb2dd452216e9edf6e7b8b46625982f24c6c9395c1e57443",

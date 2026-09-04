@@ -2224,10 +2224,22 @@ class PaneldServer internal constructor(
                 // Self-contained REST API explorer (no Swagger-UI CDN bundle) + the OpenAPI spec it
                 // renders — the spec also imports into Swagger/Postman for fleet tooling.
                 get("/api") {
-                    val html = asset("api.html").replace(
-                        "<title>ha-paneld · REST API</title>",
-                        "<title>${esc(panelBrowserTitle(config.friendlyName, "REST API"))}</title>",
+                    val strings = requestStrings(call)
+                    val projectionPrefixes = setOf("api.", "configure.hardened.", "shell.hardened.")
+                    call.response.headers.append(HttpHeaders.Vary, HttpHeaders.AcceptLanguage)
+                    call.response.headers.append(
+                        HttpHeaders.ContentLanguage,
+                        (strings.languages(projectionPrefixes) + AppLocale.ENGLISH)
+                            .distinct().sorted().joinToString(", "),
                     )
+                    val html = asset("api.html")
+                        .replace(
+                            "<title>ha-paneld · REST API</title>",
+                            "<title>${esc(panelBrowserTitle(config.friendlyName, "REST API"))}</title>",
+                        )
+                        .replace("__API_LANG__", esc(strings.requestedLocale))
+                        .replace("__API_BACK_HREF__", esc(localizedHref("/", strings)))
+                        .replace("__API_I18N_PAYLOAD__", browserI18nPayload(strings, projectionPrefixes))
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {

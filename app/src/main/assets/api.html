@@ -1,4 +1,4 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8">
+<!doctype html><html lang="__API_LANG__"><head><meta charset="utf-8">
 <script>/* ?theme=light|dark override, else the browser preference (prefers-color-scheme) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -38,94 +38,13 @@
  .approval-key{color:var(--icon);font-size:.72rem;line-height:1.4;margin:18px 0 4px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:.42rem}.approval-key::before{content:"";display:inline-block;flex:0 0 auto;width:.81rem;height:.95rem;background:currentColor;clip-path:polygon(50% 0,95% 18%,82% 72%,50% 100%,18% 72%,5% 18%);opacity:.72}
  .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 </style></head><body><div class="wrap">
-<div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a href="/">← back to panel</a></div>
-<p class="desc">Live, on-panel API explorer. <a href="/api/v1/openapi.json" target="_blank">openapi.json</a> — import into Swagger/Postman for fleet tooling. No auth; LAN only.</p>
-<span id="hardened-approval-description" class="sr-only">Requires physical on-panel approval for this action when Hardened mode is enabled.</span>
-<span id="hardened-approval-conditional-description" class="sr-only">Some request values require physical on-panel approval when Hardened mode is enabled; other values may be ordinary or unavailable.</span>
+<div class="hdr"><h1>ha-paneld <small>· REST API</small></h1><a id="api-back" href="__API_BACK_HREF__"></a></div>
+<p class="desc"><span id="api-intro-live"></span> <span id="api-intro-import"></span> <span id="api-intro-network"></span></p>
+<span id="hardened-approval-description" class="sr-only"></span>
+<span id="hardened-approval-conditional-description" class="sr-only"></span>
 <div id="root"></div>
-<p class="approval-key">Shielded actions need physical approval on this panel in Hardened mode; they cannot be approved remotely.</p>
-<script>
-fetch('/api/v1/openapi.json').then(function(r){return r.json();}).then(render).catch(function(e){
- document.getElementById('root').innerHTML='<p class="desc">Could not load /api/v1/openapi.json: '+e+'</p>';});
-
-function el(t,c,h){var e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
-function requestBody(op){var c=op.requestBody&&op.requestBody.content;if(!c)return null;
- var preferred=['application/x-www-form-urlencoded','application/json','application/yaml','text/yaml','text/plain','application/octet-stream'];
- for(var i=0;i<preferred.length;i++)if(c[preferred[i]])return {type:preferred[i],schema:c[preferred[i]].schema||{}};
- var types=Object.keys(c);return types.length?{type:types[0],schema:c[types[0]].schema||{}}:null;}
-
-function addInput(body,label,pr){body.appendChild(el('label',null,label+(pr.description?' <span style="color:#667;font-weight:400">— '+pr.description+'</span>':'')));
- var inp;if(pr.enum){inp=el('select');pr.enum.forEach(function(v){var o=el('option',null,v);o.value=v;inp.appendChild(o);});}
- else{inp=el('input');inp.type=(pr.format==='password'?'password':(pr.type==='number'||pr.type==='integer'?'number':'text'));inp.step='any';}
- body.appendChild(inp);return inp;}
-
-function render(spec){
- var paths=spec.paths,groups={};
- Object.keys(paths).forEach(function(p){Object.keys(paths[p]).forEach(function(m){
-  var op=paths[p][m],tag=(op.tags&&op.tags[0])||'other';(groups[tag]=groups[tag]||[]).push({p:p,m:m,op:op});});});
- var root=document.getElementById('root');
- Object.keys(groups).forEach(function(tag){
-  root.appendChild(el('h2',null,tag));
-  groups[tag].forEach(function(e){root.appendChild(endpoint(e.p,e.m,e.op));});
- });
-}
-
-function endpoint(path,method,op){
- var d=el('details','ep');
- var s=el('summary',null,'<span class="m '+method+'">'+method.toUpperCase()+'</span>'+
-   '<span class="path">'+path+'</span><span class="sum">'+(op.summary||'')+'</span>');
- d.appendChild(s);
- var body=el('div','body');
- var fields={},parameters=[],request=requestBody(op);
- (op.parameters||[]).forEach(function(p){var pr=p.schema||{},req=p.required?' *':'';parameters.push({spec:p,input:addInput(body,p.name+req+' ('+p.in+')',{type:pr.type,format:pr.format,enum:pr.enum,description:p.description})});});
- if(request&&request.type==='application/x-www-form-urlencoded'&&request.schema.properties){Object.keys(request.schema.properties).forEach(function(k){
-  var pr=request.schema.properties[k],req=(request.schema.required||[]).indexOf(k)>=0;
-  fields[k]=addInput(body,k+(req?' *':''),pr);});}
- else if(request){
-  body.appendChild(el('label',null,'request body ('+request.type+')'));
-  if(request.type==='application/octet-stream'){var file=el('input');file.type='file';fields.__body=file;body.appendChild(file);}
-  else{var ta=el('textarea');if(request.type==='application/json'&&request.schema.type==='object')ta.value='{}';fields.__body=ta;body.appendChild(ta);}
- }
- var btn=el('button',null,'Send '+method.toUpperCase());
- var approvalKind=JSON.stringify(op.responses||{}).indexOf('ApprovalRequired')>=0?'required':null;
- if(approvalKind&&[
-  '/api/v1/config','/api/v1/config/export','/api/v1/config/import','/api/v1/restore','/api/v1/action'
- ].indexOf(path)>=0)approvalKind='conditional';
- if(approvalKind){
-  btn.setAttribute('data-hardened-approval',approvalKind==='conditional'?'conditional':'');
-  btn.setAttribute('aria-describedby',approvalKind==='conditional'?'hardened-approval-conditional-description':'hardened-approval-description');
-  btn.title=approvalKind==='conditional'
-   ?'Some request values require physical on-panel approval in Hardened mode; other values may be ordinary or unavailable.'
-   :'Requires physical on-panel approval for this action when Hardened mode is enabled.';
- }
- var st=el('div','st'),out=el('pre');out.style.display='none';
- body.appendChild(btn);body.appendChild(st);body.appendChild(out);
- btn.onclick=function(){send(path,method,fields,parameters,request,st,out,btn);};
- d.appendChild(body);return d;
-}
-
-function send(path,method,fields,parameters,request,st,out,btn){
- btn.disabled=true;st.textContent='…';out.style.display='none';
- var opts={method:method.toUpperCase(),headers:{}},query=[];
- parameters.forEach(function(p){var v=p.input.value;if(v==='')return;var where=p.spec.in,name=p.spec.name;
-  if(where==='path')path=path.replace('{'+name+'}',encodeURIComponent(v));
-  else if(where==='query')query.push(encodeURIComponent(name)+'='+encodeURIComponent(v));
-  else if(where==='header')opts.headers[name]=v;});
- if(query.length)path+=(path.indexOf('?')>=0?'&':'?')+query.join('&');
- if(request&&request.type==='application/x-www-form-urlencoded'){
-  var params=[];Object.keys(fields).forEach(function(k){var v=fields[k].value;if(v!=='')params.push(encodeURIComponent(k)+'='+encodeURIComponent(v));});
-  if(params.length)opts.body=params.join('&');opts.headers['Content-Type']=request.type;}
- else if(request&&fields.__body){
-  if(request.type==='application/octet-stream'){if(fields.__body.files&&fields.__body.files[0])opts.body=fields.__body.files[0];}
-  else opts.body=fields.__body.value;
-  opts.headers['Content-Type']=request.type;
- }
- var t0=Date.now();
- fetch(path,opts).then(function(r){return r.text().then(function(tx){
-  st.innerHTML='<b style="color:'+(r.ok?'#5ad18a':'#d9534f')+'">'+r.status+'</b> '+(r.headers.get('content-type')||'')+' · '+(Date.now()-t0)+' ms';
-  var body=tx;try{body=JSON.stringify(JSON.parse(tx),null,2);}catch(e){}
-  out.textContent=body;out.style.display='';btn.disabled=false;});})
- .catch(function(e){st.innerHTML='<b style="color:#d9534f">error</b> '+e;btn.disabled=false;});
-}
-</script>
+<p id="api-approval-key" class="approval-key"></p>
+<script id="ha-i18n" type="application/json">__API_I18N_PAYLOAD__</script>
+<script src="/assets/i18n.js"></script>
+<script src="/assets/api.js"></script>
 </div></body></html>
