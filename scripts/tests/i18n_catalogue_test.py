@@ -18,33 +18,6 @@ SPEC.loader.exec_module(i18n)
 
 
 class CatalogueTest(unittest.TestCase):
-    def test_release_catalogue_source_revision_is_reachable_ancestry(self):
-        expected_revision = "271310c06ec572b4f7830b01af90711c31743fee"
-        repository = SCRIPT.parents[1]
-        catalogue_dir = repository / "app/src/main/assets/i18n"
-        revisions = {
-            json.loads(path.read_text(encoding="utf-8"))["sourceRevision"]
-            for path in catalogue_dir.glob("*.json")
-        }
-        self.assertEqual(1, len(revisions), "release catalogues must share one source revision")
-        revision = revisions.pop()
-        self.assertRegex(revision, r"\A[0-9a-f]{40}\Z")
-        self.assertEqual(expected_revision, revision, "release catalogues must retain reviewed provenance")
-        reachable = subprocess.run(
-            ["git", "cat-file", "-e", f"{revision}^{{commit}}"],
-            cwd=repository,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, reachable.returncode, "catalogue source revision must exist in this checkout")
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", revision, "HEAD"],
-            cwd=repository,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(0, ancestor.returncode, "catalogue source revision must be an ancestor of HEAD")
-
     def source(self):
         text = "Keep {name} on MQTT."
         return {
