@@ -55,20 +55,20 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
-    @Test fun `release target HTML UI slices are complete current and promoted`() {
+    @Test fun `release target HTML UI slices including Install and API are complete current and promoted`() {
         val source = SourceCatalogue.parse(File(assets, "i18n/en.json").readText())
-        val promotedSurfaces = setOf("shell", "dashboard", "configure", "profiles", "entities", "install")
+        val promotedSurfaces = setOf("shell", "dashboard", "configure", "profiles", "entities", "install", "api")
         val expected = source.strings.filterKeys { key ->
             catalogue.getJSONObject(key).getString("surface") in promotedSurfaces
         }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 2139, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1725, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 2149, source.strings.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1735, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
                 "$locale must contain the complete release catalogue",
-                2139,
+                2149,
                 target.strings.size,
             )
             assertEquals(

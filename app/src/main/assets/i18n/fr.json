@@ -3,6 +3,56 @@
   "schema": 1,
   "sourceRevision": "271310c06ec572b4f7830b01af90711c31743fee",
   "strings": {
+    "api.action.send": {
+      "text": "Envoyer {method}",
+      "sourceHash": "7365a088061c87f7f525e3a06863526ab9eafcf28af995c47c8854f5cf927e6a",
+      "state": "machine-cross-checked"
+    },
+    "api.approval.conditional": {
+      "text": "Certaines valeurs de la requête nécessitent une approbation physique sur le panneau lorsque le mode renforcé est activé ; d’autres peuvent ne pas nécessiter d’approbation ou être indisponibles.",
+      "sourceHash": "2916fbdbb0372eb477cc499739145c72bd292b53044ea30adc345777c4be1bf9",
+      "state": "machine-cross-checked"
+    },
+    "api.error.load_spec": {
+      "text": "Impossible de charger {path} : {error}",
+      "sourceHash": "a1a41d5d73294149e5c159405074dafa40e17ff4a15a341e44f36671c0a84c65",
+      "state": "machine-cross-checked"
+    },
+    "api.group.other": {
+      "text": "autres",
+      "sourceHash": "d9298a10d1b0735837dc4bd85dac641b0f3cef27a47e5d53a54f2f3f5b2fcffa",
+      "state": "machine-cross-checked"
+    },
+    "api.header.back_to_panel": {
+      "text": "← retour au panneau",
+      "sourceHash": "3179fe433fe59423811c6a9c908cbf30f7ba7b766fdc8e2b413e8cac1a0d474c",
+      "state": "machine-cross-checked"
+    },
+    "api.intro.import": {
+      "text": "Importez openapi.json dans Swagger/Postman pour les outils de gestion du parc.",
+      "sourceHash": "5c1b865cb71b0b5067fe0de28419ab19cae0e80198e900c31f4cf0b83bbfb85a",
+      "state": "machine-cross-checked"
+    },
+    "api.intro.live": {
+      "text": "Explorateur d’API en direct sur le panneau.",
+      "sourceHash": "4c6b19a324019c78cd5ff3eccf1f1ecfa7bcab532ec28603dc5c378f28f85fb0",
+      "state": "machine-cross-checked"
+    },
+    "api.intro.network": {
+      "text": "Aucune authentification ; LAN uniquement.",
+      "sourceHash": "e7668612168c85895e82396278494d86417ce8ea9a061693d39cdc18638abff6",
+      "state": "machine-cross-checked"
+    },
+    "api.request.body": {
+      "text": "corps de la requête ({type})",
+      "sourceHash": "7fee98b74029a31776212fad2d26b6e5dde5accfa5a1096746c6ac5bcbcbdf39",
+      "state": "machine-cross-checked"
+    },
+    "api.status.error": {
+      "text": "erreur",
+      "sourceHash": "ca00fccfb408989eddc401062c4d1219a6aceb6b9b55412357f1790862e8f178",
+      "state": "machine-cross-checked"
+    },
     "configure.action.failed": {
       "text": "Échec de l’action ({error}).",
       "sourceHash": "4acca2deec62ac51cb2dd452216e9edf6e7b8b46625982f24c6c9395c1e57443",

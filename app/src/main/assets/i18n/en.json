@@ -29,9 +29,7 @@
         "configure.hardened.action_approval"
       ],
       "placeholders": [],
-      "frozen": [
-        "Hardened"
-      ],
+      "frozen": [],
       "softMaxChars": 176,
       "hardMaxChars": 240
     },
