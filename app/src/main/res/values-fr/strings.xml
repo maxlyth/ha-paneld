@@ -58,8 +58,8 @@
     <string name="approval_op_companion_repair">Réparer la configuration de Companion</string>
     <string name="approval_op_dashboard_storage_clear">Effacer les données de navigation du tableau de bord</string>
     <string name="approval_op_display_configuration">Modifier les dimensions d’affichage</string>
-    <string name="approval_op_power_configuration">Modifier les protections de sécurité électrique du panneau</string>
-    <string name="approval_op_power_safety_ack">Masquer un avertissement précis de sécurité électrique</string>
+    <string name="approval_op_power_configuration">Modifier les garde-fous de gestion de l’alimentation du panneau</string>
+    <string name="approval_op_power_safety_ack">Masquer un avertissement précis relatif à la gestion de l’alimentation</string>
     <string name="approval_op_guard_db">Faire progresser la récupération de la base de données</string>
     <string name="approval_op_camera_enable">Activer la caméra du panneau</string>
 
@@ -68,10 +68,10 @@
     <string name="panel_not_set_up">Ce panneau n’est pas encore configuré.</string>
     <string name="panel_not_set_up_hint">Scannez le code ou ouvrez l’adresse ci-dessous sur votre téléphone ou ordinateur portable — cela prend environ deux minutes. Vous pouvez aussi toucher %1$s pour le faire sur cet écran.</string>
     <string name="mqtt_could_not_connect">MQTT n’a pas pu se connecter.</string>
-    <string name="mqtt_credentials_rejected_hint">Le courtier a refusé le nom d’utilisateur et le mot de passe — corrigez-les sur la page de configuration dans un navigateur.</string>
+    <string name="mqtt_credentials_rejected_hint">Le broker MQTT a refusé le nom d’utilisateur et le mot de passe — corrigez-les sur la page de configuration dans un navigateur.</string>
     <string name="waiting_for_mqtt_details">En attente des informations MQTT.</string>
     <string name="someone_configuring_hint">Quelqu’un effectue la configuration dans un navigateur. Aucune action n’est nécessaire ici.</string>
-    <string name="mqtt_address_check_hint">Vérifiez l’adresse du courtier sur la page de configuration dans un navigateur.</string>
+    <string name="mqtt_address_check_hint">Vérifiez l’adresse du broker MQTT sur la page de configuration dans un navigateur.</string>
     <string name="checking_mqtt_connection">Vérification de la connexion MQTT…</string>
     <string name="takes_few_seconds_hint">Cela prend quelques secondes. Aucune action n’est nécessaire ici.</string>
     <string name="browser_engine_too_old">Le moteur de navigateur de ce panneau est trop ancien.</string>
@@ -92,7 +92,7 @@
     <string name="dashboard">Tableau de bord</string>
     <string name="open_dashboard">Ouvrir le tableau de bord</string>
     <string name="sign_in_home_assistant">Connexion à Home Assistant</string>
-    <string name="build_number">version %1$d</string>
+    <string name="build_number">compilation %1$d</string>
 
     <string name="panel_admin">Administration du panneau</string>
     <string name="panel_admin_summary">Accès rapide pour administrer ce panneau. Le tableau de bord est l’écran d’accueil du panneau.</string>
