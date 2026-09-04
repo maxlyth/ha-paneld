@@ -394,7 +394,7 @@ val buildHelperSocketTestServer = tasks.register<Exec>("buildHelperSocketTestSer
 val unitTestRuntimeReadDirectories = listOf(
     "src/main/kotlin", // StringTemplateEscapeContractTest and HaTimestampTest walk every source file
     "src/main/assets", // web assets, OpenAPI, i18n catalogues, device profiles, wake-word models
-    "src/main/res/xml", // backup rules and locale configuration
+    "src/main/res", // native strings, drawables, backup rules and locale configuration
     "../docs/profiles/examples", // BundledProfileParityTest
     "../docs/profiles/unofficial", // BundledProfileFixtures
     "../helper/src", // HelperSocketCompositionTest reads screen.c and runs a server built from this tree
@@ -403,7 +403,6 @@ val unitTestRuntimeReadDirectories = listOf(
 val unitTestRuntimeReadFiles = listOf(
     "build.gradle.kts",
     "src/main/AndroidManifest.xml",
-    "src/main/res/drawable/ic_nav_dashboard.xml",
     "../settings.gradle.kts",
     "../gradle/libs.versions.toml",
     "../docs/api.md",

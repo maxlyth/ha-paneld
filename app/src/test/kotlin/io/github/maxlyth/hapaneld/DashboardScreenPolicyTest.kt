@@ -7,6 +7,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DashboardScreenPolicyTest {
+    private fun englishString(name: String): String {
+        val xml = listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).first { it.isFile }.readText()
+        return Regex("""<string name="${Regex.escape(name)}"[^>]*>(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)
+            ?: error("missing English string resource: $name")
+    }
+
     @Test fun preventIdleDimOwnsTheBuiltInRendererWindowFlag() {
         assertTrue(shouldKeepBuiltInRendererScreenOn(preventIdleDim = true))
         assertFalse(shouldKeepBuiltInRendererScreenOn(preventIdleDim = false))
@@ -47,11 +57,13 @@ class DashboardScreenPolicyTest {
         )
 
         assertTrue(block.contains("config.haToken.isBlank() && config.haRefreshToken.isBlank()"))
-        assertTrue(block.contains("\"Home Assistant sign-in needed\""))
+        assertTrue(block.contains("getString(R.string.ha_sign_in_needed)"))
+        assertEquals("Home Assistant sign-in needed", englishString("ha_sign_in_needed"))
         // The refusal title must name the SIGN-IN, not the version check. A panel reported on
         // 2026-08-17 showing "Home Assistant version check rejected" sent diagnosis after a version
         // problem that did not exist; the body had always said authentication.
-        assertTrue(block.contains("\"Home Assistant sign-in rejected\""))
+        assertTrue(block.contains("getString(R.string.ha_sign_in_rejected)"))
+        assertEquals("Home Assistant sign-in rejected", englishString("ha_sign_in_rejected"))
         assertFalse(block.contains("version check rejected"))
         // The two situations must reach DIFFERENT outcomes so a diagnostic surface can tell them
         // apart, even though both are person-repaired.
@@ -73,8 +85,16 @@ class DashboardScreenPolicyTest {
             source.indexOf("is DashboardV2ProbeResult.Unavailable"),
         )
 
-        listOf("keep checking", "keep trying", "will retry automatically", "retrying automatically").forEach {
-            assertFalse("credential copy must not promise an automatic retry: $it", block.contains(it))
+        val credentialDetails = listOf(
+            englishString("ha_sign_in_needed_detail"),
+            englishString("ha_sign_in_rejected_detail"),
+        )
+        assertTrue(block.contains("getString(R.string.ha_sign_in_needed_detail)"))
+        assertTrue(block.contains("getString(R.string.ha_sign_in_rejected_detail)"))
+        listOf("keep checking", "keep trying", "will retry automatically", "retrying automatically").forEach { phrase ->
+            credentialDetails.forEach { detail ->
+                assertFalse("credential copy must not promise an automatic retry: $phrase", detail.contains(phrase))
+            }
         }
         // Saying the dashboard RETURNS once the sign-in works is a different claim, and a true one:
         // PaneldServer relaunches the renderer on a changed Home Assistant credential or URL
@@ -82,7 +102,7 @@ class DashboardScreenPolicyTest {
         // credential nothing has changed, which is what the strings above would promise.
         assertTrue(
             "a credential screen must say the dashboard comes back once the sign-in works",
-            block.contains("on its own"),
+            credentialDetails.all { it.contains("on its own") },
         )
         // It must still name a route back, or the screen is a dead end, and it must name the
         // DESTINATION rather than a control. These screens now sometimes replace the Configure button
@@ -90,15 +110,18 @@ class DashboardScreenPolicyTest {
         // describing something the person could no longer see.
         assertTrue(
             "a credential screen must name where the sign-in lives, not which button to press",
-            block.contains("this panel's settings, under Home Assistant") ||
-                block.contains("this panel's settings, under Home\n") ||
-                block.contains("sign-in lives in this panel's settings"),
+            credentialDetails.all { detail ->
+                detail.contains("this panel’s settings, under Home Assistant") ||
+                    detail.contains("this panel's settings, under Home\n") ||
+                    detail.contains("sign-in lives in this panel's settings")
+            },
         )
         assertFalse(
             "the copy must not name a button that a code may have replaced",
-            block.contains("Configure opens"),
+            credentialDetails.any { it.contains("Configure opens") },
         )
-        assertTrue(block.contains("Retry"))
+        assertTrue(block.contains("showBlockedAdmissionScreen("))
+        assertTrue(source.contains("showV2CompatibilityScreen(title, detail, getString(R.string.retry), admissionRetryClass(outcome), outcome)"))
         // The pairing this test exists to protect: neither credential outcome runs a timer.
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.CREDENTIAL_REFUSED))
         assertEquals(AdmissionRetryClass.MANUAL_ONLY, admissionRetryClass(AdmissionOutcome.SIGN_IN_REQUIRED))
@@ -109,8 +132,11 @@ class DashboardScreenPolicyTest {
     private fun dashboardSource() = File("src/main/kotlin/io/github/maxlyth/hapaneld/DashboardActivity.kt").readText()
 
     /** A window from each blocked-screen call large enough to include its outcome. */
-    private fun callWindows(source: String, title: String): List<String> =
-        Regex("showBlockedAdmissionScreen\\(\\s*" + Regex.escape("\"$title\"")).findAll(source).map {
+    private fun callWindows(source: String, titleResource: String): List<String> =
+        Regex(
+            "showBlockedAdmissionScreen\\(\\s*getString\\(R\\.string\\." +
+                Regex.escape(titleResource) + "\\)",
+        ).findAll(source).map {
             source.substring(it.range.first, minOf(source.length, it.range.first + 700))
         }.toList()
 
@@ -119,25 +145,25 @@ class DashboardScreenPolicyTest {
 
         // Each blocked screen names its evidence; admissionRetryClass (not the call site) decides the
         // policy, so a screen cannot quietly pick its own recovery behavior.
-        fun outcomeOf(title: String) = callWindows(source, title).map { w ->
+        fun outcomeOf(titleResource: String) = callWindows(source, titleResource).map { w ->
             Regex("""AdmissionOutcome\.([A-Z_]+)""").find(w)?.groupValues?.get(1)
         }
-        assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("The panel cannot reach Home Assistant"))
-        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("Home Assistant dashboard list unavailable"))
-        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("The Home Assistant sign-in page would not load"))
-        assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("Home Assistant opened but will not respond"))
-        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("Home Assistant version unverifiable"))
-        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("Home Assistant upgrade required"))
+        assertEquals(listOf("TRANSPORT_FAILED"), outcomeOf("cannot_reach_ha"))
+        assertEquals(listOf("DASHBOARD_LIST_UNREADABLE"), outcomeOf("dashboard_list_unavailable"))
+        assertEquals(listOf("SIGN_IN_PAGE_UNREACHABLE"), outcomeOf("ha_sign_in_page_failed"))
+        assertEquals(listOf("BRIDGE_HANDSHAKE_MISSED"), outcomeOf("home_assistant_unresponsive"))
+        assertEquals(listOf("VERSION_UNVERIFIABLE"), outcomeOf("ha_version_unverifiable"))
+        assertEquals(listOf("UNSUPPORTED_HA"), outcomeOf("ha_upgrade_required"))
         assertEquals(
             listOf("NO_LEGAL_DASHBOARD", "DASHBOARD_LIST_UNREADABLE", "NO_LEGAL_DASHBOARD"),
-            outcomeOf("This account has no dashboard to open"),
+            outcomeOf("no_dashboard_title"),
         )
         // One permanent-incapability screen. The three attachment failures are separate, retryable
         // evidence, and they split by what the person actually lost: one never opened Home Assistant,
         // the other two dropped it part-way through a page change.
-        assertEquals(listOf("BRIDGE_UNAVAILABLE"), outcomeOf("This panel's web viewer is too old"))
-        assertEquals(listOf("BRIDGE_ATTACH_FAILED"), outcomeOf("Home Assistant could not open"))
-        assertEquals(List(2) { "BRIDGE_ATTACH_FAILED" }, outcomeOf("Home Assistant stopped loading"))
+        assertEquals(listOf("BRIDGE_UNAVAILABLE"), outcomeOf("web_viewer_too_old_title"))
+        assertEquals(listOf("BRIDGE_ATTACH_FAILED"), outcomeOf("home_assistant_could_not_open"))
+        assertEquals(List(2) { "BRIDGE_ATTACH_FAILED" }, outcomeOf("home_assistant_stopped_loading"))
         // The credential branch chooses its title inside one call, so read the branch itself.
         val authBranch = source.substring(
             source.indexOf("DashboardV2ProbeResult.AuthenticationFailed ->"),
@@ -154,7 +180,7 @@ class DashboardScreenPolicyTest {
         assertFalse("an outcome must never be defaulted", source.contains("outcome: AdmissionOutcome ="))
         assertFalse("call sites must not choose the retry class themselves", source.contains("autoRetry = AdmissionRetryClass."))
         assertEquals(2, Regex(Regex.escape("showAdmissionProgressScreen(")).findAll(source).count() - 1)
-        assertTrue(source.contains("showV2CompatibilityScreen(title, detail, \"Retry\", admissionRetryClass(outcome), outcome)"))
+        assertTrue(source.contains("showV2CompatibilityScreen(title, detail, getString(R.string.retry), admissionRetryClass(outcome), outcome)"))
         // The verdict itself reaches the painter, not just its retry class. Two screens now offer
         // something the class cannot express — a repair the panel can perform, and a code that
         // opens the exact setting on a phone — and both are decided from the outcome. Passing only
@@ -229,7 +255,7 @@ class DashboardScreenPolicyTest {
         // call here. What must hold is unchanged — this one button, and nothing else, resets the back-off.
         val manualButton = source.substring(
             source.indexOf("retryLabel?.let { label ->"),
-            source.indexOf("add(surface.action(\"Configure\")"),
+            source.indexOf("add(surface.action(getString(R.string.configure))"),
         )
         assertTrue(
             "a present human does not wait out a timer",
@@ -276,7 +302,7 @@ class DashboardScreenPolicyTest {
             source.indexOf("private fun navigateAfterHomeDashboardCorrection"),
         )
         assertTrue(resolver.contains("admissionRetryPolicy.nextDelayMs("))
-        assertTrue(resolver.contains("armAdmissionAutoRetry(it, \"Home Assistant dashboard list unavailable\")"))
+        assertTrue(resolver.contains("armAdmissionAutoRetry(it, getString(R.string.dashboard_list_unavailable))"))
     }
 
     @Test fun theCountdownAndTheRetryCallbackShareTheHandlerClock() {
@@ -309,10 +335,16 @@ class DashboardScreenPolicyTest {
             source.indexOf("private fun showWaitingForEntityFilterAnswer()"),
             source.indexOf("private fun showWaitingForEntityBootstrap()"),
         )
-        assertTrue(screen.contains("to optimise the "))
+        assertTrue(screen.contains("getString(R.string.finish_questions_browser)"))
+        assertTrue(englishString("finish_questions_browser").contains("to optimise the "))
         assertTrue("the page's own address must be shown", screen.contains("\"/setup\""))
-        assertTrue(screen.contains("\"Skip and load the dashboard now\""))
-        assertTrue("skipping must state its cost", screen.contains("which is slower on this panel"))
+        assertTrue(screen.contains("getString(R.string.skip_load_dashboard)"))
+        assertEquals("Skip and load the dashboard now", englishString("skip_load_dashboard"))
+        assertTrue(screen.contains("getString(R.string.skip_entity_filter_detail)"))
+        assertTrue(
+            "skipping must state its cost",
+            englishString("skip_entity_filter_detail").contains("which is slower on this panel"),
+        )
         assertTrue(screen.contains("skipEntityFilterQuestion()"))
 
         // Skipping records the SAME answer the browser's decline records, so the two surfaces cannot disagree
@@ -380,12 +412,19 @@ class DashboardScreenPolicyTest {
         ).flatMap { argumentWindows(source, it) }
         val assigned = Regex("\\.text = ($lit(?:\\s*\\+\\s*$lit)*)")
             .findAll(source).map { it.groupValues[1] }
-        return (windows.asSequence() + assigned)
+        val resource = Regex("""getString\(R\.string\.([A-Za-z0-9_]+)""")
+        val assignedResources = Regex("""\.text\s*=\s*getString\(R\.string\.([A-Za-z0-9_]+)""")
+            .findAll(source).map { englishString(it.groupValues[1]) }
+        val literals = (windows.asSequence() + assigned)
             .flatMap { region ->
                 message.findAll(region).map { m ->
                     literal.findAll(m.value).joinToString("") { it.value.drop(1).dropLast(1) }
                 }
             }
+        val resources = windows.asSequence().flatMap { region ->
+            resource.findAll(region).map { englishString(it.groupValues[1]) }
+        }
+        return (literals + resources + assignedResources)
             .filter { it.isNotBlank() }
             .toList()
     }

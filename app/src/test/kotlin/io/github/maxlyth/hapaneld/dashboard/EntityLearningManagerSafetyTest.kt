@@ -55,7 +55,10 @@ class EntityLearningManagerSafetyTest {
             "if (filterHold == null && blockingIssues > 0)",
         ).substringBefore("if (filterHold != null || bootstrapProblem == EntityBootstrapProblem.AUTHENTICATION) {")
         assertTrue(dashboard.contains("if (canIgnoreBlockingIssues)"))
-        assertTrue(dashboard.indexOf("if (canIgnoreBlockingIssues)") < dashboard.indexOf("Ignore flagged entities and continue"))
+        assertTrue(
+            dashboard.indexOf("if (canIgnoreBlockingIssues)") <
+                dashboard.indexOf("getString(R.string.ignore_flagged_entities)"),
+        )
     }
 
     @Test fun registryProjectionCarriesEffectiveAreaFloorLabelNamesAndAreaOverrides() {

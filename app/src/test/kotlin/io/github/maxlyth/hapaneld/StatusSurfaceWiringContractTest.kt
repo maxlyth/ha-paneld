@@ -29,6 +29,12 @@ class StatusSurfaceWiringContractTest {
     private val standing by lazy { source("MainActivity.kt") }
     private val admin by lazy { source("AdminLauncherActivity.kt") }
     private val service by lazy { source("PaneldService.kt") }
+    private val englishStrings by lazy {
+        listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).first { it.isFile }.readText()
+    }
 
     /**
      * Every screen the dashboard puts up in place of Home Assistant is built by [StatusSurface].
@@ -743,7 +749,12 @@ class StatusSurfaceWiringContractTest {
         // a SUCCESSFUL repair causes — so it must not be reported as a failure.
         assertTrue(
             "a blank terminal message must not be narrated as a failure",
-            poll.contains("stopped without saying why"),
+            poll.contains("progress.message.takeIf { it.isNotBlank() }") &&
+                poll.contains("?: getString(R.string.update_stopped_unknown)") &&
+                englishStrings.contains(
+                    "<string name=\"update_stopped_unknown\">The update stopped without saying why, " +
+                        "and nothing on this panel was changed.</string>",
+                ),
         )
     }
 

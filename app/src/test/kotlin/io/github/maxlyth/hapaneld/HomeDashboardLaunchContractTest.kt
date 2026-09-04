@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.testsupport.TestSources
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,6 +14,16 @@ import org.junit.Test
  * HomeDashboardLaunchCacheTest / HomeDashboardLaunchCacheConfigTest.
  */
 class HomeDashboardLaunchContractTest {
+
+    private fun englishString(name: String): String {
+        val xml = listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).first { it.isFile }.readText()
+        return Regex("""<string name="${Regex.escape(name)}"[^>]*>(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)
+            ?: error("missing English string resource: $name")
+    }
 
     private val source = TestSources.kotlin("DashboardActivity.kt").readText()
 
@@ -42,9 +53,10 @@ class HomeDashboardLaunchContractTest {
     }
 
     @Test fun `the selecting screen shows only when nothing provisional is rendering`() {
-        val screen = resolver.indexOf("\"Selecting the Home Assistant dashboard\"")
+        val screen = resolver.indexOf("getString(R.string.selecting_ha_dashboard)")
         val gate = resolver.indexOf("if (provisionalPath == null)")
         assertTrue(gate in 0 until screen)
+        assertEquals("Selecting the Home Assistant dashboard", englishString("selecting_ha_dashboard"))
     }
 
     @Test fun `a transient failure keeps the cache and retries quietly behind a rendering page`() {
@@ -56,9 +68,10 @@ class HomeDashboardLaunchContractTest {
         // teardown screen is gated on nothing rendering.
         assertTrue(failure.contains("showBlockedAdmissionScreen("))
         assertTrue(failure.contains("armAdmissionAutoRetry(it"))
-        val screen = failure.indexOf("\"Home Assistant dashboard list unavailable\"")
+        val screen = failure.indexOf("getString(R.string.dashboard_list_unavailable)")
         val gate = failure.indexOf("if (shownPath == null || web == null)")
         assertTrue(gate in 0 until screen)
+        assertEquals("Home Assistant dashboard list unavailable", englishString("dashboard_list_unavailable"))
         // The transient branch never touches the persisted cache, in either direction.
         assertFalse(failure.contains("clearHomeDashboardLaunchPathIfOwned"))
         assertFalse(failure.contains("setHomeDashboardLaunchPathIfOwned"))
@@ -70,7 +83,8 @@ class HomeDashboardLaunchContractTest {
             resolver.indexOf("setHomeDashboardLaunchPathIfOwned"),
         )
         assertTrue(confirmedNone.contains("clearHomeDashboardLaunchPathIfOwned(launchOwner)"))
-        assertTrue(confirmedNone.contains("\"This account has no dashboard to open\""))
+        assertTrue(confirmedNone.contains("getString(R.string.no_dashboard_title)"))
+        assertEquals("This account has no dashboard to open", englishString("no_dashboard_title"))
     }
 
     @Test fun `every successful live resolution is the only writer of the cache`() {
@@ -151,7 +165,8 @@ class HomeDashboardLaunchContractTest {
         assertTrue(confirmedNone.contains("if (!currentConfig.clearHomeDashboardLaunchPathIfOwned(launchOwner))"))
         assertTrue(confirmedNone.contains("showBlockedAdmissionScreen("))
         assertTrue(confirmedNone.contains("AdmissionOutcome.DASHBOARD_LIST_UNREADABLE"))
-        assertTrue(confirmedNone.contains("could not clear the dashboard it had saved"))
+        assertTrue(confirmedNone.contains("getString(R.string.no_dashboard_cache_clear_detail)"))
+        assertTrue(englishString("no_dashboard_cache_clear_detail").contains("could not clear the dashboard it had saved"))
     }
 
     @Test fun `the resolver protocol itself never emits the cached source`() {

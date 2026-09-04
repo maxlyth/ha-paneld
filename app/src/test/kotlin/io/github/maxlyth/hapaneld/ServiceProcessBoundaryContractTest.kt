@@ -19,7 +19,7 @@ class ServiceProcessBoundaryContractTest {
             source.indexOf("private fun startMqttWatchdog()"),
         )
 
-        val promotion = create.indexOf("startForegroundCompat(\"Starting…\", silent = true)")
+        val promotion = create.indexOf("startForegroundCompat(nativeString(R.string.starting), silent = true)")
         assertTrue(promotion > create.indexOf("super.onCreate()"))
         listOf(
             "SERVICE_RESTART_BARRIER.enter()",
@@ -31,7 +31,10 @@ class ServiceProcessBoundaryContractTest {
             assertTrue("foreground promotion must precede $heavyweight", promotion < create.indexOf(heavyweight))
         }
         assertTrue(create.indexOf("migrateLiveStore()") < create.indexOf("ensurePanelId()"))
-        assertTrue(create.indexOf("ensurePanelId()") < create.indexOf("updateForegroundStatus(\"Starting…\")"))
+        assertTrue(
+            create.indexOf("ensurePanelId()") <
+                create.indexOf("updateForegroundStatus(nativeString(R.string.starting))"),
+        )
         assertFalse(start.contains("startForegroundCompat("))
     }
 
@@ -626,7 +629,7 @@ class ServiceProcessBoundaryContractTest {
         val create = source("PaneldService.kt").let {
             it.substring(it.indexOf("override fun onCreate()"), it.indexOf("override fun onStartCommand("))
         }
-        val promotion = create.indexOf("startForegroundCompat(\"Starting…\", silent = true)")
+        val promotion = create.indexOf("startForegroundCompat(nativeString(R.string.starting), silent = true)")
         val admission = create.indexOf(
             "PROCESS_BOUNDARY_COMMITMENT.admitServiceGeneration() == ServiceGenerationAdmission.STAND_DOWN",
         )

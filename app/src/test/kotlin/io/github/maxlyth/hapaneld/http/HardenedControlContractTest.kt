@@ -13,6 +13,18 @@ class HardenedControlContractTest {
 
     private val server by lazy { source("http/PaneldServer.kt") }
     private val mqtt by lazy { source("MqttBridge.kt") }
+    private val englishStrings by lazy {
+        listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).first { it.isFile }.readText()
+    }
+
+    private fun englishString(name: String): String {
+        val marker = "<string name=\"$name\">"
+        require(englishStrings.contains(marker)) { "missing English string resource $name" }
+        return englishStrings.substringAfter(marker).substringBefore("</string>")
+    }
 
     @Test fun configImportApprovalBindsCompleteHttpRequestAndRevisionRestoreBindsContent() {
         val import = server.substring(
@@ -115,8 +127,16 @@ class HardenedControlContractTest {
             activity.indexOf("private fun enableHardenedMode"),
             activity.indexOf("private fun showPendingApprovals"),
         )
-        assertTrue(enableHardened.contains("classic network ADB"))
-        assertTrue(enableHardened.contains("Android Wireless debugging"))
+        val remoteAdbMessages = listOf(
+            "unable_verify_remote_adb_detail",
+            "turn_off_remote_adb_first_detail",
+        )
+        remoteAdbMessages.forEach { name ->
+            assertTrue(enableHardened.contains("R.string.$name"))
+            val message = englishString(name)
+            assertTrue(message.contains("classic network ADB"))
+            assertTrue(message.contains("Android Wireless debugging"))
+        }
         assertTrue(enableHardened.contains("withContext(Dispatchers.IO)"))
         assertTrue(enableHardened.contains("RemoteDebugSecurityTransitionGate.mutate"))
         assertTrue(enableHardened.contains("CdpRelay.stopAndVerifyThen(this@ConfigActivity)"))
@@ -207,10 +227,14 @@ class HardenedControlContractTest {
         assertFalse(config.contains("SecurityMode.CONVENIENCE"))
 
         val activity = source("ConfigActivity.kt")
-        assertTrue(activity.contains("Relaxed mode is on."))
-        assertTrue(activity.contains("Use Relaxed mode"))
-        assertTrue(activity.contains("Enable Hardened mode"))
+        assertTrue(activity.contains("R.string.security_mode_relaxed_summary"))
+        assertTrue(activity.contains("R.string.use_relaxed_mode"))
+        assertTrue(activity.contains("R.string.enable_hardened_mode"))
+        assertTrue(englishString("security_mode_relaxed_summary").startsWith("Relaxed mode is on."))
+        assertTrue(englishString("use_relaxed_mode") == "Use Relaxed mode")
+        assertTrue(englishString("enable_hardened_mode") == "Enable Hardened mode")
         assertFalse(activity.contains("Convenience mode"))
+        assertFalse(englishStrings.contains("Convenience mode"))
 
         val service = source("PaneldService.kt")
         assertTrue(service.contains("\"Security mode\" to if (config.hardenedSecurityEnabled)"))

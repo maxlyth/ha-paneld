@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,6 +10,16 @@ class LaunchScreenWiringContractTest {
         File("src/main/kotlin/io/github/maxlyth/hapaneld/$name"),
         File("app/src/main/kotlin/io/github/maxlyth/hapaneld/$name"),
     ).first { it.isFile }.readText()
+
+    private fun englishString(name: String): String {
+        val xml = listOf(
+            File("src/main/res/values/strings.xml"),
+            File("app/src/main/res/values/strings.xml"),
+        ).first { it.isFile }.readText()
+        return Regex("""<string name="${Regex.escape(name)}"[^>]*>(.*?)</string>""", RegexOption.DOT_MATCHES_ALL)
+            .find(xml)?.groupValues?.get(1)
+            ?: error("missing English string resource: $name")
+    }
 
     @Test fun adminLauncherMarksItsIntroEntryExplicitly() {
         val admin = source("AdminLauncherActivity.kt")
@@ -81,7 +92,8 @@ class LaunchScreenWiringContractTest {
             main.indexOf("private fun openDashboard"),
             main.indexOf("private fun Bundle.getLongOrNull"),
         )
-        assertTrue(main.contains("\"Retry dashboard\""))
+        assertTrue(main.contains("getString(R.string.retry_dashboard)"))
+        assertEquals("Retry dashboard", englishString("retry_dashboard"))
         assertTrue(open.contains("DashboardRecoveryState.BUILTIN_RENDERER"))
         assertTrue(open.indexOf("BuiltinDashboard.requestExplicitReload()") < open.indexOf("startActivity(it)"))
     }
@@ -124,15 +136,18 @@ class LaunchScreenWiringContractTest {
 
     @Test fun qrIntroNoBackgroundLanguage() {
         val main = source("MainActivity.kt")
-        assertTrue(main.contains("dashboard, app launcher and panel controls"))
-        assertTrue(main.contains("speaker and sensors to Home Assistant over your local network"))
-        assertTrue(main.contains("Configure the panel from "))
-        assertTrue(main.contains("a browser using the address below"))
+        assertTrue(main.contains("getString(R.string.panel_generic_description)"))
+        val description = englishString("panel_generic_description")
+        assertTrue(description.contains("dashboard, app launcher and panel controls"))
+        assertTrue(description.contains("speaker and sensors to Home Assistant over your local network"))
+        assertTrue(description.contains("Configure the panel from "))
+        assertTrue(description.contains("a browser using the address below"))
         // The version line is still on this screen, but it is now drawn by the shared brand header
         // rather than by this screen's own column, so the string is composed in two places. Both
         // halves are asserted, so dropping either still fails: the screen supplies the build number,
         // the shared header supplies the version and the separator.
-        assertTrue(main.contains("build ${'$'}{BuildConfig.VERSION_CODE}"))
+        assertTrue(main.contains("surface.setBrandCaption(getString(R.string.build_number, BuildConfig.VERSION_CODE))"))
+        assertEquals("build %1${'$'}d", englishString("build_number"))
         assertTrue(
             source("StatusSurface.kt").contains("v${'$'}{BuildConfig.VERSION_NAME} · ${'$'}suffix"),
         )
@@ -142,10 +157,12 @@ class LaunchScreenWiringContractTest {
 
     @Test fun qrIntroDescribesTheOnPanelDashboardAndLauncher() {
         val main = source("MainActivity.kt")
-        assertTrue(main.contains("dashboard, app launcher and panel controls"))
-        assertTrue(main.contains("speaker and sensors to Home Assistant over your local network"))
-        assertTrue(main.contains("Configure the panel from "))
-        assertTrue(main.contains("a browser using the address below"))
+        assertTrue(main.contains("getString(R.string.panel_generic_description)"))
+        val description = englishString("panel_generic_description")
+        assertTrue(description.contains("dashboard, app launcher and panel controls"))
+        assertTrue(description.contains("speaker and sensors to Home Assistant over your local network"))
+        assertTrue(description.contains("Configure the panel from "))
+        assertTrue(description.contains("a browser using the address below"))
         assertTrue(!main.contains("runs in the background so Home Assistant can control"))
     }
 }
