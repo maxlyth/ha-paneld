@@ -355,6 +355,31 @@ export function headingAnchors(source) {
   return headings;
 }
 
+export function htmlAnchors(source) {
+  validateSource(source);
+  const anchors = [];
+  visit(parser.parse(source), [], (node) => {
+    if (node.type !== "html") return;
+    const [baseOffset, nodeEnd] = offsets(node);
+    const raw = source.slice(baseOffset, nodeEnd);
+    visitHtml(parseHtml(raw), (htmlNode) => {
+      if (htmlNode.tagName !== "a") return;
+      const id = htmlNode.attrs?.find((attribute) => attribute.name === "id");
+      if (!id) return;
+      const location = htmlNode.sourceCodeLocation;
+      if (!location || !Number.isInteger(location.startOffset) || !Number.isInteger(location.endOffset)) {
+        throw new Error("HTML anchor lacks exact source offsets");
+      }
+      anchors.push({
+        anchor: id.value,
+        start: baseOffset + location.startOffset,
+        end: baseOffset + location.endOffset,
+      });
+    });
+  });
+  return anchors.sort((left, right) => left.start - right.start || left.end - right.end);
+}
+
 function markdownDestinationRange(source, node) {
   const [start, end] = offsets(node);
   const raw = source.slice(start, end);

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   PARSER_VERSIONS,
   headingAnchors,
+  htmlAnchors,
   inventoryMarkdown,
   linkDestinations,
   preflightMarkdown,
@@ -215,6 +216,29 @@ test("derives exact GitHub-compatible anchors including duplicate suffixes", () 
     { anchor: "über-panel", start: 27, end: 41 },
     { anchor: "über-panel-1", start: 43, end: 57 },
   ]);
+});
+
+test("discovers exact raw HTML anchor ids but ignores code and text lookalikes", () => {
+  const source = [
+    '<a id="stable-anchor"></a>',
+    '',
+    '<div><a class="target" id="nested-anchor">Target</a></div>',
+    '',
+    '`<a id="inline-code-fake"></a>`',
+    '',
+    '```html',
+    '<a id="fenced-code-fake"></a>',
+    '```',
+    '',
+    '\\<a id="escaped-text-fake"></a>',
+    '',
+    '<!-- <a id="comment-fake"></a> -->',
+    '',
+  ].join("\n");
+  const anchors = htmlAnchors(source);
+  assert.deepEqual(anchors.map(({ anchor }) => anchor), ["stable-anchor", "nested-anchor"]);
+  assert.equal(source.slice(anchors[0].start, anchors[0].end), '<a id="stable-anchor">');
+  assert.equal(source.slice(anchors[1].start, anchors[1].end), '<a class="target" id="nested-anchor">Target</a>');
 });
 
 test("rejects noncanonical sources, reserved tokens, forged inventory, and incomplete results", () => {
