@@ -122,6 +122,11 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("it", "setup.progress.server"): "Server",
 }
 TARGET_LITERAL_EXCEPTIONS = {
+    ("de", "install.presentation.status_no_renderer"): ("ℹ",),
+    ("es", "install.presentation.status_no_renderer"): ("ℹ",),
+    ("fr", "install.presentation.status_no_renderer"): ("ℹ",),
+    ("it", "install.presentation.status_no_renderer"): ("ℹ",),
+    ("zh-Hans", "install.presentation.status_no_renderer"): ("ℹ",),
     ("zh-Hans", "entities.dynamic.body"): ("ID",),
     ("zh-Hans", "entities.issue.auto-entities-options-dynamic.summary"): ("Auto-entities",),
     ("zh-Hans", "entities.issue.auto-entities-options-javascript.summary"): ("Auto-entities",),

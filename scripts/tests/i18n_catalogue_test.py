@@ -860,6 +860,30 @@ class CatalogueTest(unittest.TestCase):
                 with self.subTest(key=key), self.assertRaises(i18n.CatalogueError):
                     i18n.validate_target_language(key, text, "zh-Hans", source["strings"][key])
 
+    def test_install_information_symbol_exception_is_exact_and_key_scoped(self):
+        key = "install.presentation.status_no_renderer"
+        source_record = {
+            "text": "ℹ MQTT is configured.",
+            "placeholders": [],
+            "frozen": ["MQTT"],
+        }
+        targets = {
+            "de": "ℹ MQTT ist konfiguriert.",
+            "es": "ℹ MQTT está configurado.",
+            "fr": "ℹ MQTT est configuré.",
+            "it": "ℹ MQTT è configurato.",
+            "zh-Hans": "ℹ MQTT 已配置。",
+        }
+        for locale, text in targets.items():
+            pair = (locale, key)
+            self.assertEqual(("ℹ",), i18n.TARGET_LITERAL_EXCEPTIONS.get(pair))
+            i18n.validate_target_language(key, text, locale, source_record)
+            with self.subTest(locale=locale, key=f"{key}.other"), self.assertRaises(i18n.CatalogueError):
+                i18n.validate_target_language(f"{key}.other", text, locale, source_record)
+            with mock.patch.dict(i18n.TARGET_LITERAL_EXCEPTIONS, {pair: ()}):
+                with self.subTest(locale=locale, mutation="removed"), self.assertRaises(i18n.CatalogueError):
+                    i18n.validate_target_language(key, text, locale, source_record)
+
     def test_report_counts_current_translation_and_effective_fallback_per_locale(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
