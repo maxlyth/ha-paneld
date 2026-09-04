@@ -144,9 +144,9 @@ class GuardDbMaintenanceService : Service() {
 
     private fun foreground() {
         val manager = getSystemService(NotificationManager::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && manager.getNotificationChannel(CHANNEL) == null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL, getString(R.string.database_recovery_channel), NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(CHANNEL, nativeString(R.string.database_recovery_channel), NotificationManager.IMPORTANCE_LOW),
             )
         }
         val activity = PendingIntent.getActivity(
@@ -157,8 +157,8 @@ class GuardDbMaintenanceService : Service() {
         )
         val notification = NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle(getString(R.string.guard_db_activity_label))
-            .setContentText(getString(R.string.database_recovery_notification))
+            .setContentTitle(nativeString(R.string.guard_db_activity_label))
+            .setContentText(nativeString(R.string.database_recovery_notification))
             .setOngoing(true)
             .setContentIntent(activity)
             .build()

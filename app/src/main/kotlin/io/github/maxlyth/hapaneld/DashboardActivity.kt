@@ -1634,7 +1634,7 @@ class DashboardActivity : AppCompatActivity() {
         BuiltinDashboard.setActivityAuthLatched(activityOwner, true)
         main.removeCallbacks(watchdog)
         val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
-        val cfg = if (ip != null) "http://$ip:8888/configure" else "port 8888 of this panel's IP address"
+        val cfg = ip?.let { "http://$it:8888/configure" } ?: getString(R.string.config_activity_label)
         web?.let(::suspendBusDocument)
         // Branded like the native screens, and for the sharpest reason on any of them: the heading
         // names Home Assistant, the page is drawn by the browser that normally shows Home Assistant,
@@ -3225,9 +3225,9 @@ class DashboardActivity : AppCompatActivity() {
     }
 
     /** Where the decision on the hold screen can also be answered from another device. */
-    private fun entitiesPageAddress(): String {
+    private fun entitiesPageAddress(): String? {
         val ip = io.github.maxlyth.hapaneld.metrics.PanelMetrics.shared.ipAddress()
-        return if (ip != null) "http://$ip:8888/entities" else "port 8888 of this panel's IP address"
+        return ip?.let { "http://$it:8888/entities" }
     }
 
     private fun localizedBootstrapMilestone(): String {
@@ -3289,7 +3289,9 @@ class DashboardActivity : AppCompatActivity() {
                     getString(R.string.entity_filter_hold_detail, localizedEntityFilterHoldDetail(filterHold))
                 } else if (blockingIssues > 0) {
                     if (canIgnoreBlockingIssues) {
-                        getString(R.string.entity_filter_attention_remote, blockingIssues, entitiesPageAddress())
+                        entitiesPageAddress()?.let { address ->
+                            getString(R.string.entity_filter_attention_remote, blockingIssues, address)
+                        } ?: getString(R.string.entity_filter_attention_detail, blockingIssues)
                     } else {
                         getString(R.string.too_many_flagged_entities)
                     }

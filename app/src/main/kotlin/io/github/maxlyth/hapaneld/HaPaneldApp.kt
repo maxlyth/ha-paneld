@@ -30,6 +30,10 @@ class HaPaneldApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Guard DB recovery returns before Config may open the protected database. Its UI and foreground
+        // notification still need the last selected language, so restore it from Config's read-only 0.9.x
+        // compatibility mirror before taking that early return.
+        NativeLocale.applyBeforeDatabase(this)
         // A helper-owned replacement transaction must settle before Config or any service/background
         // producer opens shared state. This performs only the expected migration/proof/nonce-bound ACK.
         if (!GuardDbStartupAcknowledger.reconcileBeforeServices(this)) {
@@ -41,6 +45,8 @@ class HaPaneldApp : Application() {
         // Registers only the official Binder lifecycle listeners. No service is bound and no permission
         // is requested until the user opts in locally through the on-panel setup surface.
         ShizukuBridge.initialize(this)
+        // The database remains authoritative after ordinary admission; correct any stale compatibility
+        // mirror before activities or the foreground service render user-visible resources.
         NativeLocale.apply(Config(this).uiLanguage)
         if (Build.VERSION.SDK_INT < 29) {
             AppCompatDelegate.setDefaultNightMode(

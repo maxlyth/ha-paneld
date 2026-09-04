@@ -58,7 +58,7 @@ class NativeLocalizationContractTest {
                 "setContentTitle|setContentText)\\s*\\(|" +
                 "\\b(?:menu\\.add|surface\\.(?:heading|detail|caption|action)|text|button|Tile|" +
                 "updateForegroundStatus|startForegroundCompat|announceDeliberateRestart|" +
-                "showBlockedAdmissionScreen)\\s*\\()\\s*\"([^\"\\n]*)\"",
+                "showBlockedAdmissionScreen|foregroundNotification)\\s*\\()\\s*\"([^\"\\n]*)\"",
         )
         val deliberateNonLanguageLiterals = setOf(
             "ha-paneld",
@@ -89,11 +89,9 @@ class NativeLocalizationContractTest {
         val references = kotlinReferences + xmlReferences
 
         assertEquals("missing base resources", emptySet<String>(), references - catalogue.keys)
-        // Kept in the frozen catalogue for the bounded no-remote-address variant. The current runtime
-        // always has an Entities URL and therefore renders entity_filter_attention_remote instead.
         assertEquals(
             "unaccounted frozen resources",
-            setOf("entity_filter_attention_detail"),
+            emptySet<String>(),
             catalogue.keys - references,
         )
     }
@@ -101,6 +99,10 @@ class NativeLocalizationContractTest {
     @Test fun nativeLocaleFollowsThePersistedUiLanguage() {
         val application = TestSources.kotlin("HaPaneldApp.kt").readText()
         val locale = TestSources.kotlin("NativeLocale.kt").readText()
+        assertTrue(application.indexOf("NativeLocale.applyBeforeDatabase(this)") < application.indexOf("reconcileBeforeServices(this)"))
+        assertTrue(locale.contains("getSharedPreferences(LEGACY_CONFIG_PREFERENCES, Context.MODE_PRIVATE)"))
+        val beforeDatabase = locale.substringAfter("fun applyBeforeDatabase").substringBefore("fun apply(raw: String)")
+        assertTrue(!beforeDatabase.contains("Config(") && !beforeDatabase.contains("AppState.preferences"))
         assertTrue(application.contains("NativeLocale.apply(Config(this).uiLanguage)"))
         assertTrue(locale.contains("AppCompatDelegate.setApplicationLocales(desired)"))
         assertTrue(kotlin("ConfigActivity.kt").contains("NativeLocale.apply(Config(this@ConfigActivity).uiLanguage)"))
@@ -122,9 +124,29 @@ class NativeLocalizationContractTest {
         val camera = kotlin("camera/CameraForegroundService.kt")
         val recovery = kotlin("GuardDbMaintenanceService.kt")
         assertTrue(service.contains("localizedStorageHealthNotification(snapshot)"))
-        assertTrue(service.contains("getString(R.string.panel_agent_channel_description)"))
-        assertTrue(camera.contains("getString(R.string.camera_in_use)"))
-        assertTrue(recovery.contains("getString(R.string.database_recovery_notification)"))
+        assertTrue(service.contains("nativeString(R.string.panel_agent_channel_description)"))
+        assertTrue(camera.contains("nativeString(R.string.camera_in_use)"))
+        assertTrue(recovery.contains("nativeString(R.string.database_recovery_notification)"))
+        listOf(service, camera, recovery).forEach { source ->
+            assertEquals(emptyList<String>(), Regex("getString\\(R\\.string").findAll(source).map { it.value }.toList())
+        }
+        assertTrue(!service.contains("getNotificationChannel(STORAGE_HEALTH_CHANNEL_ID) == null"))
+        assertTrue(!service.contains("getNotificationChannel(channelId) == null"))
+        assertTrue(!recovery.contains("getNotificationChannel(CHANNEL) == null"))
+    }
+
+    @Test fun serviceResourcesUseAnExplicitLocaleBeforeAndroid13() {
+        val locale = TestSources.kotlin("NativeLocale.kt").readText()
+        val resolver = locale.substringAfter("fun string(context: Context").substringBefore("private const val")
+        assertTrue(resolver.contains("Build.VERSION.SDK_INT >= 33"))
+        assertTrue(resolver.contains("Configuration(context.resources.configuration)"))
+        assertTrue(resolver.contains("setLocale(Locale.forLanguageTag(tag))"))
+        assertTrue(resolver.contains("context.createConfigurationContext(configuration)"))
+        val server = kotlin("http/PaneldServer.kt")
+        val commit = server.substringAfter("config.applyBatch(").substringBefore("val prevDash")
+        assertTrue(commit.contains("p[\"ui_language\"]?.let(NativeLocale::apply)"))
+        val service = kotlin("PaneldService.kt")
+        assertTrue(service.contains("foregroundNotification(channelId, silent = true, nativeString(R.string.starting))"))
     }
 
     @Test fun everyFiniteDashboardRestartReasonHasANativeLocalization() {
@@ -147,5 +169,20 @@ class NativeLocalizationContractTest {
         finiteReasons.forEach { reason ->
             assertTrue("restart reason is not localized: $reason", dashboard.contains("\"$reason\""))
         }
+    }
+
+    @Test fun entityAttentionUsesTheLocalCopyUntilARealAddressExists() {
+        val dashboard = kotlin("DashboardActivity.kt")
+        val address = dashboard.substringAfter("private fun entitiesPageAddress()").substringBefore("private fun localizedBootstrapMilestone")
+        assertTrue(address.contains("String?"))
+        assertTrue(address.contains("return ip?.let { \"http://\$it:8888/entities\" }"))
+        assertTrue(!address.contains("port 8888"))
+        val presentation = dashboard.substringAfter("val bootstrapHint = surface.detail(").substringBefore("else if (bootstrapProblem")
+        assertTrue(presentation.contains("entitiesPageAddress()?.let"))
+        assertTrue(presentation.contains("R.string.entity_filter_attention_remote"))
+        assertTrue(presentation.contains("R.string.entity_filter_attention_detail"))
+        val authLatch = dashboard.substringAfter("private fun renderAuthLatchPage()").substringBefore("private fun installStatusSurface")
+        assertTrue(authLatch.contains("?: getString(R.string.config_activity_label)"))
+        assertTrue(!dashboard.contains("port 8888 of this panel's IP address"))
     }
 }

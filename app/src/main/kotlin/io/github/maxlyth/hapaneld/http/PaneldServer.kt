@@ -6,6 +6,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.canonicalHaOrigin
 import io.github.maxlyth.hapaneld.sameOriginDashboardRoute
 import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.NativeLocale
 import io.github.maxlyth.hapaneld.sensors.HaLifecycle
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleMessage
 import io.github.maxlyth.hapaneld.sensors.HaLifecycleRuntime
@@ -6900,6 +6901,7 @@ mismatched to the physical screen. Applies live, persists across reboot; needs s
                     config.applyBatch(
                         afterCommit = {
                             if ("tame_vendor_packages" in p) requestTameReconcileAfterCommit()
+                            p["ui_language"]?.let(NativeLocale::apply)
                         },
                     ) {
                     stageDirectConfigRegistryValues(config, postedValues, mutationPlan.changedKeys)

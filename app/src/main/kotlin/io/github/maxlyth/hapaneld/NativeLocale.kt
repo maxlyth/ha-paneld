@@ -1,22 +1,60 @@
 package io.github.maxlyth.hapaneld
 
 import android.content.Context
+import android.content.res.Configuration
+import android.os.Build
+import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
+import java.util.Locale
 
 /** Keep native Android resources on the same explicit language selected for ha-paneld's web UI. */
 internal object NativeLocale {
+    @Volatile private var explicitLanguageTag: String? = null
+
+    /** Read only the downgrade-compatible XML mirror; Guard DB recovery must not construct Config/AppState. */
+    fun applyBeforeDatabase(context: Context) {
+        val raw = runCatching {
+            context.applicationContext
+                .getSharedPreferences(LEGACY_CONFIG_PREFERENCES, Context.MODE_PRIVATE)
+                .getString(UI_LANGUAGE_KEY, AUTO_LANGUAGE)
+        }.getOrNull()
+        apply(raw ?: AUTO_LANGUAGE)
+    }
+
     fun apply(raw: String) {
         val locale = raw.takeUnless { it.equals("auto", ignoreCase = true) }
             ?.let { AppLocale.canonical(it, allowPseudo = BuildConfig.DEBUG) }
+        explicitLanguageTag = locale
         val desired = locale?.let(LocaleListCompat::forLanguageTags) ?: LocaleListCompat.getEmptyLocaleList()
         if (AppCompatDelegate.getApplicationLocales().toLanguageTags() != desired.toLanguageTags()) {
             AppCompatDelegate.setApplicationLocales(desired)
         }
     }
+
+    fun string(context: Context, @StringRes id: Int, vararg formatArgs: Any): String {
+        val tag = explicitLanguageTag
+        val localized = if (Build.VERSION.SDK_INT >= 33 || tag == null) {
+            context
+        } else {
+            val configuration = Configuration(context.resources.configuration).apply {
+                setLocale(Locale.forLanguageTag(tag))
+            }
+            context.createConfigurationContext(configuration)
+        }
+        return if (formatArgs.isEmpty()) localized.getString(id) else localized.getString(id, *formatArgs)
+    }
+
+    private const val LEGACY_CONFIG_PREFERENCES = "ha-paneld"
+    private const val UI_LANGUAGE_KEY = "ui_language"
+    private const val AUTO_LANGUAGE = "auto"
 }
+
+/** Services do not inherit AppCompat's activity locale override before Android 13. */
+internal fun Context.nativeString(@StringRes id: Int, vararg formatArgs: Any): String =
+    NativeLocale.string(this, id, *formatArgs)
 
 internal fun Context.localizedLabel(operation: SensitiveOperation): String = getString(
     when (operation) {
