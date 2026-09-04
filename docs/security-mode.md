@@ -1,6 +1,6 @@
 # Security mode
 
-ha-paneld's HTTP and MQTT controls are designed for a trusted home network. **Relaxed mode** is the default: existing automations, provisioning tools and browser actions continue to work without an extra prompt.
+ha-paneld's HTTP and MQTT controls are designed for a trusted home network. **Relaxed mode** is the default: existing automations, provisioning tools and browser actions continue to work without an extra prompt. One action is deliberately outside that rule. Turning the camera on from Home Assistant asks for approval at the panel in every mode, including Relaxed, so no remote message alone can put a camera into service; turning it off never does.
 
 For a panel on a network shared with less-trusted clients, optional **Hardened mode** adds physical-presence approval to selected high-impact network operations. It is an additional safety boundary, not a replacement for a VLAN or firewall and not general API authentication. Read-only endpoints and routine panel controls remain available under the normal trusted-LAN model.
 
@@ -31,7 +31,7 @@ When Hardened mode intercepts a protected HTTP request, the first attempt return
   "ok": false,
   "error": "approval-required",
   "approval_id": "…",
-  "message": "Approve this request on the panel, then retry it."
+  "message": "Approve this request physically on the panel, then retry it; it cannot be approved remotely."
 }
 ```
 
@@ -58,11 +58,15 @@ Hardened mode requires on-panel approval before a network client can:
 - activate or roll back a hardware profile;
 - play media fetched from a remote URL;
 - reload the dashboard renderer or reboot the panel;
+- download an APK from a link, which is approved separately from installing it: the download is bound to that exact URL's SHA-256 and no connection is opened until it is approved, so a Hardened install from a link asks twice;
+- advance database recovery maintenance;
 - repair Home Assistant Companion configuration or clear the built-in dashboard's browsing data;
 - change system display density or font scaling;
 - disable the configured keep-awake or prevent-idle-dim reachability guard through Configure or Home Assistant;
 - repair panel power safety; or
 - hide one exact unchanged manual-only power-safety caution. This acknowledgement changes presentation only; the underlying assessment, diagnostics and installer result remain unchanged.
+
+Enabling the panel camera is approved the same way, and is the one entry on this list that applies in Relaxed mode as well.
 
 A remote Hardened Configure request must save a power-safety reduction separately from package-taming or software-installation policy changes because those actions require different approval classes. Relaxed-mode and loopback combined saves remain direct.
 
