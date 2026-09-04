@@ -32,6 +32,7 @@ import {
 export const SOURCE_MANIFEST_SCHEMA = 1;
 export const LOCALE_RESULT_SCHEMA = 1;
 export const LOCALE_RECEIPT_SCHEMA = 1;
+export const TRANSLATION_PLAN_SCHEMA = 1;
 export const MAX_SEGMENTS_PER_PACKET = 20;
 export const MAX_SOURCE_CHARACTERS_PER_PACKET = 12_000;
 export const MAX_TARGET_CHARACTERS_PER_SEGMENT = 48_000;
@@ -80,11 +81,28 @@ const SOURCE_SEGMENT_KEYS = [
   "sectionPath",
   "occurrence",
   "sourceSha256",
-  "maskedSource",
-  "bindings",
   "sourceCharacters",
+  "maskedSourceSha256",
+  "bindingsSha256",
 ];
 const BINDING_KEYS = ["token", "value", "sha256"];
+const PLAN_ROOT_KEYS = ["schema", "sourceManifestSha256", "sourceRevision", "packets"];
+const PLAN_PACKET_KEYS = [
+  "id",
+  "locale",
+  "packetSha256",
+  "sourceManifestSha256",
+  "sourceRevision",
+  "records",
+];
+const PLAN_RECORD_KEYS = [
+  "document",
+  "segmentId",
+  "sourceSha256",
+  "sourceCharacters",
+  "maskedSource",
+  "bindings",
+];
 const PACKET_KEYS = ["id", "locale", "number", "sourceCharacters", "owners"];
 const OWNER_KEYS = ["document", "segmentId"];
 const RESULT_KEYS = [
@@ -444,6 +462,44 @@ function parserSegment(segment, document) {
   };
 }
 
+function sourceSegmentCommitment(segment) {
+  return {
+    id: segment.id,
+    ownerType: segment.ownerType,
+    sectionPath: segment.sectionPath,
+    occurrence: segment.occurrence,
+    sourceSha256: segment.sourceSha256,
+    sourceCharacters: segment.sourceCharacters,
+    maskedSourceSha256: sha256(segment.maskedSource),
+    bindingsSha256: sha256(canonicalJson(segment.bindings)),
+  };
+}
+
+function validateSourceSegmentCommitment(segment, document) {
+  exactKeys(segment, SOURCE_SEGMENT_KEYS, `${document}.${segment?.id ?? "segment"}`);
+  if (typeof segment.id !== "string" || !segment.id.startsWith(`${document}::`)) {
+    throw new Error(`${document}: segment ID must be document-qualified`);
+  }
+  if (typeof segment.ownerType !== "string" || !segment.ownerType) {
+    throw new Error(`${segment.id}: missing ownerType`);
+  }
+  if (!Array.isArray(segment.sectionPath) || segment.sectionPath.some(
+    (part) => typeof part !== "string" || !part,
+  )) {
+    throw new Error(`${segment.id}: sectionPath must contain non-empty strings`);
+  }
+  if (!Number.isInteger(segment.occurrence) || segment.occurrence < 1) {
+    throw new Error(`${segment.id}: occurrence must be positive`);
+  }
+  if (!Number.isInteger(segment.sourceCharacters) || segment.sourceCharacters < 1) {
+    throw new Error(`${segment.id}: sourceCharacters must be positive`);
+  }
+  for (const key of ["sourceSha256", "maskedSourceSha256", "bindingsSha256"]) {
+    assertSha(segment[key], `${segment.id}.${key}`);
+  }
+  return segment;
+}
+
 function buildPackets(documents, locales) {
   const packets = [];
   for (const locale of locales) {
@@ -497,7 +553,8 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
     const tree = readTreeSource(bound.repository, sourceRevision, sourcePath);
     const inventory = inventoryFor(sourcePath, tree.source);
     preflightMarkdown(inventory);
-    const segments = inventory.segments.map((segment) => parserSegment(segment, sourcePath));
+    const segments = inventory.segments.map((segment) =>
+      sourceSegmentCommitment(parserSegment(segment, sourcePath)));
     if (segments.length === 0 || new Set(segments.map((segment) => segment.id)).size !== segments.length) {
       throw new Error(`${sourcePath}: segment inventory must be non-empty and unique`);
     }
@@ -517,7 +574,6 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
   }
   const notice = {
     version: AUTHORITY_NOTICE_VERSION,
-    template: AUTHORITY_NOTICE_TEMPLATE,
     sha256: sha256(AUTHORITY_NOTICE_TEMPLATE),
     languagePickerVersion: LANGUAGE_PICKER_VERSION,
     sourceLanguagePickerSha256: sha256(
@@ -545,12 +601,11 @@ function validateSourceShape(manifest) {
   if (manifest.schema !== SOURCE_MANIFEST_SCHEMA) throw new Error("unsupported source manifest schema");
   exactKeys(
     manifest.notice,
-    ["version", "template", "sha256", "languagePickerVersion", "sourceLanguagePickerSha256"],
+    ["version", "sha256", "languagePickerVersion", "sourceLanguagePickerSha256"],
     "source manifest notice",
   );
   if (
     manifest.notice.version !== AUTHORITY_NOTICE_VERSION ||
-    manifest.notice.template !== AUTHORITY_NOTICE_TEMPLATE ||
     manifest.notice.sha256 !== sha256(AUTHORITY_NOTICE_TEMPLATE) ||
     manifest.notice.languagePickerVersion !== LANGUAGE_PICKER_VERSION
   ) {
@@ -589,10 +644,7 @@ function validateSourceShape(manifest) {
     }
     for (const [segmentIndex, segment] of document.segments.entries()) {
       exactKeys(segment, SOURCE_SEGMENT_KEYS, `${document.sourcePath}.segments[${segmentIndex}]`);
-      const rebuilt = parserSegment(segment, document.sourcePath);
-      if (canonicalJson(rebuilt) !== canonicalJson(segment)) {
-        throw new Error(`${segment.id}: non-canonical segment record`);
-      }
+      validateSourceSegmentCommitment(segment, document.sourcePath);
     }
   }
   for (const locale of SUPPORTED_LOCALES) {
@@ -631,6 +683,74 @@ export function validateSourceManifest(manifest, { repository, head = "HEAD" }) 
   });
   if (canonicalJson(rebuilt) !== canonicalJson(manifest)) {
     throw new Error("source manifest is not exactly equal to the canonical rebuilt manifest");
+  }
+  return rebuilt;
+}
+
+function expandedSourceSegments(manifest, repository) {
+  const expanded = new Map();
+  for (const document of manifest.documents) {
+    const tree = readTreeSource(repository, manifest.sourceRevision, document.sourcePath);
+    const inventory = inventoryFor(document.sourcePath, tree.source);
+    const segments = inventory.segments.map((segment) => parserSegment(segment, document.sourcePath));
+    const commitments = segments.map(sourceSegmentCommitment);
+    if (canonicalJson(commitments) !== canonicalJson(document.segments)) {
+      throw new Error(`${document.sourcePath}: private source expansion differs from the manifest commitments`);
+    }
+    expanded.set(document.sourcePath, new Map(segments.map((segment) => [segment.id, segment])));
+  }
+  return expanded;
+}
+
+export function buildTranslationPlan(manifest, { repository }) {
+  validateSourceManifest(manifest, { repository });
+  const manifestHash = sourceManifestSha256(manifest);
+  const expanded = expandedSourceSegments(manifest, repository);
+  return {
+    schema: TRANSLATION_PLAN_SCHEMA,
+    sourceManifestSha256: manifestHash,
+    sourceRevision: manifest.sourceRevision,
+    packets: manifest.packets.map((packet) => ({
+      id: packet.id,
+      locale: packet.locale,
+      packetSha256: packetHash(packet),
+      sourceManifestSha256: manifestHash,
+      sourceRevision: manifest.sourceRevision,
+      records: packet.owners.map((owner) => {
+        const segment = expanded.get(owner.document)?.get(owner.segmentId);
+        if (!segment) throw new Error(`${packet.id}: missing expanded owner ${owner.segmentId}`);
+        return {
+          document: owner.document,
+          segmentId: segment.id,
+          sourceSha256: segment.sourceSha256,
+          sourceCharacters: segment.sourceCharacters,
+          maskedSource: segment.maskedSource,
+          bindings: segment.bindings,
+        };
+      }),
+    })),
+  };
+}
+
+export function validateTranslationPlan(manifest, plan, { repository }) {
+  exactKeys(plan, PLAN_ROOT_KEYS, "translation plan");
+  if (plan.schema !== TRANSLATION_PLAN_SCHEMA || !Array.isArray(plan.packets)) {
+    throw new Error("unsupported translation plan schema");
+  }
+  for (const [packetIndex, packet] of plan.packets.entries()) {
+    exactKeys(packet, PLAN_PACKET_KEYS, `translation plan packets[${packetIndex}]`);
+    if (!Array.isArray(packet.records)) throw new Error(`${packet.id}: plan records must be an array`);
+    for (const [recordIndex, record] of packet.records.entries()) {
+      exactKeys(record, PLAN_RECORD_KEYS, `${packet.id}.records[${recordIndex}]`);
+      if (!Array.isArray(record.bindings)) throw new Error(`${record.segmentId}: plan bindings must be an array`);
+      for (const [bindingIndex, binding] of record.bindings.entries()) {
+        exactKeys(binding, BINDING_KEYS, `${record.segmentId}.bindings[${bindingIndex}]`);
+      }
+    }
+  }
+  const rebuilt = buildTranslationPlan(manifest, { repository });
+  if (canonicalJson(plan) !== canonicalJson(rebuilt)) {
+    throw new Error("translation plan is not exactly equal to its manifest-bound Git source expansion");
   }
   return rebuilt;
 }
@@ -730,7 +850,8 @@ export function buildLocaleReceipt(manifest, locale, results, { repository }) {
       }));
     const tree = readTreeSource(repository, manifest.sourceRevision, document.sourcePath);
     const inventory = inventoryFor(document.sourcePath, tree.source);
-    const canonicalSegments = inventory.segments.map((segment) => parserSegment(segment, document.sourcePath));
+    const canonicalSegments = inventory.segments.map((segment) =>
+      sourceSegmentCommitment(parserSegment(segment, document.sourcePath)));
     if (canonicalJson(canonicalSegments) !== canonicalJson(document.segments)) {
       throw new Error(`${document.sourcePath}: parser inventory differs from the source manifest`);
     }

@@ -14,6 +14,7 @@ import {
   applyLocaleReceipt,
   buildLocaleReceipt,
   buildSourceManifest,
+  buildTranslationPlan,
   canonicalJson,
   readCanonicalJson,
   sha256,
@@ -21,6 +22,7 @@ import {
   validateLocaleReceipt,
   validateRepository,
   validateSourceManifest,
+  validateTranslationPlan,
 } from "../lib/contract.mjs";
 import {
   SUPPORTED_LOCALES,
@@ -28,6 +30,9 @@ import {
   localizedOutputPath,
   normalizeSourcePath,
 } from "../lib/paths.mjs";
+
+const PRIVATE_PROVIDER_NAMES = ["Open" + "AI", "Anth" + "ropic", "Deep" + "L"];
+const PRIVATE_PROVIDER_URL = ["https", "://", "provider.example.invalid"].join("");
 
 function command(repository, args) {
   return execFileSync(args[0], args.slice(1), { cwd: repository, encoding: "utf8" }).trim();
@@ -52,7 +57,7 @@ function fixture() {
 
 <a id="stable-install"></a>
 
-Read the [guide](docs/guide.md#install), [this section](#install), and [the stable anchor](#stable-install). Keep \`Home Assistant\` available.
+Read the [guide](docs/guide.md#install), [this section](#install), and [the stable anchor](#stable-install). Providers ${PRIVATE_PROVIDER_NAMES.join(", ")} are described at [the provider site](${PRIVATE_PROVIDER_URL}).
 `);
   write(repository, "docs/guide.md", `# Install
 
@@ -69,9 +74,10 @@ Read the [guide](../README.md). Keep \`Home Assistant\` available.
   return { repository, sourceRevision, manifest };
 }
 
-function localeResults(manifest, locale) {
+function localeResults(manifest, locale, repository) {
   const manifestHash = sourceManifestSha256(manifest);
-  const byDocument = new Map(manifest.documents.map((document) => [document.sourcePath, document]));
+  const plan = buildTranslationPlan(manifest, { repository });
+  const planPackets = new Map(plan.packets.map((packet) => [packet.id, packet]));
   return manifest.packets.filter((packet) => packet.locale === locale).map((packet) => ({
     schema: 1,
     locale,
@@ -79,11 +85,10 @@ function localeResults(manifest, locale) {
     sourceRevision: manifest.sourceRevision,
     packetId: packet.id,
     packetSha256: sha256(canonicalJson(packet)),
-    records: packet.owners.map((owner) => {
-      const segment = byDocument.get(owner.document).segments.find((item) => item.id === owner.segmentId);
+    records: planPackets.get(packet.id).records.map((segment) => {
       return {
-        document: owner.document,
-        segmentId: owner.segmentId,
+        document: segment.document,
+        segmentId: segment.segmentId,
         sourceSha256: segment.sourceSha256,
         translation: segment.maskedSource,
         state: PROMOTABLE_STATE,
@@ -156,6 +161,44 @@ test("canonical JSON rejects noncanonical bytes and duplicate-key spelling", () 
   assert.throws(() => readCanonicalJson(duplicate), /canonical form|duplicate/);
 });
 
+test("public manifest contains commitments only and private plan exact-expands them", () => {
+  const current = fixture();
+  const manifestText = canonicalJson(current.manifest);
+  for (const forbidden of [...PRIVATE_PROVIDER_NAMES, PRIVATE_PROVIDER_URL, "maskedSource\""]) {
+    assert.equal(manifestText.includes(forbidden), false, forbidden);
+  }
+  assert.equal(manifestText.includes('"bindings"'), false);
+  const plan = buildTranslationPlan(current.manifest, { repository: current.repository });
+  assert.ok(canonicalJson(plan).includes(PRIVATE_PROVIDER_NAMES[0]));
+  assert.ok(canonicalJson(plan).includes(PRIVATE_PROVIDER_URL));
+  assert.deepEqual(
+    validateTranslationPlan(current.manifest, plan, { repository: current.repository }),
+    plan,
+  );
+
+  const changedManifest = clone(current.manifest);
+  changedManifest.documents[0].segments[0].maskedSourceSha256 = "0".repeat(64);
+  assert.throws(
+    () => validateTranslationPlan(changedManifest, plan, { repository: current.repository }),
+    /canonical rebuilt manifest|commitment/i,
+  );
+
+  const changedPlan = clone(plan);
+  changedPlan.packets[0].records[0].maskedSource += "tamper";
+  assert.throws(
+    () => validateTranslationPlan(current.manifest, changedPlan, { repository: current.repository }),
+    /not exactly equal/,
+  );
+  const changedBinding = clone(plan);
+  const recordWithBinding = changedBinding.packets[0].records.find((record) => record.bindings.length > 0);
+  assert.ok(recordWithBinding);
+  recordWithBinding.bindings[0].value += "tamper";
+  assert.throws(
+    () => validateTranslationPlan(current.manifest, changedBinding, { repository: current.repository }),
+    /not exactly equal/,
+  );
+});
+
 for (const [name, mutate] of [
   ["extra root field", (manifest) => { manifest.extra = true; }],
   ["parser version", (manifest) => { manifest.parser.unified = "0.0.0"; }],
@@ -163,7 +206,7 @@ for (const [name, mutate] of [
   ["packet owner", (manifest) => { manifest.packets[0].owners[0].segmentId += "-forged"; }],
   ["packet character count", (manifest) => { manifest.packets[0].sourceCharacters += 1; }],
   ["output path", (manifest) => { manifest.documents[0].outputs.de = "docs/fr/README.md"; }],
-  ["binding payload", (manifest) => { manifest.documents[0].segments[0].bindings[0].value += "x"; }],
+  ["binding commitment", (manifest) => { manifest.documents[0].segments[0].bindingsSha256 = "0".repeat(64); }],
 ]) {
   test(`canonical manifest rebuild rejects ${name}`, () => {
     const { repository, manifest } = fixture();
@@ -285,7 +328,7 @@ for (const [name, mutate] of [
 ]) {
   test(`locale reconciliation rejects ${name}`, () => {
     const current = fixture();
-    const results = localeResults(current.manifest, "de");
+    const results = localeResults(current.manifest, "de", current.repository);
     mutate(results);
     assert.throws(() => buildLocaleReceipt(current.manifest, "de", results, {
       repository: current.repository,
@@ -295,7 +338,7 @@ for (const [name, mutate] of [
 
 test("cross-locale packet results cannot be applied under another locale", () => {
   const current = fixture();
-  const chinese = localeResults(current.manifest, "zh-Hans");
+  const chinese = localeResults(current.manifest, "zh-Hans", current.repository);
   assert.throws(
     () => buildLocaleReceipt(current.manifest, "de", chinese, { repository: current.repository }),
     /binding mismatch/,
@@ -304,7 +347,7 @@ test("cross-locale packet results cannot be applied under another locale", () =>
 
 test("localized links relocate selected documents and translated heading fragments", () => {
   const current = fixture();
-  const results = localeResults(current.manifest, "de");
+  const results = localeResults(current.manifest, "de", current.repository);
   const heading = current.manifest.documents[0].segments.find((segment) => segment.ownerType === "heading");
   const record = results.flatMap((result) => result.records).find((item) => item.segmentId === heading.id);
   record.translation = record.translation.replace("Install", "Installieren");
@@ -333,7 +376,7 @@ test("a missing source fragment is rejected before a localized receipt is produc
     documents: ["README.md", "docs/guide.md"],
   });
   assert.throws(
-    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de"), {
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
       repository: current.repository,
     }),
     /fragment does not name a heading/,
@@ -342,7 +385,7 @@ test("a missing source fragment is rejected before a localized receipt is produc
 
 test("receipt apply is confined, no-clobber, banner-bound, hash-bound, and replay-safe", () => {
   const current = fixture();
-  const results = localeResults(current.manifest, "de");
+  const results = localeResults(current.manifest, "de", current.repository);
   const receipt = applyLocaleReceipt({
     repository: current.repository,
     manifest: current.manifest,
@@ -400,11 +443,16 @@ test("receipt apply is confined, no-clobber, banner-bound, hash-bound, and repla
   fs.writeFileSync(output, oversizedContent);
   const oversizedReceipt = clone(receipt);
   oversizedReceipt.documents[0].targetSha256 = sha256(oversizedContent);
+  const privatePlan = buildTranslationPlan(current.manifest, { repository: current.repository });
+  const paragraphRecord = privatePlan.packets.find((packet) => packet.locale === "de").records.find(
+    (record) => record.document === "README.md" && record.maskedSource.includes("Read the"),
+  );
+  assert.ok(paragraphRecord);
   const paragraphIndex = current.manifest.documents[0].segments.findIndex(
-    (segment) => segment.maskedSource.includes("Read the"),
+    (segment) => segment.id === paragraphRecord.segmentId,
   );
   assert.notEqual(paragraphIndex, -1);
-  const oversizedMasked = current.manifest.documents[0].segments[paragraphIndex].maskedSource.replace(
+  const oversizedMasked = paragraphRecord.maskedSource.replace(
     "Read the",
     oversizedTranslation,
   );
@@ -445,7 +493,7 @@ test("atomic multi-document apply rolls back every linked output after a later f
       repository: current.repository,
       manifest: current.manifest,
       locale: "de",
-      results: localeResults(current.manifest, "de"),
+      results: localeResults(current.manifest, "de", current.repository),
     }),
     /already exists/,
   );
@@ -468,7 +516,7 @@ test("atomic apply removes already-linked outputs when a later link operation fa
         repository: current.repository,
         manifest: current.manifest,
         locale: "de",
-        results: localeResults(current.manifest, "de"),
+        results: localeResults(current.manifest, "de", current.repository),
       }),
       /injected link failure/,
     );
@@ -491,7 +539,7 @@ test("an unselected Markdown fragment must still exist at the selected HEAD", ()
   command(current.repository, ["git", "add", "docs/guide.md"]);
   command(current.repository, ["git", "commit", "-qm", "rename unselected heading"]);
   assert.throws(
-    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de"), {
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
       repository: current.repository,
     }),
     /fragment is absent from selected HEAD/,
@@ -520,7 +568,7 @@ test("localized links require non-symlink targets at sourceRevision and existing
   command(repository, ["git", "add", "asset.txt"]);
   command(repository, ["git", "commit", "-qm", "delete linked asset"]);
   assert.throws(
-    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de"), { repository }),
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", repository), { repository }),
     /link target is absent/,
   );
   fs.symlinkSync("README.md", path.join(repository, "asset.txt"));
@@ -536,7 +584,7 @@ test("localized links require non-symlink targets at sourceRevision and existing
     () => buildLocaleReceipt(
       symlinkManifest,
       "de",
-      localeResults(symlinkManifest, "de"),
+      localeResults(symlinkManifest, "de", repository),
       { repository },
     ),
     /not a regular blob or tree/,
@@ -561,7 +609,7 @@ test("repository validation requires the exact manifest, receipt set, and output
       repository: current.repository,
       manifest,
       locale,
-      results: localeResults(manifest, locale),
+      results: localeResults(manifest, locale, current.repository),
     });
   }
   assert.deepEqual(validateRepository({
