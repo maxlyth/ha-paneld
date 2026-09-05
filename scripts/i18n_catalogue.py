@@ -73,6 +73,7 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "logs.source.system"): "System",
     ("de", "logs.state.app_live"): "App · live",
     ("de", "logs.state.system_live"): "System · live",
+    ("de", "profiles.action.rollback"): "Rollback",
     ("de", "setup.progress.name"): "Name",
     ("de", "setup.progress.server"): "Server",
     ("de", "shell.nav.dashboard"): "Dashboard",
