@@ -31,7 +31,7 @@ import io.github.maxlyth.hapaneld.util.localIpv4
 import io.github.maxlyth.hapaneld.util.localIpv6
 
 /**
- * Launcher Activity. Requests the notification permission (Android 13+) and starts [PaneldService],
+ * Launcher Activity. Starts [PaneldService] and requests the notification permission (Android 13+),
  * then either opens the configured dashboard under kiosk policy or shows a small standing screen — app
  * icon, the full config URL, and buttons to open the config page or dashboard. The standing screen stays
  * available for explicit admin and recovery entry. The agent runs headless as a foreground service
@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
         ) {
-            if (!maintenanceFence.stop(this)) startServiceAndChooseDestination()
+            if (!maintenanceFence.stop(this)) chooseDestination()
         }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -201,6 +201,9 @@ class MainActivity : AppCompatActivity() {
             )
         }
 
+        // Notification consent controls notification visibility, not service availability. Start while
+        // this Activity is foreground so remote setup works even if the dialog is left unanswered.
+        PaneldService.start(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -210,13 +213,8 @@ class MainActivity : AppCompatActivity() {
             setContentView(buildUi())
             requestNotif.launch(Manifest.permission.POST_NOTIFICATIONS)
         } else {
-            startServiceAndChooseDestination()
+            chooseDestination()
         }
-    }
-
-    private fun startServiceAndChooseDestination() {
-        PaneldService.start(this)
-        chooseDestination()
     }
 
     private fun chooseDestination() {

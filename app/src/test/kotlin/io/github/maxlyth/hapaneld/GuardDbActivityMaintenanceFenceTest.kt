@@ -56,12 +56,13 @@ class GuardDbActivityMaintenanceFenceTest {
 
         val main = TestSources.kotlin("MainActivity.kt").readText()
         assertGuardBefore(main, "override fun onCreate", "supportActionBar?.hide()")
+        assertGuardBefore(main, "override fun onCreate", "PaneldService.start(this)")
         assertGuardBefore(main, "override fun onStart", "updateKioskAdminVisibility()")
         val permissionResult = main.substring(
             main.indexOf("private val requestNotif"),
             main.indexOf("private fun dp", main.indexOf("private val requestNotif")),
         )
-        assertTrue(permissionResult.contains("if (!maintenanceFence.stop(this)) startServiceAndChooseDestination()"))
+        assertTrue(permissionResult.contains("if (!maintenanceFence.stop(this)) chooseDestination()"))
     }
 
     private fun assertGuardBefore(source: String, signature: String, firstOrdinaryWork: String) {

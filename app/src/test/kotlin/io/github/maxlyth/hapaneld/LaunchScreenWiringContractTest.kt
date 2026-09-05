@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,7 +41,7 @@ class LaunchScreenWiringContractTest {
     @Test fun serviceStartsBeforePolicyCanRedirectAndIntroPrecedesAcknowledgement() {
         val main = source("MainActivity.kt")
         val startup = main.substring(
-            main.indexOf("private fun startServiceAndChooseDestination"),
+            main.indexOf("override fun onCreate"),
             main.indexOf("private fun chooseDestination"),
         )
         assertTrue(startup.indexOf("PaneldService.start(this)") < startup.indexOf("chooseDestination()"))
@@ -84,6 +85,23 @@ class LaunchScreenWiringContractTest {
         assertTrue(destroy.contains("introAcknowledgement?.cancel()"))
         assertTrue(destroy.contains("presentedIntro = null"))
         assertTrue(destroy.contains("introGeneration++"))
+    }
+
+    @Test fun serviceStartsBeforeNotificationConsentAndResultOnlyNavigates() {
+        val main = source("MainActivity.kt")
+        val startup = main.substring(
+            main.indexOf("override fun onCreate"),
+            main.indexOf("private fun chooseDestination"),
+        )
+        val serviceStart = startup.indexOf("PaneldService.start(this)")
+        val permissionBranch = startup.indexOf("if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU")
+        assertTrue("The foreground service must start without a notification result", serviceStart >= 0)
+        assertTrue("Service startup must precede the permission branch", permissionBranch > serviceStart)
+        assertTrue(startup.indexOf("requestNotif.launch(Manifest.permission.POST_NOTIFICATIONS)") > permissionBranch)
+        assertTrue("The permission dialog keeps a non-blank standing surface", startup.indexOf("setContentView(buildUi())") in (permissionBranch + 1) until startup.indexOf("requestNotif.launch"))
+        val result = main.substring(main.indexOf("private val requestNotif"), main.indexOf("private fun dp"))
+        assertTrue("Either notification result permits navigation", result.contains("if (!maintenanceFence.stop(this)) chooseDestination()"))
+        assertFalse("Permission results must not restart the service", result.contains("PaneldService.start"))
     }
 
     @Test fun manualBuiltinRecoveryIsAnExplicitRetryRatherThanALatchBypass() {
