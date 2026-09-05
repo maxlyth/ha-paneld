@@ -424,9 +424,28 @@ function htmlDestinationRanges(raw, baseOffset) {
         });
         continue;
       }
+
+      const quoted = /^([^=]+\s*=\s*)(["'])([\s\S]*)\2$/.exec(attributeSource);
+      if (!quoted || quoted[3] !== attribute.value) {
+        throw new Error("unsupported HTML srcset attribute quoting or character references");
+      }
+      // A comma may be part of a URL (most notably a data: URL), so a plain
+      // split(",") can silently reclassify URL bytes as candidate separators.
+      // This deliberately supports only the unambiguous form used by the
+      // documentation: candidates separated by a comma and ASCII whitespace,
+      // with no comma inside a candidate. Other valid-but-ambiguous forms fail
+      // closed instead of receiving an unsafe partial rewrite.
+      const candidates = attribute.value.split(/,[\t\n\f\r ]+/);
+      if (candidates.some((candidate) => candidate.includes(","))) {
+        throw new Error("unsupported comma-bearing HTML srcset candidate");
+      }
+      const valueOffset = quoted[1].length + quoted[2].length;
       let searchFrom = 0;
-      for (const candidate of attribute.value.split(",").map((item) => item.trim().split(/\s+/)[0]).filter(Boolean)) {
-        const local = attributeSource.indexOf(candidate, searchFrom);
+      for (const rawCandidate of candidates) {
+        const match = /^\s*(\S+)(?:[\t\n\f\r ]+(?:\d+w|(?:\d+(?:\.\d+)?|\.\d+)x))?\s*$/.exec(rawCandidate);
+        if (!match) throw new Error("unsupported HTML srcset candidate syntax");
+        const candidate = match[1];
+        const local = attributeSource.indexOf(candidate, Math.max(searchFrom, valueOffset));
         if (local < 0) throw new Error("HTML srcset candidate lacks an exact source range");
         ranges.push({
           kind: "html-srcset",
@@ -751,12 +770,24 @@ export function reconstructMarkdown(inventory, records, options = { deterministi
     frozenChunksSha256: sha256(canonicalBytes(state.frozenChunks)),
     structuralProjection: projection,
   };
-  verifyFrozenByteProof(canonicalInventory, result);
+  verifyFrozenByteProof(canonicalInventory, result, { records, deterministicReplacements: replacements });
   return result;
 }
 
-export function verifyFrozenByteProof(inventory, result) {
+export function verifyFrozenByteProof(inventory, result, options) {
   const canonicalInventory = validateInventory(inventory);
+  exactKeys(options, ["records", "deterministicReplacements"], "Markdown frozen-byte proof inputs");
+  validateRecords(canonicalInventory, options.records);
+  const replacements = validateDeterministicReplacements(canonicalInventory, options.deterministicReplacements);
+  const expected = constructBody(canonicalInventory, options.records, replacements);
+  const expectedChangedRanges = expected.changedRanges.filter((range) => range.outputStart !== range.outputEnd);
+  const identityRecords = canonicalInventory.segments.map((segment) => ({
+    document: segment.document,
+    segmentId: segment.segmentId,
+    sourceSha256: segment.sourceSha256,
+    translation: segment.maskedSource,
+  }));
+  const identityBody = constructBody(canonicalInventory, identityRecords, replacements).body;
   exactKeys(result, [
     "document", "sourceSha256", "body", "bodySha256", "changedRanges", "frozenChunks",
     "frozenChunksSha256", "structuralProjection",
@@ -766,6 +797,18 @@ export function verifyFrozenByteProof(inventory, result) {
   }
   const bodyBytes = Buffer.from(result.body);
   if (sha256(bodyBytes) !== result.bodySha256) throw new Error("frozen Markdown proof has a stale body hash");
+  if (result.body !== expected.body) throw new Error("frozen Markdown proof does not match canonical reconstruction");
+  if (!canonicalBytes(result.changedRanges).equals(canonicalBytes(expectedChangedRanges))
+      || !canonicalBytes(result.frozenChunks).equals(canonicalBytes(expected.frozenChunks))) {
+    throw new Error("frozen Markdown proof coverage does not match canonical reconstruction");
+  }
+  const expectedProjection = structuralProjection(expected.body);
+  if (!canonicalBytes(expectedProjection).equals(canonicalBytes(structuralProjection(identityBody)))) {
+    throw new Error(`Markdown structural projection changed: ${canonicalInventory.document}`);
+  }
+  if (!canonicalBytes(result.structuralProjection).equals(canonicalBytes(expectedProjection))) {
+    throw new Error("frozen Markdown proof has a stale structural projection");
+  }
   if (sha256(canonicalBytes(result.frozenChunks)) !== result.frozenChunksSha256) {
     throw new Error("frozen Markdown proof manifest hash mismatch");
   }

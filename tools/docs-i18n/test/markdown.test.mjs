@@ -189,11 +189,22 @@ test("binds exact owner exclusions and proves deterministic shell changes separa
   assert.ok(result.changedRanges.some((range) => range.kind === "deterministic"));
   assert.ok(result.changedRanges.some((range) => range.kind === "translated"));
   assert.equal(result.frozenChunksSha256.length, 64);
-  assert.equal(verifyFrozenByteProof(inventory, result), true);
+  const proofInputs = { records: records(inventory, (masked) => masked.replace("Translate this paragraph.", "Diesen Absatz übersetzen.")), deterministicReplacements: [{
+    exclusionId: excluded.exclusionId,
+    sourceSha256: excluded.sourceSha256,
+    replacement: "[English](../../README.md) · **Deutsch**",
+  }] };
+  assert.equal(verifyFrozenByteProof(inventory, result, proofInputs), true);
   const tampered = structuredClone(result);
   tampered.body = tampered.body.replace("# Guide", "! Guide");
   tampered.bodySha256 = sha256(tampered.body);
-  assert.throws(() => verifyFrozenByteProof(inventory, tampered), /byte proof failed/);
+  assert.throws(() => verifyFrozenByteProof(inventory, tampered, proofInputs), /canonical reconstruction/);
+
+  const reclassified = structuredClone(result);
+  reclassified.frozenChunks = [];
+  reclassified.frozenChunksSha256 = sha256("[]");
+  reclassified.changedRanges = [{ kind: "translated", outputStart: 0, outputEnd: Buffer.byteLength(result.body) }];
+  assert.throws(() => verifyFrozenByteProof(inventory, reclassified, proofInputs), /coverage does not match canonical reconstruction/);
 });
 
 test("discovers Markdown and HTML link ranges without regex truncation", () => {
@@ -207,6 +218,18 @@ test("discovers Markdown and HTML link ranges without regex truncation", () => {
   const rewritten = rewriteLinkDestinations(source, ({ url }) => `../${url}`);
   assert.ok(rewritten.body.includes('src="../image.png"'));
   assert.ok(rewritten.body.includes('srcset="../small.png 1x, ../large.png 2x"'));
+
+  const commaUrl = '<img srcset="data:image/svg+xml,%3Csvg%3E 1x, image.png 2x">\n';
+  assert.throws(() => linkDestinations(commaUrl), /comma-bearing HTML srcset candidate/);
+  assert.throws(() => rewriteLinkDestinations(commaUrl, ({ url }) => `../${url}`), /comma-bearing HTML srcset candidate/);
+  assert.throws(
+    () => linkDestinations('<img srcset="asset,variant.png 1x, image.png 2x">\n'),
+    /comma-bearing HTML srcset candidate/,
+  );
+
+  const nameLikeValue = '<img srcset="srcset 1x, other.png 2x">\n';
+  const nameLikeRewritten = rewriteLinkDestinations(nameLikeValue, ({ url }) => `../${url}`);
+  assert.equal(nameLikeRewritten.body, '<img srcset="../srcset 1x, ../other.png 2x">\n');
 });
 
 test("derives exact GitHub-compatible anchors including duplicate suffixes", () => {
