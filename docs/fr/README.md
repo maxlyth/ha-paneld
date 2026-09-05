@@ -68,7 +68,7 @@ Vous n’avez pas besoin de cloner le dépôt ni de fournir d’options. Le prog
 Si une étape requise échoue, le programme d’installation indique le problème et se ferme sans prétendre que l’installation a réussi. Corrigez le problème et exécutez de nouveau la même commande.
 
 > [!IMPORTANT]
-> **Vérifiez Home Assistant et le WebView système du panneau avant le premier chargement du tableau de bord.** Le moteur de rendu intégré nécessite Home Assistant 2026.4.2 ou une version ultérieure, ainsi qu’un WebView moderne. Même un panneau neuf peut contenir un WebView trop ancien pour afficher un tableau de bord actuel. Consultez [Configuration requise du moteur de rendu intégré](../built-in-renderer.md#requirements-and-compatibility) et [Mise à jour du WebView système](../hardware/README.md#updating-the-system-webview).
+> **Vérifiez Home Assistant et le WebView système du panneau avant le premier chargement du tableau de bord.** Le moteur de rendu intégré nécessite Home Assistant 2026.4.2 ou une version ultérieure, ainsi qu’un WebView moderne. Même un panneau neuf peut contenir un WebView trop ancien pour afficher un tableau de bord actuel. Consultez [Configuration requise du moteur de rendu intégré](built-in-renderer.md#configuration-requise-et-compatibilité) et [Mise à jour du WebView système](../hardware/README.md#updating-the-system-webview).
 
 Pour suivre la dernière version publiée, y compris les versions candidates, ajoutez `--prerelease`. Une version stable plus récente reste prioritaire :
 
@@ -158,7 +158,7 @@ Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-s
 ### Utilisation de ha-paneld
 
 - [Provisionnement et mises à jour du parc](provisioning.md) : installation sans intervention, configuration d’ADB par USB et réseau, sauvegardes et mises à jour de l’ensemble du parc.
-- [Moteur de rendu intégré](../built-in-renderer.md) : prérequis, connexion à distance, sélection du tableau de bord, récupération et limitations intentionnelles.
+- [Moteur de rendu intégré](built-in-renderer.md) : prérequis, connexion à distance, sélection du tableau de bord, récupération et limitations intentionnelles.
 - [Performances](../performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
 - [Luminosité adaptative](../adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.
 - [Proximité adaptative et réveil d’un geste de la main](../adaptive-proximity.md) : configurez la détection de proximité et apprenez au panneau le geste de réveil.

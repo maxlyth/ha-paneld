@@ -68,7 +68,7 @@ No necesitas clonar el repositorio ni proporcionar ninguna opción. El instalado
 Si falla un paso obligatorio, el instalador indica el problema y se cierra sin afirmar que la instalación se haya completado correctamente. Corrige el problema y vuelve a ejecutar el mismo comando.
 
 > [!IMPORTANT]
-> **Comprueba Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulta [Requisitos del renderizador integrado](../built-in-renderer.md#requirements-and-compatibility) y [Actualización del WebView del sistema](../hardware/README.md#updating-the-system-webview).
+> **Comprueba Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulta [Requisitos del renderizador integrado](built-in-renderer.md#requisitos-y-compatibilidad) y [Actualización del WebView del sistema](../hardware/README.md#updating-the-system-webview).
 
 Para seguir la versión publicada más reciente, incluidas las versiones candidatas, añade `--prerelease`. Una versión estable más reciente sigue teniendo prioridad:
 
@@ -158,7 +158,7 @@ Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-p
 ### Uso de ha-paneld
 
 - [Aprovisionamiento y actualizaciones de flotas](provisioning.md): instalación desatendida, configuración de ADB mediante USB y red, copias de seguridad y actualizaciones de toda la flota.
-- [Renderizador integrado](../built-in-renderer.md): requisitos, inicio de sesión remoto, selección del panel de control, recuperación y limitaciones deliberadas.
+- [Renderizador integrado](built-in-renderer.md): requisitos, inicio de sesión remoto, selección del panel de control, recuperación y limitaciones deliberadas.
 - [Rendimiento](../performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
 - [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
 - [Proximidad adaptativa y activación con un gesto de la mano](../adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.

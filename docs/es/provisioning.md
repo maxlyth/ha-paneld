@@ -69,7 +69,7 @@ Protect an exported config like a credential. It contains settings and secrets, 
 
 The easiest setup is on the panel's `:8888` **Configure** page. Under **Home Assistant connection**, enter the Home Assistant URL and choose **Browser sign-in**. Open the short-lived link in an administrator's browser and complete the sign-in, then select **Built-in renderer** in the Dashboard card. A long-lived access token remains available for automated or compatibility setup, but it is not needed for the normal interactive journey.
 
-El renderizador integrado requiere Home Assistant 2026.4.2 o una versión posterior y una versión actual compatible de Android System WebView. Consulta los [requisitos del renderizador y los controles de apariencia](../built-in-renderer.md#requirements-and-compatibility).
+El renderizador integrado requiere Home Assistant 2026.4.2 o una versión posterior y una versión actual compatible de Android System WebView. Consulta los [requisitos del renderizador y los controles de apariencia](built-in-renderer.md#requisitos-y-compatibilidad).
 
 For unattended provisioning, `--builtin` selects the renderer and signs in to Home Assistant from this computer, so nothing is typed on the panel:
 

@@ -68,7 +68,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 如果必需步骤失败，安装程序会指出问题并退出，且不会声称安装成功。修正问题后，再次运行同一命令。
 
 > [!IMPORTANT]
-> **首次加载仪表盘前，请检查 Home Assistant 和面板的系统 WebView。** 内置渲染器要求 Home Assistant 2026.4.2 或更高版本以及现代 WebView。即使是新面板，其中的 WebView 也可能过旧，无法显示当前的仪表盘。请参阅 [内置渲染器要求](../built-in-renderer.md#requirements-and-compatibility) 和 [更新系统 WebView](../hardware/README.md#updating-the-system-webview)。
+> **首次加载仪表盘前，请检查 Home Assistant 和面板的系统 WebView。** 内置渲染器要求 Home Assistant 2026.4.2 或更高版本以及现代 WebView。即使是新面板，其中的 WebView 也可能过旧，无法显示当前的仪表盘。请参阅 [内置渲染器要求](built-in-renderer.md#要求与兼容性) 和 [更新系统 WebView](../hardware/README.md#updating-the-system-webview)。
 
 要跟踪最新发布的版本（包括候选发布版本），请添加 `--prerelease`。如有更新的稳定版本，仍会优先使用该稳定版本：
 
@@ -158,7 +158,7 @@ Web 界面会用锁标记不可用的控制项，并说明面板缺少什么。�
 ### 使用 ha-paneld
 
 - [预配和设备群更新](provisioning.md)：无人值守安装、USB 和网络 ADB 设置、备份以及整个设备群的更新。
-- [内置渲染器](../built-in-renderer.md)：要求、远程登录、仪表盘选择、恢复和有意设置的限制。
+- [内置渲染器](built-in-renderer.md)：要求、远程登录、仪表盘选择、恢复和有意设置的限制。
 - [性能](../performance.md)：查明仪表盘运行缓慢的原因，并衡量实体筛选的效果。
 - [自适应亮度](../adaptive-brightness.md)：选择光源、了解学习机制，以及移动面板后重置历史记录。
 - [自适应接近感应和挥手唤醒](../adaptive-proximity.md)：配置接近检测并示教唤醒手势。

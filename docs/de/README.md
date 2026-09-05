@@ -68,7 +68,7 @@ Du musst das Repository weder klonen noch Optionen angeben. Das Installationspro
 Wenn ein erforderlicher Schritt fehlschlägt, nennt das Installationsprogramm das Problem und wird beendet, ohne zu behaupten, dass die Installation erfolgreich war. Behebe das Problem und führe denselben Befehl erneut aus.
 
 > [!IMPORTANT]
-> **Überprüfe Home Assistant und das System WebView des Panels, bevor das Dashboard zum ersten Mal geladen wird.** Der integrierte Renderer erfordert Home Assistant 2026.4.2 oder neuer und ein modernes WebView. Selbst ein neues Panel kann ein WebView enthalten, das zu alt ist, um ein aktuelles Dashboard anzuzeigen. Siehe [Anforderungen des integrierten Renderers](../built-in-renderer.md#requirements-and-compatibility) und [System WebView aktualisieren](../hardware/README.md#updating-the-system-webview).
+> **Überprüfe Home Assistant und das System WebView des Panels, bevor das Dashboard zum ersten Mal geladen wird.** Der integrierte Renderer erfordert Home Assistant 2026.4.2 oder neuer und ein modernes WebView. Selbst ein neues Panel kann ein WebView enthalten, das zu alt ist, um ein aktuelles Dashboard anzuzeigen. Siehe [Anforderungen des integrierten Renderers](built-in-renderer.md#anforderungen-und-kompatibilität) und [System WebView aktualisieren](../hardware/README.md#updating-the-system-webview).
 
 Füge `--prerelease` hinzu, um die neueste veröffentlichte Version einschließlich Release Candidates zu verwenden. Eine neuere stabile Version hat weiterhin Vorrang:
 
@@ -158,7 +158,7 @@ Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweitert
 ### ha-paneld verwenden
 
 - [Bereitstellung und Flottenaktualisierungen](provisioning.md): unbeaufsichtigte Installation, Einrichtung von ADB über USB und Netzwerk, Sicherungen und Aktualisierungen der gesamten Flotte.
-- [Integrierter Renderer](../built-in-renderer.md): Anforderungen, Remote-Anmeldung, Dashboard-Auswahl, Wiederherstellung und bewusste Einschränkungen.
+- [Integrierter Renderer](built-in-renderer.md): Anforderungen, Remote-Anmeldung, Dashboard-Auswahl, Wiederherstellung und bewusste Einschränkungen.
 - [Leistung](../performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
 - [Adaptive Helligkeit](../adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
 - [Adaptive Näherungserkennung und Aktivierung durch Winken](../adaptive-proximity.md): die Näherungserkennung konfigurieren und die Aktivierungsgeste anlernen.
