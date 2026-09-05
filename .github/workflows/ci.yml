@@ -84,18 +84,16 @@ jobs:
           cache-provider: basic
 
       # The bundled-helper installer tests drive the real staging script, which requires
-      # its transaction record to be owned by root exactly as it is on a panel. Hosted
-      # runners are unprivileged, so the unit tests run as root and hand the tree back
-      # before the cacheable Gradle work continues.
-      - name: Unit tests
+      # its transaction record to be owned by root exactly as it is on a panel, so the
+      # whole invocation runs as root and hands the tree back afterwards. Splitting it
+      # into a root half and an unprivileged half costs a second Gradle startup and
+      # configuration pass, which is far more expensive than the work it isolates.
+      - name: Test, lint, and build APKs
         run: |
           sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
-            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --stacktrace
+            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
           sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}"
-
-      - name: Lint and build APKs
-        run: ./gradlew :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |
@@ -264,7 +262,12 @@ jobs:
       # directory is owned by the calling user, which holds on a panel because the
       # daemon is root. Hosted runners are unprivileged, so the suite runs as root.
       - name: Unit tests
-        run: sudo make -C helper test
+        run: |
+          sudo make -C helper test && exit 0
+          echo "::group::standalone installer transaction trace"
+          sudo bash -x helper/test/standalone_installer_transaction_test.sh || true
+          echo "::endgroup::"
+          exit 1
 
       - name: App↔daemon contract cross-check
         run: helper/test/contract-check.sh
