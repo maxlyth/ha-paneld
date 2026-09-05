@@ -54,7 +54,7 @@ L’interface web permet de configurer un écran, d’installer des logiciels et
 
 Si vous ne savez pas si ha-paneld peut fonctionner sur votre panneau, consultez [Panneaux et état de la prise en charge](#panneaux-et-état-de-la-prise-en-charge) avant l’installation.
 
-Commencez par rendre ADB accessible sur le réseau. Sur certains panneaux, cette option se trouve dans les options pour les développeurs ; d’autres nécessitent une connexion USB ponctuelle pour exécuter `adb tcpip 5555`. Le [guide de provisionnement](../provisioning.md) et les [guides du matériel](../hardware/) propres à chaque modèle expliquent les méthodes disponibles. Exécutez ensuite cette commande depuis un ordinateur disposant de `adb` sur le même réseau :
+Commencez par rendre ADB accessible sur le réseau. Sur certains panneaux, cette option se trouve dans les options pour les développeurs ; d’autres nécessitent une connexion USB ponctuelle pour exécuter `adb tcpip 5555`. Le [guide de provisionnement](provisioning.md) et les [guides du matériel](../hardware/) propres à chaque modèle expliquent les méthodes disponibles. Exécutez ensuite cette commande depuis un ordinateur disposant de `adb` sur le même réseau :
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -76,14 +76,14 @@ Pour suivre la dernière version publiée, y compris les versions candidates, aj
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-Le même programme d’installation prend en charge le provisionnement d’un panneau unique sans intervention manuelle. Consultez [Provisionnement et mises à jour du parc](../provisioning.md) pour les installations automatisées par script, l’amorçage USB, les panneaux sans ADB réseau et les mises à jour de l’ensemble du parc.
+Le même programme d’installation prend en charge le provisionnement d’un panneau unique sans intervention manuelle. Consultez [Provisionnement et mises à jour du parc](provisioning.md) pour les installations automatisées par script, l’amorçage USB, les panneaux sans ADB réseau et les mises à jour de l’ensemble du parc.
 
 ha-paneld n’est pas distribué via Google Play ; l’installation nécessite donc toujours un chargement latéral. Cela s’applique également aux panneaux récents qui ont par ailleurs accès au Play Store.
 
 ### Autres méthodes d’installation
 
 - **F-Droid sur le panneau :** ajoutez [le dépôt F-Droid de ha-paneld](../fdroid.md) pour installer et mettre à jour les versions stables sans ordinateur. F-Droid vous avertit lorsqu’une mise à jour est disponible et vous permet de l’installer sur le panneau ; les versions candidates ne sont pas incluses. Les versions 4.0.0 et ultérieures du micrologiciel Sonoff NSPanel Pro incluent F-Droid. Cette méthode installe l’application, mais les fonctionnalités nécessitant un accès root requièrent toujours les étapes de provisionnement habituelles.
-- **Chargement latéral manuel ou amorçage USB :** utilisez l’APK de la [dernière version](https://github.com/maxlyth/ha-paneld/releases) et suivez [Provisionnement et mises à jour du parc](../provisioning.md) pour les autorisations et la configuration restantes.
+- **Chargement latéral manuel ou amorçage USB :** utilisez l’APK de la [dernière version](https://github.com/maxlyth/ha-paneld/releases) et suivez [Provisionnement et mises à jour du parc](provisioning.md) pour les autorisations et la configuration restantes.
 
 ## Choisir le mode d’exécution du tableau de bord
 
@@ -151,13 +151,13 @@ L’interface web signale les commandes indisponibles par un cadenas et explique
 
 **Un accès direct à `su` dans ha-paneld reste nécessaire :** verrouillage d’Android sur le tableau de bord, journaux système complets, commande des relais lorsque le profil l’exige et ancien chemin d’importation de session Companion. Une sauvegarde complète peut inclure une connexion Companion existante, qui passe toujours par l’assistant authentifié : le protocole limité aux descripteurs est l’unique chemin, y compris sur les panneaux avec accès root direct.
 
-Il existe une [solution de repli avancée](../provisioning.md#shizuku-fallback-for-unrooted-panels) limitée pour les panneaux réellement dépourvus d’accès root, mais elle ne fait pas partie du parcours normal pour le matériel pris en charge et ne fournit pas les fonctionnalités matérielles réservées à l’accès root.
+Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-shizuku-pour-les-panneaux-non-rootés) limitée pour les panneaux réellement dépourvus d’accès root, mais elle ne fait pas partie du parcours normal pour le matériel pris en charge et ne fournit pas les fonctionnalités matérielles réservées à l’accès root.
 
 ## Guides et références
 
 ### Utilisation de ha-paneld
 
-- [Provisionnement et mises à jour du parc](../provisioning.md) : installation sans intervention, configuration d’ADB par USB et réseau, sauvegardes et mises à jour de l’ensemble du parc.
+- [Provisionnement et mises à jour du parc](provisioning.md) : installation sans intervention, configuration d’ADB par USB et réseau, sauvegardes et mises à jour de l’ensemble du parc.
 - [Moteur de rendu intégré](../built-in-renderer.md) : prérequis, connexion à distance, sélection du tableau de bord, récupération et limitations intentionnelles.
 - [Performances](../performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
 - [Luminosité adaptative](../adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.

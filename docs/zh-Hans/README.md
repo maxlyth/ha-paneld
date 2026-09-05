@@ -54,7 +54,7 @@ Web 界面提供一个统一的位置，用于配置面板、安装软件以及�
 
 如果不确定 ha-paneld 能否在你的面板上运行，请在安装前查看[面板和支持状态](#面板和支持状态)。
 
-首先让 ADB 可通过网络使用。在某些面板上，可在开发者选项中进行此设置；其他面板则需要通过 USB 连接一次并运行 `adb tcpip 5555`。[预配指南](../provisioning.md)和针对具体型号的[硬件指南](../hardware/)介绍了可用的方法。然后，在同一网络中装有 `adb` 的计算机上运行以下命令：
+首先让 ADB 可通过网络使用。在某些面板上，可在开发者选项中进行此设置；其他面板则需要通过 USB 连接一次并运行 `adb tcpip 5555`。[预配指南](provisioning.md)和针对具体型号的[硬件指南](../hardware/)介绍了可用的方法。然后，在同一网络中装有 `adb` 的计算机上运行以下命令：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -76,14 +76,14 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-同一安装程序还支持无人值守的单面板预配。有关脚本化安装、USB 初始预配、无网络 ADB 的面板以及整个设备群的更新，请参阅[预配和设备群更新](../provisioning.md)。
+同一安装程序还支持无人值守的单面板预配。有关脚本化安装、USB 初始预配、无网络 ADB 的面板以及整个设备群的更新，请参阅[预配和设备群更新](provisioning.md)。
 
 ha-paneld 不通过 Google Play 分发，因此安装始终需要旁加载。对于本来可以访问 Play Store 的较新面板也是如此。
 
 ### 其他安装方式
 
 - **面板上的 F-Droid：** 添加 [ha-paneld 的 F-Droid 存储库](../fdroid.md)，无需计算机即可安装和更新稳定版本。有更新可用时，F-Droid 会通知你，并允许你在面板上安装；不包括候选发布版本。Sonoff NSPanel Pro 固件 4.0.0 及更高版本包含 F-Droid。此方式会安装应用，但需要 root 的功能仍需执行常规预配步骤。
-- **手动旁加载或 USB 初始预配：** 使用 [最新版本](https://github.com/maxlyth/ha-paneld/releases) 中的 APK，并按照 [预配和设备群更新](../provisioning.md) 完成其余权限授予和设置。
+- **手动旁加载或 USB 初始预配：** 使用 [最新版本](https://github.com/maxlyth/ha-paneld/releases) 中的 APK，并按照 [预配和设备群更新](provisioning.md) 完成其余权限授予和设置。
 
 ## 选择仪表盘的运行方式
 
@@ -151,13 +151,13 @@ Web 界面会用锁标记不可用的控制项，并说明面板缺少什么。�
 
 **ha-paneld 内部仍需直接使用 `su`：** 将 Android 锁定到仪表盘、完整的系统日志、配置文件要求的继电器控制，以及旧版 Companion 会话导入路径。完整备份可以包含现有的 Companion 登录信息，该操作始终通过经过身份验证的辅助程序完成：即使在直接使用 root 的面板上，文件描述符约束的协议也是唯一途径。
 
-对于确实未取得 root 权限的面板，有一种受限的[高级后备方案](../provisioning.md#shizuku-fallback-for-unrooted-panels)，但它不属于常规的受支持硬件路径，也不提供仅限 root 权限的硬件功能。
+对于确实未取得 root 权限的面板，有一种受限的[高级后备方案](provisioning.md#未-root-面板的-shizuku-回退方案)，但它不属于常规的受支持硬件路径，也不提供仅限 root 权限的硬件功能。
 
 ## 指南和参考资料
 
 ### 使用 ha-paneld
 
-- [预配和设备群更新](../provisioning.md)：无人值守安装、USB 和网络 ADB 设置、备份以及整个设备群的更新。
+- [预配和设备群更新](provisioning.md)：无人值守安装、USB 和网络 ADB 设置、备份以及整个设备群的更新。
 - [内置渲染器](../built-in-renderer.md)：要求、远程登录、仪表盘选择、恢复和有意设置的限制。
 - [性能](../performance.md)：查明仪表盘运行缓慢的原因，并衡量实体筛选的效果。
 - [自适应亮度](../adaptive-brightness.md)：选择光源、了解学习机制，以及移动面板后重置历史记录。

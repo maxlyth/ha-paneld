@@ -54,7 +54,7 @@ L'interfaccia web offre un unico posto in cui configurare un pannello, installar
 
 Se non sai se ha-paneld può essere eseguito sul tuo pannello, consulta [Pannelli e stato del supporto](#pannelli-e-stato-del-supporto) prima dell'installazione.
 
-Per prima cosa, rendi ADB disponibile in rete. Su alcuni pannelli questa opzione si trova nelle Opzioni sviluppatore; altri richiedono una connessione USB una tantum per eseguire `adb tcpip 5555`. La [guida al provisioning](../provisioning.md) e le [guide hardware](../hardware/) specifiche per modello illustrano i metodi disponibili. Quindi esegui quanto segue da un computer con `adb` connesso alla stessa rete:
+Per prima cosa, rendi ADB disponibile in rete. Su alcuni pannelli questa opzione si trova nelle Opzioni sviluppatore; altri richiedono una connessione USB una tantum per eseguire `adb tcpip 5555`. La [guida al provisioning](provisioning.md) e le [guide hardware](../hardware/) specifiche per modello illustrano i metodi disponibili. Quindi esegui quanto segue da un computer con `adb` connesso alla stessa rete:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -76,14 +76,14 @@ Per seguire la versione pubblicata più recente, incluse le release candidate, a
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-Lo stesso programma di installazione supporta il provisioning non presidiato di un singolo pannello. Consulta [Provisioning e aggiornamenti del parco dispositivi](../provisioning.md) per installazioni tramite script, bootstrap USB, pannelli senza ADB di rete e aggiornamenti dell'intero parco dispositivi.
+Lo stesso programma di installazione supporta il provisioning non presidiato di un singolo pannello. Consulta [Provisioning e aggiornamenti del parco dispositivi](provisioning.md) per installazioni tramite script, bootstrap USB, pannelli senza ADB di rete e aggiornamenti dell'intero parco dispositivi.
 
 ha-paneld non viene distribuito tramite Google Play, quindi l'installazione richiede sempre il sideloading. Questo vale anche per i pannelli più recenti che altrimenti hanno accesso al Play Store.
 
 ### Altri metodi di installazione
 
 - **F-Droid sul pannello:** aggiungi il [repository F-Droid di ha-paneld](../fdroid.md) per installare e aggiornare le versioni stabili senza un computer. F-Droid ti avvisa quando è disponibile un aggiornamento e ti consente di installarlo sul pannello; le release candidate non sono incluse. Il firmware Sonoff NSPanel Pro 4.0.0 e versioni successive include F-Droid. Questo installa l'app, ma le funzionalità che richiedono l'accesso root necessitano comunque dei normali passaggi di provisioning.
-- **Sideloading manuale o bootstrap USB:** usa l'APK dell'[ultima versione](https://github.com/maxlyth/ha-paneld/releases) e segui [Provisioning e aggiornamenti del parco dispositivi](../provisioning.md) per le autorizzazioni e la configurazione rimanenti.
+- **Sideloading manuale o bootstrap USB:** usa l'APK dell'[ultima versione](https://github.com/maxlyth/ha-paneld/releases) e segui [Provisioning e aggiornamenti del parco dispositivi](provisioning.md) per le autorizzazioni e la configurazione rimanenti.
 
 ## Scegli come eseguire la dashboard
 
@@ -151,13 +151,13 @@ L'interfaccia web contrassegna con un lucchetto i controlli non disponibili e sp
 
 **L'uso diretto di `su` all'interno di ha-paneld è ancora necessario:** blocco di Android sulla dashboard, log di sistema completi, controllo dei relè quando richiesto dal profilo e percorso legacy per l'importazione della sessione Companion. Un backup completo può includere un accesso Companion esistente, che passa sempre attraverso l'helper autenticato: il protocollo limitato ai descrittori è l'unico percorso, anche sui pannelli con root diretto.
 
-Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](../provisioning.md#shizuku-fallback-for-unrooted-panels) limitata, che tuttavia non fa parte del normale percorso per l'hardware supportato e non offre le funzionalità hardware disponibili solo con il root.
+Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](provisioning.md#shizuku-come-soluzione-di-ripiego-per-i-pannelli-senza-root) limitata, che tuttavia non fa parte del normale percorso per l'hardware supportato e non offre le funzionalità hardware disponibili solo con il root.
 
 ## Guide e riferimenti
 
 ### Utilizzo di ha-paneld
 
-- [Provisioning e aggiornamenti del parco dispositivi](../provisioning.md): installazione automatica, configurazione di ADB tramite USB e rete, backup e aggiornamenti dell'intero parco dispositivi.
+- [Provisioning e aggiornamenti del parco dispositivi](provisioning.md): installazione automatica, configurazione di ADB tramite USB e rete, backup e aggiornamenti dell'intero parco dispositivi.
 - [Renderer integrato](../built-in-renderer.md): requisiti, login remoto, selezione della dashboard, ripristino e limitazioni intenzionali.
 - [Prestazioni](../performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
 - [Luminosità adattiva](../adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.

@@ -54,7 +54,7 @@ La interfaz web ofrece un único lugar para configurar un panel, instalar softwa
 
 Si no tienes claro si ha-paneld puede ejecutarse en tu panel, consulta [Paneles y estado de compatibilidad](#paneles-y-estado-de-compatibilidad) antes de instalarlo.
 
-Primero, habilita ADB a través de la red. En algunos paneles, esto se configura en las opciones para desarrolladores; otros necesitan una única conexión USB para ejecutar `adb tcpip 5555`. La [guía de aprovisionamiento](../provisioning.md) y las [guías de hardware](../hardware/) específicas de cada modelo explican los métodos disponibles. A continuación, ejecuta lo siguiente desde un ordenador que tenga `adb` y esté en la misma red:
+Primero, habilita ADB a través de la red. En algunos paneles, esto se configura en las opciones para desarrolladores; otros necesitan una única conexión USB para ejecutar `adb tcpip 5555`. La [guía de aprovisionamiento](provisioning.md) y las [guías de hardware](../hardware/) específicas de cada modelo explican los métodos disponibles. A continuación, ejecuta lo siguiente desde un ordenador que tenga `adb` y esté en la misma red:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -76,14 +76,14 @@ Para seguir la versión publicada más reciente, incluidas las versiones candida
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-El mismo instalador permite el aprovisionamiento desatendido de un solo panel. Consulta [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para obtener información sobre instalaciones mediante scripts, arranque inicial por USB, paneles sin ADB de red y actualizaciones de toda la flota.
+El mismo instalador permite el aprovisionamiento desatendido de un solo panel. Consulta [Aprovisionamiento y actualizaciones de flotas](provisioning.md) para obtener información sobre instalaciones mediante scripts, arranque inicial por USB, paneles sin ADB de red y actualizaciones de toda la flota.
 
 ha-paneld no se distribuye a través de Google Play, por lo que la instalación siempre requiere carga lateral. Esto también se aplica a los paneles más recientes que, por lo demás, tienen acceso a Play Store.
 
 ### Otros métodos de instalación
 
 - **F-Droid en el panel:** añade el [repositorio de F-Droid de ha-paneld](../fdroid.md) para instalar y actualizar versiones estables sin un ordenador. F-Droid te avisa cuando hay una actualización disponible y te permite instalarla en el panel; las versiones candidatas no están incluidas. El firmware 4.0.0 y posterior de Sonoff NSPanel Pro incluye F-Droid. Esto instala la aplicación, pero las funciones que requieren acceso root siguen necesitando los pasos de aprovisionamiento habituales.
-- **Carga lateral manual o arranque inicial por USB:** usa el APK de la [versión más reciente](https://github.com/maxlyth/ha-paneld/releases) y sigue [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para configurar los permisos restantes y completar la puesta en marcha.
+- **Carga lateral manual o arranque inicial por USB:** usa el APK de la [versión más reciente](https://github.com/maxlyth/ha-paneld/releases) y sigue [Aprovisionamiento y actualizaciones de flotas](provisioning.md) para configurar los permisos restantes y completar la puesta en marcha.
 
 ## Elige cómo se ejecuta el panel de control
 
@@ -151,13 +151,13 @@ La interfaz web marca con un candado los controles no disponibles y explica qué
 
 **Sigue siendo necesario usar `su` directamente dentro de ha-paneld para:** bloquear Android en el panel de control, obtener registros completos del sistema, controlar relés cuando lo requiera el perfil y usar la ruta heredada de importación de sesiones de Companion. Una copia de seguridad completa puede incluir un inicio de sesión de Companion existente, que siempre pasa por el asistente autenticado: el protocolo limitado por descriptores es la única ruta, incluso en paneles con root directo.
 
-Existe una [alternativa avanzada](../provisioning.md#shizuku-fallback-for-unrooted-panels) limitada para paneles que realmente no tienen acceso root, pero no forma parte de la vía habitual para hardware compatible ni proporciona funciones de hardware que requieren acceso root.
+Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-paneles-sin-root) limitada para paneles que realmente no tienen acceso root, pero no forma parte de la vía habitual para hardware compatible ni proporciona funciones de hardware que requieren acceso root.
 
 ## Guías y referencia
 
 ### Uso de ha-paneld
 
-- [Aprovisionamiento y actualizaciones de flotas](../provisioning.md): instalación desatendida, configuración de ADB mediante USB y red, copias de seguridad y actualizaciones de toda la flota.
+- [Aprovisionamiento y actualizaciones de flotas](provisioning.md): instalación desatendida, configuración de ADB mediante USB y red, copias de seguridad y actualizaciones de toda la flota.
 - [Renderizador integrado](../built-in-renderer.md): requisitos, inicio de sesión remoto, selección del panel de control, recuperación y limitaciones deliberadas.
 - [Rendimiento](../performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
 - [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.

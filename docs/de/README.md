@@ -54,7 +54,7 @@ Diese App ist für dedizierte Wandpanels vorgesehen, nicht für persönliche Sma
 
 Wenn du nicht sicher bist, ob ha-paneld auf deinem Panel ausgeführt werden kann, lies vor der Installation den Abschnitt [Panels und Unterstützungsstatus](#panels-und-unterstützungsstatus).
 
-Mache ADB zunächst über das Netzwerk verfügbar. Bei einigen Panels ist dies eine Einstellung in den Entwickleroptionen; andere benötigen eine einmalige USB-Verbindung, um `adb tcpip 5555` auszuführen. Der [Bereitstellungsleitfaden](../provisioning.md) und die modellspezifischen [Hardwareleitfäden](../hardware/) erläutern die verfügbaren Methoden. Führe anschließend diesen Befehl auf einem Computer mit `adb` im selben Netzwerk aus:
+Mache ADB zunächst über das Netzwerk verfügbar. Bei einigen Panels ist dies eine Einstellung in den Entwickleroptionen; andere benötigen eine einmalige USB-Verbindung, um `adb tcpip 5555` auszuführen. Der [Bereitstellungsleitfaden](provisioning.md) und die modellspezifischen [Hardwareleitfäden](../hardware/) erläutern die verfügbaren Methoden. Führe anschließend diesen Befehl auf einem Computer mit `adb` im selben Netzwerk aus:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -76,14 +76,14 @@ Füge `--prerelease` hinzu, um die neueste veröffentlichte Version einschließl
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-Dasselbe Installationsprogramm unterstützt die unbeaufsichtigte Bereitstellung eines einzelnen Panels. Unter [Bereitstellung und Flottenaktualisierungen](../provisioning.md) findest du skriptgesteuerte Installationen, USB-Bootstrap, Panels ohne ADB-Zugriff über das Netzwerk und Aktualisierungen der gesamten Flotte.
+Dasselbe Installationsprogramm unterstützt die unbeaufsichtigte Bereitstellung eines einzelnen Panels. Unter [Bereitstellung und Flottenaktualisierungen](provisioning.md) findest du skriptgesteuerte Installationen, USB-Bootstrap, Panels ohne ADB-Zugriff über das Netzwerk und Aktualisierungen der gesamten Flotte.
 
 ha-paneld wird nicht über Google Play vertrieben, daher ist für die Installation immer Sideloading erforderlich. Dies gilt auch für neuere Panels, die ansonsten Zugriff auf den Play Store haben.
 
 ### Andere Installationsmethoden
 
 - **F-Droid auf dem Panel:** Füge das [F-Droid-Repository von ha-paneld](../fdroid.md) hinzu, um stabile Versionen ohne Computer zu installieren und zu aktualisieren. F-Droid benachrichtigt dich, wenn eine Aktualisierung verfügbar ist, und ermöglicht dir, sie auf dem Panel zu installieren; Release Candidates sind nicht enthalten. Sonoff NSPanel Pro-Firmware 4.0.0 und neuer enthält F-Droid. Dadurch wird die App installiert, aber Funktionen, die Root-Rechte erfordern, benötigen weiterhin die normalen Bereitstellungsschritte.
-- **Manuelles Sideloading oder USB-Bootstrap:** Verwende die APK aus der [neuesten Version](https://github.com/maxlyth/ha-paneld/releases) und folge für die verbleibenden Berechtigungen und die Einrichtung der Anleitung [Bereitstellung und Flottenaktualisierungen](../provisioning.md).
+- **Manuelles Sideloading oder USB-Bootstrap:** Verwende die APK aus der [neuesten Version](https://github.com/maxlyth/ha-paneld/releases) und folge für die verbleibenden Berechtigungen und die Einrichtung der Anleitung [Bereitstellung und Flottenaktualisierungen](provisioning.md).
 
 ## Auswählen, wie das Dashboard ausgeführt wird
 
@@ -151,13 +151,13 @@ Die Weboberfläche kennzeichnet nicht verfügbare Bedienelemente mit einem Schlo
 
 **Direktes `su` innerhalb von ha-paneld ist weiterhin erforderlich:** Android auf das Dashboard beschränken, vollständige Systemprotokolle, Relaissteuerung, wenn das Profil sie erfordert, und der alte Importpfad für Companion-Sitzungen. Eine vollständige Sicherung kann eine bestehende Companion-Anmeldung enthalten, die immer über den authentifizierten Helfer läuft: Das auf Deskriptoren beschränkte Protokoll ist auch auf Panels mit direktem Root-Zugriff der einzige Pfad.
 
-Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweiterte Ausweichlösung](../provisioning.md#shizuku-fallback-for-unrooted-panels). Sie gehört jedoch nicht zum regulären Pfad für unterstützte Hardware und stellt keine Hardwarefunktionen bereit, die Root-Zugriff erfordern.
+Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweiterte Ausweichlösung](provisioning.md#shizuku-ausweichlösung-für-panels-ohne-root-zugriff). Sie gehört jedoch nicht zum regulären Pfad für unterstützte Hardware und stellt keine Hardwarefunktionen bereit, die Root-Zugriff erfordern.
 
 ## Anleitungen und Referenz
 
 ### ha-paneld verwenden
 
-- [Bereitstellung und Flottenaktualisierungen](../provisioning.md): unbeaufsichtigte Installation, Einrichtung von ADB über USB und Netzwerk, Sicherungen und Aktualisierungen der gesamten Flotte.
+- [Bereitstellung und Flottenaktualisierungen](provisioning.md): unbeaufsichtigte Installation, Einrichtung von ADB über USB und Netzwerk, Sicherungen und Aktualisierungen der gesamten Flotte.
 - [Integrierter Renderer](../built-in-renderer.md): Anforderungen, Remote-Anmeldung, Dashboard-Auswahl, Wiederherstellung und bewusste Einschränkungen.
 - [Leistung](../performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
 - [Adaptive Helligkeit](../adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
