@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     name: Android build
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -197,7 +197,7 @@ jobs:
 
   dependency-integrity:
     name: Dependency integrity
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -256,7 +256,7 @@ jobs:
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
     name: Privileged helper
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -271,6 +271,10 @@ jobs:
       # daemon is root. Hosted runners are unprivileged, so the suite runs as root.
       - name: Unit tests
         run: |
+          # Running as root leaves root-owned artefacts behind. On a throwaway image that
+          # is harmless; on a reused workspace the next checkout cannot clean them. Always
+          # hand the tree back, whichever result the suite produced.
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
           sudo make -C helper test && exit 0
           # The suite stops at its first failing script, so one run only ever reveals one
           # problem. Re-run the shell contracts individually to report all of them at once.
