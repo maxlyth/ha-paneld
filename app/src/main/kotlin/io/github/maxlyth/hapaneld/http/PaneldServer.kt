@@ -1394,6 +1394,28 @@ internal fun logShipStatusJson(status: LogShipStatusProjection): String =
     "{\"enabled\":${status.enabled},\"configured\":${status.configured}," +
         "\"text\":${Json.str(status.text)}}"
 
+/** JSON projected into browser pages. Install, Entities and shared Runtime controls need per-key
+ * provenance to distinguish a genuine translation from an English compatibility fallback. */
+internal fun browserI18nPayload(strings: AppStrings, prefixes: Set<String>): String {
+    val resolved = strings.resolved(prefixes)
+    val entries = resolved.entries.joinToString(",") { (key, localized) ->
+        "${Json.str(key)}:${Json.str(localized.text)}"
+    }
+    val provenancePrefixes = setOf("entities.", "install.", "runtime.")
+    val provenance = if (prefixes.any(provenancePrefixes::contains)) {
+        val languages = resolved.entries.joinToString(",") { (key, localized) ->
+            "${Json.str(key)}:${Json.str(localized.language)}"
+        }
+        ",\"languages\":{$languages}"
+    } else ""
+    return "{\"locale\":${Json.str(strings.requestedLocale)},\"strings\":{$entries}$provenance}"
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+}
+
 class PaneldServer internal constructor(
     private val config: Config,
     private val cacheDir: File,
@@ -3975,31 +3997,6 @@ class PaneldServer internal constructor(
         val fragment = if (fragmentAt < 0) "" else path.substring(fragmentAt)
         val separator = if ('?' in address) '&' else '?'
         return "$address${separator}lang=${esc(AppLocale.ENGLISH)}$fragment"
-    }
-
-    /** JSON inside a script data block: escape HTML-significant bytes as JSON unicode escapes so a
-     * translated value can never terminate the element or become markup. */
-    private fun browserI18nPayload(strings: AppStrings, prefixes: Set<String>): String {
-        val resolved = strings.resolved(prefixes)
-        val entries = resolved.entries.joinToString(",") { (key, localized) ->
-            "${Json.str(key)}:${Json.str(localized.text)}"
-        }
-        // Entities needs per-record provenance so an absent/stale/draft presentation code can fall back
-        // to the exact compatibility field instead of presenting the English source as a translation.
-        // Shared runtime interactions need the same distinction before choosing an endpoint's English
-        // message. Keep the additive bytes off pages whose consumers need only the text map.
-        val provenance = if ("entities." in prefixes || "runtime." in prefixes) {
-            val languages = resolved.entries.joinToString(",") { (key, localized) ->
-                "${Json.str(key)}:${Json.str(localized.language)}"
-            }
-            ",\"languages\":{$languages}"
-        } else ""
-        return "{\"locale\":${Json.str(strings.requestedLocale)},\"strings\":{$entries}$provenance}"
-            .replace("<", "\\u003c")
-            .replace(">", "\\u003e")
-            .replace("&", "\\u0026")
-            .replace("\u2028", "\\u2028")
-            .replace("\u2029", "\\u2029")
     }
 
     private fun navBar(

@@ -9,6 +9,7 @@ import { chromium } from 'playwright-core';
 
 const asset = fileURLToPath(new URL('../app/src/main/assets/install.js', import.meta.url));
 const powerAsset = fileURLToPath(new URL('../app/src/main/assets/power-safety.js', import.meta.url));
+const catalogueDir = fileURLToPath(new URL('../app/src/main/assets/i18n/', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 
@@ -40,6 +41,21 @@ function frozenObject(source, name) {
 
 function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+async function realCatalogueProjection(locale, prefixes) {
+  const source = JSON.parse(await readFile(`${catalogueDir}/en.json`, 'utf8'));
+  const target = JSON.parse(await readFile(`${catalogueDir}/${locale}.json`, 'utf8'));
+  const strings = {}, languages = {};
+  for (const [key, english] of Object.entries(source.strings)) {
+    if (!prefixes.some((prefix) => key.startsWith(prefix))) continue;
+    const candidate = target.strings[key];
+    const localized = candidate && candidate.sourceHash === english.sourceHash &&
+      (candidate.state === 'machine-cross-checked' || candidate.state === 'community-corrected');
+    strings[key] = localized ? candidate.text : english.text;
+    languages[key] = localized ? locale : 'en';
+  }
+  return { locale, strings, languages };
 }
 
 test('Install browser copies the exact frozen v3 presentation and direct-token tables', async () => {
@@ -80,18 +96,21 @@ async function rig(t, options = {}) {
   Object.assign(strings, options.extraStrings || {});
   Object.keys(options.extraStrings || {}).forEach((key) => { languages[key] = 'zh-Hans'; });
   if (options.untranslated) delete languages[typeof presentations[options.untranslated] === 'string' ? presentations[options.untranslated] : presentations[options.untranslated].other];
-  const payload = JSON.stringify({ locale: 'zh-Hans', strings, languages }).replaceAll('<', '\\u003c');
+  const projection = options.projection || { locale: 'zh-Hans', strings, languages };
+  const projectedStrings = projection.strings;
+  const projectedLocale = projection.locale;
+  const payload = JSON.stringify(projection).replaceAll('<', '\\u003c');
   const status = options.status || { warnings: [], warning_presentations: [] };
   const server = createServer((request, response) => {
     const requestUrl = new URL(request.url, 'http://panel.test');
     const path = requestUrl.pathname;
     if (options.route && options.route(request, response, requestUrl)) return;
     if (path === '/install.js') { response.writeHead(200, { 'content-type': 'application/javascript' }); response.end(source); return; }
-    if (path === '/api/v1/radio') { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"present":false}'); return; }
+    if (path === '/api/v1/radio') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(options.radio || { present: false })); return; }
     if (path === '/api/v1/status') { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(status)); return; }
-    const helper = options.noHelper ? '' : `<script>window.HaI18n={locale:'zh-Hans',t:(key,fallback,values)=>{const all=${JSON.stringify(strings)};return String(Object.prototype.hasOwnProperty.call(all,key)?all[key]:fallback).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(token,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):token);}};</script>`;
+    const helper = options.noHelper ? '' : `<script>window.HaI18n={locale:${JSON.stringify(projectedLocale)},t:(key,fallback,values)=>{const all=${JSON.stringify(projectedStrings)};return String(Object.prototype.hasOwnProperty.call(all,key)?all[key]:fallback).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(token,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):token);}};</script>`;
     response.writeHead(200, { 'content-type': 'text/html' });
-    response.end(`<!doctype html><html lang="zh-Hans"><body><script id="ha-i18n" type="application/json">${payload}</script>${helper}${options.html || '<div id="audit-out"></div><div id="bk-msg"></div>'}<script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/install.js"></script></body></html>`);
+    response.end(`<!doctype html><html lang="${projectedLocale}"><body><script id="ha-i18n" type="application/json">${payload}</script>${helper}${options.html || '<div id="audit-out"></div><div id="bk-msg"></div>'}<script>window.CardColumnAlignment={attach:()=>()=>{}};</script><script src="/install.js"></script></body></html>`);
   });
   await new Promise((done) => server.listen(0, '127.0.0.1', done));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
@@ -100,6 +119,30 @@ async function rig(t, options = {}) {
   await page.goto(`http://127.0.0.1:${server.address().port}/${options.query || ''}`, { waitUntil: 'domcontentloaded' });
   return { page, presentations, params };
 }
+
+browserTest('Install localizes closed wire tokens from the real German catalogue projection', async (t) => {
+  const projection = await realCatalogueProjection('de', ['shell.', 'install.']);
+  const { page } = await rig(t, {
+    projection,
+    radio: { present: true, status: 'ready', state: 'degraded_unjoined' },
+    html: '<div id="radiocard" style="display:none"><span id="radio-status"></span><span id="radio-health"></span></div><div id="bk-msg"></div>',
+  });
+
+  await page.waitForFunction(() => document.getElementById('radio-health').textContent.length > 0);
+  assert.equal(await page.locator('#radio-health').textContent(), 'aktiviert, aber keinem Netz beigetreten');
+  assert.notEqual(await page.locator('#radio-health').textContent(), 'degraded_unjoined');
+
+  const restore = await page.evaluate(() => {
+    window.HaPaneldInstallPresentation.renderRestoreResult({
+      message: 'complete',
+      presentation: { code: 'restore-completed', params: {} },
+      result: { config: { status: 'rollback_failed' } },
+    });
+    return document.getElementById('bk-msg').textContent;
+  });
+  assert.match(restore, /Rollback fehlgeschlagen/);
+  assert.doesNotMatch(restore, /rollback_failed/);
+});
 
 browserTest('Install accepts every frozen presentation code with its exact parameter shape', async (t) => {
   const { page, presentations, params } = await rig(t);
