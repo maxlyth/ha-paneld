@@ -5247,6 +5247,35 @@ static int acquire_helper_transaction_lock(helper_transaction_lock *lock) {
     int exact = dir >= 0 && helper_transaction_lock_dir_exact(parent, dir, &dir_before) &&
         helper_transaction_lock_namespace_exact(dir) &&
         helper_transaction_lock_pid_exact(dir, &holder, &pid_before) == 0;
+#ifdef HAPANELD_TEST
+    if (!exact) {
+        struct stat probe;
+        int have = dir >= 0 && fstat(dir, &probe) == 0;
+        fprintf(stderr,
+            "LOCKDIAG dir_fd=%d dir_exact=%d ns_exact=%d pid_exact=%d "
+            "uid=%ld egid=%ld st_uid=%ld st_gid=%ld mode=%o errno=%d\n",
+            dir,
+            dir >= 0 ? helper_transaction_lock_dir_exact(parent, dir, NULL) : -1,
+            dir >= 0 ? helper_transaction_lock_namespace_exact(dir) : -1,
+            dir >= 0 ? helper_transaction_lock_pid_exact(dir, &rebound_holder, &pid_after) : -1,
+            (long)geteuid(), (long)getegid(),
+            have ? (long)probe.st_uid : -1L, have ? (long)probe.st_gid : -1L,
+            have ? (unsigned)(probe.st_mode & 07777) : 0u, errno);
+        if (dir >= 0) {
+            int dup2fd = openat(dir, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (dup2fd >= 0) {
+                DIR *ds = fdopendir(dup2fd);
+                if (ds) {
+                    for (struct dirent *e = readdir(ds); e; e = readdir(ds))
+                        fprintf(stderr, "LOCKDIAG entry=%s\n", e->d_name);
+                    closedir(ds);
+                } else {
+                    close(dup2fd);
+                }
+            }
+        }
+    }
+#endif
     if (!exact) {
         if (dir >= 0) close(dir);
         close(parent);
