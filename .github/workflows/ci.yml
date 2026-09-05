@@ -11,9 +11,13 @@ on:
 permissions:
   contents: read
 
+# A push supersedes the run before it, so group by ref and let the newer run cancel
+# the older one. Keying a push on its own run id gave every push a group of one, so
+# superseded runs kept burning minutes on a commit that was no longer the tip. That
+# matters more on a single self-hosted machine, where they also contend for it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
