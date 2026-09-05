@@ -11,17 +11,14 @@ on:
 permissions:
   contents: read
 
-# A push supersedes the run before it, so group by ref and let the newer run
-# cancel the older one. Keying a push on its own run id gave every push a group
-# of one, so superseded runs kept burning minutes to no purpose.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Android build
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,7 +142,7 @@ jobs:
 
   host-contracts:
     name: Host contracts
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
     # The host-side shell contracts have crept from ten minutes to nearly fourteen and
     # crossed the old fifteen-minute ceiling. Give the job real headroom while the
     # provisioning suite, which dominates the step, is split up.
@@ -195,7 +192,7 @@ jobs:
 
   dependency-integrity:
     name: Dependency integrity
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -254,7 +251,7 @@ jobs:
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
     name: Privileged helper
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
