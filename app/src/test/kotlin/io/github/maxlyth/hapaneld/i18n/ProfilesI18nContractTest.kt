@@ -141,7 +141,7 @@ class ProfilesI18nContractTest {
         assertTrue("Profiles route must identify its active surface to the shared page shell", route.contains("page(\"profiles\""))
         assertTrue(
             "shared page shell must project the active surface's complete namespace",
-            server.readText().contains("translationPrefixes = setOf(\"shell.\", \"\$active.\")"),
+            server.readText().contains("translationPrefixes = setOf(\"shell.\", \"\$active.\", \"runtime.\")"),
         )
     }
 

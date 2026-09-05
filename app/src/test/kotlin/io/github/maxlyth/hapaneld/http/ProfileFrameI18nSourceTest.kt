@@ -20,7 +20,7 @@ class ProfileFrameI18nSourceTest {
         assertFalse(route.contains("+ AppLocale.ENGLISH"))
         assertTrue(
             server.substringAfter("private fun page(").substringBefore("private fun setupBody")
-                .contains("translationPrefixes = setOf(\"shell.\", \"\$active.\")"),
+                .contains("translationPrefixes = setOf(\"shell.\", \"\$active.\", \"runtime.\")"),
         )
     }
 

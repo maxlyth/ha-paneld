@@ -154,7 +154,7 @@ class LogsFleetI18nContractTest {
         val page = functionBody("page")
         assertTrue(
             "page() must project the active body prefix for browser-side translations",
-            page.contains("translationPrefixes = setOf(\"shell.\", \"${'$'}active.\")"),
+            page.contains("translationPrefixes = setOf(\"shell.\", \"${'$'}active.\", \"runtime.\")"),
         )
     }
 

@@ -136,7 +136,7 @@ class SetupI18nContractTest {
                 .containsMatchIn(route),
         )
         assertFalse("Setup must not report unconditional English after full promotion", route.contains("+ AppLocale.ENGLISH"))
-        assertTrue(route.contains("translationPrefixes = setOf(\"shell.\", \"setup.\")"))
+        assertTrue(route.contains("translationPrefixes = setOf(\"shell.\", \"setup.\", \"runtime.\")"))
         assertTrue(route.contains("setupBody(strings, preserveExplicitEnglish)"))
     }
 
