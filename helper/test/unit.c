@@ -597,7 +597,13 @@ static void test_sysctl_execution_results(void) {
     // nodes fails closed and must never construct a shell command.
     sysexec_stub_reset();
     dispatch_reply("GOV performance", out, sizeof out);
-    CHECK(strcmp(out, "ERR\n") == 0, "GOV fails closed without writable cpufreq nodes (got '%s')\n", out);
+    // The fail-closed half only means anything where the nodes really are unwritable. A
+    // privileged run on a machine that exposes them can write one, so assert that half
+    // against the precondition it names. Never shelling out stays unconditional.
+    int cpufreq_writable =
+        access("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", W_OK) == 0;
+    CHECK(cpufreq_writable || strcmp(out, "ERR\n") == 0,
+          "GOV fails closed without writable cpufreq nodes (got '%s')\n", out);
     CHECK(sysexec_stub_count_run("scaling_governor") == 0,
           "GOV never constructs a request-derived shell command\n");
 
