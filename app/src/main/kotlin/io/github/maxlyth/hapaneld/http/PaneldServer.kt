@@ -1401,8 +1401,9 @@ internal fun browserI18nPayload(strings: AppStrings, prefixes: Set<String>): Str
     val entries = resolved.entries.joinToString(",") { (key, localized) ->
         "${Json.str(key)}:${Json.str(localized.text)}"
     }
-    val provenancePrefixes = setOf("entities.", "install.", "runtime.")
-    val provenance = if (prefixes.any(provenancePrefixes::contains)) {
+    val provenance = if (
+        "entities." in prefixes || "install." in prefixes || "runtime." in prefixes
+    ) {
         val languages = resolved.entries.joinToString(",") { (key, localized) ->
             "${Json.str(key)}:${Json.str(localized.language)}"
         }
