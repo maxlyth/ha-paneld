@@ -4388,7 +4388,7 @@ browserTest('Catalogue search reports its per-section counts and brings Suggeste
   await settled(page, () => document.getElementById('entity-search-status').textContent.startsWith('Matches:'));
   assert.equal(
     await page.locator('#entity-search-status').textContent(),
-    'Matches: Current 60 · Suggested 3 · Stale or noisy 0',
+    'Matches: Current: 60, Suggested: 3, Stale or noisy: 0',
   );
 
   await settled(page, () => {
