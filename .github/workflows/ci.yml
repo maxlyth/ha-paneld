@@ -11,13 +11,9 @@ on:
 permissions:
   contents: read
 
-# A push supersedes the run before it, so group by ref and let the newer run cancel
-# the older one. Keying a push on its own run id gave every push a group of one, so
-# superseded runs kept burning minutes on a commit that was no longer the tip. That
-# matters more on a single self-hosted machine, where they also contend for it.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -146,7 +142,8 @@ jobs:
 
   host-contracts:
     name: Host contracts
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    # Env-sensitive shell contracts (sqlite3/adb/coreutils) are calibrated to the hosted image; keep on hosted.
+    runs-on: ubuntu-24.04
     # The host-side shell contracts have crept from ten minutes to nearly fourteen and
     # crossed the old fifteen-minute ceiling. Give the job real headroom while the
     # provisioning suite, which dominates the step, is split up.
@@ -271,20 +268,8 @@ jobs:
       - name: Unit tests
         run: |
           sudo make -C helper test && exit 0
-          # The suite stops at its first failing script, so one run only ever reveals one
-          # problem. Re-run the shell contracts individually to report all of them at once.
-          echo "::group::remaining helper shell contracts"
-          for contract in root_command_quote_test standalone_installer_transaction_test \
-              standalone_installer_identity_test install_daemon_security_test \
-              direct_root_transport_test; do
-            if sudo bash "helper/test/$contract.sh" > "/tmp/$contract.out" 2>&1; then
-              echo "ok       $contract"
-            else
-              echo "FAILED   $contract"
-              grep -E '^\s*(FAIL|✗)' "/tmp/$contract.out" | head -20 || true
-              tail -25 "/tmp/$contract.out"
-            fi
-          done
+          echo "::group::standalone installer transaction trace"
+          sudo bash -x helper/test/standalone_installer_transaction_test.sh || true
           echo "::endgroup::"
           exit 1
 
