@@ -37,6 +37,15 @@ def assert_docs_workflow_contract(workflow: str) -> None:
         raise AssertionError("host-contracts job boundary is missing")
     host = workflow[host_start:host_end]
 
+    checkout = (
+        "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n"
+        "        with:\n"
+        "          persist-credentials: false\n"
+        "          fetch-depth: 0\n"
+    )
+    if host.count(checkout) != 1:
+        raise AssertionError("documentation validation checkout must retain complete Git history")
+
     setup = named_step(host, "Set up Node.js for documentation localization")
     required_setup = (
         "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
@@ -143,6 +152,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
         setup = named_step(host, "Set up Node.js for documentation localization")
         validation = named_step(host, "Validate multilingual documentation")
         mutations = (
+            workflow.replace("          fetch-depth: 0\n", "", 1),
             workflow.replace(setup, setup.replace("node-version: '20.18.1'", "node-version: '22'")),
             workflow.replace(
                 validation,
