@@ -13,7 +13,7 @@ The renderer uses Home Assistant's documented `?external_auth=1` interface, whic
 
 - Reopens the last verified dashboard after an app restart while refreshing Home Assistant's dashboard list in the background. A short compatibility check still runs first. The remembered route is tied to the Home Assistant server, account and configured dashboard, and an explicitly configured dashboard or dashboard tab remains authoritative.
 - Freezes the page while the screen is off and resumes it on wake, saving roughly 70% of renderer CPU overnight.
-- Reloads a dashboard that opened but never connected. Retries slow down after repeated failures, and the panel shows a clear "Reconnecting…" screen instead of a browser error page.
+- Reloads a dashboard that opened but never connected. Retries slow down after repeated failures, and the panel shows a clear **Reconnecting to Home Assistant…** screen instead of a browser error page.
 - Automatically retries recoverable checks with increasing delays. A permanently rejected login stops the retry loop and shows Browser sign-in instructions. An unsupported Home Assistant version or incompatible WebView names the required update and waits for it.
 - Releases accumulated memory through invisible reloads while the screen is off.
 - Contains and rate-limits renderer crashes. A page that continues to crash falls back to the admin launcher instead of restarting all night.
@@ -21,7 +21,7 @@ The renderer uses Home Assistant's documented `?external_auth=1` interface, whic
 
 You can pull down from the very top edge of the screen to refresh, or pull twice for a full reload. The renderer also supports an optional idle return to the Home dashboard, camera-stream autoplay and private-CA HTTPS using user-installed certificate authorities. **Hide Android system bars** provides an edge-to-edge dashboard; swipe from a screen edge to reveal the bars again. On panels using ha-paneld's software navigation bar, **Dashboard** brings the configured renderer to the foreground without reloading it. **Reload** remains a separate recovery action.
 
-The renderer sizes the dashboard in the same way as the Home Assistant Companion app, so switching from Companion preserves the layout. **Dashboard zoom** adjusts the result, with 100% matching the Companion default. The renderer adds an **App Configuration** entry to the Home Assistant sidebar that opens the panel's configuration page. On first run it hides the docked sidebar and keeps the connection alive while idle. You can still open the sidebar or change these defaults later. The separate **Hide Home Assistant navigation (native)** option asks the frontend to remove its navigation while native kiosk mode is active.
+The renderer sizes the dashboard in the same way as the Home Assistant Companion app, so switching from Companion preserves the layout. **Zoom (%)** adjusts the result, with 100% matching the Companion default. The renderer adds an **App settings** entry to the Home Assistant sidebar that opens the panel's configuration page. On first run it hides the docked sidebar and keeps the connection alive while idle. You can still open the sidebar or change these defaults later. The separate **Hide Home Assistant navigation (native)** option asks the frontend to remove its navigation while native kiosk mode is active.
 
 ## Requirements and compatibility
 
@@ -85,13 +85,13 @@ The filter applies only to ha-paneld's built-in renderer. It changes the fronten
 
 ### Automatic workflow
 
-1. In `:8888` open **Configure → Dashboard**, select **Built-in renderer**, then enable **Automatic dashboard entity filter**.
+1. In `:8888` open **Configure → Dashboard**, select **Built-in renderer**, then enable **Entity filtering**.
 2. Open the **Entities** tab and select **Scan dashboard now**.
 3. Visit every dashboard tab and use its controls, pop-ups and conditional content so ha-paneld can observe runtime dependencies.
 4. Review the current, suggested and excluded lists. Pin entities used indirectly by custom cards or templates, and resolve any entity-filter checks shown above the tables.
 5. Select **Apply policy set** when the candidate is ready. ha-paneld shows the old and new entity counts before asking for confirmation, then reloads the dashboard with the filtered subscription.
 
-The Entities page explains why each entity was found, records manual pin and exclusion choices, and keeps recognized broad or dynamic rules visible until the user fixes them or explicitly chooses how to proceed. Unrecognized behavior can still exist, so test every dashboard tab after activation. If anything is missing, turn off **Automatic dashboard entity filter** in Configure and reload before revising the candidate.
+The Entities page explains why each entity was found, records manual pin and exclusion choices, and keeps recognized broad or dynamic rules visible until the user fixes them or explicitly chooses how to proceed. Unrecognized behavior can still exist, so test every dashboard tab after activation. If anything is missing, turn off **Entity filtering** in Configure and reload before revising the candidate.
 
 ### When the panel holds the dashboard
 
@@ -182,7 +182,7 @@ Like the rest of ha-paneld's control API, this endpoint is unauthenticated and i
 
 Forcing a theme changes only the light/dark part of the choice. A named theme and its colours are left exactly as they are, and switching back to Follow Home Assistant returns the light/dark part to the value it had before, or to Auto if there was none. The panel never changes the theme stored against your Home Assistant *account*, so a panel set to Dark cannot darken your phone.
 
-One case it cannot override: if this Home Assistant user has explicitly chosen Light or Dark (rather than Auto), that choice still wins, because overriding it would mean changing a setting shared with every other device that user signs in on. Set the user's theme to Auto, or use a separate Home Assistant user for the panel, and the panel's choice applies. When that happens the panel says so rather than staying quiet: the Runtime card on the `:8888` pages notes that Home Assistant's theme is overriding Dashboard theme, and `GET /api/v1/status` reports it under `renderer` as `theme_overridden: true`, with `theme_policy` and `theme_effective` beside it and the fix named in `action`.
+One case it cannot override: if this Home Assistant user has explicitly chosen Light or Dark (rather than Auto), that choice still wins, because overriding it would mean changing a setting shared with every other device that user signs in on. Set the user's theme to Auto, or use a separate Home Assistant user for the panel, and the panel's choice applies. When that happens the panel says so rather than staying quiet: the **Runtime diagnostics** card on the `:8888` pages notes that Home Assistant's theme is overriding Dashboard theme, and `GET /api/v1/status` reports it under `renderer` as `theme_overridden: true`, with `theme_policy` and `theme_effective` beside it and the fix named in `action`.
 
 The `:8888` web interface is separate from all of this and always follows the browser you are viewing it in.
 

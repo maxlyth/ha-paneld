@@ -81,27 +81,43 @@ Read the [guide](../README.md). Keep \`Home Assistant\` available.
 function consequentialFixture(policyMutation) {
   const current = fixture();
   const provisioning = "# Provisioning\n\nReset erases panel data.\n\nContinue normally.\n";
+  const renderer = "# Built-in renderer\n\nA failed login stops retries.\n\nContinue normally.\n";
   write(current.repository, "docs/provisioning.md", provisioning);
-  const inventory = inventoryMarkdown("docs/provisioning.md", provisioning);
-  const consequential = inventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
+  write(current.repository, "docs/built-in-renderer.md", renderer);
+  const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
+  const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
+  const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
+  const rendererConsequential = rendererInventory.segments.find(
+    (segment) => segment.maskedSource.includes("failed login"),
+  );
   const policy = {
-    schema: 1,
-    document: "docs/provisioning.md",
-    sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
-    segmentCount: inventory.segments.length,
-    consequentialSegments: [consequential.segmentId],
+    schema: 2,
+    documents: [
+      {
+        document: "docs/provisioning.md",
+        sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
+        segmentCount: provisioningInventory.segments.length,
+        consequentialSegments: [consequential.segmentId],
+      },
+      {
+        document: "docs/built-in-renderer.md",
+        sourceSha256: sha256(Buffer.from(renderer, "utf8")),
+        segmentCount: rendererInventory.segments.length,
+        consequentialSegments: [rendererConsequential.segmentId],
+      },
+    ],
   };
   policyMutation?.(policy);
   write(current.repository, "docs/i18n/consequential-segments.json", canonicalJson(policy));
-  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/i18n/consequential-segments.json"]);
+  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/i18n/consequential-segments.json"]);
   command(current.repository, ["git", "commit", "-qm", "add consequential policy"]);
   const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({
     repository: current.repository,
     sourceRevision,
-    documents: ["README.md", "docs/provisioning.md"],
+    documents: PRODUCTION_DOCUMENTS,
   });
-  return { repository: current.repository, sourceRevision, manifest, consequential };
+  return { repository: current.repository, sourceRevision, manifest, consequential, rendererConsequential };
 }
 
 function localeResults(manifest, locale, repository) {
@@ -163,8 +179,8 @@ function rebindReceiptResults(receipt, manifest) {
 
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();
-  assert.equal(manifest.schema, 2);
-  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md"]);
+  assert.equal(manifest.schema, 3);
+  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md"]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
   assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());
@@ -177,7 +193,7 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
   });
   assert.equal(manifest.documents[0].outputs.de, "docs/de/README.md");
   assert.equal(manifest.documents[1].outputs.de, "docs/de/guide.md");
-  assert.deepEqual(manifest.reviewPolicy, { schema: 1, path: null, sha256: null });
+  assert.deepEqual(manifest.reviewPolicy, { schema: 2, path: null, sha256: null });
   assert.ok(manifest.documents.flatMap((document) => document.segments).every(
     (segment) => segment.requiredState === PROMOTABLE_STATE,
   ));
@@ -195,14 +211,50 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
   }
 });
 
-test("consequential policy binds the provisioning inventory and grandfathers README", () => {
+test("appending a document preserves every prior document commitment and packet object", () => {
+  const current = fixture();
+  write(current.repository, "docs/third.md", "# Third\n\nAn appended document.\n");
+  command(current.repository, ["git", "add", "docs/third.md"]);
+  command(current.repository, ["git", "commit", "-qm", "append third document"]);
+  const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+  const prefix = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md", "docs/guide.md"],
+  });
+  const extended = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md", "docs/guide.md", "docs/third.md"],
+  });
+  assert.deepEqual(extended.documents.slice(0, prefix.documents.length), prefix.documents);
+  for (const locale of SUPPORTED_LOCALES) {
+    const priorPackets = prefix.packets.filter((packet) => packet.locale === locale);
+    const extendedPackets = extended.packets.filter((packet) => packet.locale === locale);
+    assert.deepEqual(extendedPackets.slice(0, priorPackets.length), priorPackets);
+    const appendedPackets = extendedPackets.slice(priorPackets.length);
+    assert.ok(appendedPackets.length > 0);
+    assert.deepEqual(
+      appendedPackets.flatMap((packet) => packet.owners),
+      extended.documents[2].segments.map((segment) => ({
+        document: extended.documents[2].sourcePath,
+        segmentId: segment.id,
+      })),
+    );
+    assert.ok(appendedPackets.every(
+      (packet) => packet.owners.every((owner) => owner.document === "docs/third.md"),
+    ));
+  }
+});
+
+test("consequential policy binds every selected production inventory and grandfathers README", () => {
   const current = consequentialFixture();
   const policyBytes = fs.readFileSync(path.join(
     current.repository,
     "docs/i18n/consequential-segments.json",
   ));
   assert.deepEqual(current.manifest.reviewPolicy, {
-    schema: 1,
+    schema: 2,
     path: "docs/i18n/consequential-segments.json",
     sha256: sha256(policyBytes),
   });
@@ -220,6 +272,15 @@ test("consequential policy binds the provisioning inventory and grandfathers REA
   assert.ok(provisioning.segments.filter(
     (segment) => segment.id !== current.consequential.segmentId,
   ).every((segment) => segment.requiredState === PROMOTABLE_STATE));
+  const renderer = current.manifest.documents.find(
+    (document) => document.sourcePath === "docs/built-in-renderer.md",
+  );
+  assert.equal(
+    renderer.segments.find(
+      (segment) => segment.id === current.rendererConsequential.segmentId,
+    ).requiredState,
+    ENGLISH_FALLBACK_STATE,
+  );
 
   const forged = clone(current.manifest);
   forged.documents[0].segments[0].requiredState = ENGLISH_FALLBACK_STATE;
@@ -243,12 +304,35 @@ test("consequential policy fails closed for missing, incomplete, and unknown inv
     /consequential policy is absent/,
   );
   assert.throws(
-    () => consequentialFixture((policy) => { policy.segmentCount -= 1; }),
+    () => consequentialFixture((policy) => { policy.documents[0].segmentCount -= 1; }),
     /consequential policy source binding mismatch/,
   );
   assert.throws(
-    () => consequentialFixture((policy) => { policy.consequentialSegments[0] += "-unknown"; }),
-    /unknown provisioning segment/,
+    () => consequentialFixture((policy) => { policy.documents[0].consequentialSegments[0] += "-unknown"; }),
+    /unknown segment in docs\/provisioning\.md/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.documents.reverse(); }),
+    /document selection mismatch/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.documents.pop(); }),
+    /document selection mismatch/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.documents[1].consequentialSegments.push("duplicate"); }),
+    /unknown segment in docs\/built-in-renderer\.md/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.documents[1].consequentialSegments = []; }),
+    /source binding mismatch for docs\/built-in-renderer\.md/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => {
+      const segment = policy.documents[1].consequentialSegments[0];
+      policy.documents[1].consequentialSegments = [`${segment}z`, segment];
+    }),
+    /source binding mismatch for docs\/built-in-renderer\.md/,
   );
 });
 
@@ -899,7 +983,7 @@ test("repository validation requires the exact manifest, receipt set, and output
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(nonProductionManifest));
   assert.throws(
     () => validateRepository({ repository: current.repository }),
-    /must select exactly README\.md, docs\/provisioning\.md/,
+    /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md/,
   );
   const manifest = current.manifest;
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
@@ -927,7 +1011,6 @@ test("repository validation rejects every non-production document selection", ()
   for (const documents of [
     ["README.md"],
     ["README.md", "docs/guide.md"],
-    ["README.md", "docs/guide.md", "docs/provisioning.md"],
   ]) {
     const manifest = buildSourceManifest({
       repository: current.repository,
@@ -937,7 +1020,7 @@ test("repository validation rejects every non-production document selection", ()
     write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
     assert.throws(
       () => validateRepository({ repository: current.repository }),
-      /must select exactly README\.md, docs\/provisioning\.md/,
+      /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md/,
       documents.join(","),
     );
   }

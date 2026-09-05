@@ -30,7 +30,7 @@ import {
   readTreeSource,
 } from "./paths.mjs";
 
-export const SOURCE_MANIFEST_SCHEMA = 2;
+export const SOURCE_MANIFEST_SCHEMA = 3;
 export const LOCALE_RESULT_SCHEMA = 1;
 export const LOCALE_RECEIPT_SCHEMA = 1;
 export const TRANSLATION_PLAN_SCHEMA = 1;
@@ -42,8 +42,9 @@ export const ENGLISH_FALLBACK_STATE = "english-fallback";
 export const PRODUCTION_DOCUMENTS = Object.freeze([
   "README.md",
   "docs/provisioning.md",
+  "docs/built-in-renderer.md",
 ]);
-export const CONSEQUENTIAL_POLICY_SCHEMA = 1;
+export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";
 export const AUTHORITY_NOTICE_VERSION = 2;
 export const AUTHORITY_NOTICE_TEMPLATES = Object.freeze({
@@ -537,8 +538,11 @@ function readTreeConsequentialPolicy(repository, revision, revisionName) {
 }
 
 function consequentialPolicy(repository, sourceRevision, headRevision, documents) {
-  const provisioning = documents.find((document) => document.sourcePath === "docs/provisioning.md");
-  if (!provisioning) return { commitment: { schema: CONSEQUENTIAL_POLICY_SCHEMA, path: null, sha256: null }, ids: new Set() };
+  const policyDocuments = documents.filter((document) =>
+    PRODUCTION_DOCUMENTS.slice(1).includes(document.sourcePath));
+  if (!policyDocuments.length) {
+    return { commitment: { schema: CONSEQUENTIAL_POLICY_SCHEMA, path: null, sha256: null }, ids: new Set() };
+  }
   const source = readTreeConsequentialPolicy(repository, sourceRevision, "sourceRevision");
   const head = readTreeConsequentialPolicy(repository, headRevision, "selected HEAD");
   if (!head.bytes.equals(source.bytes)) {
@@ -553,22 +557,48 @@ function consequentialPolicy(repository, sourceRevision, headRevision, documents
   }
   exactKeys(
     source.policy,
-    ["schema", "document", "sourceSha256", "segmentCount", "consequentialSegments"],
+    ["schema", "documents"],
     "consequential policy",
   );
-  if (
-    source.policy.schema !== CONSEQUENTIAL_POLICY_SCHEMA ||
-    source.policy.document !== provisioning.sourcePath ||
-    source.policy.sourceSha256 !== provisioning.sourceSha256 ||
-    source.policy.segmentCount !== provisioning.segments.length
-  ) {
+  if (source.policy.schema !== CONSEQUENTIAL_POLICY_SCHEMA || !Array.isArray(source.policy.documents)) {
     throw new Error("consequential policy source binding mismatch");
   }
-  assertSortedUnique(source.policy.consequentialSegments, "consequential policy segments");
-  const segmentIds = new Set(provisioning.segments.map((segment) => segment.id));
-  for (const segmentId of source.policy.consequentialSegments) {
-    if (!segmentIds.has(segmentId)) {
-      throw new Error(`consequential policy names an unknown provisioning segment: ${segmentId}`);
+  const selectedPaths = policyDocuments.map((document) => document.sourcePath);
+  const policyPaths = source.policy.documents.map((document, index) => {
+    exactKeys(
+      document,
+      ["document", "sourceSha256", "segmentCount", "consequentialSegments"],
+      `consequential policy document ${index}`,
+    );
+    return document.document;
+  });
+  if (JSON.stringify(policyPaths) !== JSON.stringify(selectedPaths)) {
+    throw new Error("consequential policy document selection mismatch");
+  }
+  const ids = new Set();
+  for (const [index, policyDocument] of source.policy.documents.entries()) {
+    const selected = policyDocuments[index];
+    if (
+      policyDocument.document !== selected.sourcePath ||
+      policyDocument.sourceSha256 !== selected.sourceSha256 ||
+      policyDocument.segmentCount !== selected.segments.length ||
+      !Array.isArray(policyDocument.consequentialSegments) ||
+      policyDocument.consequentialSegments.length === 0 ||
+      new Set(policyDocument.consequentialSegments).size !== policyDocument.consequentialSegments.length ||
+      JSON.stringify(policyDocument.consequentialSegments) !==
+        JSON.stringify([...policyDocument.consequentialSegments].sort())
+    ) {
+      throw new Error(`consequential policy source binding mismatch for ${selected.sourcePath}`);
+    }
+    const segmentIds = new Set(selected.segments.map((segment) => segment.id));
+    for (const segmentId of policyDocument.consequentialSegments) {
+      if (!segmentIds.has(segmentId)) {
+        throw new Error(`consequential policy names an unknown segment in ${selected.sourcePath}: ${segmentId}`);
+      }
+      if (ids.has(segmentId)) {
+        throw new Error(`consequential policy repeats a segment: ${segmentId}`);
+      }
+      ids.add(segmentId);
     }
   }
   return {
@@ -577,7 +607,7 @@ function consequentialPolicy(repository, sourceRevision, headRevision, documents
       path: CONSEQUENTIAL_POLICY_PATH,
       sha256: sha256(source.bytes),
     },
-    ids: new Set(source.policy.consequentialSegments),
+    ids,
   };
 }
 
@@ -653,7 +683,9 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
   const bound = bindSourceRevision(repository, sourceRevision, head);
   if (!Array.isArray(documents)) throw new Error("documents must be an array");
   const sourcePaths = documents.map(normalizeSourcePath);
-  assertSortedUnique(sourcePaths, "documents");
+  if (sourcePaths.length === 0 || new Set(sourcePaths).size !== sourcePaths.length) {
+    throw new Error("documents must be non-empty and unique");
+  }
   if (sourcePaths[0] !== "README.md") {
     throw new Error("README.md must remain the first selected documentation source");
   }
@@ -726,16 +758,16 @@ function validateSourceShape(manifest) {
   if (manifest.reviewPolicy.schema !== CONSEQUENTIAL_POLICY_SCHEMA) {
     throw new Error("unsupported consequential policy schema");
   }
-  const selectsProvisioning = manifest.documents.some(
-    (document) => document.sourcePath === "docs/provisioning.md",
+  const selectsPolicyDocument = manifest.documents.some(
+    (document) => PRODUCTION_DOCUMENTS.slice(1).includes(document.sourcePath),
   );
-  if (selectsProvisioning) {
+  if (selectsPolicyDocument) {
     if (manifest.reviewPolicy.path !== CONSEQUENTIAL_POLICY_PATH) {
       throw new Error("source manifest does not bind the canonical consequential policy path");
     }
     assertSha(manifest.reviewPolicy.sha256, "reviewPolicy.sha256");
   } else if (manifest.reviewPolicy.path !== null || manifest.reviewPolicy.sha256 !== null) {
-    throw new Error("a manifest without provisioning cannot bind a consequential policy");
+    throw new Error("a manifest without a classified production document cannot bind a consequential policy");
   }
   if (
     manifest.notice.version !== AUTHORITY_NOTICE_VERSION ||
@@ -763,7 +795,14 @@ function validateSourceShape(manifest) {
   if (JSON.stringify(manifest.locales) !== JSON.stringify(SUPPORTED_LOCALES)) {
     throw new Error("source manifest locales do not match the fixed release locale set");
   }
-  assertSortedUnique(manifest.documents.map((document) => document.sourcePath), "manifest documents");
+  const manifestPaths = manifest.documents.map((document) => document.sourcePath);
+  if (
+    manifestPaths.length === 0 ||
+    new Set(manifestPaths).size !== manifestPaths.length ||
+    manifestPaths[0] !== "README.md"
+  ) {
+    throw new Error("manifest documents must be non-empty and unique with README.md first");
+  }
   for (const [documentIndex, document] of manifest.documents.entries()) {
     exactKeys(document, SOURCE_DOCUMENT_KEYS, `documents[${documentIndex}]`);
     normalizeSourcePath(document.sourcePath);

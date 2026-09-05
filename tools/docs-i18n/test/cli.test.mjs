@@ -33,16 +33,34 @@ Private plan test.
 
 Provision a panel safely.
 `;
+  const renderer = `# Built-in renderer
+
+Stop after a rejected login.
+`;
   fs.writeFileSync(path.join(repository, "docs/provisioning.md"), provisioning);
-  const consequential = inventoryMarkdown("docs/provisioning.md", provisioning).segments[1];
+  fs.writeFileSync(path.join(repository, "docs/built-in-renderer.md"), renderer);
+  const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
+  const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
+  const consequential = provisioningInventory.segments[1];
+  const rendererConsequential = rendererInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
-    schema: 1,
-    document: "docs/provisioning.md",
-    sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
-    segmentCount: 2,
-    consequentialSegments: [consequential.segmentId],
+    schema: 2,
+    documents: [
+      {
+        document: "docs/provisioning.md",
+        sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
+        segmentCount: provisioningInventory.segments.length,
+        consequentialSegments: [consequential.segmentId],
+      },
+      {
+        document: "docs/built-in-renderer.md",
+        sourceSha256: sha256(Buffer.from(renderer, "utf8")),
+        segmentCount: rendererInventory.segments.length,
+        consequentialSegments: [rendererConsequential.segmentId],
+      },
+    ],
   }));
-  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/i18n/consequential-segments.json"]);
+  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/i18n/consequential-segments.json"]);
   command(repository, ["git", "commit", "-qm", "fixture"]);
   const sourceRevision = command(repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({ repository, sourceRevision, documents: PRODUCTION_DOCUMENTS });
@@ -64,6 +82,7 @@ test("CLI plan selects the exact Tier-1 document prefix", () => {
   assert.deepEqual(manifest.documents.map((document) => document.sourcePath), [
     "README.md",
     "docs/provisioning.md",
+    "docs/built-in-renderer.md",
   ]);
   assert.throws(() => main([
     "plan",
