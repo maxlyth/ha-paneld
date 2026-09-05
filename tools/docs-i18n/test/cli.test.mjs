@@ -6,7 +6,8 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import { main, parseArguments } from "../cli.mjs";
-import { buildSourceManifest, canonicalJson } from "../lib/contract.mjs";
+import { buildSourceManifest, canonicalJson, PRODUCTION_DOCUMENTS, sha256 } from "../lib/contract.mjs";
+import { inventoryMarkdown } from "../lib/markdown.mjs";
 
 function command(repository, args) {
   return execFileSync(args[0], args.slice(1), { cwd: repository, encoding: "utf8" }).trim();
@@ -27,14 +28,50 @@ function exportFixture() {
 
 Private plan test.
 `);
-  command(repository, ["git", "add", "README.md"]);
+  fs.mkdirSync(path.join(repository, "docs/i18n"), { recursive: true });
+  const provisioning = `# Provisioning
+
+Provision a panel safely.
+`;
+  fs.writeFileSync(path.join(repository, "docs/provisioning.md"), provisioning);
+  const consequential = inventoryMarkdown("docs/provisioning.md", provisioning).segments[1];
+  fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
+    schema: 1,
+    document: "docs/provisioning.md",
+    sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
+    segmentCount: 2,
+    consequentialSegments: [consequential.segmentId],
+  }));
+  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/i18n/consequential-segments.json"]);
   command(repository, ["git", "commit", "-qm", "fixture"]);
   const sourceRevision = command(repository, ["git", "rev-parse", "HEAD"]);
-  const manifest = buildSourceManifest({ repository, sourceRevision, documents: ["README.md"] });
+  const manifest = buildSourceManifest({ repository, sourceRevision, documents: PRODUCTION_DOCUMENTS });
   const manifestPath = path.join(temporary, "manifest.json");
   fs.writeFileSync(manifestPath, canonicalJson(manifest));
   return { manifestPath, repository, temporary };
 }
+
+test("CLI plan selects the exact Tier-1 document prefix", () => {
+  const current = exportFixture();
+  const manifestPath = path.join(current.repository, "docs/i18n/manifest.json");
+  assert.equal(main([
+    "plan",
+    "--repository", current.repository,
+    "--source-revision", command(current.repository, ["git", "rev-parse", "HEAD"]),
+    "--output", manifestPath,
+  ]), 0);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+  assert.deepEqual(manifest.documents.map((document) => document.sourcePath), [
+    "README.md",
+    "docs/provisioning.md",
+  ]);
+  assert.throws(() => main([
+    "plan",
+    "--repository", current.repository,
+    "--source-revision", command(current.repository, ["git", "rev-parse", "HEAD"]),
+    "--output", manifestPath,
+  ]), /EEXIST/);
+});
 
 function exportArguments(current, output) {
   return [

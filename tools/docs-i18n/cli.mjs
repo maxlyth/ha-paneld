@@ -9,6 +9,7 @@ import {
   buildSourceManifest,
   buildTranslationPlan,
   canonicalJson,
+  PRODUCTION_DOCUMENTS,
   readCanonicalJson,
   validateRepository,
 } from "./lib/contract.mjs";
@@ -128,10 +129,11 @@ export function main(argv = process.argv.slice(2)) {
     const manifest = buildSourceManifest({
       repository: target.root,
       sourceRevision: options["source-revision"],
-      documents: ["README.md"],
+      documents: PRODUCTION_DOCUMENTS,
     });
     writeExclusive(target.resolved, canonicalJson(manifest));
-    process.stdout.write(`documentation localization plan: ${manifest.documents[0].segments.length} segments, ${manifest.packets.length} packets\n`);
+    const segmentCount = manifest.documents.reduce((total, document) => total + document.segments.length, 0);
+    process.stdout.write(`documentation localization plan: ${segmentCount} segments, ${manifest.packets.length} packets\n`);
     return 0;
   }
   if (command === "export-plan") {

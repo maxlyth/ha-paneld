@@ -30,7 +30,7 @@ import {
   readTreeSource,
 } from "./paths.mjs";
 
-export const SOURCE_MANIFEST_SCHEMA = 1;
+export const SOURCE_MANIFEST_SCHEMA = 2;
 export const LOCALE_RESULT_SCHEMA = 1;
 export const LOCALE_RECEIPT_SCHEMA = 1;
 export const TRANSLATION_PLAN_SCHEMA = 1;
@@ -38,6 +38,13 @@ export const MAX_SEGMENTS_PER_PACKET = 20;
 export const MAX_SOURCE_CHARACTERS_PER_PACKET = 12_000;
 export const MAX_TARGET_CHARACTERS_PER_SEGMENT = 48_000;
 export const PROMOTABLE_STATE = "machine-cross-checked";
+export const ENGLISH_FALLBACK_STATE = "english-fallback";
+export const PRODUCTION_DOCUMENTS = Object.freeze([
+  "README.md",
+  "docs/provisioning.md",
+]);
+export const CONSEQUENTIAL_POLICY_SCHEMA = 1;
+export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";
 export const AUTHORITY_NOTICE_VERSION = 2;
 export const AUTHORITY_NOTICE_TEMPLATES = Object.freeze({
   de:
@@ -89,6 +96,7 @@ const SOURCE_ROOT_KEYS = [
   "sourceRevision",
   "parser",
   "notice",
+  "reviewPolicy",
   "limits",
   "locales",
   "documents",
@@ -110,6 +118,7 @@ const SOURCE_SEGMENT_KEYS = [
   "sourceCharacters",
   "maskedSourceSha256",
   "bindingsSha256",
+  "requiredState",
 ];
 const BINDING_KEYS = ["token", "value", "sha256"];
 const PLAN_ROOT_KEYS = ["schema", "sourceManifestSha256", "sourceRevision", "packets"];
@@ -489,7 +498,7 @@ function parserSegment(segment, document) {
   };
 }
 
-function sourceSegmentCommitment(segment) {
+function sourceSegmentCommitment(segment, requiredState = PROMOTABLE_STATE) {
   return {
     id: segment.id,
     ownerType: segment.ownerType,
@@ -499,6 +508,76 @@ function sourceSegmentCommitment(segment) {
     sourceCharacters: segment.sourceCharacters,
     maskedSourceSha256: sha256(segment.maskedSource),
     bindingsSha256: sha256(canonicalJson(segment.bindings)),
+    requiredState,
+  };
+}
+
+function readTreeConsequentialPolicy(repository, revision, revisionName) {
+  const entry = git(repository, ["ls-tree", revision, "--", CONSEQUENTIAL_POLICY_PATH]).trim();
+  if (!entry) throw new Error(`consequential policy is absent from ${revisionName}`);
+  const [mode, type] = entry.split(/\s+/, 2);
+  if (mode === "120000" || type !== "blob") {
+    throw new Error("consequential policy must be a regular Git blob");
+  }
+  const bytes = git(repository, ["show", `${revision}:${CONSEQUENTIAL_POLICY_PATH}`], { encoding: null });
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes) || text.includes("\r")) {
+    throw new Error("consequential policy must be canonical UTF-8 with LF endings");
+  }
+  let policy;
+  try {
+    policy = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`consequential policy is invalid JSON: ${error.message}`);
+  }
+  if (canonicalJson(policy) !== text) {
+    throw new Error("consequential policy JSON is not canonical or contains duplicate keys");
+  }
+  return { bytes, policy };
+}
+
+function consequentialPolicy(repository, sourceRevision, headRevision, documents) {
+  const provisioning = documents.find((document) => document.sourcePath === "docs/provisioning.md");
+  if (!provisioning) return { commitment: { schema: CONSEQUENTIAL_POLICY_SCHEMA, path: null, sha256: null }, ids: new Set() };
+  const source = readTreeConsequentialPolicy(repository, sourceRevision, "sourceRevision");
+  const head = readTreeConsequentialPolicy(repository, headRevision, "selected HEAD");
+  if (!head.bytes.equals(source.bytes)) {
+    throw new Error("consequential policy differs between sourceRevision and selected HEAD");
+  }
+  const currentPath = confinedWorkingPath(repository, CONSEQUENTIAL_POLICY_PATH, {
+    mustExist: true,
+    allowFile: true,
+  });
+  if (!fs.readFileSync(currentPath).equals(source.bytes)) {
+    throw new Error("working consequential policy differs from sourceRevision");
+  }
+  exactKeys(
+    source.policy,
+    ["schema", "document", "sourceSha256", "segmentCount", "consequentialSegments"],
+    "consequential policy",
+  );
+  if (
+    source.policy.schema !== CONSEQUENTIAL_POLICY_SCHEMA ||
+    source.policy.document !== provisioning.sourcePath ||
+    source.policy.sourceSha256 !== provisioning.sourceSha256 ||
+    source.policy.segmentCount !== provisioning.segments.length
+  ) {
+    throw new Error("consequential policy source binding mismatch");
+  }
+  assertSortedUnique(source.policy.consequentialSegments, "consequential policy segments");
+  const segmentIds = new Set(provisioning.segments.map((segment) => segment.id));
+  for (const segmentId of source.policy.consequentialSegments) {
+    if (!segmentIds.has(segmentId)) {
+      throw new Error(`consequential policy names an unknown provisioning segment: ${segmentId}`);
+    }
+  }
+  return {
+    commitment: {
+      schema: CONSEQUENTIAL_POLICY_SCHEMA,
+      path: CONSEQUENTIAL_POLICY_PATH,
+      sha256: sha256(source.bytes),
+    },
+    ids: new Set(source.policy.consequentialSegments),
   };
 }
 
@@ -523,6 +602,9 @@ function validateSourceSegmentCommitment(segment, document) {
   }
   for (const key of ["sourceSha256", "maskedSourceSha256", "bindingsSha256"]) {
     assertSha(segment[key], `${segment.id}.${key}`);
+  }
+  if (![PROMOTABLE_STATE, ENGLISH_FALLBACK_STATE].includes(segment.requiredState)) {
+    throw new Error(`${segment.id}: invalid required review state`);
   }
   return segment;
 }
@@ -561,8 +643,8 @@ function buildPackets(documents, locales) {
         owners.push({ document: document.sourcePath, segmentId: segment.id });
         sourceCharacters += segment.sourceCharacters;
       }
+      flush();
     }
-    flush();
   }
   return packets;
 }
@@ -576,7 +658,7 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
     throw new Error("README.md must remain the first selected documentation source");
   }
   const locales = [...SUPPORTED_LOCALES];
-  const builtDocuments = sourcePaths.map((sourcePath) => {
+  let builtDocuments = sourcePaths.map((sourcePath) => {
     const tree = readTreeSource(bound.repository, sourceRevision, sourcePath);
     const inventory = inventoryFor(sourcePath, tree.source);
     preflightMarkdown(inventory);
@@ -593,6 +675,14 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
       segments,
     };
   });
+  const policy = consequentialPolicy(bound.repository, sourceRevision, bound.headRevision, builtDocuments);
+  builtDocuments = builtDocuments.map((document) => ({
+    ...document,
+    segments: document.segments.map((segment) => ({
+      ...segment,
+      requiredState: policy.ids.has(segment.id) ? ENGLISH_FALLBACK_STATE : PROMOTABLE_STATE,
+    })),
+  }));
   for (const locale of locales) {
     const outputs = builtDocuments.map((document) => document.outputs[locale]);
     if (new Set(outputs).size !== outputs.length) {
@@ -612,6 +702,7 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
     sourceRevision,
     parser: PARSER_VERSIONS,
     notice,
+    reviewPolicy: policy.commitment,
     limits: {
       maxSegmentsPerPacket: MAX_SEGMENTS_PER_PACKET,
       maxSourceCharactersPerPacket: MAX_SOURCE_CHARACTERS_PER_PACKET,
@@ -631,6 +722,21 @@ function validateSourceShape(manifest) {
     ["version", "sha256", "languagePickerVersion", "sourceLanguagePickerSha256"],
     "source manifest notice",
   );
+  exactKeys(manifest.reviewPolicy, ["schema", "path", "sha256"], "source manifest review policy");
+  if (manifest.reviewPolicy.schema !== CONSEQUENTIAL_POLICY_SCHEMA) {
+    throw new Error("unsupported consequential policy schema");
+  }
+  const selectsProvisioning = manifest.documents.some(
+    (document) => document.sourcePath === "docs/provisioning.md",
+  );
+  if (selectsProvisioning) {
+    if (manifest.reviewPolicy.path !== CONSEQUENTIAL_POLICY_PATH) {
+      throw new Error("source manifest does not bind the canonical consequential policy path");
+    }
+    assertSha(manifest.reviewPolicy.sha256, "reviewPolicy.sha256");
+  } else if (manifest.reviewPolicy.path !== null || manifest.reviewPolicy.sha256 !== null) {
+    throw new Error("a manifest without provisioning cannot bind a consequential policy");
+  }
   if (
     manifest.notice.version !== AUTHORITY_NOTICE_VERSION ||
     manifest.notice.sha256 !== sha256(canonicalJson(AUTHORITY_NOTICE_TEMPLATES)) ||
@@ -720,7 +826,9 @@ function expandedSourceSegments(manifest, repository) {
     const tree = readTreeSource(repository, manifest.sourceRevision, document.sourcePath);
     const inventory = inventoryFor(document.sourcePath, tree.source);
     const segments = inventory.segments.map((segment) => parserSegment(segment, document.sourcePath));
-    const commitments = segments.map(sourceSegmentCommitment);
+    const requiredStates = new Map(document.segments.map((segment) => [segment.id, segment.requiredState]));
+    const commitments = segments.map((segment) =>
+      sourceSegmentCommitment(segment, requiredStates.get(segment.id)));
     if (canonicalJson(commitments) !== canonicalJson(document.segments)) {
       throw new Error(`${document.sourcePath}: private source expansion differs from the manifest commitments`);
     }
@@ -804,13 +912,14 @@ function committedResult(result) {
   };
 }
 
-function validateLocaleResults(manifest, locale, results) {
+function validateLocaleResults(manifest, locale, results, { repository }) {
   normalizeLocale(locale);
   if (!Array.isArray(results)) throw new Error("locale results must be an array");
   const expectedPackets = manifest.packets.filter((packet) => packet.locale === locale);
   if (results.length !== expectedPackets.length) throw new Error(`${locale}: packet result coverage mismatch`);
   const manifestHash = sourceManifestSha256(manifest);
   const byDocument = new Map(manifest.documents.map((document) => [document.sourcePath, document]));
+  const expanded = expandedSourceSegments(manifest, repository);
   const flat = [];
   for (let index = 0; index < expectedPackets.length; index += 1) {
     const expected = expectedPackets[index];
@@ -843,14 +952,20 @@ function validateLocaleResults(manifest, locale, results) {
       ) {
         throw new Error(`${expected.id}: result owner/source mismatch at record ${recordIndex}`);
       }
-      if (record.state !== PROMOTABLE_STATE) {
-        throw new Error(`${record.segmentId}: only ${PROMOTABLE_STATE} records can be promoted`);
+      if (record.state !== segment.requiredState) {
+        throw new Error(`${record.segmentId}: result state must be ${segment.requiredState}`);
       }
       if (typeof record.translation !== "string" || !record.translation.trim()) {
         throw new Error(`${record.segmentId}: translation must be non-empty`);
       }
       if (codePointLength(record.translation) > MAX_TARGET_CHARACTERS_PER_SEGMENT) {
         throw new Error(`${record.segmentId}: translation exceeds the fixed target character limit`);
+      }
+      if (
+        record.state === ENGLISH_FALLBACK_STATE &&
+        record.translation !== expanded.get(owner.document)?.get(owner.segmentId)?.maskedSource
+      ) {
+        throw new Error(`${record.segmentId}: english-fallback must exactly preserve the masked English source`);
       }
       flat.push(record);
     }
@@ -860,7 +975,7 @@ function validateLocaleResults(manifest, locale, results) {
 
 export function buildLocaleReceipt(manifest, locale, results, { repository }) {
   validateSourceManifest(manifest, { repository });
-  const records = validateLocaleResults(manifest, locale, results);
+  const records = validateLocaleResults(manifest, locale, results, { repository });
   const resultBindings = results.map((result) => ({
     packetId: result.packetId,
     packetSha256: result.packetSha256,
@@ -869,22 +984,26 @@ export function buildLocaleReceipt(manifest, locale, results, { repository }) {
   const items = manifest.documents.map((document) => {
     const documentRecords = records
       .filter((record) => record.document === document.sourcePath)
-      .map(({ document: recordDocument, segmentId, sourceSha256, translation }) => ({
+      .map(({ document: recordDocument, segmentId, sourceSha256, translation, state }) => ({
         document: recordDocument,
         segmentId,
         sourceSha256,
         translation,
+        state,
       }));
     const tree = readTreeSource(repository, manifest.sourceRevision, document.sourcePath);
     const inventory = inventoryFor(document.sourcePath, tree.source);
-    const canonicalSegments = inventory.segments.map((segment) =>
-      sourceSegmentCommitment(parserSegment(segment, document.sourcePath)));
+    const requiredStates = new Map(document.segments.map((segment) => [segment.id, segment.requiredState]));
+    const canonicalSegments = inventory.segments.map((segment) => {
+      const parsed = parserSegment(segment, document.sourcePath);
+      return sourceSegmentCommitment(parsed, requiredStates.get(parsed.id));
+    });
     if (canonicalJson(canonicalSegments) !== canonicalJson(document.segments)) {
       throw new Error(`${document.sourcePath}: parser inventory differs from the source manifest`);
     }
     const picker = document.sourcePath === "README.md" ? sourceLanguagePicker(tree.source) : null;
     const localizedPicker = picker ? localizedLanguagePicker(locale) : "";
-    const reconstructed = reconstructMarkdown(inventory, documentRecords, {
+    const reconstructed = reconstructMarkdown(inventory, documentRecords.map(({ state, ...record }) => record), {
       deterministicReplacements: picker ? [{
         exclusionId: inventory.excludedOwners[0].exclusionId,
         sourceSha256: inventory.excludedOwners[0].sourceSha256,
@@ -926,7 +1045,7 @@ export function buildLocaleReceipt(manifest, locale, results, { repository }) {
         segmentId: record.segmentId,
         sourceSha256: record.sourceSha256,
         targetSha256: sha256(record.translation),
-        state: PROMOTABLE_STATE,
+        state: record.state,
       })),
     });
   }
@@ -993,7 +1112,7 @@ function validateReceiptShape(receipt, manifest, locale) {
       if (
         actual.segmentId !== expected.id ||
         actual.sourceSha256 !== expected.sourceSha256 ||
-        actual.state !== PROMOTABLE_STATE
+        actual.state !== expected.requiredState
       ) {
         throw new Error(`${locale}: receipt segment binding mismatch at ${actual.segmentId}`);
       }
@@ -1062,6 +1181,12 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository })
       }
       if (sha256(targetSegment.maskedSource) !== receiptSegment.targetSha256) {
         throw new Error(`${locale}: target segment hash mismatch: ${receiptSegment.segmentId}`);
+      }
+      if (
+        receiptSegment.state === ENGLISH_FALLBACK_STATE &&
+        targetSegment.maskedSource !== inventory.segments[segmentIndex].maskedSource
+      ) {
+        throw new Error(`${locale}: english-fallback target differs from masked English source: ${receiptSegment.segmentId}`);
       }
       return targetSegment.maskedSource;
     });
@@ -1193,10 +1318,10 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
   const manifest = readCanonicalJson(manifestFile);
   validateSourceManifest(manifest, { repository: root });
   if (
-    manifest.documents.length !== 1 ||
-    manifest.documents[0].sourcePath !== "README.md"
+    JSON.stringify(manifest.documents.map((document) => document.sourcePath)) !==
+    JSON.stringify(PRODUCTION_DOCUMENTS)
   ) {
-    throw new Error("the current localization proof must select exactly README.md");
+    throw new Error(`the current localization proof must select exactly ${PRODUCTION_DOCUMENTS.join(", ")}`);
   }
   for (const locale of SUPPORTED_LOCALES) {
     const receiptFile = confinedWorkingPath(root, localeReceiptPath(locale), {

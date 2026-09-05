@@ -7,10 +7,12 @@ import test from "node:test";
 
 import {
   AUTHORITY_NOTICE_TEMPLATES,
+  ENGLISH_FALLBACK_STATE,
   MAX_SEGMENTS_PER_PACKET,
   MAX_SOURCE_CHARACTERS_PER_PACKET,
   MAX_TARGET_CHARACTERS_PER_SEGMENT,
   PROMOTABLE_STATE,
+  PRODUCTION_DOCUMENTS,
   applyLocaleReceipt,
   buildLocaleReceipt,
   buildSourceManifest,
@@ -31,6 +33,7 @@ import {
   normalizeSourcePath,
   readTreeMarkdownLinkTarget,
 } from "../lib/paths.mjs";
+import { inventoryMarkdown } from "../lib/markdown.mjs";
 
 const PRIVATE_PROVIDER_NAMES = ["Open" + "AI", "Anth" + "ropic", "Deep" + "L"];
 const PRIVATE_PROVIDER_URL = ["https", "://", "provider.example.invalid"].join("");
@@ -75,10 +78,38 @@ Read the [guide](../README.md). Keep \`Home Assistant\` available.
   return { repository, sourceRevision, manifest };
 }
 
+function consequentialFixture(policyMutation) {
+  const current = fixture();
+  const provisioning = "# Provisioning\n\nReset erases panel data.\n\nContinue normally.\n";
+  write(current.repository, "docs/provisioning.md", provisioning);
+  const inventory = inventoryMarkdown("docs/provisioning.md", provisioning);
+  const consequential = inventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
+  const policy = {
+    schema: 1,
+    document: "docs/provisioning.md",
+    sourceSha256: sha256(Buffer.from(provisioning, "utf8")),
+    segmentCount: inventory.segments.length,
+    consequentialSegments: [consequential.segmentId],
+  };
+  policyMutation?.(policy);
+  write(current.repository, "docs/i18n/consequential-segments.json", canonicalJson(policy));
+  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/i18n/consequential-segments.json"]);
+  command(current.repository, ["git", "commit", "-qm", "add consequential policy"]);
+  const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+  const manifest = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md", "docs/provisioning.md"],
+  });
+  return { repository: current.repository, sourceRevision, manifest, consequential };
+}
+
 function localeResults(manifest, locale, repository) {
   const manifestHash = sourceManifestSha256(manifest);
   const plan = buildTranslationPlan(manifest, { repository });
   const planPackets = new Map(plan.packets.map((packet) => [packet.id, packet]));
+  const requiredStates = new Map(manifest.documents.flatMap((document) =>
+    document.segments.map((segment) => [segment.id, segment.requiredState])));
   return manifest.packets.filter((packet) => packet.locale === locale).map((packet) => ({
     schema: 1,
     locale,
@@ -92,7 +123,7 @@ function localeResults(manifest, locale, repository) {
         segmentId: segment.segmentId,
         sourceSha256: segment.sourceSha256,
         translation: segment.maskedSource,
-        state: PROMOTABLE_STATE,
+        state: requiredStates.get(segment.segmentId),
       };
     }),
   }));
@@ -132,6 +163,8 @@ function rebindReceiptResults(receipt, manifest) {
 
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();
+  assert.equal(manifest.schema, 2);
+  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md"]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
   assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());
@@ -144,6 +177,10 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
   });
   assert.equal(manifest.documents[0].outputs.de, "docs/de/README.md");
   assert.equal(manifest.documents[1].outputs.de, "docs/de/guide.md");
+  assert.deepEqual(manifest.reviewPolicy, { schema: 1, path: null, sha256: null });
+  assert.ok(manifest.documents.flatMap((document) => document.segments).every(
+    (segment) => segment.requiredState === PROMOTABLE_STATE,
+  ));
   for (const locale of SUPPORTED_LOCALES) {
     const owners = manifest.packets
       .filter((packet) => packet.locale === locale)
@@ -152,7 +189,67 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
       document.segments.map((segment) => `${document.sourcePath}\0${segment.id}`));
     assert.deepEqual(owners, expected);
     assert.equal(new Set(owners).size, owners.length);
+    for (const packet of manifest.packets.filter((candidate) => candidate.locale === locale)) {
+      assert.equal(new Set(packet.owners.map((owner) => owner.document)).size, 1);
+    }
   }
+});
+
+test("consequential policy binds the provisioning inventory and grandfathers README", () => {
+  const current = consequentialFixture();
+  const policyBytes = fs.readFileSync(path.join(
+    current.repository,
+    "docs/i18n/consequential-segments.json",
+  ));
+  assert.deepEqual(current.manifest.reviewPolicy, {
+    schema: 1,
+    path: "docs/i18n/consequential-segments.json",
+    sha256: sha256(policyBytes),
+  });
+  const readme = current.manifest.documents.find((document) => document.sourcePath === "README.md");
+  assert.ok(readme.segments.every((segment) => segment.requiredState === PROMOTABLE_STATE));
+  const provisioning = current.manifest.documents.find(
+    (document) => document.sourcePath === "docs/provisioning.md",
+  );
+  assert.equal(
+    provisioning.segments.find(
+      (segment) => segment.id === current.consequential.segmentId,
+    ).requiredState,
+    ENGLISH_FALLBACK_STATE,
+  );
+  assert.ok(provisioning.segments.filter(
+    (segment) => segment.id !== current.consequential.segmentId,
+  ).every((segment) => segment.requiredState === PROMOTABLE_STATE));
+
+  const forged = clone(current.manifest);
+  forged.documents[0].segments[0].requiredState = ENGLISH_FALLBACK_STATE;
+  assert.throws(
+    () => validateSourceManifest(forged, { repository: current.repository }),
+    /canonical rebuilt manifest/,
+  );
+});
+
+test("consequential policy fails closed for missing, incomplete, and unknown inventories", () => {
+  const missing = fixture();
+  write(missing.repository, "docs/provisioning.md", "# Provisioning\n\nReset erases data.\n");
+  command(missing.repository, ["git", "add", "docs/provisioning.md"]);
+  command(missing.repository, ["git", "commit", "-qm", "add provisioning without policy"]);
+  assert.throws(
+    () => buildSourceManifest({
+      repository: missing.repository,
+      sourceRevision: command(missing.repository, ["git", "rev-parse", "HEAD"]),
+      documents: ["README.md", "docs/provisioning.md"],
+    }),
+    /consequential policy is absent/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.segmentCount -= 1; }),
+    /consequential policy source binding mismatch/,
+  );
+  assert.throws(
+    () => consequentialFixture((policy) => { policy.consequentialSegments[0] += "-unknown"; }),
+    /unknown provisioning segment/,
+  );
 });
 
 test("canonical JSON rejects noncanonical bytes and duplicate-key spelling", () => {
@@ -346,6 +443,62 @@ test("cross-locale packet results cannot be applied under another locale", () =>
   assert.throws(
     () => buildLocaleReceipt(current.manifest, "de", chinese, { repository: current.repository }),
     /binding mismatch/,
+  );
+});
+
+test("english-fallback accepts only the exact masked English source", () => {
+  const current = consequentialFixture();
+  const results = localeResults(current.manifest, "de", current.repository);
+  const record = results
+    .flatMap((result) => result.records)
+    .find((candidate) => candidate.segmentId === current.consequential.segmentId);
+  const fallback = buildLocaleReceipt(current.manifest, "de", results, {
+    repository: current.repository,
+  });
+  const receiptSegment = fallback.receipt.documents
+    .flatMap((document) => document.segments)
+    .find((segment) => segment.segmentId === current.consequential.segmentId);
+  assert.equal(receiptSegment.state, ENGLISH_FALLBACK_STATE);
+  record.translation += " changed";
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /english-fallback must exactly preserve the masked English source/,
+  );
+  record.translation = current.consequential.maskedSource;
+  record.state = PROMOTABLE_STATE;
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /result state must be english-fallback/,
+  );
+});
+
+test("receipt validation rejects altered text committed as english-fallback", () => {
+  const current = consequentialFixture();
+  const results = localeResults(current.manifest, "de", current.repository);
+  const receipt = applyLocaleReceipt({
+    repository: current.repository,
+    manifest: current.manifest,
+    locale: "de",
+    results,
+  });
+  const receiptDocument = receipt.documents.find(
+    (document) => document.sourcePath === "docs/provisioning.md",
+  );
+  const receiptSegment = receipt.documents
+    .flatMap((document) => document.segments)
+    .find((segment) => segment.segmentId === current.consequential.segmentId);
+  const target = path.join(current.repository, receiptDocument.targetPath);
+  const changedContent = fs.readFileSync(target, "utf8").replace(
+    current.consequential.maskedSource,
+    "Zurücksetzen löscht Paneldaten.",
+  );
+  fs.writeFileSync(target, changedContent);
+  receiptDocument.targetSha256 = sha256(changedContent);
+  receiptSegment.targetSha256 = sha256("Zurücksetzen löscht Paneldaten.");
+  rebindReceiptResults(receipt, current.manifest);
+  assert.throws(
+    () => validateLocaleReceipt(current.manifest, "de", receipt, { repository: current.repository }),
+    /english-fallback target differs from masked English source/,
   );
 });
 
@@ -737,17 +890,18 @@ test("localized links require non-symlink targets at sourceRevision and existing
 });
 
 test("repository validation requires the exact manifest, receipt set, and output tree", () => {
-  const current = fixture();
-  write(current.repository, "docs/i18n/manifest.json", canonicalJson(current.manifest));
-  assert.throws(
-    () => validateRepository({ repository: current.repository }),
-    /must select exactly README\.md/,
-  );
-  const manifest = buildSourceManifest({
+  const current = consequentialFixture();
+  const nonProductionManifest = buildSourceManifest({
     repository: current.repository,
     sourceRevision: current.sourceRevision,
-    documents: ["README.md"],
+    documents: ["README.md", "docs/guide.md"],
   });
+  write(current.repository, "docs/i18n/manifest.json", canonicalJson(nonProductionManifest));
+  assert.throws(
+    () => validateRepository({ repository: current.repository }),
+    /must select exactly README\.md, docs\/provisioning\.md/,
+  );
+  const manifest = current.manifest;
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
   for (const locale of SUPPORTED_LOCALES) {
     applyLocaleReceipt({
@@ -766,4 +920,25 @@ test("repository validation requires the exact manifest, receipt set, and output
     () => validateRepository({ repository: current.repository }),
     /output tree differs/,
   );
+});
+
+test("repository validation rejects every non-production document selection", () => {
+  const current = consequentialFixture();
+  for (const documents of [
+    ["README.md"],
+    ["README.md", "docs/guide.md"],
+    ["README.md", "docs/guide.md", "docs/provisioning.md"],
+  ]) {
+    const manifest = buildSourceManifest({
+      repository: current.repository,
+      sourceRevision: current.sourceRevision,
+      documents,
+    });
+    write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
+    assert.throws(
+      () => validateRepository({ repository: current.repository }),
+      /must select exactly README\.md, docs\/provisioning\.md/,
+      documents.join(","),
+    );
+  }
 });

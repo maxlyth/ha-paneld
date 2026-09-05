@@ -120,7 +120,10 @@ def manifest_extractor(shell: str) -> str:
 
 
 def source_manifest() -> dict:
-    outputs = {locale: f"docs/{locale}/README.md" for locale in LOCALES}
+    readme_outputs = {locale: f"docs/{locale}/README.md" for locale in LOCALES}
+    provisioning_outputs = {
+        locale: f"docs/{locale}/provisioning.md" for locale in LOCALES
+    }
     return {
         "schema": 1,
         "sourceRevision": "0" * 40,
@@ -133,9 +136,16 @@ def source_manifest() -> dict:
                 "sourcePath": "README.md",
                 "sourceSha256": "0" * 64,
                 "structuralSha256": "0" * 64,
-                "outputs": outputs,
+                "outputs": readme_outputs,
                 "segments": [],
-            }
+            },
+            {
+                "sourcePath": "docs/provisioning.md",
+                "sourceSha256": "0" * 64,
+                "structuralSha256": "0" * 64,
+                "outputs": provisioning_outputs,
+                "segments": [],
+            },
         ],
         "packets": [],
     }
@@ -212,10 +222,11 @@ class DocsI18nCiContractTest(unittest.TestCase):
             manifest = source_manifest()
             manifest_path = root / "docs" / "i18n" / "manifest.json"
             manifest_path.parent.mkdir(parents=True)
-            for output in manifest["documents"][0]["outputs"].values():
-                target = root / output
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("translated\n", encoding="utf-8")
+            for document in manifest["documents"]:
+                for output in document["outputs"].values():
+                    target = root / output
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("translated\n", encoding="utf-8")
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             result = subprocess.run(
@@ -229,7 +240,10 @@ class DocsI18nCiContractTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(
                 result.stdout.splitlines(),
-                [f"README.md\tdocs/{locale}/README.md" for locale in LOCALES],
+                [
+                    *(f"README.md\tdocs/{locale}/README.md" for locale in LOCALES),
+                    *(f"docs/provisioning.md\tdocs/{locale}/provisioning.md" for locale in LOCALES),
+                ],
             )
 
             manifest["documents"][0]["outputs"]["de"] = "docs/de/../outside.md"
@@ -253,15 +267,16 @@ class DocsI18nCiContractTest(unittest.TestCase):
             manifest = source_manifest()
             manifest_path = root / "docs" / "i18n" / "manifest.json"
             manifest_path.parent.mkdir(parents=True)
-            for locale, output in manifest["documents"][0]["outputs"].items():
-                target = root / output
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if locale == "de":
-                    external = root / "outside.md"
-                    external.write_text("outside\n", encoding="utf-8")
-                    target.symlink_to(external)
-                else:
-                    target.write_text("translated\n", encoding="utf-8")
+            for document_index, document in enumerate(manifest["documents"]):
+                for locale, output in document["outputs"].items():
+                    target = root / output
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if document_index == 0 and locale == "de":
+                        external = root / "outside.md"
+                        external.write_text("outside\n", encoding="utf-8")
+                        target.symlink_to(external)
+                    else:
+                        target.write_text("translated\n", encoding="utf-8")
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             rejected = subprocess.run(
