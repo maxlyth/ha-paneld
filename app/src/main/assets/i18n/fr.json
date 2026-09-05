@@ -10794,7 +10794,7 @@
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.level.at_risk": {
-      "text": "Gestion de l’alimentation du panneau : risque élevé",
+      "text": "Gestion de l’alimentation du panneau : à risque",
       "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
       "state": "machine-cross-checked"
     },

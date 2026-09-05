@@ -10794,17 +10794,17 @@
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.level.at_risk": {
-      "text": "Sicurezza energetica del pannello: a rischio",
+      "text": "Sicurezza dell’alimentazione: a rischio",
       "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.level.caution": {
-      "text": "Sicurezza energetica del pannello: attenzione",
+      "text": "Sicurezza dell’alimentazione: attenzione",
       "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.level.unknown": {
-      "text": "Sicurezza energetica del pannello: sconosciuta",
+      "text": "Sicurezza dell’alimentazione: sconosciuta",
       "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
       "state": "machine-cross-checked"
     },
@@ -10814,32 +10814,32 @@
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.summary.caution": {
-      "text": "La raggiungibilità del pannello dipende attualmente da un solo meccanismo di protezione energetica rilevato.",
+      "text": "La raggiungibilità del pannello dipende attualmente da un solo meccanismo di protezione dell’alimentazione rilevato.",
       "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.summary.unknown": {
-      "text": "Impossibile stabilire la sicurezza energetica perché una o più verifiche dell’alimentazione Android non erano disponibili o erano ambigue.",
+      "text": "Impossibile stabilire la sicurezza dell’alimentazione perché una o più verifiche dell’alimentazione Android non erano disponibili o erano ambigue.",
       "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.action.review": {
-      "text": "Controlla le protezioni energetiche rilevate. Le modifiche a Mantieni attivo e Doze di Android richiedono l’accesso root diretto; le azioni di sicurezza energetica non riavviano mai il pannello.",
+      "text": "Controlla le protezioni dell’alimentazione rilevate. Le modifiche a Mantieni attivo e Doze di Android richiedono l’accesso root diretto; le azioni di sicurezza dell’alimentazione non riavviano mai il pannello.",
       "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.action.repair_direct": {
-      "text": "Usa «Ripara sicurezza energetica» per attivare e verificare le protezioni energetiche dell’app e di Android. La riparazione non riavvia mai il pannello.",
+      "text": "Usa «Ripara sicurezza dell’alimentazione» per attivare e verificare le protezioni dell’alimentazione dell’app e di Android. La riparazione non riavvia mai il pannello.",
       "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.action.repair_degraded": {
-      "text": "Usa «Ripara sicurezza energetica» per verificare le protezioni dell’app e riprovare il percorso di accesso root diretto attualmente degradato di questo pannello. La riparazione non riavvia mai il pannello.",
+      "text": "Usa «Ripara sicurezza dell’alimentazione» per verificare le protezioni dell’app e riprovare il percorso di accesso root diretto attualmente degradato di questo pannello. La riparazione non riavvia mai il pannello.",
       "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.action.repair_limited": {
-      "text": "Usa «Ripara sicurezza energetica» per attivare e verificare i blocchi CPU/Wi-Fi dell’app e il timeout infinito. Le modifiche a Mantieni attivo e Doze di Android non sono disponibili tramite il percorso attuale di questo pannello.",
+      "text": "Usa «Ripara sicurezza dell’alimentazione» per attivare e verificare i blocchi CPU/Wi-Fi dell’app e il timeout infinito. Le modifiche a Mantieni attivo e Doze di Android non sono disponibili tramite il percorso attuale di questo pannello.",
       "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
       "state": "machine-cross-checked"
     },
@@ -10859,7 +10859,7 @@
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.button.repair": {
-      "text": "Ripara sicurezza energetica",
+      "text": "Ripara sicurezza dell’alimentazione",
       "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
       "state": "machine-cross-checked"
     },
@@ -10874,22 +10874,22 @@
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.repair.approval": {
-      "text": "Approva fisicamente questa richiesta sul pannello, quindi tocca di nuovo «Ripara sicurezza energetica».",
+      "text": "Approva fisicamente questa richiesta sul pannello, quindi tocca di nuovo «Ripara sicurezza dell’alimentazione».",
       "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.repair.repaired": {
-      "text": "La sicurezza energetica è stata riparata e verificata.",
+      "text": "La sicurezza dell’alimentazione è stata riparata e verificata.",
       "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.repair.partial": {
-      "text": "La riparazione della sicurezza energetica è stata parziale. Non è stato tentato alcun riavvio.",
+      "text": "La riparazione della sicurezza dell’alimentazione è stata parziale. Non è stato tentato alcun riavvio.",
       "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
       "state": "machine-cross-checked"
     },
     "runtime.power_safety.repair.failed_no_reboot": {
-      "text": "La riparazione della sicurezza energetica non è riuscita; non è stato tentato alcun riavvio.",
+      "text": "Riparazione della sicurezza dell’alimentazione non riuscita; nessun riavvio è stato tentato.",
       "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
       "state": "machine-cross-checked"
     }

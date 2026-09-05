@@ -75,6 +75,37 @@ class RuntimeLocalizationContractTest {
         assertTrue(routeBody(kotlin, "setup").contains("setOf(\"shell.\", \"setup.\", \"runtime.\")"))
     }
 
+    @Test fun `Italian and French power safety use the established risk terminology`() {
+        val italian = TargetCatalogue.parse(File(assets, "i18n/it.json").readText(), source)
+        val italianKeys = setOf(
+            "runtime.power_safety.level.at_risk",
+            "runtime.power_safety.level.caution",
+            "runtime.power_safety.level.unknown",
+            "runtime.power_safety.summary.caution",
+            "runtime.power_safety.summary.unknown",
+            "runtime.power_safety.action.review",
+            "runtime.power_safety.action.repair_direct",
+            "runtime.power_safety.action.repair_degraded",
+            "runtime.power_safety.action.repair_limited",
+            "runtime.power_safety.button.repair",
+            "runtime.power_safety.repair.approval",
+            "runtime.power_safety.repair.repaired",
+            "runtime.power_safety.repair.partial",
+            "runtime.power_safety.repair.failed_no_reboot",
+        )
+        italianKeys.forEach { key ->
+            val text = checkNotNull(italian.strings[key]).text
+            assertTrue("$key must use the established Italian power-safety term", "dell’alimentazione" in text)
+            assertTrue("$key must not revert to energy terminology", !Regex("energi", RegexOption.IGNORE_CASE).containsMatchIn(text))
+        }
+
+        val french = TargetCatalogue.parse(File(assets, "i18n/fr.json").readText(), source)
+        assertEquals(
+            "Gestion de l’alimentation du panneau : à risque",
+            checkNotNull(french.strings["runtime.power_safety.level.at_risk"]).text,
+        )
+    }
+
     private fun literalRuntimeKeys(text: String): Set<String> =
         Regex("[\\\"'](runtime(?:\\.[a-z0-9_-]+)+)[\\\"']")
             .findAll(text)
