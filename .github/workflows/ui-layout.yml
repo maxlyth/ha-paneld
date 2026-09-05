@@ -11,9 +11,12 @@ on:
     paths: ['app/src/main/assets/**', 'test/**', '.github/workflows/ui-layout.yml']
   workflow_dispatch:
 
+# A push supersedes the run before it, so group by ref and let the newer run
+# cancel the older one. Keying a push on its own run id gave every push a group
+# of one, so superseded runs kept burning minutes to no purpose.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
