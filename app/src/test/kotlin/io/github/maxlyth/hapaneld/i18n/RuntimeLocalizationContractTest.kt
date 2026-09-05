@@ -42,10 +42,12 @@ class RuntimeLocalizationContractTest {
     )
 
     @Test fun `every literal runtime call site has a current promoted catalogue record`() {
-        val consumers = literalRuntimeKeys(server.readText()) +
-            literalRuntimeKeys(File(assets, "power-safety.js").readText())
+        val consumers = listOf(File("src/main/kotlin"), assets)
+            .flatMap { root -> root.walkTopDown().filter { it.isFile && it.extension in setOf("kt", "js") }.toList() }
+            .flatMapTo(sortedSetOf()) { literalRuntimeKeys(it.readText()) }
 
         assertEquals("the release-blocker runtime addition changed", 29, newRuntimeKeys.size)
+        assertEquals("the complete production runtime call-site inventory changed", 41, consumers.size)
         assertTrue("all newly authored runtime records must have literal consumers", consumers.containsAll(newRuntimeKeys))
         assertTrue(
             "runtime call sites are missing English catalogue records: ${consumers - source.strings.keys}",
