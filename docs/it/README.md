@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> This document is machine-generated and automatically cross-checked, but it has not been systematically reviewed by speakers of this language. The English documentation is authoritative. [Read the English source](../../README.md) or [open a translation correction issue](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+> Questo documento è generato automaticamente e verificato mediante controlli incrociati automatici, ma non è stato rivisto sistematicamente da persone che parlano questa lingua. La documentazione in inglese fa fede. [Leggi la fonte in inglese](../../README.md) oppure [apri una segnalazione per correggere la traduzione](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../app/src/main/res/drawable-night-nodpi/wordmark.png">
@@ -40,7 +40,7 @@ L'interfaccia web offre un unico posto in cui configurare un pannello, installar
 |---|---|
 | <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="Scheda Entità" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="Scheda Installa" width="420"></picture></a> |
 
-| Profilo | Log |
+| Profilo | Registri |
 |---|---|
 | <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="Scheda Profilo" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="Scheda Registri" width="420"></picture></a> |
 
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 ```
 
 > [!IMPORTANT]
-> **In Windows, usa Git Bash o WSL, non PowerShell.** Il programma di installazione è uno script `bash` . Git Bash è incluso in [Git for Windows](https://gitforwindows.org/). Installa `adb` con `winget install Google.PlatformTools`, riapri la shell e quindi esegui il comando. macOS e Linux possono eseguirlo così com'è.
+> **In Windows, usa Git Bash o WSL, non PowerShell.** Il programma di installazione è uno script `bash`. Git Bash è incluso in [Git for Windows](https://gitforwindows.org/). Installa `adb` con `winget install Google.PlatformTools`, riapri la shell e quindi esegui il comando. macOS e Linux possono eseguirlo così com'è.
 
 Non è necessario clonare il repository né specificare alcuna opzione. Il programma di installazione verifica che `adb` e `curl` siano disponibili, richiede l'indirizzo del pannello e spiega ogni modifica prima di applicarla. Scarica l'ultima versione stabile firmata, la installa e verifica che ha-paneld si sia avviato correttamente.
 
@@ -83,13 +83,13 @@ ha-paneld non viene distribuito tramite Google Play, quindi l'installazione rich
 ### Altri metodi di installazione
 
 - **F-Droid sul pannello:** aggiungi il [repository F-Droid di ha-paneld](../fdroid.md) per installare e aggiornare le versioni stabili senza un computer. F-Droid ti avvisa quando è disponibile un aggiornamento e ti consente di installarlo sul pannello; le release candidate non sono incluse. Il firmware Sonoff NSPanel Pro 4.0.0 e versioni successive include F-Droid. Questo installa l'app, ma le funzionalità che richiedono l'accesso root necessitano comunque dei normali passaggi di provisioning.
-- **Sideloading manuale o bootstrap USB:** usa l'APK dell' [ultima versione](https://github.com/maxlyth/ha-paneld/releases) e segui [Provisioning e aggiornamenti del parco dispositivi](../provisioning.md) per le autorizzazioni e la configurazione rimanenti.
+- **Sideloading manuale o bootstrap USB:** usa l'APK dell'[ultima versione](https://github.com/maxlyth/ha-paneld/releases) e segui [Provisioning e aggiornamenti del parco dispositivi](../provisioning.md) per le autorizzazioni e la configurazione rimanenti.
 
 ## Scegli come eseguire la dashboard
 
 Usa il renderer integrato quando desideri filtrare le entità della dashboard. Supporta inoltre l'accesso da un altro browser, la selezione di una specifica scheda della dashboard e un avvio e un ripristino più rapidi. Dopo il riavvio dell'app, può riaprire l'ultima dashboard predefinita dell'account verificata mentre aggiorna in background l'elenco delle dashboard di Home Assistant.
 
-È supportata anche l'app ufficiale [Home Assistant Companion](https://github.com/home-assistant/android) . Usala quando il pannello richiede più di un server Home Assistant, il controllo vocale Assist o le notifiche native. Su un pannello senza Google Play e con un metodo di installazione supportato, usa la scheda Install di ha-paneld. Il selettore applica il limite di compatibilità per quel pannello, anziché presupporre che possa eseguire la versione più recente di Companion.
+È supportata anche l'app ufficiale [Home Assistant Companion](https://github.com/home-assistant/android). Usala quando il pannello richiede più di un server Home Assistant, il controllo vocale Assist o le notifiche native. Su un pannello senza Google Play e con un metodo di installazione supportato, usa la scheda Installa di ha-paneld. Il selettore applica il limite di compatibilità per quel pannello, anziché presupporre che possa eseguire la versione più recente di Companion.
 
 Entrambe le opzioni rimangono supportate. Il filtro delle entità della dashboard funziona solo con il renderer integrato di ha-paneld.
 
@@ -104,8 +104,8 @@ Non è necessario installare ha-paneld come app di sistema. I controlli Android 
 | Sonoff NSPanel Pro / Pro 120 | Supportato | Android 8.1, arm64-v8a | PX30 / rk3326-S; il firmware stock fornisce ADB root e il normale provisioning installa l'helper root autenticato di ha-paneld |
 | Tuya TPA10 | Supportato | Android 11, armeabi-v7a | rk3566 con userspace a 32 bit |
 | Electron WF1589T | Supportato | Android 14, arm64-v8a | firmware userdebug rk3576; `adb root`, barra di navigazione Android nativa e controllo del LED RGB |
-| ZHICAI SMT1019 | Testato dalla community, alcune funzionalità sono sperimentali | Android 14, arm64-v8a | rk3576; il firmware di serie non dispone di root accessibile dalle app. L'helper autenticato può fornire ulteriore accesso all'hardware, se installato. L'accuratezza della climatizzazione e il supporto del sensore di prossimità richiedono ancora ulteriori test sull'hardware. [Issue #8](https://github.com/maxlyth/ha-paneld/issues/8) |
-| ZX-SMT156 / RK3566_T | Preliminare | Android 13, arm64-v8a | Il LED RGB e i sensori di luminosità e prossimità funzionano senza root. Il supporto della climatizzazione è facoltativo; i relè e l'accesso root sono ancora in fase di caratterizzazione. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24) |
+| ZHICAI SMT1019 | Testato dalla community, alcune funzionalità sono sperimentali | Android 14, arm64-v8a | rk3576; il firmware di serie non dispone di root accessibile dalle app. L'helper autenticato può fornire ulteriore accesso all'hardware, se installato. L'accuratezza delle misurazioni di temperatura e umidità e il supporto del sensore di prossimità richiedono ancora ulteriori test sull'hardware. [Issue #8](https://github.com/maxlyth/ha-paneld/issues/8) |
+| ZX-SMT156 / RK3566_T | Preliminare | Android 13, arm64-v8a | Il LED RGB e i sensori di luminosità e prossimità funzionano senza root. Il supporto dei sensori di temperatura e umidità è facoltativo; i relè e l'accesso root sono ancora in fase di caratterizzazione. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24) |
 | Smatek S9E | Sperimentale | Android 11, arm64-v8a | Profilo per i relè integrati, i LED dei pulsanti e il sensore di prossimità. È ancora necessaria una conferma dal vivo sull'hardware S9E. |
 | Shelly Wall Display (originale) | Software di serie incompatibile | Android 7.0, armeabi-v7a | La versione di Android è precedente alla versione minima richiesta da ha-paneld. |
 | Shelly Wall Display X2 | Solo per ricerca | Android 8.1, armeabi-v7a | Nessun metodo confermato per installare ha-paneld. |
@@ -126,18 +126,18 @@ Ogni pannello espone solo i controlli supportati dal proprio profilo e dall'hard
 | Luce ambientale e prossimità | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` e un valore normalizzato `sensor.<panel>_proximity_level` da 0 (lontano) a 100 (vicino) |
 | Luminosità adattiva | Apprendimento opzionale di sette giorni dal sensore di luminosità del pannello o da un'entità di illuminamento di Home Assistant |
 | Aprire un URL | `text.<panel>_navigate` |
-| Controlli della dashboard e riavvio | Pulsanti di Home Assistant, oltre alle azioni Dashboard, Ricarica e di navigazione nel pannello Controlli remoto |
+| Controlli della dashboard e riavvio | Pulsanti di Home Assistant, oltre alle azioni Dashboard, Ricarica e alle azioni di navigazione disponibili nel riquadro Comandi dell'interfaccia remota |
 | Audio TTS e degli annunci | `POST /play` e `number.<panel>_volume`; consultare la [guida TTS](../tts.md) |
-| Screenshot della dashboard e tocco remoto | I pannelli con un metodo di acquisizione degli screenshot supportato possono mostrare e aggiornare lo schermo dalla scheda Dashboard; la modalità Relaxed consente anche di inviare un clic al pannello |
+| Screenshot della dashboard e tocco remoto | I pannelli con un metodo di acquisizione degli screenshot supportato possono mostrare e aggiornare lo schermo dalla scheda Dashboard; la modalità Permissiva consente anche di inviare un clic al pannello |
 | Informazioni e configurazione del pannello | Aprire `http://<panel>:8888/`, disponibile anche tramite il collegamento **Visita** nella pagina del dispositivo di Home Assistant |
 
 Home Assistant rileva questi controlli tramite MQTT senza YAML. Le principali famiglie di entità, l'API HTTP e i dettagli sull'associazione sono disponibili in [docs/api.md](../api.md). È inoltre possibile esplorare e provare l'API HTTP su un pannello all'indirizzo `http://<panel>:8888/api`.
 
 ## Sicurezza e accesso root
 
-### Modalità di sicurezza avanzata
+### Modalità protetta
 
-La modalità Relaxed è quella predefinita ed è destinata a una rete domestica attendibile. Usare la [modalità di sicurezza avanzata](../security-mode.md) quando la rete è condivisa con dispositivi meno attendibili. La modalità di sicurezza avanzata richiede l'accesso fisico al pannello. Qualcuno deve approvare sullo schermo del pannello le azioni remote ad alto impatto; non è possibile approvarle da remoto. Gli screenshot rimangono visualizzabili, ma i tocchi remoti sono disabilitati. L'impostazione deve essere abilitata separatamente su ogni pannello e non viene copiata tramite backup, ripristino o provisioning del parco dispositivi.
+La modalità permissiva è quella predefinita ed è destinata a una rete domestica attendibile. Usa la [modalità protetta](../security-mode.md) quando la rete è condivisa con dispositivi meno attendibili. La modalità protetta richiede l'accesso fisico al pannello. Qualcuno deve approvare sullo schermo del pannello le azioni remote ad alto impatto; non è possibile approvarle da remoto. Gli screenshot rimangono visualizzabili, ma i tocchi remoti sono disabilitati. L'impostazione deve essere abilitata separatamente su ogni pannello e non viene copiata tramite backup, ripristino o provisioning del parco dispositivi.
 
 ### Funzionalità che richiedono root
 
@@ -162,7 +162,7 @@ Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](.
 - [Prestazioni](../performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
 - [Luminosità adattiva](../adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.
 - [Prossimità adattiva e riattivazione con un gesto della mano](../adaptive-proximity.md): configura il rilevamento di prossimità e insegna il gesto di riattivazione.
-- [Modalità di sicurezza](../security-mode.md): comprendi la modalità Relaxed e la modalità di sicurezza Hardened, incluse le azioni che richiedono la presenza di una persona davanti al pannello.
+- [Modalità di sicurezza](../security-mode.md): comprendi la modalità permissiva e la modalità protetta, incluse le azioni che richiedono la presenza di una persona davanti al pannello.
 - [TTS](../tts.md): genera l'audio vocale con un motore TTS di Home Assistant e invialo a un pannello.
 
 ### Sviluppo ed estensione di ha-paneld
@@ -210,7 +210,7 @@ Inizia con la [guida ai profili di runtime](../profiles/README.md). Il profilo G
 
 Quindi, se vuoi contribuire:
 
-- **Crea e condividi un profilo.** Apri `http://<panel-ip>:8888/profiles`, scarica la bozza del dispositivo Generic e segui le guide per [eseguire i test](../profiles/testing.md) e [condividere](../profiles/sharing.md) . Un profilo della community può essere utile prima che sia pronto per essere distribuito con ha-paneld.
+- **Crea e condividi un profilo.** Apri `http://<panel-ip>:8888/profiles`, scarica la bozza del dispositivo Generic e segui le guide per [eseguire i test](../profiles/testing.md) e [condividere](../profiles/sharing.md). Un profilo della community può essere utile prima che sia pronto per essere distribuito con ha-paneld.
 - **Apri una issue con la diagnostica del pannello.** Visita `http://<panel-ip>:8888/diag`, controlla e oscura i dati sensibili nel report, quindi incollalo in una nuova issue. È sufficiente per iniziare. Collaborerò con te per eseguire una breve serie di test su eventuali pulsanti, LED, relè o sensori che richiedono la presenza di qualcuno davanti al pannello.
 - **Inviami il pannello.** Mi trovo nel Regno Unito e sono disponibile a svolgere direttamente il reverse engineering. È il modo più rapido per ottenere un supporto completo per l'hardware. Ti verrà restituito (ne ho già fin troppi); apri prima una issue, così possiamo concordare i dettagli.
 
@@ -218,7 +218,7 @@ Il risultato è sempre aperto: il tuo pannello diventa un profilo utilizzabile d
 
 ## Sviluppo
 
-Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l' [API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l' [ambiente di test del browser](../../test/README.md)e il [processo di rilascio](../RELEASING.md).
+Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../test/README.md) e il [processo di rilascio](../RELEASING.md).
 
 Ho fornito deliberatamente informazioni sufficienti per usare il container di sviluppo incluso e creare una versione di test locale. Non inviare pull request o issue generate automaticamente senza modificarle: leggi e comprendi ogni parte del testo e del codice proposti, quindi riscrivili con parole tue. Questo progetto è gestito da una sola persona e non ho tempo di esaminare contenuti generati automaticamente e non filtrati. Sii conciso e scrivi per le persone; se hai dubbi su qualcosa, chiedi prima.
 
@@ -226,7 +226,7 @@ Ho fornito deliberatamente informazioni sufficienti per usare il container di sv
 <summary><strong>Stack tecnologico</strong></summary>
 
 - **Applicazione:** [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) e [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
-- **HTTP e WebSocket di Home Assistant:** [Ktor](https://github.com/ktorio/ktor) .
+- **HTTP e WebSocket di Home Assistant:** [Ktor](https://github.com/ktorio/ktor) con i moduli CIO per server e client e il modulo WebSocket.
 - **MQTT:** [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client), con il relativo client MQTT 5 e il trasporto NIO in Java puro.
 - **mDNS:** [JmDNS](https://github.com/jmdns/jmdns), che annuncia `_ha-paneld._tcp` affinché le istanze di ha-paneld possano trovarsi a vicenda per il selettore multipannello. ha-paneld segnala quando tale annuncio si interrompe e non può essere ripristinato.
 - **Profili di runtime:** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) per YAML 1.2, con [CodeMirror](https://codemirror.net/) e il relativo [pacchetto del linguaggio YAML](https://github.com/codemirror/lang-yaml) nell'editor dei profili.
@@ -238,7 +238,7 @@ La selezione e gli aggiornamenti delle dipendenze seguono la [politica del proge
 
 ## Traduzioni
 
-Le traduzioni vengono generate e verificate automaticamente. Non sono state revisionate sistematicamente da parlanti di ciascuna lingua, pertanto il testo inglese rimane quello autorevole. Se una formulazione non è chiara o è errata, [apri una issue per correggere la traduzione](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+Le traduzioni vengono generate e sottoposte a verifica incrociata mediante diversi servizi e modelli, tra cui EuroLLM, DeepL e OpenAI. Non sono state revisionate sistematicamente da parlanti di ciascuna lingua, pertanto il testo inglese rimane autorevole. Se una formulazione non è chiara o è errata, [apri una issue per correggere la traduzione](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
 
 ## Ringraziamenti
 

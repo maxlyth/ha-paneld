@@ -2035,15 +2035,15 @@
         },
         {
           "bindingsSha256": "ec06b0d29e5b0acc1742f1c04fdace84f3f5b45f01eecbfa814d0923016e0ce4",
-          "id": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1",
-          "maskedSourceSha256": "6fd9a3b3b181a7cb047a9c2aeed6b8db4f6979b60f30f66a3c4571f9b47f1420",
+          "id": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1",
+          "maskedSourceSha256": "8dc93f9e082df339c2b8c85ff39c6f32dff64ecd844b611bc17f3e4b7db6c7c1",
           "occurrence": 1,
           "ownerType": "paragraph",
           "sectionPath": [
             "2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff"
           ],
-          "sourceCharacters": 323,
-          "sourceSha256": "829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343"
+          "sourceCharacters": 336,
+          "sourceSha256": "9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e"
         },
         {
           "bindingsSha256": "ace750afaaca6759acc735da9bc29177a94057b03f6d8ebf430cebfecf804e20",
@@ -2095,7 +2095,7 @@
         }
       ],
       "sourcePath": "README.md",
-      "sourceSha256": "10585771d83593657b64665dc16b5ad20f693f601eeca5c14b6e52eca0300a57",
+      "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
       "structuralSha256": "8e0332b57e752b2c291cb78fd8e11eb149f5ce943e63eb7b53e341264bc9e2a0"
     }
   ],
@@ -2113,9 +2113,9 @@
   ],
   "notice": {
     "languagePickerVersion": 1,
-    "sha256": "0fb0afe0301d842d58871ba0554c65e8181b8fc7dcd46fe4e914f6e89e54a78e",
+    "sha256": "3a380de8db1d6b47a7ed64273e836a5991f72e165d2debbe8bb87ecff1c910bb",
     "sourceLanguagePickerSha256": "eacfc7c194cf7709e54d08b5e87260bf343e4ebb378f431c57af1ac050168e41",
-    "version": 1
+    "version": 2
   },
   "packets": [
     {
@@ -2869,7 +2869,7 @@
         },
         {
           "document": "README.md",
-          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1"
+          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1"
         },
         {
           "document": "README.md",
@@ -2888,7 +2888,7 @@
           "segmentId": "README.md::2:83a30de307914439a7d5ed6b88feeef4fad862a616214839889b9238455c90e7::paragraph::42413165179944a2c90d3c27d06a7bf32e328dcaafc88a97c87bd02f3540cdfb::1"
         }
       ],
-      "sourceCharacters": 2759
+      "sourceCharacters": 2772
     },
     {
       "id": "es-0001",
@@ -3641,7 +3641,7 @@
         },
         {
           "document": "README.md",
-          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1"
+          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1"
         },
         {
           "document": "README.md",
@@ -3660,7 +3660,7 @@
           "segmentId": "README.md::2:83a30de307914439a7d5ed6b88feeef4fad862a616214839889b9238455c90e7::paragraph::42413165179944a2c90d3c27d06a7bf32e328dcaafc88a97c87bd02f3540cdfb::1"
         }
       ],
-      "sourceCharacters": 2759
+      "sourceCharacters": 2772
     },
     {
       "id": "fr-0001",
@@ -4413,7 +4413,7 @@
         },
         {
           "document": "README.md",
-          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1"
+          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1"
         },
         {
           "document": "README.md",
@@ -4432,7 +4432,7 @@
           "segmentId": "README.md::2:83a30de307914439a7d5ed6b88feeef4fad862a616214839889b9238455c90e7::paragraph::42413165179944a2c90d3c27d06a7bf32e328dcaafc88a97c87bd02f3540cdfb::1"
         }
       ],
-      "sourceCharacters": 2759
+      "sourceCharacters": 2772
     },
     {
       "id": "it-0001",
@@ -5185,7 +5185,7 @@
         },
         {
           "document": "README.md",
-          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1"
+          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1"
         },
         {
           "document": "README.md",
@@ -5204,7 +5204,7 @@
           "segmentId": "README.md::2:83a30de307914439a7d5ed6b88feeef4fad862a616214839889b9238455c90e7::paragraph::42413165179944a2c90d3c27d06a7bf32e328dcaafc88a97c87bd02f3540cdfb::1"
         }
       ],
-      "sourceCharacters": 2759
+      "sourceCharacters": 2772
     },
     {
       "id": "zh-Hans-0001",
@@ -5957,7 +5957,7 @@
         },
         {
           "document": "README.md",
-          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::829bbdd82de61768ea6a56481465d10e59190bbfdce61fdfd7737a3ae4a5c343::1"
+          "segmentId": "README.md::2:df855f7000050a24c754e54184e92d4eb478a679048964fffdfb1847d922fdff::paragraph::9e5b7e50be1b650c0cf1d09e2b80395d5aa18e7fc368600daf53c16f18a44a8e::1"
         },
         {
           "document": "README.md",
@@ -5976,7 +5976,7 @@
           "segmentId": "README.md::2:83a30de307914439a7d5ed6b88feeef4fad862a616214839889b9238455c90e7::paragraph::42413165179944a2c90d3c27d06a7bf32e328dcaafc88a97c87bd02f3540cdfb::1"
         }
       ],
-      "sourceCharacters": 2759
+      "sourceCharacters": 2772
     }
   ],
   "parser": {
@@ -5986,5 +5986,5 @@
     "unified": "11.0.5"
   },
   "schema": 1,
-  "sourceRevision": "5a0f4e5ef52a8c671ac225974678e7b5c93ce300"
+  "sourceRevision": "4b4215ec8cdca2829fad75966c141c9dfe122d1d"
 }

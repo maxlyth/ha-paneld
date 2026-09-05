@@ -1,5 +1,5 @@
 > [!IMPORTANT]
-> This document is machine-generated and automatically cross-checked, but it has not been systematically reviewed by speakers of this language. The English documentation is authoritative. [Read the English source](../../README.md) or [open a translation correction issue](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+> Este documento se genera automáticamente y se somete a comprobaciones cruzadas automáticas, pero no ha sido revisado sistemáticamente por hablantes de este idioma. La documentación en inglés es la fuente de referencia. [Consulta la fuente en inglés](../../README.md) o [abre una incidencia para corregir la traducción](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../../app/src/main/res/drawable-night-nodpi/wordmark.png">
@@ -52,60 +52,60 @@ La interfaz web ofrece un único lugar para configurar un panel, instalar softwa
 
 ## Instalación
 
-Si no sabe con certeza si ha-paneld puede ejecutarse en su panel, consulte [Paneles y estado de compatibilidad](#paneles-y-estado-de-compatibilidad) antes de instalarlo.
+Si no tienes claro si ha-paneld puede ejecutarse en tu panel, consulta [Paneles y estado de compatibilidad](#paneles-y-estado-de-compatibilidad) antes de instalarlo.
 
-Primero, permita el acceso a ADB a través de la red. En algunos paneles, esto se configura en las opciones para desarrolladores; otros necesitan una única conexión USB para ejecutar `adb tcpip 5555`. La [guía de aprovisionamiento](../provisioning.md) y las [guías de hardware](../hardware/) específicas de cada modelo explican los métodos disponibles. A continuación, ejecute lo siguiente desde un ordenador que tenga `adb` y esté en la misma red:
+Primero, habilita ADB a través de la red. En algunos paneles, esto se configura en las opciones para desarrolladores; otros necesitan una única conexión USB para ejecutar `adb tcpip 5555`. La [guía de aprovisionamiento](../provisioning.md) y las [guías de hardware](../hardware/) específicas de cada modelo explican los métodos disponibles. A continuación, ejecuta lo siguiente desde un ordenador que tenga `adb` y esté en la misma red:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
 ```
 
 > [!IMPORTANT]
-> **En Windows, use Git Bash o WSL, no PowerShell.** El instalador es un script de `bash` . Git Bash se incluye con [Git for Windows](https://gitforwindows.org/). Instale `adb` con `winget install Google.PlatformTools`, vuelva a abrir el intérprete de comandos y ejecute el comando. En macOS y Linux puede ejecutarlo tal como está escrito.
+> **En Windows, usa Git Bash o WSL, no PowerShell.** El instalador es un script de `bash`. Git Bash se incluye con [Git for Windows](https://gitforwindows.org/). Instala `adb` con `winget install Google.PlatformTools`, vuelve a abrir el intérprete de comandos y ejecuta el comando. En macOS y Linux puedes ejecutarlo tal como está escrito.
 
-No necesita clonar el repositorio ni proporcionar ninguna opción. El instalador comprueba que `adb` y `curl` estén disponibles, solicita la dirección del panel y explica cada cambio antes de realizarlo. Descarga la versión estable firmada más reciente, la instala y comprueba que ha-paneld se haya iniciado correctamente.
+No necesitas clonar el repositorio ni proporcionar ninguna opción. El instalador comprueba que `adb` y `curl` estén disponibles, solicita la dirección del panel y explica cada cambio antes de realizarlo. Descarga la versión estable firmada más reciente, la instala y comprueba que ha-paneld se haya iniciado correctamente.
 
-Si falla un paso obligatorio, el instalador indica el problema y se cierra sin afirmar que la instalación se haya completado correctamente. Corrija el problema y vuelva a ejecutar el mismo comando.
+Si falla un paso obligatorio, el instalador indica el problema y se cierra sin afirmar que la instalación se haya completado correctamente. Corrige el problema y vuelve a ejecutar el mismo comando.
 
 > [!IMPORTANT]
-> **Compruebe Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulte [Requisitos del renderizador integrado](../built-in-renderer.md#requirements-and-compatibility) y [Actualización del WebView del sistema](../hardware/README.md#updating-the-system-webview).
+> **Comprueba Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulta [Requisitos del renderizador integrado](../built-in-renderer.md#requirements-and-compatibility) y [Actualización del WebView del sistema](../hardware/README.md#updating-the-system-webview).
 
-Para seguir la versión publicada más reciente, incluidas las versiones candidatas, añada `--prerelease`. Una versión estable más reciente sigue teniendo prioridad:
+Para seguir la versión publicada más reciente, incluidas las versiones candidatas, añade `--prerelease`. Una versión estable más reciente sigue teniendo prioridad:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-El mismo instalador permite el aprovisionamiento desatendido de un solo panel. Consulte [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para obtener información sobre instalaciones mediante scripts, arranque inicial por USB, paneles sin ADB de red y actualizaciones de toda la flota.
+El mismo instalador permite el aprovisionamiento desatendido de un solo panel. Consulta [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para obtener información sobre instalaciones mediante scripts, arranque inicial por USB, paneles sin ADB de red y actualizaciones de toda la flota.
 
 ha-paneld no se distribuye a través de Google Play, por lo que la instalación siempre requiere carga lateral. Esto también se aplica a los paneles más recientes que, por lo demás, tienen acceso a Play Store.
 
 ### Otros métodos de instalación
 
-- **F-Droid en el panel:** añada el [repositorio de F-Droid de ha-paneld](../fdroid.md) para instalar y actualizar versiones estables sin un ordenador. F-Droid le avisa cuando hay una actualización disponible y le permite instalarla en el panel; las versiones candidatas no están incluidas. El firmware 4.0.0 y posterior de Sonoff NSPanel Pro incluye F-Droid. Esto instala la aplicación, pero las funciones que requieren acceso root siguen necesitando los pasos de aprovisionamiento habituales.
-- **Carga lateral manual o arranque inicial por USB:** use el APK de la [versión más reciente](https://github.com/maxlyth/ha-paneld/releases) y siga [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para configurar los permisos restantes y completar la puesta en marcha.
+- **F-Droid en el panel:** añade el [repositorio de F-Droid de ha-paneld](../fdroid.md) para instalar y actualizar versiones estables sin un ordenador. F-Droid te avisa cuando hay una actualización disponible y te permite instalarla en el panel; las versiones candidatas no están incluidas. El firmware 4.0.0 y posterior de Sonoff NSPanel Pro incluye F-Droid. Esto instala la aplicación, pero las funciones que requieren acceso root siguen necesitando los pasos de aprovisionamiento habituales.
+- **Carga lateral manual o arranque inicial por USB:** usa el APK de la [versión más reciente](https://github.com/maxlyth/ha-paneld/releases) y sigue [Aprovisionamiento y actualizaciones de flotas](../provisioning.md) para configurar los permisos restantes y completar la puesta en marcha.
 
-## Elija cómo se ejecuta el panel de control
+## Elige cómo se ejecuta el panel de control
 
-Use el renderizador integrado si desea filtrar las entidades del panel de control. También permite iniciar sesión desde otro navegador, seleccionar una pestaña específica del panel de control y agilizar el inicio y la recuperación. Tras reiniciar la aplicación, puede volver a abrir el último panel de control predeterminado de la cuenta que se haya verificado mientras actualiza en segundo plano la lista de paneles de control de Home Assistant.
+Usa el renderizador integrado si quieres filtrar las entidades del panel de control. También permite iniciar sesión desde otro navegador, seleccionar una pestaña específica del panel de control y agilizar el inicio y la recuperación. Tras reiniciar la aplicación, puede volver a abrir el panel de control predeterminado de la cuenta verificado más recientemente mientras actualiza en segundo plano la lista de paneles de control de Home Assistant.
 
-También se admite la aplicación oficial [Home Assistant Companion](https://github.com/home-assistant/android) . Úsala cuando el panel necesite más de un servidor de Home Assistant, el control por voz de Assist o notificaciones nativas. En un panel sin Google Play y con un método de instalación compatible, usa la pestaña Instalar de ha-paneld. El selector aplica el límite de compatibilidad de ese panel en lugar de asumir que la versión más reciente de Companion funcionará en él.
+También se admite la aplicación oficial [Home Assistant Companion](https://github.com/home-assistant/android). Úsala cuando el panel necesite más de un servidor de Home Assistant, el control por voz de Assist o notificaciones nativas. En un panel sin Google Play y con un método de instalación compatible, usa la pestaña Instalar de ha-paneld. El selector aplica el límite de compatibilidad de ese panel en lugar de asumir que la versión más reciente de Companion funcionará en él.
 
-Ambas opciones siguen siendo compatibles. El filtrado de entidades del dashboard solo funciona con el renderizador integrado de ha-paneld.
+Ambas opciones siguen siendo compatibles. El filtrado de entidades del panel de control solo funciona con el renderizador integrado de ha-paneld.
 
 <a id="panels-and-support-status"></a>
 
 ## Paneles y estado de compatibilidad
 
-No es necesario instalar ha-paneld como aplicación del sistema. Los controles básicos de Android, como el brillo, la navegación y TTS, funcionan en paneles compatibles. Los LED, los relés, el apagado real de la pantalla y algunos sensores requieren que su [perfil de panel](../profiles/README.md)incluya soporte para ese modelo. Los eventos de los botones físicos requieren la captura mediante Accesibilidad de Android o un método de perfil verificado.
+No es necesario instalar ha-paneld como aplicación del sistema. Los controles básicos de Android, como el brillo, la navegación y TTS, funcionan en paneles compatibles. Los LED, los relés, el apagado real de la pantalla y algunos sensores requieren que su [perfil de panel](../profiles/README.md) incluya soporte para ese modelo. Los eventos de los botones físicos requieren la captura mediante Accesibilidad de Android o un método de perfil verificado.
 
 | Panel | Estado | Android / ABI | Notas |
 |---|---|---|---|
 | Sonoff NSPanel Pro / Pro 120 | Compatible | Android 8.1, arm64-v8a | PX30 / rk3326-S; el firmware de fábrica proporciona ADB root y el aprovisionamiento normal instala el asistente root autenticado de ha-paneld |
 | Tuya TPA10 | Compatible | Android 11, armeabi-v7a | rk3566 con espacio de usuario de 32 bits |
 | Electron WF1589T | Compatible | Android 14, arm64-v8a | firmware userdebug rk3576; `adb root`, barra de navegación nativa de Android y control del LED RGB |
-| ZHICAI SMT1019 | Probado por la comunidad; algunas funciones son experimentales | Android 14, arm64-v8a | rk3576; el firmware de fábrica no dispone de acceso root accesible para las aplicaciones. El asistente autenticado puede proporcionar acceso adicional al hardware donde esté instalado. La precisión de la climatización y la compatibilidad con proximidad aún requieren más pruebas de hardware. [Incidencia #8](https://github.com/maxlyth/ha-paneld/issues/8) |
-| ZX-SMT156 / RK3566_T | Preliminar | Android 13, arm64-v8a | El LED RGB y los sensores de luz y proximidad funcionan sin root. La compatibilidad con climatización es opcional; los relés y el acceso root aún se están caracterizando. [Incidencia #24](https://github.com/maxlyth/ha-paneld/issues/24) |
+| ZHICAI SMT1019 | Probado por la comunidad; algunas funciones son experimentales | Android 14, arm64-v8a | rk3576; el firmware de fábrica no dispone de acceso root accesible para las aplicaciones. El asistente autenticado puede proporcionar acceso adicional al hardware donde esté instalado. La precisión de las mediciones de temperatura y humedad y la compatibilidad con la proximidad aún requieren más pruebas de hardware. [Incidencia #8](https://github.com/maxlyth/ha-paneld/issues/8) |
+| ZX-SMT156 / RK3566_T | Preliminar | Android 13, arm64-v8a | El LED RGB y los sensores de luz y proximidad funcionan sin root. La compatibilidad con la medición de temperatura y humedad es opcional; los relés y el acceso root aún se están caracterizando. [Incidencia #24](https://github.com/maxlyth/ha-paneld/issues/24) |
 | Smatek S9E | Experimental | Android 11, arm64-v8a | Perfil para los relés integrados, los LED de los botones y la proximidad. Aún se necesita confirmación en hardware S9E real. |
 | Shelly Wall Display (original) | Software de fábrica incompatible | Android 7.0, armeabi-v7a | Android es anterior a la versión mínima de ha-paneld. |
 | Shelly Wall Display X2 | Solo para investigación | Android 8.1, armeabi-v7a | No hay ninguna ruta de instalación de ha-paneld confirmada. |
@@ -126,18 +126,18 @@ Cada panel publica únicamente los controles compatibles con su perfil y con el 
 | Luz ambiental y proximidad | `sensor.<panel>_illuminance`, `binary_sensor.<panel>_proximity` y un valor normalizado de `sensor.<panel>_proximity_level` entre 0 (lejos) y 100 (cerca) |
 | Brillo adaptativo | Aprendizaje opcional durante siete días mediante el sensor de luz del panel o una entidad de iluminancia de Home Assistant |
 | Abrir una URL | `text.<panel>_navigate` |
-| Controles del panel de control y reinicio | Botones de Home Assistant, además de acciones de Panel de control, Recargar y navegación en el panel remoto Controles |
-| Audio de TTS y anuncios | `POST /play` y `number.<panel>_volume`; consulte la [guía de TTS](../tts.md) |
-| Captura del panel de control y toque remoto | Los paneles con un método de captura de pantalla compatible pueden mostrar y actualizar la pantalla desde la pestaña Panel de control; el modo Relajado también permite enviar un clic al panel |
-| Información y configuración del panel | Abra `http://<panel>:8888/`, también enlazado como **Visitar** en la página del dispositivo de Home Assistant |
+| Controles del panel de control y reinicio | Botones de Home Assistant, además de las acciones Panel de control, Recargar y de navegación en el panel remoto Controles |
+| Audio de TTS y anuncios | `POST /play` y `number.<panel>_volume`; consulta la [guía de TTS](../tts.md) |
+| Captura del panel de control y toque remoto | Los paneles con un método de captura de pantalla compatible pueden mostrar y actualizar la pantalla desde la pestaña Panel de control; el modo relajado también permite enviar un clic al panel |
+| Información y configuración del panel | Abre `http://<panel>:8888/`, también enlazado como **Visitar** en la página del dispositivo de Home Assistant |
 
-Home Assistant detecta estos controles mediante MQTT sin YAML. Las principales familias de entidades y los detalles sobre la API HTTP y el emparejamiento se encuentran en [docs/api.md](../api.md). También puede explorar y probar la API HTTP de un panel en `http://<panel>:8888/api`.
+Home Assistant detecta estos controles mediante MQTT sin YAML. Las principales familias de entidades y los detalles sobre la API HTTP y el emparejamiento se encuentran en [docs/api.md](../api.md). También puedes explorar y probar la API HTTP de un panel en `http://<panel>:8888/api`.
 
 ## Seguridad y acceso root
 
-### Modo de seguridad reforzada
+### Modo reforzado
 
-El modo Relajado es el predeterminado y está destinado a redes domésticas de confianza. Use el [modo de seguridad reforzada](../security-mode.md) cuando haya dispositivos menos fiables en la misma red. El modo de seguridad reforzada requiere acceso físico al panel. Alguien debe aprobar en la pantalla del panel las acciones remotas de gran impacto; no se pueden aprobar de forma remota. Las capturas de pantalla siguen siendo visibles, pero los toques remotos están desactivados. El ajuste debe activarse por separado en cada panel y no se copia mediante copias de seguridad, restauraciones ni aprovisionamiento de flotas.
+El modo relajado es el predeterminado y está destinado a redes domésticas de confianza. Usa el [modo reforzado](../security-mode.md) cuando haya dispositivos menos fiables en la misma red. El modo reforzado requiere acceso físico al panel. Alguien debe aprobar en la pantalla del panel las acciones remotas de gran impacto; no se pueden aprobar de forma remota. Las capturas de pantalla siguen siendo visibles, pero los toques remotos están desactivados. El ajuste debe activarse por separado en cada panel y no se copia mediante copias de seguridad, restauraciones ni aprovisionamiento de flotas.
 
 ### Funciones que necesitan root
 
@@ -145,7 +145,7 @@ Parte del hardware del panel está oculto para las aplicaciones Android comunes 
 
 La interfaz web marca con un candado los controles no disponibles y explica qué le falta al panel. El instalador y los diagnósticos también indican qué nivel de acceso está disponible.
 
-**No necesitan root:** el emparejamiento con Home Assistant, el brillo y la atenuación de la pantalla, los anuncios de audio, ambas opciones de panel de control, la interfaz web, la API REST y la copia de seguridad y restauración de la configuración. Atrás, Recientes, la activación mediante un gesto de la mano y la barra de navegación por software dependen de la capacidad correspondiente de Android o del sensor, pero no requieren root de forma inherente.
+**No necesitan root:** el emparejamiento con Home Assistant, el brillo y la atenuación de la pantalla, los anuncios de audio, ambas opciones de panel de control, la interfaz web, la API REST y la copia de seguridad y restauración de la configuración. Volver, Recientes, la activación mediante un gesto de la mano y la barra de navegación por software dependen de la capacidad correspondiente de Android o del sensor, pero no requieren root de forma inherente.
 
 **Puede que se necesite root o el asistente autenticado:** apagado físico de la retroiluminación, suspensión de Android cuando el perfil la seleccione, control del LED RGB en algunos paneles, control de la aplicación del proveedor, reinicio y regulador de la CPU. Si el perfil activo no dispone de una forma segura de apagar la pantalla por completo, ha-paneld la atenúa en su lugar.
 
@@ -162,7 +162,7 @@ Existe una [alternativa avanzada](../provisioning.md#shizuku-fallback-for-unroot
 - [Rendimiento](../performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
 - [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
 - [Proximidad adaptativa y activación con un gesto de la mano](../adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.
-- [Modos de seguridad](../security-mode.md): comprende el modo Relaxed y el modo de seguridad Hardened, incluidas las acciones que requieren la presencia de alguien junto al panel.
+- [Modos de seguridad](../security-mode.md): comprende el modo relajado y el modo reforzado, incluidas las acciones que requieren la presencia de alguien junto al panel.
 - [TTS](../tts.md): genera voz con un motor TTS de Home Assistant y envíala a un panel.
 
 ### Desarrollo y ampliación de ha-paneld
@@ -210,7 +210,7 @@ Empieza con la [guía de perfiles de ejecución](../profiles/README.md). El perf
 
 Así que, si quieres ayudar:
 
-- **Crea y comparte un perfil.** Abre `http://<panel-ip>:8888/profiles`, descarga el borrador del dispositivo Generic y sigue las guías de [pruebas](../profiles/testing.md) y [uso compartido](../profiles/sharing.md) . Un perfil de la comunidad puede ser útil antes de estar listo para incluirse con ha-paneld.
+- **Crea y comparte un perfil.** Abre `http://<panel-ip>:8888/profiles`, descarga el borrador del dispositivo Generic y sigue las guías de [pruebas](../profiles/testing.md) y [uso compartido](../profiles/sharing.md). Un perfil de la comunidad puede ser útil antes de estar listo para incluirse con ha-paneld.
 - **Abre una incidencia con los diagnósticos del panel.** Visita `http://<panel-ip>:8888/diag`, revisa el informe y oculta la información confidencial; después, pégalo en una incidencia nueva. Eso basta para empezar. Trabajaré contigo mediante una breve serie de pruebas para cualquier botón, led, relé o sensor que requiera la presencia de alguien ante el panel.
 - **Envíame el panel.** Vivo en el Reino Unido y estaré encantado de realizar directamente la ingeniería inversa. Esta es la vía más rápida para conseguir compatibilidad completa con el hardware. Te lo devolveré (ya tengo demasiados); abre primero una incidencia para que podamos acordar los detalles.
 
@@ -218,7 +218,7 @@ El resultado siempre es abierto: tu panel se convierte en un perfil que todo el 
 
 ## Desarrollo
 
-Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](../api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../test/README.md)y el [proceso de publicación](../RELEASING.md).
+Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](../api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../test/README.md) y el [proceso de publicación](../RELEASING.md).
 
 He proporcionado deliberadamente suficiente información para usar el contenedor de desarrollo suministrado y compilar una versión de prueba local. No envíes solicitudes de cambios ni informes de problemas generados por ordenador sin modificarlos: lee y comprende cada parte del texto y del código propuestos y, después, reescríbelos con tus propias palabras. Este proyecto está a cargo de una sola persona y no tengo tiempo para revisar contenido generado por ordenador sin filtrar. Sé conciso y escribe para personas; si tienes dudas sobre algo, pregunta primero.
 
@@ -226,19 +226,19 @@ He proporcionado deliberadamente suficiente información para usar el contenedor
 <summary><strong>Pila tecnológica</strong></summary>
 
 - **Aplicación:** [Kotlin](https://github.com/JetBrains/kotlin), [AndroidX](https://github.com/androidx/androidx) y [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines).
-- **HTTP y WebSocket de Home Assistant:** [Ktor](https://github.com/ktorio/ktor) .
+- **HTTP y WebSocket de Home Assistant:** [Ktor](https://github.com/ktorio/ktor), con sus módulos CIO de servidor, cliente y WebSocket.
 - **MQTT:** [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client), con su cliente MQTT 5 y transporte NIO íntegramente en Java.
 - **mDNS:** [JmDNS](https://github.com/jmdns/jmdns), que anuncia `_ha-paneld._tcp` de modo que las instancias de ha-paneld puedan encontrarse entre sí para el selector de varios paneles. ha-paneld informa cuando ese anuncio se detiene y no puede recuperarse.
 - **Perfiles en tiempo de ejecución:** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) para YAML 1.2, con [CodeMirror](https://codemirror.net/) y su [paquete de lenguaje YAML](https://github.com/codemirror/lang-yaml) en el editor de perfiles.
 - **QR y registro:** [ZXing](https://github.com/zxing/zxing) para los códigos QR de configuración y [SLF4J](https://github.com/qos-ch/slf4j) para el registro de Ktor y HiveMQ mediante Logcat.
 
-La selección y las actualizaciones de dependencias siguen la [política de dependencias y cadena de suministro](../../SECURITY.md#dependency-and-supply-chain-policy)del proyecto.
+La selección y las actualizaciones de dependencias siguen la [política de dependencias y cadena de suministro](../../SECURITY.md#dependency-and-supply-chain-policy) del proyecto.
 
 </details>
 
 ## Traducciones
 
-Las traducciones se generan y se contrastan automáticamente. No han sido revisadas sistemáticamente por hablantes de cada idioma, por lo que el texto en inglés sigue siendo la versión de referencia. Si alguna redacción no está clara o es incorrecta, [abre un informe de corrección de traducción](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+Las traducciones se generan y se contrastan mediante varios servicios y modelos, entre ellos EuroLLM, DeepL y OpenAI. No han sido revisadas sistemáticamente por hablantes de cada idioma, por lo que el texto en inglés sigue siendo la versión de referencia. Si alguna redacción no está clara o es incorrecta, [abre un informe de corrección de traducción](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
 
 ## Agradecimientos
 
