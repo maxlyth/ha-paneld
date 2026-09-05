@@ -70,6 +70,52 @@ function writeExclusive(file, content) {
   fs.writeFileSync(file, content, { encoding: "utf8", flag: "wx", mode: 0o644 });
 }
 
+function isWithin(root, candidate) {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+function physicalOutputPath(repositoryRoot, requested) {
+  const output = path.resolve(requested);
+  if (isWithin(repositoryRoot, output)) {
+    throw new Error("expanded translation plans contain source text and must stay outside the public repository");
+  }
+
+  const parsed = path.parse(output);
+  const components = path.relative(parsed.root, output).split(path.sep).filter(Boolean);
+  let existing = parsed.root;
+  let existingComponents = 0;
+  for (const component of components) {
+    const candidate = path.join(existing, component);
+    try {
+      const entry = fs.lstatSync(candidate);
+      if (entry.isSymbolicLink()) {
+        throw new Error(`private translation plan output cannot use symlinked path components: ${candidate}`);
+      }
+      existing = candidate;
+      existingComponents += 1;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      break;
+    }
+  }
+
+  const physicalExisting = fs.realpathSync(existing);
+  const physicalOutput = path.join(physicalExisting, ...components.slice(existingComponents));
+  if (isWithin(repositoryRoot, physicalOutput)) {
+    throw new Error("expanded translation plans contain source text and must physically stay outside the public repository");
+  }
+  return output;
+}
+
+function writePrivatePlanExclusive(repositoryRoot, file, content) {
+  const output = physicalOutputPath(repositoryRoot, file);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  // Re-resolve after directory creation so the final parent is also covered by
+  // the physical boundary immediately before the exclusive write.
+  physicalOutputPath(repositoryRoot, output);
+  fs.writeFileSync(output, content, { encoding: "utf8", flag: "wx", mode: 0o644 });
+}
+
 export function main(argv = process.argv.slice(2)) {
   const parsed = parseArguments(argv);
   if (parsed.help) {
@@ -90,13 +136,10 @@ export function main(argv = process.argv.slice(2)) {
   }
   if (command === "export-plan") {
     const root = fs.realpathSync(options.repository);
-    const output = path.resolve(options.output);
-    if (output === root || output.startsWith(`${root}${path.sep}`)) {
-      throw new Error("expanded translation plans contain source text and must stay outside the public repository");
-    }
+    const output = physicalOutputPath(root, options.output);
     const manifest = readCanonicalJson(path.resolve(options.manifest));
     const plan = buildTranslationPlan(manifest, { repository: root });
-    writeExclusive(output, canonicalJson(plan));
+    writePrivatePlanExclusive(root, output, canonicalJson(plan));
     process.stdout.write(`private translation plan: ${plan.packets.length} packets\n`);
     return 0;
   }

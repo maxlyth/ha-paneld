@@ -40,6 +40,9 @@ docs/icon-preview.png
 # UI layout-test deps (playwright-core)
 test/node_modules/
 
+# Documentation localization tool dependencies
+/tools/docs-i18n/node_modules/
+
 # Vendor firmware images for private hardware research — NEVER commit (large binaries; public repo).
 # No trailing slash so it also ignores the symlink form (the blobs live in /media to stay out of HA
 # backups; this path is symlinked there).

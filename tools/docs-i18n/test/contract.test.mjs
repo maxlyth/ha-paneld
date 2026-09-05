@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import {
-  AUTHORITY_NOTICE_TEMPLATE,
+  AUTHORITY_NOTICE_TEMPLATES,
   MAX_SEGMENTS_PER_PACKET,
   MAX_SOURCE_CHARACTERS_PER_PACKET,
   MAX_TARGET_CHARACTERS_PER_SEGMENT,
@@ -134,6 +134,9 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
   const { repository, manifest } = fixture();
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
+  assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());
+  assert.equal(manifest.notice.version, 2);
+  assert.equal(manifest.notice.sha256, sha256(canonicalJson(AUTHORITY_NOTICE_TEMPLATES)));
   assert.deepEqual(manifest.limits, {
     maxSegmentsPerPacket: MAX_SEGMENTS_PER_PACKET,
     maxSourceCharactersPerPacket: MAX_SOURCE_CHARACTERS_PER_PACKET,
@@ -384,6 +387,63 @@ test("a missing source fragment is rejected before a localized receipt is produc
   );
 });
 
+test("every locale receives its exact localized authority notice", () => {
+  for (const locale of SUPPORTED_LOCALES) {
+    const current = fixture();
+    const receipt = applyLocaleReceipt({
+      repository: current.repository,
+      manifest: current.manifest,
+      locale,
+      results: localeResults(current.manifest, locale, current.repository),
+    });
+    for (const document of receipt.documents) {
+      const sourceLink = path.posix.relative(
+        path.posix.dirname(document.targetPath),
+        document.sourcePath,
+      ) || path.posix.basename(document.sourcePath);
+      const expected = AUTHORITY_NOTICE_TEMPLATES[locale].replace("{SOURCE_LINK}", sourceLink);
+      assert.ok(fs.readFileSync(path.join(current.repository, document.targetPath), "utf8").startsWith(expected));
+      assert.equal(document.noticeSha256, sha256(expected));
+    }
+  }
+});
+
+test("a notice from every other supported locale is rejected", () => {
+  for (const locale of SUPPORTED_LOCALES) {
+    for (const substitutedLocale of SUPPORTED_LOCALES.filter((candidate) => candidate !== locale)) {
+      const current = fixture();
+      const receipt = applyLocaleReceipt({
+        repository: current.repository,
+        manifest: current.manifest,
+        locale,
+        results: localeResults(current.manifest, locale, current.repository),
+      });
+      const document = receipt.documents[0];
+      const target = path.join(current.repository, document.targetPath);
+      const sourceLink = path.posix.relative(
+        path.posix.dirname(document.targetPath),
+        document.sourcePath,
+      ) || path.posix.basename(document.sourcePath);
+      const expected = AUTHORITY_NOTICE_TEMPLATES[locale].replace("{SOURCE_LINK}", sourceLink);
+      const substituted = AUTHORITY_NOTICE_TEMPLATES[substitutedLocale].replace("{SOURCE_LINK}", sourceLink);
+      const content = fs.readFileSync(target, "utf8");
+      assert.ok(content.startsWith(expected));
+      const forgedContent = substituted + content.slice(expected.length);
+      fs.writeFileSync(target, forgedContent);
+      const forgedReceipt = clone(receipt);
+      forgedReceipt.documents[0].targetSha256 = sha256(forgedContent);
+      forgedReceipt.documents[0].noticeSha256 = sha256(substituted);
+      assert.throws(
+        () => validateLocaleReceipt(current.manifest, locale, forgedReceipt, {
+          repository: current.repository,
+        }),
+        /authority notice mismatch/,
+        `${locale} accepted ${substitutedLocale}`,
+      );
+    }
+  }
+});
+
 test("receipt apply is confined, no-clobber, banner-bound, hash-bound, and replay-safe", () => {
   const current = fixture();
   const results = localeResults(current.manifest, "de", current.repository);
@@ -395,7 +455,7 @@ test("receipt apply is confined, no-clobber, banner-bound, hash-bound, and repla
   });
   assert.equal(receipt.documents[0].targetPath, localizedOutputPath("de", "README.md"));
   const output = path.join(current.repository, receipt.documents[0].targetPath);
-  assert.ok(fs.readFileSync(output, "utf8").startsWith(AUTHORITY_NOTICE_TEMPLATE.replace(
+  assert.ok(fs.readFileSync(output, "utf8").startsWith(AUTHORITY_NOTICE_TEMPLATES.de.replace(
     "{SOURCE_LINK}",
     "../../README.md",
   )));

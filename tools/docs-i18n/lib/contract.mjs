@@ -38,13 +38,38 @@ export const MAX_SEGMENTS_PER_PACKET = 20;
 export const MAX_SOURCE_CHARACTERS_PER_PACKET = 12_000;
 export const MAX_TARGET_CHARACTERS_PER_SEGMENT = 48_000;
 export const PROMOTABLE_STATE = "machine-cross-checked";
-export const AUTHORITY_NOTICE_VERSION = 1;
-export const AUTHORITY_NOTICE_TEMPLATE =
-  "> [!IMPORTANT]\n" +
-  "> This document is machine-generated and automatically cross-checked, but it has not been " +
-  "systematically reviewed by speakers of this language. The English documentation is authoritative. " +
-  "[Read the English source]({SOURCE_LINK}) or " +
-  "[open a translation correction issue](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).\n\n";
+export const AUTHORITY_NOTICE_VERSION = 2;
+export const AUTHORITY_NOTICE_TEMPLATES = Object.freeze({
+  de:
+    "> [!IMPORTANT]\n" +
+    "> Dieses Dokument wurde maschinell erstellt und automatisch gegengeprüft, jedoch nicht systematisch " +
+    "von Personen geprüft, die diese Sprache sprechen. Die englische Dokumentation ist maßgeblich. " +
+    "[Englisches Original lesen]({SOURCE_LINK}) oder " +
+    "[ein Issue zur Übersetzungskorrektur öffnen](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).\n\n",
+  es:
+    "> [!IMPORTANT]\n" +
+    "> Este documento se genera automáticamente y se somete a comprobaciones cruzadas automáticas, pero no " +
+    "ha sido revisado sistemáticamente por hablantes de este idioma. La documentación en inglés es la fuente " +
+    "de referencia. [Consulta la fuente en inglés]({SOURCE_LINK}) o " +
+    "[abre una incidencia para corregir la traducción](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).\n\n",
+  fr:
+    "> [!IMPORTANT]\n" +
+    "> Ce document est généré automatiquement et fait l’objet d’une vérification croisée automatique, mais il " +
+    "n’a pas été systématiquement relu par des locuteurs de cette langue. La documentation en anglais fait foi. " +
+    "[Consulter la source en anglais]({SOURCE_LINK}) ou " +
+    "[signaler une correction de traduction](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).\n\n",
+  it:
+    "> [!IMPORTANT]\n" +
+    "> Questo documento è generato automaticamente e verificato mediante controlli incrociati automatici, ma non " +
+    "è stato rivisto sistematicamente da persone che parlano questa lingua. La documentazione in inglese fa fede. " +
+    "[Leggi la fonte in inglese]({SOURCE_LINK}) oppure " +
+    "[apri una segnalazione per correggere la traduzione](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).\n\n",
+  "zh-Hans":
+    "> [!IMPORTANT]\n" +
+    "> 本文档由机器生成并经过自动交叉核验，但尚未由中文使用者进行系统审阅。英文文档为权威版本。" +
+    "[阅读英文原文]({SOURCE_LINK})，或" +
+    "[创建翻译更正议题](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml)。\n\n",
+});
 export const LANGUAGE_PICKER_VERSION = 1;
 export const LANGUAGE_PICKER_START = "<!-- docs-i18n-language-picker:start -->";
 export const LANGUAGE_PICKER_END = "<!-- docs-i18n-language-picker:end -->";
@@ -216,9 +241,10 @@ function codePointLength(value) {
   return [...value].length;
 }
 
-function noticeFor(sourcePath, targetPath) {
+function noticeFor(locale, sourcePath, targetPath) {
+  normalizeLocale(locale);
   const sourceLink = path.posix.relative(path.posix.dirname(targetPath), sourcePath) || path.posix.basename(sourcePath);
-  return AUTHORITY_NOTICE_TEMPLATE.replace("{SOURCE_LINK}", sourceLink);
+  return AUTHORITY_NOTICE_TEMPLATES[locale].replace("{SOURCE_LINK}", sourceLink);
 }
 
 function sourceLanguagePicker(source) {
@@ -575,7 +601,7 @@ export function buildSourceManifest({ repository, sourceRevision, documents, hea
   }
   const notice = {
     version: AUTHORITY_NOTICE_VERSION,
-    sha256: sha256(AUTHORITY_NOTICE_TEMPLATE),
+    sha256: sha256(canonicalJson(AUTHORITY_NOTICE_TEMPLATES)),
     languagePickerVersion: LANGUAGE_PICKER_VERSION,
     sourceLanguagePickerSha256: sha256(
       sourceLanguagePicker(readTreeSource(bound.repository, sourceRevision, "README.md").source).value,
@@ -607,7 +633,7 @@ function validateSourceShape(manifest) {
   );
   if (
     manifest.notice.version !== AUTHORITY_NOTICE_VERSION ||
-    manifest.notice.sha256 !== sha256(AUTHORITY_NOTICE_TEMPLATE) ||
+    manifest.notice.sha256 !== sha256(canonicalJson(AUTHORITY_NOTICE_TEMPLATES)) ||
     manifest.notice.languagePickerVersion !== LANGUAGE_PICKER_VERSION
   ) {
     throw new Error("authority notice contract mismatch");
@@ -884,7 +910,7 @@ export function buildLocaleReceipt(manifest, locale, results, { repository }) {
   const receiptDocuments = [];
   for (const item of finalized) {
     const targetPath = item.targetPath;
-    const notice = noticeFor(item.sourcePath, targetPath);
+    const notice = noticeFor(locale, item.sourcePath, targetPath);
     const content = notice + item.body;
     const projection = structuralProjection(item.body);
     outputs.push({ path: targetPath, content });
@@ -1011,7 +1037,7 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository })
     const sourceDocument = manifest.documents[index];
     const tree = readTreeSource(repository, manifest.sourceRevision, sourceDocument.sourcePath);
     const inventory = inventoryFor(sourceDocument.sourcePath, tree.source);
-    const expectedNotice = noticeFor(document.sourcePath, document.targetPath);
+    const expectedNotice = noticeFor(locale, document.sourcePath, document.targetPath);
     const target = confinedWorkingPath(repository, document.targetPath, { mustExist: true, allowFile: true });
     const content = fs.readFileSync(target);
     if (sha256(content) !== document.targetSha256) {
@@ -1071,7 +1097,7 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository })
   }));
   for (const [index, item] of finalized.entries()) {
     const document = item.receipt;
-    const expectedNotice = noticeFor(document.sourcePath, document.targetPath);
+    const expectedNotice = noticeFor(locale, document.sourcePath, document.targetPath);
     const expectedContent = expectedNotice + item.body;
     const content = item.content;
     if (!content.equals(Buffer.from(expectedContent, "utf8")) || sha256(content) !== document.targetSha256) {
