@@ -126,6 +126,26 @@ test("preserves task-list marker bytes while translating labels", () => {
   }
 });
 
+test("rejects translations that remove visible text across protected inline markers", () => {
+  const source = "| Scope | What it does **not** change |\n| --- | --- |\n| Display | Other layers |\n";
+  const inventory = inventoryMarkdown("docs/marker-topology.md", source);
+  const segment = segmentContaining(inventory, "What it does");
+  const broken = records(inventory);
+  const index = inventory.segments.indexOf(segment);
+  broken[index].translation = segment.maskedSource
+    .replace("What it does ", "Ce qu’elle ne modifie ")
+    .replace("not", "pas")
+    .replace(" change", "");
+  assert.throws(() => reconstructMarkdown(inventory, broken), /structural projection changed/);
+
+  const preserved = records(inventory);
+  preserved[index].translation = segment.maskedSource
+    .replace("What it does ", "Ce qu’elle ne modifie ")
+    .replace("not", "pas")
+    .replace(" change", " :");
+  assert.match(reconstructMarkdown(inventory, preserved).body, /\*\*pas\*\* :/);
+});
+
 test("protects the complete footnote reference graph", () => {
   const source = "Text[^safety].\n\n[^safety]: Explanatory text.\n";
   const inventory = inventoryMarkdown("docs/footnote.md", source);

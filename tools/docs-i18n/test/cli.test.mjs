@@ -37,12 +37,19 @@ Provision a panel safely.
 
 Stop after a rejected login.
 `;
+  const performance = `# Performance
+
+Changing the filter can hide required entities.
+`;
   fs.writeFileSync(path.join(repository, "docs/provisioning.md"), provisioning);
   fs.writeFileSync(path.join(repository, "docs/built-in-renderer.md"), renderer);
+  fs.writeFileSync(path.join(repository, "docs/performance.md"), performance);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
+  const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
   const consequential = provisioningInventory.segments[1];
   const rendererConsequential = rendererInventory.segments[1];
+  const performanceConsequential = performanceInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -58,9 +65,15 @@ Stop after a rejected login.
         segmentCount: rendererInventory.segments.length,
         consequentialSegments: [rendererConsequential.segmentId],
       },
+      {
+        document: "docs/performance.md",
+        sourceSha256: sha256(Buffer.from(performance, "utf8")),
+        segmentCount: performanceInventory.segments.length,
+        consequentialSegments: [performanceConsequential.segmentId],
+      },
     ],
   }));
-  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/i18n/consequential-segments.json"]);
+  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/i18n/consequential-segments.json"]);
   command(repository, ["git", "commit", "-qm", "fixture"]);
   const sourceRevision = command(repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({ repository, sourceRevision, documents: PRODUCTION_DOCUMENTS });
@@ -83,6 +96,7 @@ test("CLI plan selects the exact Tier-1 document prefix", () => {
     "README.md",
     "docs/provisioning.md",
     "docs/built-in-renderer.md",
+    "docs/performance.md",
   ]);
   assert.throws(() => main([
     "plan",

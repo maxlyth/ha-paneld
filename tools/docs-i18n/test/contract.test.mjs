@@ -82,13 +82,19 @@ function consequentialFixture(policyMutation) {
   const current = fixture();
   const provisioning = "# Provisioning\n\nReset erases panel data.\n\nContinue normally.\n";
   const renderer = "# Built-in renderer\n\nA failed login stops retries.\n\nContinue normally.\n";
+  const performance = "# Performance\n\nChanging the filter can hide required entities.\n\nContinue normally.\n";
   write(current.repository, "docs/provisioning.md", provisioning);
   write(current.repository, "docs/built-in-renderer.md", renderer);
+  write(current.repository, "docs/performance.md", performance);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
+  const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
   const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
   const rendererConsequential = rendererInventory.segments.find(
     (segment) => segment.maskedSource.includes("failed login"),
+  );
+  const performanceConsequential = performanceInventory.segments.find(
+    (segment) => segment.maskedSource.includes("hide required entities"),
   );
   const policy = {
     schema: 2,
@@ -105,11 +111,17 @@ function consequentialFixture(policyMutation) {
         segmentCount: rendererInventory.segments.length,
         consequentialSegments: [rendererConsequential.segmentId],
       },
+      {
+        document: "docs/performance.md",
+        sourceSha256: sha256(Buffer.from(performance, "utf8")),
+        segmentCount: performanceInventory.segments.length,
+        consequentialSegments: [performanceConsequential.segmentId],
+      },
     ],
   };
   policyMutation?.(policy);
   write(current.repository, "docs/i18n/consequential-segments.json", canonicalJson(policy));
-  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/i18n/consequential-segments.json"]);
+  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/i18n/consequential-segments.json"]);
   command(current.repository, ["git", "commit", "-qm", "add consequential policy"]);
   const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({
@@ -117,7 +129,7 @@ function consequentialFixture(policyMutation) {
     sourceRevision,
     documents: PRODUCTION_DOCUMENTS,
   });
-  return { repository: current.repository, sourceRevision, manifest, consequential, rendererConsequential };
+  return { repository: current.repository, sourceRevision, manifest, consequential, rendererConsequential, performanceConsequential };
 }
 
 function localeResults(manifest, locale, repository) {
@@ -179,8 +191,8 @@ function rebindReceiptResults(receipt, manifest) {
 
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();
-  assert.equal(manifest.schema, 3);
-  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md"]);
+  assert.equal(manifest.schema, 4);
+  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md"]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
   assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());
@@ -227,11 +239,19 @@ test("appending a document preserves every prior document commitment and packet 
     sourceRevision,
     documents: ["README.md", "docs/guide.md", "docs/third.md"],
   });
+  const prefixPlan = buildTranslationPlan(prefix, { repository: current.repository });
+  const extendedPlan = buildTranslationPlan(extended, { repository: current.repository });
   assert.deepEqual(extended.documents.slice(0, prefix.documents.length), prefix.documents);
   for (const locale of SUPPORTED_LOCALES) {
     const priorPackets = prefix.packets.filter((packet) => packet.locale === locale);
     const extendedPackets = extended.packets.filter((packet) => packet.locale === locale);
     assert.deepEqual(extendedPackets.slice(0, priorPackets.length), priorPackets);
+    const priorInputs = prefixPlan.packets.filter((packet) => packet.locale === locale);
+    const extendedInputs = extendedPlan.packets.filter((packet) => packet.locale === locale);
+    assert.deepEqual(
+      extendedInputs.slice(0, priorInputs.length).map((packet) => packet.records),
+      priorInputs.map((packet) => packet.records),
+    );
     const appendedPackets = extendedPackets.slice(priorPackets.length);
     assert.ok(appendedPackets.length > 0);
     assert.deepEqual(
@@ -271,6 +291,18 @@ test("consequential policy binds every selected production inventory and grandfa
   );
   assert.ok(provisioning.segments.filter(
     (segment) => segment.id !== current.consequential.segmentId,
+  ).every((segment) => segment.requiredState === PROMOTABLE_STATE));
+  const performance = current.manifest.documents.find(
+    (document) => document.sourcePath === "docs/performance.md",
+  );
+  assert.equal(
+    performance.segments.find(
+      (segment) => segment.id === current.performanceConsequential.segmentId,
+    ).requiredState,
+    ENGLISH_FALLBACK_STATE,
+  );
+  assert.ok(performance.segments.filter(
+    (segment) => segment.id !== current.performanceConsequential.segmentId,
   ).every((segment) => segment.requiredState === PROMOTABLE_STATE));
   const renderer = current.manifest.documents.find(
     (document) => document.sourcePath === "docs/built-in-renderer.md",
@@ -983,7 +1015,7 @@ test("repository validation requires the exact manifest, receipt set, and output
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(nonProductionManifest));
   assert.throws(
     () => validateRepository({ repository: current.repository }),
-    /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md/,
+    /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md, docs\/performance\.md/,
   );
   const manifest = current.manifest;
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
@@ -1020,7 +1052,7 @@ test("repository validation rejects every non-production document selection", ()
     write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
     assert.throws(
       () => validateRepository({ repository: current.repository }),
-      /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md/,
+      /must select exactly README\.md, docs\/provisioning\.md, docs\/built-in-renderer\.md, docs\/performance\.md/,
       documents.join(","),
     );
   }
