@@ -54,6 +54,17 @@ class PlatformLocaleContractTest {
             ?.let { body -> Regex(""""([^"\\]+)"""").findAll(body).map { it.groupValues[1] }.toList() }
 
         assertEquals(AppLocale.RELEASE_LOCALES.map(::androidResourceQualifier), filters)
+        filters.orEmpty().forEach { qualifier ->
+            val stringsPath = "${androidValuesDirectory(qualifier)}/strings.xml"
+            val strings = TestSources.appFileOrNull(stringsPath)
+            assertTrue("missing strings.xml for filtered locale $qualifier", strings?.isFile == true)
+            assertTrue(
+                "empty strings.xml for filtered locale $qualifier",
+                document(stringsPath)
+                    .getElementsByTagName("string")
+                    .length > 0,
+            )
+        }
         assertTrue(build.contains("localeFilters += releaseLocaleFilters"))
         assertTrue(build.contains("isPseudoLocalesEnabled = true"))
     }
@@ -63,9 +74,12 @@ class PlatformLocaleContractTest {
     }.newDocumentBuilder().parse(TestSources.appFile(path))
 
     private fun androidResourceQualifier(locale: String): String = when (locale) {
-        "zh-Hans" -> "b+zh+Hans"
+        "zh-Hans" -> "zh-rCN"
         else -> locale
     }
+
+    private fun androidValuesDirectory(qualifier: String): String =
+        if (qualifier == AppLocale.ENGLISH) "src/main/res/values" else "src/main/res/values-$qualifier"
 
     private companion object {
         const val ANDROID_NS = "http://schemas.android.com/apk/res/android"
