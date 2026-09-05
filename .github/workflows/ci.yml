@@ -83,8 +83,19 @@ jobs:
         with:
           cache-provider: basic
 
-      - name: Test, lint, and build APKs
-        run: ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
+      # The bundled-helper installer tests drive the real staging script, which requires
+      # its transaction record to be owned by root exactly as it is on a panel. Hosted
+      # runners are unprivileged, so the unit tests run as root and hand the tree back
+      # before the cacheable Gradle work continues.
+      - name: Unit tests
+        run: |
+          sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
+            "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
+            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest --stacktrace
+          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}"
+
+      - name: Lint and build APKs
+        run: ./gradlew :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |
@@ -249,8 +260,11 @@ jobs:
       - name: Compile check (-Werror)
         run: make -C helper
 
+      # The helper takes its transaction lock under a root-owned parent and checks the
+      # directory is owned by the calling user, which holds on a panel because the
+      # daemon is root. Hosted runners are unprivileged, so the suite runs as root.
       - name: Unit tests
-        run: make -C helper test
+        run: sudo make -C helper test
 
       - name: App↔daemon contract cross-check
         run: helper/test/contract-check.sh
