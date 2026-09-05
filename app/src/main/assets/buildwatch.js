@@ -212,7 +212,7 @@
     if (slow) {
       // Same rule as the banner: the verdict is the probe's, so the socket's numbers stay off it.
       // The responsiveness clause is kept because it names its own instrument out loud.
-      row.textContent = (ownValue(HA_NET_ROW_SLOW, state) || state) + "; " + clause;
+      row.textContent = (ownValue(HA_NET_ROW_SLOW, state) || state) + (clause ? "; " + clause : "");
       return;
     }
     var evidence = haNetEvidence(p95, n, miss, age);

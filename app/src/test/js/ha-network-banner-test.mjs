@@ -137,12 +137,12 @@ assert.ok(!/going missing|not getting through|probes missed/.test(ids.hanetbar.t
 // The verdict is the probe's; the WebSocket p95 must not be offered as proof of it.
 assert.ok(!/p95/.test(ids.hanetbar.textContent), 'the other instrument\'s evidence must be omitted: ' + ids.hanetbar.textContent);
 assert.ok(!/p95/.test(ids.hanetcell.textContent), 'the row must omit it too: ' + ids.hanetcell.textContent);
-assert.equal(ids.hanetcell.textContent, 'slow; ');
+assert.equal(ids.hanetcell.textContent, 'slow');
 
 await poll(base + ' ha_net=severe ha_net_cause=latency ha_resp=healthy ha_net_p95=9 ha_net_n=30 ha_net_miss=0');
 assert.ok(/very slow/.test(ids.hanetbar.textContent), ids.hanetbar.textContent);
 assert.equal(ids.hanetbar.className, 'setup crit');
-assert.equal(ids.hanetcell.textContent, 'very slow; ');
+assert.equal(ids.hanetcell.textContent, 'very slow');
 
 // A loss cause keeps the loss wording and its own evidence.
 await poll(base + ' ha_net=warning ha_net_cause=loss ha_resp=healthy ha_net_p95=30 ha_net_n=30 ha_net_miss=2');

@@ -439,6 +439,10 @@ internal object HaNetworkPathPresentation {
             snap.severity == HaNetworkPathSeverity.WARNING -> "losing probes"
             else -> "failing"
         }
+        if (snap.cause == PathProbeCause.LATENCY) {
+            val responsiveness = responsivenessClause(snap).removeSuffix("; ")
+            return if (responsiveness.isEmpty()) path else "$path; $responsiveness"
+        }
         return "$path; ${responsivenessClause(snap)}${evidence(snap)}"
     }
 

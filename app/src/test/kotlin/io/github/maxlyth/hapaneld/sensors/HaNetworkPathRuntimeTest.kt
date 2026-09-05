@@ -215,6 +215,11 @@ class HaNetworkPathRuntimeTest {
             "failing; Home Assistant answering very slowly; p95 4,200 ms, 3 of 30 probes missed in the last 5 min",
             HaNetworkPathPresentation.statusText(degraded(HaNetworkPathSeverity.SEVERE, 3, 4_200L)),
         )
+        val slowPath = degraded(HaNetworkPathSeverity.WARNING, 0, 9L).copy(
+            cause = PathProbeCause.LATENCY,
+            responsiveness = HaNetworkPathSeverity.HEALTHY,
+        )
+        assertEquals("slow", HaNetworkPathPresentation.statusText(slowPath))
         val measuringButEmpty = HaNetworkPath().apply { onSocketState(HaSocketState.LIVE) }.snapshot(0L)
         assertEquals("healthy; no probes yet in the last 5 min", HaNetworkPathPresentation.statusText(measuringButEmpty))
     }
