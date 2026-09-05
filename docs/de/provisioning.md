@@ -87,7 +87,7 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 
 ### Dashboard und Entitätsfilter auswählen
 
-Bei einer unbeaufsichtigten Installation können die Fragen der geführten Einrichtung nicht beantwortet werden. Standardmäßig öffnet das Panel das Standard-Dashboard des Home Assistant-Kontos. Bei einem großen Konto ist dies häufig das langsamste verfügbare Dashboard, und ein älteres Panel kann für die Darstellung sehr lange benötigen. `--home-dashboard` und `--entity-filter` beantworten beide Fragen vor der ersten Darstellung:
+Eine unbeaufsichtigte Installation kann die Fragen der geführten Einrichtung nicht stellen. Standardmäßig öffnet das Panel das Standard-Dashboard des Home Assistant-Kontos. Bei einem großen Konto ist dies häufig das langsamste verfügbare Dashboard, und ein älteres Panel kann für die Darstellung sehr lange benötigen. `--home-dashboard` und `--entity-filter` beantworten beide Fragen vor der ersten Darstellung:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | \
@@ -102,7 +102,7 @@ Durch die Angabe einer der beiden Optionen wird auch die entsprechende Frage der
 
 Lassen Sie bei einer interaktiven Installation `--builtin` und die Argumente für die Home Assistant-Anmeldedaten weg. Das Installationsprogramm gibt die Adresse für den Schritt aus, auf den das Panel wartet, normalerweise `http://<panel>:8888/setup`. Sie können dort von einem Computer oder Smartphone aus fortfahren oder auf dem Panel auf **Einrichten** tippen. Beide Wege führen durch denselben Ablauf. Bei vorhandenen Panels, die eine Companion-Sitzung importiert haben, bleibt diese Anmeldung als Kompatibilitätsoption erhalten.
 
-Um zur Companion-App zurückzukehren, wählen Sie im Tab „Konfigurieren“ das installierte Home Assistant Companion-Paket als Dashboard-App aus. Der integrierte Renderer unterstützt weder Voice Assistant noch Benachrichtigungen. Verwenden Sie daher weiterhin Companion, wenn diese Funktionen benötigt werden.
+Um zur Companion-App zurückzukehren, wählen Sie im Tab „Konfiguration“ das installierte Home Assistant Companion-Paket als Dashboard-App aus. Der integrierte Renderer unterstützt weder Voice Assistant noch Benachrichtigungen. Verwenden Sie daher weiterhin Companion, wenn diese Funktionen benötigt werden.
 
 ## Ein Panel neu einrichten
 
@@ -196,7 +196,7 @@ scripts/provision.sh <panel-ip:5555> \
 
 Android SDK Build-Tools containing `apksigner` are required to update a panel that already has ha-paneld installed, whatever the APK source, because the provisioner compares the installed and candidate signers before it changes anything. A first installation on a panel without ha-paneld does not need them. Local `--apk` provisioning additionally needs either `aapt` or `aapt2`. Before any upgrade backup or panel change, the provisioner verifies the package and exactly one valid signer. Self-built APKs may use the builder's consistent signing key. Add `--require-release-signer` only when the local file should carry the official release certificate.
 
-Der profilabhängige Plan meldet, wenn ausgewählte Treiber den Helfer benötigen. Viele rk3576- und PX30-Panels können `su` innerhalb der App ausführen, während gerootete Panels mit Sandbox den Helfer für privilegierte Vorgänge verwenden. Ein tatsächlich nicht gerootetes Panel arbeitet mit den standardmäßigen Android-Funktionen weiter, sofern sein Profil nicht für genau eine Funktion eine separat dokumentierte Alternative angibt.
+Der profilabhängige Plan meldet, wenn ausgewählte Treiber den Helfer benötigen. Viele rk3576- und PX30-Panels können `su` innerhalb der App ausführen, während gerootete Panels mit Sandbox den Helfer für privilegierte Vorgänge verwenden. Ein tatsächlich nicht gerootetes Panel arbeitet mit den standardmäßigen Android-Funktionen weiter, sofern sein Profil nicht für eine bestimmte Funktion eine separat dokumentierte Alternative angibt.
 
 ## adb-Zugriff initialisieren
 

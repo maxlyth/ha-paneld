@@ -102,7 +102,7 @@ Specificando una delle due opzioni si risponde anche alla domanda corrispondente
 
 Per un'installazione interattiva, ometti `--builtin` e gli argomenti delle credenziali di Home Assistant. Il programma di installazione stampa l'indirizzo del passaggio che il pannello sta aspettando, in genere `http://<panel>:8888/setup`. Puoi continuare da lì da un computer o da un telefono, oppure toccare **Configura** sul pannello. Entrambi seguono lo stesso percorso. I pannelli esistenti che hanno importato una sessione Companion mantengono quell'accesso come percorso di compatibilità.
 
-Per tornare all'app Companion, seleziona il pacchetto Home Assistant Companion installato come app Dashboard nella scheda Configura. Il renderer integrato non fornisce Voice Assistant né notifiche, quindi mantieni Companion dove queste funzionalità sono necessarie.
+Per tornare all'app Companion, nella scheda «Configura», seleziona il pacchetto Home Assistant Companion installato nell'impostazione «App della dashboard». Il renderer integrato non fornisce Voice Assistant né notifiche, quindi mantieni Companion dove queste funzionalità sono necessarie.
 
 ## Ricominciare la configurazione di un pannello
 

@@ -1237,13 +1237,13 @@
           "segmentId": "docs/provisioning.md::1:3e4817a7684792d1de31dfce102c3ed300cd17408663de3f924f4cfd0a9995de/2:00a35f3b1633f37f0d1741d7018ac5a225403bcfb1b7a58a4aae7ab5c0e7c8d9/3:966d611007a463783e7adc709f49bc5d9957049ff3cb9f76a1587902d4404e0a::paragraph::ef1a815fd5d25bd7c015ce7149bd270fbe04bc60fe2edb7b2219fa363fd965d1::1",
           "sourceSha256": "ef1a815fd5d25bd7c015ce7149bd270fbe04bc60fe2edb7b2219fa363fd965d1",
           "state": "machine-cross-checked",
-          "targetSha256": "2051f52e481a395b0b4ead17f983f7a35e9fdf126a750823f37ddd0160f73852"
+          "targetSha256": "9fc36c59545834ddc64d79d66bdb4130e254bac20d1c4530fdffda7165a570da"
         },
         {
           "segmentId": "docs/provisioning.md::1:3e4817a7684792d1de31dfce102c3ed300cd17408663de3f924f4cfd0a9995de/2:00a35f3b1633f37f0d1741d7018ac5a225403bcfb1b7a58a4aae7ab5c0e7c8d9/3:966d611007a463783e7adc709f49bc5d9957049ff3cb9f76a1587902d4404e0a::paragraph::1ce0007c7e3322d0f6d3a403680f2b403799b9e6f5da7b6576de13e848a339c2::1",
           "sourceSha256": "1ce0007c7e3322d0f6d3a403680f2b403799b9e6f5da7b6576de13e848a339c2",
           "state": "machine-cross-checked",
-          "targetSha256": "5d38726e21a637735656947059907fd36dc989498032ce2b841e1da5ec802e06"
+          "targetSha256": "3576db30517fc993ab0c563a617a560ee02fcc31bab1bee315699aba748f29c6"
         },
         {
           "segmentId": "docs/provisioning.md::1:3e4817a7684792d1de31dfce102c3ed300cd17408663de3f924f4cfd0a9995de/2:00a35f3b1633f37f0d1741d7018ac5a225403bcfb1b7a58a4aae7ab5c0e7c8d9/3:966d611007a463783e7adc709f49bc5d9957049ff3cb9f76a1587902d4404e0a::heading::478d37dbcda8a7f13f042061e76af16d645418f1ee9677e01e6a0e3ae18160df::1",
@@ -1502,7 +1502,7 @@
       "sourceSha256": "baab9d9450a15ee93af289d742654cc1d6aeb4fee05b45f4293f1f2647f15973",
       "structureSha256": "fa09963c5d7cde97f7d1ffd0e9959b29959dcf0eff0e7f7523e7b99eb87f6b10",
       "targetPath": "docs/zh-Hans/provisioning.md",
-      "targetSha256": "51aa62c85058e3d65da99082597747608146fc4f841103e482ffbed4a874c08c"
+      "targetSha256": "9c97fbe8f4d5b524158fa953d8340a89799d358dae991e44b44a1e01e19c69d4"
     }
   ],
   "locale": "zh-Hans",
@@ -1560,7 +1560,7 @@
     {
       "packetId": "zh-Hans-0011",
       "packetSha256": "9890d1984cbe6ba1c61bff1e140fb8c6d4401ecd90646c4bea7ae9da6b12b396",
-      "resultSha256": "df86d89802e8bd1f8f3d16445ba2a4180a4c7eef073150757a10ef56ed110227"
+      "resultSha256": "67ad217f9e96e63357cf2737698a4dbecd6ee8ab5c83ec90a616e9bb8b04b002"
     },
     {
       "packetId": "zh-Hans-0012",

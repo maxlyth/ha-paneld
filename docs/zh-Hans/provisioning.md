@@ -100,9 +100,9 @@ curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/inst
 
 提供任一选项也会回答相应的引导式设置问题。之后在面板上所做的更改优先，并且命令中指定的选项优先于同一命令中的 `--restore` 包。如果 Home Assistant 当前未列出指定的仪表盘，安装程序会保存它并通知你；这样便可在预期的仪表盘存在之前配置面板。Home Assistant 永远无法解析的路径会被拒绝，因此引导式设置仍会询问。
 
-对于交互式安装，请省略 `--builtin` 和 Home Assistant 凭据参数。安装程序会显示面板正在等待的步骤地址，通常为 `http://<panel>:8888/setup`。你可以从计算机或手机在该地址继续，也可以在面板上点按**设置**。两种方式采用相同的流程。已导入 Companion 会话的现有面板会保留该登录方式作为兼容路径。
+对于交互式安装，请省略 `--builtin` 和 Home Assistant 凭据参数。安装程序会显示面板正在等待的步骤地址，通常为 `http://<panel>:8888/setup`。你可以从计算机或手机在该地址继续，也可以在面板上点按**初始设置**。两种方式采用相同的流程。已导入 Companion 会话的现有面板会保留该登录方式作为兼容路径。
 
-要返回 Companion 应用，请在配置选项卡中选择已安装的 Home Assistant Companion 软件包作为仪表盘应用。内置渲染器不提供 Voice Assistant 或通知，因此需要这些功能时请保留 Companion。
+要返回 Companion 应用，请在“设置”选项卡中选择已安装的 Home Assistant Companion 软件包作为仪表盘应用。内置渲染器不提供 Voice Assistant 或通知，因此需要这些功能时请保留 Companion。
 
 ## 重新开始设置面板
 
