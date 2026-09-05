@@ -212,9 +212,9 @@
     <string name="guard_db_intro">Normale Panel-Dienste und Datenbankschreibvorgänge sind pausiert. Lass dieses Panel eingeschaltet; die Wiederherstellung ist nur für diesen Start garantiert. Bestätige ausschließlich den genau von dir angeforderten nächsten Schritt.</string>
     <string name="guard_db_reading_journal">Root-Journal wird gelesen…</string>
     <string name="guard_db_journal_status">Root-Journal: %1$s · Generation %2$d</string>
-    <string name="guard_db_outcome"> · Ergebnis %1$s</string>
+    <string name="guard_db_outcome">" · Ergebnis %1$s"</string>
     <string name="guard_db_deadline">Harte Frist: %1$d vergangene ms</string>
-    <string name="guard_db_forward_deadline"> · vorwärts: %1$d</string>
+    <string name="guard_db_forward_deadline">" · vorwärts: %1$d"</string>
     <string name="guard_db_unreachable">Der Root-Helfer wird neu gestartet oder ist nicht erreichbar. Es ist keine Änderung erlaubt.</string>
     <string name="guard_db_malformed">Die Antwort des Root-Journals ist fehlerhaft. Die Wiederherstellung wird angehalten.</string>
     <string name="guard_db_unsupported">Der installierte Helfer kann diese Wiederherstellung nicht ausführen. Die Wiederherstellung wird angehalten.</string>
@@ -246,10 +246,10 @@
     <string name="storage_health_channel_description">Kritische Fehler des Panel-Speichers und von SQLite</string>
     <string name="panel_agent_channel_description">Panel-Hardware-Agent für Home Assistant</string>
     <string name="storage_pressure_title">Panel-Speicher-/Datenbankdruck kritisch</string>
-    <string name="storage_capacity_suffix"> (%1$d MiB im Dateisystem frei)</string>
+    <string name="storage_capacity_suffix">" (%1$d MiB im Dateisystem frei)"</string>
     <string name="storage_pressure_body">Der Speicher- oder Datenbankdateidruck ist kritisch%1$s. Öffne ha-paneld und prüfe den freien Speicherplatz sowie das WAL-Wachstum, bevor du die Konfiguration änderst.</string>
     <string name="database_attention_title">Panel-Datenbank erfordert Aufmerksamkeit</string>
-    <string name="database_during_suffix"> während %1$s</string>
+    <string name="database_during_suffix">" während %1$s"</string>
     <string name="database_full_body">Ein Schreibvorgang in der Panel-Datenbank%1$s ist fehlgeschlagen, weil der Speicher voll war. Öffne ha-paneld; die Wiederherstellung wurde noch nicht überprüft.</string>
     <string name="database_io_body">Die Panel-Datenbank hat einen Datenträger-E/A-Fehler gemeldet%1$s. Öffne ha-paneld und versuche es erst nach Behebung der Ursache erneut.</string>
     <string name="database_corruption_body">Die Integritätsprüfung der Panel-Datenbank ist fehlgeschlagen%1$s. Bewahre sie auf und öffne die ha-paneld-Diagnose, bevor weitere Schreibvorgänge erfolgen.</string>

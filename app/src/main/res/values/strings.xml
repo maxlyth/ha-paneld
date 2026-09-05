@@ -215,9 +215,9 @@
     <string name="guard_db_intro">Normal panel services and database writers are paused. Keep this panel powered on; recovery is guaranteed only for this boot. Approve only the exact next step you requested.</string>
     <string name="guard_db_reading_journal">Reading root journal…</string>
     <string name="guard_db_journal_status">Root journal: %1$s · generation %2$d</string>
-    <string name="guard_db_outcome"> · outcome %1$s</string>
+    <string name="guard_db_outcome">" · outcome %1$s"</string>
     <string name="guard_db_deadline">Hard deadline: %1$d elapsed-ms</string>
-    <string name="guard_db_forward_deadline"> · forward: %1$d</string>
+    <string name="guard_db_forward_deadline">" · forward: %1$d"</string>
     <string name="guard_db_unreachable">Root helper is restarting or unreachable. No mutation is allowed.</string>
     <string name="guard_db_malformed">Root journal response is malformed. Recovery is held.</string>
     <string name="guard_db_unsupported">Installed helper cannot run this recovery. Recovery is held.</string>
@@ -249,10 +249,10 @@
     <string name="storage_health_channel_description">Critical panel storage and SQLite failures</string>
     <string name="panel_agent_channel_description">Panel hardware agent for Home Assistant</string>
     <string name="storage_pressure_title">Panel storage/database pressure critical</string>
-    <string name="storage_capacity_suffix"> (%1$d MiB filesystem free)</string>
+    <string name="storage_capacity_suffix">" (%1$d MiB filesystem free)"</string>
     <string name="storage_pressure_body">Storage or database-file pressure is critical%1$s. Open ha-paneld and review free space and WAL growth before changing configuration.</string>
     <string name="database_attention_title">Panel database needs attention</string>
-    <string name="database_during_suffix"> during %1$s</string>
+    <string name="database_during_suffix">" during %1$s"</string>
     <string name="database_full_body">A panel database write%1$s failed when storage was full. Open ha-paneld; recovery is not yet verified.</string>
     <string name="database_io_body">The panel database reported a disk I/O failure%1$s. Open ha-paneld; retry only after resolving the cause.</string>
     <string name="database_corruption_body">The panel database failed its integrity check%1$s. Preserve it and open ha-paneld diagnostics before further writes.</string>

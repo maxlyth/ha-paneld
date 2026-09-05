@@ -212,9 +212,9 @@
     <string name="guard_db_intro">I normali servizi del pannello e i processi che scrivono nel database sono sospesi. Mantieni acceso il pannello; il ripristino è garantito solo per questo avvio. Approva esclusivamente il passaggio successivo esatto che hai richiesto.</string>
     <string name="guard_db_reading_journal">Lettura del registro root…</string>
     <string name="guard_db_journal_status">Registro root: %1$s · generazione %2$d</string>
-    <string name="guard_db_outcome"> · risultato %1$s</string>
+    <string name="guard_db_outcome">" · risultato %1$s"</string>
     <string name="guard_db_deadline">Scadenza non prorogabile: %1$d ms trascorsi</string>
-    <string name="guard_db_forward_deadline"> · avanzamento: %1$d</string>
+    <string name="guard_db_forward_deadline">" · avanzamento: %1$d"</string>
     <string name="guard_db_unreachable">L’helper root si sta riavviando o non è raggiungibile. Non è consentita alcuna modifica.</string>
     <string name="guard_db_malformed">La risposta del registro root non è valida. Il ripristino è sospeso.</string>
     <string name="guard_db_unsupported">L’helper installato non può eseguire questo ripristino. Il ripristino è sospeso.</string>
@@ -246,10 +246,10 @@
     <string name="storage_health_channel_description">Errori critici dell’archiviazione del pannello e di SQLite</string>
     <string name="panel_agent_channel_description">Agente hardware del pannello per Home Assistant</string>
     <string name="storage_pressure_title">Pressione critica sull’archiviazione/database del pannello</string>
-    <string name="storage_capacity_suffix"> (%1$d MiB liberi nel file system)</string>
+    <string name="storage_capacity_suffix">" (%1$d MiB liberi nel file system)"</string>
     <string name="storage_pressure_body">La pressione sull’archiviazione o sui file del database è critica%1$s. Apri ha-paneld e controlla lo spazio libero e la crescita del WAL prima di modificare la configurazione.</string>
     <string name="database_attention_title">Il database del pannello richiede attenzione</string>
-    <string name="database_during_suffix"> durante %1$s</string>
+    <string name="database_during_suffix">" durante %1$s"</string>
     <string name="database_full_body">Una scrittura nel database del pannello%1$s non è riuscita perché l’archiviazione era piena. Apri ha-paneld; il ripristino non è ancora verificato.</string>
     <string name="database_io_body">Il database del pannello ha segnalato un errore di I/O del disco%1$s. Apri ha-paneld; riprova solo dopo aver risolto la causa.</string>
     <string name="database_corruption_body">Il database del pannello non ha superato il controllo di integrità%1$s. Conservalo e apri la diagnostica di ha-paneld prima di ulteriori scritture.</string>

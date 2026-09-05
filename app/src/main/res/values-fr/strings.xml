@@ -212,9 +212,9 @@
     <string name="guard_db_intro">Les services normaux du panneau et les processus écrivant dans la base de données sont suspendus. Laissez ce panneau sous tension ; la récupération n’est garantie que pour ce démarrage. N’approuvez que l’étape suivante précise que vous avez demandée.</string>
     <string name="guard_db_reading_journal">Lecture du journal racine…</string>
     <string name="guard_db_journal_status">Journal racine : %1$s · génération %2$d</string>
-    <string name="guard_db_outcome"> · résultat %1$s</string>
+    <string name="guard_db_outcome">" · résultat %1$s"</string>
     <string name="guard_db_deadline">Échéance absolue : %1$d ms écoulées</string>
-    <string name="guard_db_forward_deadline"> · progression : %1$d</string>
+    <string name="guard_db_forward_deadline">" · progression : %1$d"</string>
     <string name="guard_db_unreachable">L’assistant racine redémarre ou est inaccessible. Aucune modification n’est autorisée.</string>
     <string name="guard_db_malformed">La réponse du journal racine est mal formée. La récupération est suspendue.</string>
     <string name="guard_db_unsupported">L’assistant installé ne peut pas effectuer cette récupération. La récupération est suspendue.</string>
@@ -246,10 +246,10 @@
     <string name="storage_health_channel_description">Défaillances critiques du stockage du panneau et de SQLite</string>
     <string name="panel_agent_channel_description">Agent matériel du panneau pour Home Assistant</string>
     <string name="storage_pressure_title">Pression critique sur le stockage/la base de données du panneau</string>
-    <string name="storage_capacity_suffix"> (%1$d Mio libres sur le système de fichiers)</string>
+    <string name="storage_capacity_suffix">" (%1$d Mio libres sur le système de fichiers)"</string>
     <string name="storage_pressure_body">La pression sur le stockage ou les fichiers de base de données est critique%1$s. Ouvrez ha-paneld et vérifiez l’espace libre ainsi que la croissance du WAL avant de modifier la configuration.</string>
     <string name="database_attention_title">La base de données du panneau nécessite votre attention</string>
-    <string name="database_during_suffix"> pendant %1$s</string>
+    <string name="database_during_suffix">" pendant %1$s"</string>
     <string name="database_full_body">Une écriture dans la base de données du panneau%1$s a échoué lorsque le stockage était plein. Ouvrez ha-paneld ; la récupération n’est pas encore vérifiée.</string>
     <string name="database_io_body">La base de données du panneau a signalé une erreur d’E/S disque%1$s. Ouvrez ha-paneld ; ne réessayez qu’après avoir résolu la cause.</string>
     <string name="database_corruption_body">Le contrôle d’intégrité de la base de données du panneau a échoué%1$s. Préservez-la et ouvrez les diagnostics de ha-paneld avant toute autre écriture.</string>

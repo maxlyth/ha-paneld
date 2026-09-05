@@ -212,9 +212,9 @@
     <string name="guard_db_intro">正常面板服务和数据库写入程序已暂停。请保持此面板通电；仅保证本次启动期间可以恢复。只批准您所请求的确切下一步操作。</string>
     <string name="guard_db_reading_journal">正在读取 root 日志…</string>
     <string name="guard_db_journal_status">Root 日志：%1$s · 轮次 %2$d</string>
-    <string name="guard_db_outcome"> · 结果 %1$s</string>
+    <string name="guard_db_outcome">" · 结果 %1$s"</string>
     <string name="guard_db_deadline">硬性截止时间：已用时 %1$d 毫秒</string>
-    <string name="guard_db_forward_deadline"> · 推进操作已用时：%1$d 毫秒</string>
+    <string name="guard_db_forward_deadline">" · 推进操作已用时：%1$d 毫秒"</string>
     <string name="guard_db_unreachable">Root 辅助程序正在重启或无法访问。不允许进行任何更改。</string>
     <string name="guard_db_malformed">Root 日志响应格式错误。恢复已暂停。</string>
     <string name="guard_db_unsupported">已安装的辅助程序无法执行此恢复。恢复已暂停。</string>

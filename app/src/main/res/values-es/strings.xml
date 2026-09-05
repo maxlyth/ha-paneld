@@ -212,9 +212,9 @@
     <string name="guard_db_intro">Los servicios normales del panel y los procesos que escriben en la base de datos están en pausa. Mantén este panel encendido; la recuperación solo está garantizada durante este arranque. Aprueba únicamente el siguiente paso exacto que has solicitado.</string>
     <string name="guard_db_reading_journal">Leyendo el registro root…</string>
     <string name="guard_db_journal_status">Registro root: %1$s · generación %2$d</string>
-    <string name="guard_db_outcome"> · resultado %1$s</string>
+    <string name="guard_db_outcome">" · resultado %1$s"</string>
     <string name="guard_db_deadline">Límite estricto: %1$d ms transcurridos</string>
-    <string name="guard_db_forward_deadline"> · avance: %1$d</string>
+    <string name="guard_db_forward_deadline">" · avance: %1$d"</string>
     <string name="guard_db_unreachable">El asistente root se está reiniciando o no está disponible. No se permite ninguna modificación.</string>
     <string name="guard_db_malformed">La respuesta del registro root no tiene un formato válido. La recuperación está detenida.</string>
     <string name="guard_db_unsupported">El asistente instalado no puede ejecutar esta recuperación. La recuperación está detenida.</string>
@@ -246,10 +246,10 @@
     <string name="storage_health_channel_description">Fallos críticos del almacenamiento del panel y de SQLite</string>
     <string name="panel_agent_channel_description">Agente de hardware del panel para Home Assistant</string>
     <string name="storage_pressure_title">Presión crítica en el almacenamiento/base de datos del panel</string>
-    <string name="storage_capacity_suffix"> (%1$d MiB libres en el sistema de archivos)</string>
+    <string name="storage_capacity_suffix">" (%1$d MiB libres en el sistema de archivos)"</string>
     <string name="storage_pressure_body">La presión sobre el almacenamiento o los archivos de la base de datos es crítica%1$s. Abre ha-paneld y revisa el espacio libre y el crecimiento de WAL antes de cambiar la configuración.</string>
     <string name="database_attention_title">La base de datos del panel necesita atención</string>
-    <string name="database_during_suffix"> durante %1$s</string>
+    <string name="database_during_suffix">" durante %1$s"</string>
     <string name="database_full_body">Una escritura en la base de datos del panel%1$s falló porque el almacenamiento estaba lleno. Abre ha-paneld; la recuperación aún no se ha verificado.</string>
     <string name="database_io_body">La base de datos del panel informó de un fallo de I/O del disco%1$s. Abre ha-paneld; vuelve a intentarlo solo después de resolver la causa.</string>
     <string name="database_corruption_body">La base de datos del panel no superó la comprobación de integridad%1$s. Consérvala y abre los diagnósticos de ha-paneld antes de realizar más escrituras.</string>
