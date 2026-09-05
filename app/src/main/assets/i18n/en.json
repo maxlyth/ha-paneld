@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "locale": "en",
-  "sourceRevision": "271310c06ec572b4f7830b01af90711c31743fee",
+  "sourceRevision": "2e806335f2623ca954827fcec67450ec9f30b39c",
   "strings": {
     "api.action.send": {
       "text": "Send {method}",

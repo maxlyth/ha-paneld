@@ -1,7 +1,7 @@
 {
   "locale": "es",
   "schema": 1,
-  "sourceRevision": "271310c06ec572b4f7830b01af90711c31743fee",
+  "sourceRevision": "2e806335f2623ca954827fcec67450ec9f30b39c",
   "strings": {
     "api.action.send": {
       "sourceHash": "7365a088061c87f7f525e3a06863526ab9eafcf28af995c47c8854f5cf927e6a",
