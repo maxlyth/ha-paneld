@@ -145,7 +145,7 @@ Parte del hardware del panel está oculto para las aplicaciones Android comunes 
 
 La interfaz web marca con un candado los controles no disponibles y explica qué le falta al panel. El instalador y los diagnósticos también indican qué nivel de acceso está disponible.
 
-**No necesitan root:** el emparejamiento con Home Assistant, el brillo y la atenuación de la pantalla, los anuncios de audio, ambas opciones de panel de control, la interfaz web, la API REST y la copia de seguridad y restauración de la configuración. Volver, Recientes, la activación mediante un gesto de la mano y la barra de navegación por software dependen de la capacidad correspondiente de Android o del sensor, pero no requieren root de forma inherente.
+**No necesitan root:** el emparejamiento con Home Assistant, el brillo y la atenuación de la pantalla, los anuncios de audio, ambas opciones de panel de control, la interfaz web, la API REST y la copia de seguridad y restauración de la configuración. Volver, Aplicaciones recientes, la activación mediante un gesto de la mano y la barra de navegación por software dependen de la capacidad correspondiente de Android o del sensor, pero no requieren root de forma inherente.
 
 **Puede que se necesite root o el asistente autenticado:** apagado físico de la retroiluminación, suspensión de Android cuando el perfil la seleccione, control del LED RGB en algunos paneles, control de la aplicación del proveedor, reinicio y regulador de la CPU. Si el perfil activo no dispone de una forma segura de apagar la pantalla por completo, ha-paneld la atenúa en su lugar.
 

@@ -980,7 +980,7 @@
           "segmentId": "README.md::2:a593bd9a263f45f6b36ae03534fbe7540a444892f6b47cbf3f977142cabdd564::paragraph::acf7da47f6f4c84a4e45207b1396f5c0374ef7d9cd514dc48c8021077ce45fbd::1",
           "sourceSha256": "acf7da47f6f4c84a4e45207b1396f5c0374ef7d9cd514dc48c8021077ce45fbd",
           "state": "machine-cross-checked",
-          "targetSha256": "c5e625ef2d71878e80d751cd46d40cf553203f2ba925460b08d657d04284b706"
+          "targetSha256": "baa407b3fc57546b004fe5a8b4b458d851b426a08a72f58aa85059053370e77b"
         },
         {
           "segmentId": "README.md::2:a593bd9a263f45f6b36ae03534fbe7540a444892f6b47cbf3f977142cabdd564::paragraph::245612129f545796c4f632a218e80eb7268e5800ff645041562374cfdd1484da::1",
@@ -1059,7 +1059,7 @@
       "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
       "structureSha256": "103069d68dd5c6455a11e4a80ccd80209f5c5f7cf7bc4a0221fc9150ff5d0fed",
       "targetPath": "docs/zh-Hans/README.md",
-      "targetSha256": "6b2f1b10ac88bab072dd835fd4d0798460fc9a79a18502efad48d8c88ef3e6db"
+      "targetSha256": "ff7e859072e0f8be08760f41b0839c6437fe19df751440cd4b4995ee88ab7dd4"
     }
   ],
   "locale": "zh-Hans",
@@ -1107,7 +1107,7 @@
     {
       "packetId": "zh-Hans-0009",
       "packetSha256": "3a2f70777ec30ea392014b6715c5f972baf11f4f865c39c53f66447b82ae5547",
-      "resultSha256": "9dd9db2afad9ef9c1c410e2be071b69915893df9551648a7bcd8a32823945f20"
+      "resultSha256": "5f8fc64aa20f1d4b0fd7ad59dd3f4d24691b874c549c88c5d6b3916b4ea2010d"
     }
   ],
   "schema": 1,

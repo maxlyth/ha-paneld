@@ -225,7 +225,7 @@ ha-paneld 没有捐赠按钮。它是免费的，而真正能推动项目发展�
 <details>
 <summary><strong>技术栈</strong></summary>
 
-- **应用：** [Kotlin](https://github.com/JetBrains/kotlin)、 [AndroidX](https://github.com/androidx/androidx) 和 [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines)。
+- **应用：** [Kotlin](https://github.com/JetBrains/kotlin)、[AndroidX](https://github.com/androidx/androidx) 和 [kotlinx.coroutines](https://github.com/Kotlin/kotlinx.coroutines)。
 - **HTTP 和 Home Assistant WebSocket：** [Ktor](https://github.com/ktorio/ktor) CIO 服务器、客户端和 WebSocket 模块。
 - **MQTT：** [HiveMQ MQTT Client](https://github.com/hivemq/hivemq-mqtt-client)，使用其 MQTT 5 客户端和纯 Java NIO 传输层。
 - **mDNS：** [JmDNS](https://github.com/jmdns/jmdns)，发布 `_ha-paneld._tcp`，以便 ha-paneld 实例能够相互发现，供多面板切换器使用。ha-paneld 会在该发布停止且无法恢复时报告此情况。

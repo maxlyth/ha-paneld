@@ -710,7 +710,7 @@
           "segmentId": "README.md::2:08cf91c6fe7f9957166d815053166c984b9b331dc2a05284e5eb6cef0e5a33a7/3:f581a2173f116a37fe965910a3958cb2e6b9618ad4f819f3e01c23e4b7b66a34::paragraph::68050bcf6b135ce18e79af8b7098162ad6df96c5a5d1eda5a05153939b44ed91::1",
           "sourceSha256": "68050bcf6b135ce18e79af8b7098162ad6df96c5a5d1eda5a05153939b44ed91",
           "state": "machine-cross-checked",
-          "targetSha256": "a06be8e165cc44b534914f556bd683a99877a245f8238250b6c0ef8e73a7dc72"
+          "targetSha256": "f0c15bffc4564bb75ca08ffc99c7a518135e87f56197a837c0531de4ea33086d"
         },
         {
           "segmentId": "README.md::2:08cf91c6fe7f9957166d815053166c984b9b331dc2a05284e5eb6cef0e5a33a7/3:f581a2173f116a37fe965910a3958cb2e6b9618ad4f819f3e01c23e4b7b66a34::paragraph::935bf7bb2fe16dd6805f980703c0ddf18b79ea016c33ee1d8d3ab2f8f0ee9653::1",
@@ -1059,7 +1059,7 @@
       "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
       "structureSha256": "284430f78c6af5cd15953f4cc80323278b68eb58192348fd60d114e842a99be0",
       "targetPath": "docs/it/README.md",
-      "targetSha256": "d8897fb6abdeafc56d9bf8515ae4473bac9b9be3b4f47f5c99f852ef7ff17546"
+      "targetSha256": "e40654f985d732245fe8c69a69ddf8530ab22bb6494913e6108a179895569bf6"
     }
   ],
   "locale": "it",
@@ -1092,7 +1092,7 @@
     {
       "packetId": "it-0006",
       "packetSha256": "0161c7a036da353f78e87cdc4c66d3f7c2a1a7de254104cfb438740164f6d5e2",
-      "resultSha256": "797f20bd9bfafe72854f869d0ddbc15e92e1ce13bdac96eac69ff96948cf1b92"
+      "resultSha256": "505bdcce3d167166f8af9e023c1ea6dd0b40d43d427103e4de57a2163a5351c2"
     },
     {
       "packetId": "it-0007",

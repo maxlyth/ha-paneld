@@ -145,7 +145,7 @@ Alcuni componenti hardware del pannello sono nascosti alle normali app Android e
 
 L'interfaccia web contrassegna con un lucchetto i controlli non disponibili e spiega che cosa manca al pannello. Anche il programma di installazione e la diagnostica indicano il livello di accesso disponibile.
 
-**Root non necessario:** associazione con Home Assistant, luminosità e attenuazione dello schermo, annunci audio, entrambe le opzioni per la dashboard, interfaccia web, API REST, backup e ripristino della configurazione. Indietro, Recenti, riattivazione con un gesto della mano e barra di navigazione software dipendono dalla funzionalità Android o del sensore corrispondente, ma non richiedono intrinsecamente root.
+**Root non necessario:** associazione con Home Assistant, luminosità e attenuazione dello schermo, annunci audio, entrambe le opzioni per la dashboard, interfaccia web, API REST, backup e ripristino della configurazione. Indietro, App recenti, riattivazione con un gesto della mano e barra di navigazione software dipendono dalla funzionalità Android o del sensore corrispondente, ma non richiedono intrinsecamente root.
 
 **Potrebbero essere necessari root o l'helper autenticato:** spegnimento fisico della retroilluminazione, sospensione di Android quando selezionata dal profilo, controllo del LED RGB su alcuni pannelli, controllo dell'app del fornitore, riavvio e governor della CPU. Se il profilo attivo non dispone di un metodo sicuro per spegnere completamente lo schermo, ha-paneld ne riduce invece la luminosità.
 

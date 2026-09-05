@@ -145,7 +145,7 @@ Certains composants matériels du panneau sont masqués aux applications Android
 
 L’interface web signale les commandes indisponibles par un cadenas et explique ce qui manque au panneau. Le programme d’installation et les diagnostics indiquent également le niveau d’accès disponible.
 
-**Aucun accès root requis :** association à Home Assistant, luminosité et atténuation de l’écran, annonces audio, les deux options de tableau de bord, interface web, API REST, ainsi que sauvegarde et restauration de la configuration. Retour, Récents, réveil par geste et barre de navigation logicielle dépendent de la fonctionnalité Android ou du capteur correspondant, mais ne nécessitent pas intrinsèquement d’accès root.
+**Aucun accès root requis :** association à Home Assistant, luminosité et atténuation de l’écran, annonces audio, les deux options de tableau de bord, interface web, API REST, ainsi que sauvegarde et restauration de la configuration. Retour, Applications récentes, réveil par geste et barre de navigation logicielle dépendent de la fonctionnalité Android ou du capteur correspondant, mais ne nécessitent pas intrinsèquement d’accès root.
 
 **Un accès root ou l’assistant authentifié peut être nécessaire :** extinction physique du rétroéclairage, mise en veille Android si le profil la sélectionne, commande de la LED RGB sur certains panneaux, contrôle de l’application du fournisseur, redémarrage et gouverneur du processeur. Si le profil actif ne dispose d’aucun moyen sûr d’éteindre complètement l’écran, ha-paneld en réduit plutôt la luminosité.
 
