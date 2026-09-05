@@ -65,6 +65,14 @@ class HelperSocketCompositionTest {
     @Test(timeout = 10_000)
     fun appWireCompatibilityCorpusCrossesKotlinAndNativeHelper() {
         val daemon = SocketDaemon(socketPath)
+        // GOV writes sysfs directly and fails closed when the cpufreq nodes cannot be written.
+        // A privileged run on a host that exposes them can write one, so take the expected reply
+        // from the same condition the helper itself tests rather than assuming an outcome.
+        val governorReply =
+            if (java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").canWrite())
+                "OK"
+            else
+                "ERR"
         listOf(
             WireTranscript("VERSION", "HELPER version=1.3.0 proto=1.3"),
             WireTranscript("PING", "OK"),
@@ -93,7 +101,7 @@ class HelperSocketCompositionTest {
             WireTranscript("APPSTATE io.homeassistant.companion.android", "ERR"),
             WireTranscript("DENSITY 240", "OK"),
             WireTranscript("FONTSCALE 1.0", "OK"),
-            WireTranscript("GOV performance", "ERR"),
+            WireTranscript("GOV performance", governorReply),
             WireTranscript("ZIGBEECONTAIN", "OK"),
             WireTranscript("VERSION unexpected", "ERR"),
             WireTranscript("PINGEXTRA", "ERR"),
