@@ -10747,6 +10747,151 @@
       "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
       "state": "machine-cross-checked",
       "text": "正在刷新…"
+    },
+    "runtime.renderer_recovery.builtin": {
+      "text": "内置渲染器在 WebView 反复失败后已停止重试。请更新或修复 System WebView，然后从面板导航栏或“仪表板”标签页选择“重新加载仪表板”。",
+      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
+      "state": "machine-cross-checked"
+    },
+    "runtime.renderer_recovery.external": {
+      "text": "仪表板应用反复崩溃 — 为避免不断重启，监控程序已停止重新启动它。请重新安装或降级仪表板/Companion 应用，或重启面板。",
+      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.contained": {
+      "text": "Zigbee 网关失控已得到控制 — 在未加入网络且 CPU 持续高占用或反复重启后，路由器开关已设为 OFF。",
+      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.containment_failed": {
+      "text": "Zigbee 网关控制未完全成功 — 已尽可能停止重启程序，并降低仍在运行的任务优先级。请检查诊断信息后再重试。",
+      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.runaway": {
+      "text": "Zigbee 网关已失控 — 正在自动控制。",
+      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_high_cpu": {
+      "text": "已入网的 Zigbee 网关持续高 CPU 占用 — 由于已入网的路由器仅发出警告，因此它仍在运行。",
+      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_unjoined": {
+      "text": "Zigbee 路由器已启用但尚未入网 — 反复尝试入网可能占用大量 CPU。请将此面板加入 Zigbee 协调器，或将 Zigbee 路由器开关设为 OFF。",
+      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.legacy_watchdog": {
+      "text": "检测到旧版 Zigbee 监控程序缺陷 — 存在完全相同的递归 LD_LIBRARY_PATH 赋值。ha-paneld 不会自动修改供应商脚本。",
+      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.resolve": {
+      "text": "解决 Zigbee 设置 →",
+      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.at_risk": {
+      "text": "面板电源安全：存在风险",
+      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.caution": {
+      "text": "面板电源安全：需注意",
+      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.unknown": {
+      "text": "面板电源安全：未知",
+      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.at_risk": {
+      "text": "屏幕关闭后，面板可能挂起或进入 Doze 模式，导致 HTTP、MQTT 和后台任务无法访问。",
+      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.caution": {
+      "text": "目前仅有一项已观测到的电源保护措施维持面板可访问。",
+      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.unknown": {
+      "text": "一个或多个 Android 电源探测不可用或结果不明确，因此无法确定电源安全状态。",
+      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.review": {
+      "text": "请检查观测到的电源保护措施。更改 Android 保持唤醒和 Doze 设置需要直接超级用户权限；电源安全操作绝不会重启面板。",
+      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_direct": {
+      "text": "使用“修复电源安全”启用并验证应用和 Android 的电源保护措施。修复绝不会重启面板。",
+      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_degraded": {
+      "text": "使用“修复电源安全”验证应用保护措施，并重试此面板当前已降级的直接超级用户通道。修复绝不会重启面板。",
+      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_limited": {
+      "text": "使用“修复电源安全”启用并验证应用的 CPU/Wi-Fi 锁和无限超时。无法通过此面板的当前通道更改 Android 保持唤醒和 Doze 设置。",
+      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledged": {
+      "text": "此未变更的注意事项已在面板网页中确认；API、诊断和安装程序检查仍会报告该事项。",
+      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledgeable": {
+      "text": "应用的 CPU/Wi-Fi 锁和无限超时已启用，但无法通过此面板的当前通道更改 Android 保持唤醒和 Doze 设置。你可以隐藏这一特定注意事项；如果证据或功能发生变化，它将重新出现。",
+      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.manual": {
+      "text": "无法通过此面板的当前通道自动修复。请手动检查报告的探测结果；当风险未知或较高时，无法隐藏此警告。",
+      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair": {
+      "text": "修复电源安全",
+      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair_title": {
+      "text": "修复操作需明确触发，并会回读验证，且绝不会重启面板",
+      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.ack.not_hidden": {
+      "text": "未隐藏此注意事项。",
+      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.approval": {
+      "text": "请在面板上亲自批准此请求，然后再次点击“修复电源安全”。",
+      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.repaired": {
+      "text": "电源安全已修复并验证。",
+      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.partial": {
+      "text": "电源安全仅部分修复。未尝试重启。",
+      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.failed_no_reboot": {
+      "text": "电源安全修复失败；未尝试重启。",
+      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
+      "state": "machine-cross-checked"
     }
   }
 }

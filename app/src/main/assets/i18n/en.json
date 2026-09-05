@@ -26586,6 +26586,18 @@
       "softMaxChars": 64,
       "hardMaxChars": 116
     },
+    "runtime.power_safety.ack.not_hidden": {
+      "text": "The caution was not hidden.",
+      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 27,
+      "hardMaxChars": 49
+    },
     "runtime.power_safety.ack.saving": {
       "text": "Saving acknowledgement…",
       "sourceHash": "05360a57b87a18b1c7fc61b5d81158ccbfc3f953c2e8c6f3f353c003eff79499",
@@ -26597,6 +26609,156 @@
       "frozen": [],
       "softMaxChars": 23,
       "hardMaxChars": 42
+    },
+    "runtime.power_safety.action.acknowledgeable": {
+      "text": "The app CPU/Wi-Fi locks and infinite timeout are active, but Android stay-awake and Doze cannot be changed through this panel's current route. You may hide this exact caution; it returns if the evidence or capability changes.",
+      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.repair_limited",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "CPU",
+        "Wi-Fi",
+        "Android",
+        "Doze"
+      ],
+      "softMaxChars": 225,
+      "hardMaxChars": 405
+    },
+    "runtime.power_safety.action.acknowledged": {
+      "text": "This unchanged caution is acknowledged in panel web pages; API, diagnostics, and installer checks continue to report it.",
+      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.repair_limited",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "API"
+      ],
+      "softMaxChars": 120,
+      "hardMaxChars": 216
+    },
+    "runtime.power_safety.action.manual": {
+      "text": "Automatic repair is unavailable through this panel's current route. Review the reported probes manually; this warning cannot be hidden while risk is unknown or elevated.",
+      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.repair_limited",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 169,
+      "hardMaxChars": 305
+    },
+    "runtime.power_safety.action.repair_degraded": {
+      "text": "Use Repair power safety to verify the app guards and retry this panel's currently degraded direct-root route. The repair never reboots the panel.",
+      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.repair_limited",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 145,
+      "hardMaxChars": 261
+    },
+    "runtime.power_safety.action.repair_direct": {
+      "text": "Use Repair power safety to enable and verify the app and Android power guards. The repair never reboots the panel.",
+      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_limited",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Android"
+      ],
+      "softMaxChars": 114,
+      "hardMaxChars": 206
+    },
+    "runtime.power_safety.action.repair_limited": {
+      "text": "Use Repair power safety to enable and verify the app CPU/Wi-Fi locks and infinite timeout. Android stay-awake and Doze changes are unavailable through this panel's current route.",
+      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.review"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "CPU",
+        "Wi-Fi",
+        "Android",
+        "Doze"
+      ],
+      "softMaxChars": 178,
+      "hardMaxChars": 321
+    },
+    "runtime.power_safety.action.review": {
+      "text": "Review the observed power guards. Android stay-awake and Doze changes require direct root; power-safety actions never reboot the panel.",
+      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.action.acknowledgeable",
+        "runtime.power_safety.action.acknowledged",
+        "runtime.power_safety.action.manual",
+        "runtime.power_safety.action.repair_degraded",
+        "runtime.power_safety.action.repair_direct",
+        "runtime.power_safety.action.repair_limited"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Android",
+        "Doze"
+      ],
+      "softMaxChars": 135,
+      "hardMaxChars": 243
     },
     "runtime.power_safety.button.hide": {
       "text": "Hide this caution",
@@ -26624,6 +26786,79 @@
       "softMaxChars": 88,
       "hardMaxChars": 159
     },
+    "runtime.power_safety.button.repair": {
+      "text": "Repair power safety",
+      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.button.repair_title"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 20,
+      "hardMaxChars": 40
+    },
+    "runtime.power_safety.button.repair_title": {
+      "text": "Repair is explicit, read-back verified, and never reboots the panel",
+      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
+      "surface": "install",
+      "context": "Power-safety runtime action or control; preserve the operational limits and no-reboot guarantee.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.button.repair"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 67,
+      "hardMaxChars": 121
+    },
+    "runtime.power_safety.level.at_risk": {
+      "text": "Panel power safety: at risk",
+      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.level.caution",
+        "runtime.power_safety.level.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 27,
+      "hardMaxChars": 51
+    },
+    "runtime.power_safety.level.caution": {
+      "text": "Panel power safety: caution",
+      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.level.at_risk",
+        "runtime.power_safety.level.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 27,
+      "hardMaxChars": 49
+    },
+    "runtime.power_safety.level.unknown": {
+      "text": "Panel power safety: unknown",
+      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.level.at_risk",
+        "runtime.power_safety.level.caution"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 27,
+      "hardMaxChars": 51
+    },
     "runtime.power_safety.repair.applying": {
       "text": "Applying and verifying…",
       "sourceHash": "0a4d00786291e3748e44cb8c56ceb349eda167603ba5e2bc79779a6c46ee8447",
@@ -26635,6 +26870,22 @@
       "frozen": [],
       "softMaxChars": 23,
       "hardMaxChars": 42
+    },
+    "runtime.power_safety.repair.approval": {
+      "text": "Approve this request physically on the panel, then tap Repair power safety again.",
+      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.repair.failed_no_reboot",
+        "runtime.power_safety.repair.partial",
+        "runtime.power_safety.repair.repaired"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 81,
+      "hardMaxChars": 146
     },
     "runtime.power_safety.repair.endpoint_failed": {
       "text": "Could not reach the repair endpoint; no repair was confirmed.",
@@ -26648,6 +26899,38 @@
       "softMaxChars": 61,
       "hardMaxChars": 110
     },
+    "runtime.power_safety.repair.failed_no_reboot": {
+      "text": "Power safety repair failed; no reboot was attempted.",
+      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.repair.approval",
+        "runtime.power_safety.repair.partial",
+        "runtime.power_safety.repair.repaired"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 52,
+      "hardMaxChars": 94
+    },
+    "runtime.power_safety.repair.partial": {
+      "text": "Power safety repair was partial. No reboot was attempted.",
+      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.repair.approval",
+        "runtime.power_safety.repair.failed_no_reboot",
+        "runtime.power_safety.repair.repaired"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 57,
+      "hardMaxChars": 103
+    },
     "runtime.power_safety.repair.refreshing": {
       "text": "Refreshing…",
       "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
@@ -26659,6 +26942,261 @@
       "frozen": [],
       "softMaxChars": 20,
       "hardMaxChars": 40
+    },
+    "runtime.power_safety.repair.repaired": {
+      "text": "Power safety repaired and verified.",
+      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.repair.approval",
+        "runtime.power_safety.repair.failed_no_reboot",
+        "runtime.power_safety.repair.partial"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 35,
+      "hardMaxChars": 63
+    },
+    "runtime.power_safety.summary.at_risk": {
+      "text": "The panel can suspend or enter Doze after screen-off, making HTTP, MQTT, and background work unreachable.",
+      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.summary.caution",
+        "runtime.power_safety.summary.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Doze",
+        "HTTP",
+        "MQTT"
+      ],
+      "softMaxChars": 105,
+      "hardMaxChars": 192
+    },
+    "runtime.power_safety.summary.caution": {
+      "text": "Panel reachability currently depends on only one observed power guard.",
+      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.summary.at_risk",
+        "runtime.power_safety.summary.unknown"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 70,
+      "hardMaxChars": 126
+    },
+    "runtime.power_safety.summary.unknown": {
+      "text": "Power safety could not be established because one or more Android power probes were unavailable or ambiguous.",
+      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.power_safety.summary.at_risk",
+        "runtime.power_safety.summary.caution"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Android"
+      ],
+      "softMaxChars": 109,
+      "hardMaxChars": 197
+    },
+    "runtime.renderer_recovery.builtin": {
+      "text": "Built-in renderer stopped retrying after repeated WebView failures. Update or repair System WebView, then use Reload dashboard from the panel navbar or Dashboard tab.",
+      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.renderer_recovery.external"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "WebView",
+        "System WebView"
+      ],
+      "softMaxChars": 166,
+      "hardMaxChars": 299
+    },
+    "runtime.renderer_recovery.external": {
+      "text": "Dashboard app is crash-looping — the watchdog stopped relaunching it to avoid a restart storm. Reinstall or downgrade the dashboard/Companion app, or reboot the panel.",
+      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "consequential",
+      "siblings": [
+        "runtime.renderer_recovery.builtin"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Companion"
+      ],
+      "softMaxChars": 167,
+      "hardMaxChars": 301
+    },
+    "runtime.zigbee.warning.contained": {
+      "text": "Zigbee gateway runaway was contained — the router switch was turned OFF after sustained unjoined high CPU or repeated restarts.",
+      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.resolve",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee",
+        "OFF",
+        "CPU"
+      ],
+      "softMaxChars": 127,
+      "hardMaxChars": 229
+    },
+    "runtime.zigbee.warning.containment_failed": {
+      "text": "Zigbee gateway containment was incomplete — the respawner was stopped where possible and surviving work was demoted. Review diagnostics before retrying.",
+      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.resolve",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee"
+      ],
+      "softMaxChars": 152,
+      "hardMaxChars": 274
+    },
+    "runtime.zigbee.warning.degraded_high_cpu": {
+      "text": "Joined Zigbee gateway has sustained high CPU — it remains running because joined routers are warn-only.",
+      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.resolve",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee",
+        "CPU"
+      ],
+      "softMaxChars": 103,
+      "hardMaxChars": 186
+    },
+    "runtime.zigbee.warning.degraded_unjoined": {
+      "text": "Zigbee router is enabled but not joined — repeated join retries can consume substantial CPU. Join this panel to your Zigbee coordinator or turn the Zigbee router switch OFF.",
+      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.resolve",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee",
+        "CPU",
+        "OFF"
+      ],
+      "softMaxChars": 173,
+      "hardMaxChars": 312
+    },
+    "runtime.zigbee.warning.legacy_watchdog": {
+      "text": "Legacy Zigbee watchdog defect detected — the exact recursive LD_LIBRARY_PATH assignment is present. ha-paneld will not edit the vendor script automatically.",
+      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.resolve",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee",
+        "LD_LIBRARY_PATH",
+        "ha-paneld"
+      ],
+      "softMaxChars": 156,
+      "hardMaxChars": 281
+    },
+    "runtime.zigbee.warning.resolve": {
+      "text": "Resolve Zigbee setup →",
+      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.runaway"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee",
+        "→"
+      ],
+      "softMaxChars": 22,
+      "hardMaxChars": 40
+    },
+    "runtime.zigbee.warning.runaway": {
+      "text": "Zigbee gateway is runaway — automatic containment is in progress.",
+      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
+      "surface": "install",
+      "context": "Server-rendered runtime warning; rendered as escaped text with server-owned icon, markup, and actions.",
+      "risk": "setup",
+      "siblings": [
+        "runtime.zigbee.warning.contained",
+        "runtime.zigbee.warning.containment_failed",
+        "runtime.zigbee.warning.degraded_high_cpu",
+        "runtime.zigbee.warning.degraded_unjoined",
+        "runtime.zigbee.warning.legacy_watchdog",
+        "runtime.zigbee.warning.resolve"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Zigbee"
+      ],
+      "softMaxChars": 65,
+      "hardMaxChars": 117
     },
     "settings.auto_brightness.help": {
       "text": "On-panel engine maps a lux stream to the backlight (off = HA drives the screen).",

@@ -10747,6 +10747,151 @@
       "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
       "state": "machine-cross-checked",
       "text": "Aggiornamento…"
+    },
+    "runtime.renderer_recovery.builtin": {
+      "text": "Il renderer integrato ha smesso di riprovare dopo ripetuti errori di WebView. Aggiorna o ripara System WebView, quindi usa Ricarica dashboard dalla barra di navigazione del pannello o dalla scheda Dashboard.",
+      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
+      "state": "machine-cross-checked"
+    },
+    "runtime.renderer_recovery.external": {
+      "text": "L’app della dashboard continua ad arrestarsi in modo anomalo — il watchdog ha smesso di riavviarla per evitare una sequenza continua di riavvii. Reinstalla o esegui il downgrade dell’app dashboard/Companion oppure riavvia il pannello.",
+      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.contained": {
+      "text": "Il comportamento incontrollato del gateway Zigbee è stato contenuto — l’interruttore del router è stato impostato su OFF dopo un uso elevato e prolungato della CPU senza associazione o dopo riavvii ripetuti.",
+      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.containment_failed": {
+      "text": "Il contenimento del gateway Zigbee non è stato completato — il processo di riavvio è stato fermato dove possibile e le attività ancora in esecuzione sono state declassate. Controlla la diagnostica prima di riprovare.",
+      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.runaway": {
+      "text": "Il gateway Zigbee è fuori controllo — contenimento automatico in corso.",
+      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_high_cpu": {
+      "text": "Il gateway Zigbee associato mantiene un uso elevato della CPU — resta in esecuzione perché i router associati generano solo un avviso.",
+      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_unjoined": {
+      "text": "Il router Zigbee è attivo ma non associato — i tentativi ripetuti di associazione possono consumare molta CPU. Associa questo pannello al coordinatore Zigbee oppure imposta su OFF l’interruttore del router Zigbee.",
+      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.legacy_watchdog": {
+      "text": "Rilevato un difetto nel watchdog Zigbee legacy — è presente l’esatta assegnazione ricorsiva LD_LIBRARY_PATH. ha-paneld non modificherà automaticamente lo script del produttore.",
+      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.resolve": {
+      "text": "Risolvi la configurazione Zigbee →",
+      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.at_risk": {
+      "text": "Sicurezza energetica del pannello: a rischio",
+      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.caution": {
+      "text": "Sicurezza energetica del pannello: attenzione",
+      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.unknown": {
+      "text": "Sicurezza energetica del pannello: sconosciuta",
+      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.at_risk": {
+      "text": "Il pannello può sospendersi o entrare in modalità Doze dopo lo spegnimento dello schermo, rendendo irraggiungibili HTTP, MQTT e le attività in background.",
+      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.caution": {
+      "text": "La raggiungibilità del pannello dipende attualmente da un solo meccanismo di protezione energetica rilevato.",
+      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.unknown": {
+      "text": "Impossibile stabilire la sicurezza energetica perché una o più verifiche dell’alimentazione Android non erano disponibili o erano ambigue.",
+      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.review": {
+      "text": "Controlla le protezioni energetiche rilevate. Le modifiche a Mantieni attivo e Doze di Android richiedono l’accesso root diretto; le azioni di sicurezza energetica non riavviano mai il pannello.",
+      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_direct": {
+      "text": "Usa «Ripara sicurezza energetica» per attivare e verificare le protezioni energetiche dell’app e di Android. La riparazione non riavvia mai il pannello.",
+      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_degraded": {
+      "text": "Usa «Ripara sicurezza energetica» per verificare le protezioni dell’app e riprovare il percorso di accesso root diretto attualmente degradato di questo pannello. La riparazione non riavvia mai il pannello.",
+      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_limited": {
+      "text": "Usa «Ripara sicurezza energetica» per attivare e verificare i blocchi CPU/Wi-Fi dell’app e il timeout infinito. Le modifiche a Mantieni attivo e Doze di Android non sono disponibili tramite il percorso attuale di questo pannello.",
+      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledged": {
+      "text": "Questa avvertenza invariata è stata riconosciuta nelle pagine web del pannello; l’API, la diagnostica e i controlli del programma di installazione continuano a segnalarla.",
+      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledgeable": {
+      "text": "I blocchi CPU/Wi-Fi dell’app e il timeout infinito sono attivi, ma Mantieni attivo e Doze di Android non possono essere modificati tramite il percorso attuale di questo pannello. Puoi nascondere questa esatta avvertenza; ricomparirà se cambiano le prove o le capacità.",
+      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.manual": {
+      "text": "La riparazione automatica non è disponibile tramite il percorso attuale di questo pannello. Controlla manualmente le verifiche segnalate; questa avvertenza non può essere nascosta finché il rischio è sconosciuto o elevato.",
+      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair": {
+      "text": "Ripara sicurezza energetica",
+      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair_title": {
+      "text": "La riparazione è esplicita, verificata tramite rilettura e non riavvia mai il pannello",
+      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.ack.not_hidden": {
+      "text": "L’avvertenza non è stata nascosta.",
+      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.approval": {
+      "text": "Approva fisicamente questa richiesta sul pannello, quindi tocca di nuovo «Ripara sicurezza energetica».",
+      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.repaired": {
+      "text": "La sicurezza energetica è stata riparata e verificata.",
+      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.partial": {
+      "text": "La riparazione della sicurezza energetica è stata parziale. Non è stato tentato alcun riavvio.",
+      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.failed_no_reboot": {
+      "text": "La riparazione della sicurezza energetica non è riuscita; non è stato tentato alcun riavvio.",
+      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
+      "state": "machine-cross-checked"
     }
   }
 }

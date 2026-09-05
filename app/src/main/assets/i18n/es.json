@@ -10747,6 +10747,151 @@
       "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
       "state": "machine-cross-checked",
       "text": "Configuración de MQTT guardada: verificando la conexión con el bróker. Esto puede tardar un poco después de guardar."
+    },
+    "runtime.renderer_recovery.builtin": {
+      "text": "El renderizador integrado dejó de reintentar tras fallos repetidos de WebView. Actualiza o repara System WebView y luego usa Recargar panel de control desde la barra de navegación del panel o la pestaña Panel de control.",
+      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
+      "state": "machine-cross-checked"
+    },
+    "runtime.renderer_recovery.external": {
+      "text": "La aplicación del panel de control está en un bucle de fallos — el watchdog dejó de relanzarla para evitar una tormenta de reinicios. Reinstala o cambia a una versión anterior de la aplicación del panel de control/Companion, o reinicia el panel.",
+      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.contained": {
+      "text": "Se contuvo el descontrol de la puerta de enlace Zigbee — el interruptor del router se puso en OFF tras un uso alto y sostenido de CPU mientras no estaba unido, o tras reinicios repetidos.",
+      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.containment_failed": {
+      "text": "La contención de la puerta de enlace Zigbee fue incompleta — el relanzador se detuvo donde fue posible y el trabajo restante se degradó. Revisa los diagnósticos antes de reintentar.",
+      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.runaway": {
+      "text": "La puerta de enlace Zigbee está descontrolada — la contención automática está en curso.",
+      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_high_cpu": {
+      "text": "La puerta de enlace Zigbee unida mantiene un uso alto de CPU — sigue en ejecución porque los routers unidos solo generan advertencias.",
+      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_unjoined": {
+      "text": "El router Zigbee está activado pero no unido — los reintentos de unión repetidos pueden consumir mucha CPU. Une este panel a tu coordinador Zigbee o pon el interruptor del router Zigbee en OFF.",
+      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.legacy_watchdog": {
+      "text": "Se detectó el defecto del watchdog Zigbee antiguo — está presente la asignación recursiva exacta de LD_LIBRARY_PATH. ha-paneld no editará el script del fabricante automáticamente.",
+      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.resolve": {
+      "text": "Resolver la configuración Zigbee →",
+      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.at_risk": {
+      "text": "Seguridad de alimentación del panel: en riesgo",
+      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.caution": {
+      "text": "Seguridad de alimentación del panel: precaución",
+      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.unknown": {
+      "text": "Seguridad de alimentación del panel: desconocida",
+      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.at_risk": {
+      "text": "El panel puede suspenderse o entrar en Doze al apagarse la pantalla, dejando inaccesibles HTTP, MQTT y el trabajo en segundo plano.",
+      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.caution": {
+      "text": "La conectividad del panel depende actualmente de una sola protección de alimentación observada.",
+      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.unknown": {
+      "text": "No se pudo establecer la seguridad de alimentación porque una o más sondas de alimentación de Android no estaban disponibles o fueron ambiguas.",
+      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.review": {
+      "text": "Revisa las protecciones de alimentación observadas. Los cambios de mantener activo y Doze de Android requieren acceso root directo; las acciones de seguridad de alimentación nunca reinician el panel.",
+      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_direct": {
+      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar las protecciones de alimentación de la aplicación y de Android. La reparación nunca reinicia el panel.",
+      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_degraded": {
+      "text": "Usa «Reparar seguridad de alimentación» para verificar las protecciones de la aplicación y volver a probar la ruta de acceso root directo actualmente degradada de este panel. La reparación nunca reinicia el panel.",
+      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_limited": {
+      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito. Los cambios de mantener activo y Doze de Android no están disponibles mediante la ruta actual de este panel.",
+      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledged": {
+      "text": "Esta precaución sin cambios está reconocida en las páginas web del panel; la API, los diagnósticos y las comprobaciones del instalador siguen informando de ella.",
+      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledgeable": {
+      "text": "Los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito están activos, pero mantener activo y Doze de Android no pueden cambiarse mediante la ruta actual de este panel. Puedes ocultar esta precaución exacta; volverá si cambian las pruebas o la capacidad.",
+      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.manual": {
+      "text": "La reparación automática no está disponible mediante la ruta actual de este panel. Revisa manualmente las sondas informadas; esta advertencia no puede ocultarse mientras el riesgo sea desconocido o elevado.",
+      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair": {
+      "text": "Reparar seguridad de alimentación",
+      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair_title": {
+      "text": "La reparación es explícita, se verifica mediante una nueva lectura y nunca reinicia el panel",
+      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.ack.not_hidden": {
+      "text": "La precaución no se ocultó.",
+      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.approval": {
+      "text": "Aprueba esta solicitud físicamente en el panel y vuelve a pulsar «Reparar seguridad de alimentación».",
+      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.repaired": {
+      "text": "La seguridad de alimentación se reparó y verificó.",
+      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.partial": {
+      "text": "La reparación de la seguridad de alimentación fue parcial. No se intentó reiniciar.",
+      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.failed_no_reboot": {
+      "text": "La reparación de la seguridad de alimentación falló; no se intentó reiniciar.",
+      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
+      "state": "machine-cross-checked"
     }
   }
 }

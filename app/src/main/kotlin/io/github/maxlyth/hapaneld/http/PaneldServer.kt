@@ -2135,7 +2135,7 @@ class PaneldServer internal constructor(
                             rightControls = ghLink(strings),
                             body = setupBody(strings, preserveExplicitEnglish),
                             strings = strings,
-                            translationPrefixes = setOf("shell.", "setup."),
+                            translationPrefixes = setOf("shell.", "setup.", "runtime."),
                             preserveExplicitEnglish = preserveExplicitEnglish,
                         ),
                         ContentType.Text.Html,
@@ -3986,8 +3986,9 @@ class PaneldServer internal constructor(
         }
         // Entities needs per-record provenance so an absent/stale/draft presentation code can fall back
         // to the exact compatibility field instead of presenting the English source as a translation.
-        // Keep the additive bytes off unrelated pages, whose existing consumers need only the text map.
-        val provenance = if ("entities." in prefixes) {
+        // Shared runtime interactions need the same distinction before choosing an endpoint's English
+        // message. Keep the additive bytes off pages whose consumers need only the text map.
+        val provenance = if ("entities." in prefixes || "runtime." in prefixes) {
             val languages = resolved.entries.joinToString(",") { (key, localized) ->
                 "${Json.str(key)}:${Json.str(localized.language)}"
             }
@@ -4220,7 +4221,7 @@ $approvalKeyBefore
 $body
 $approvalKeyAfter""",
             strings = strings,
-            translationPrefixes = setOf("shell.", "$active."),
+            translationPrefixes = setOf("shell.", "$active.", "runtime."),
         )
     }
 
@@ -6460,7 +6461,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
 <p class="note" style="text-align:center;margin-top:18px"><a href="${localizedHref("/api", strings)}" style="color:#9cf">${esc(strings.get("dashboard.footer.api_explorer"))}</a>
  · <a href="/api/v1/diag" target="_blank" style="color:#9cf">${esc(strings.get("dashboard.footer.diagnostics"))}</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>""",
             strings = strings,
-            translationPrefixes = setOf("shell.", "dashboard."),
+            translationPrefixes = setOf("shell.", "dashboard.", "runtime."),
         )
     }
 
