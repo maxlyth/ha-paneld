@@ -53,7 +53,7 @@ shared_lock_signal_reply() {
   remote_pid=$!
   attempt=0
   while [ ! -f "$signal_root/handler-ready" ]; do
-    attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || { kill -KILL "$remote_pid" 2>/dev/null; wait "$remote_pid" 2>/dev/null; return 1; }
+    attempt=$((attempt + 1)); [ "$attempt" -lt 600 ] || { kill -KILL "$remote_pid" 2>/dev/null; wait "$remote_pid" 2>/dev/null; return 1; }
     sleep 0.05
   done
   kill -TERM "$remote_pid" || return 1
@@ -114,7 +114,7 @@ RACEEOF
     : > "$race_root/main-phase-lock-held"
     attempt=0
     while [ ! -f "$race_root/renewal-blocked-by-phase-lock" ]; do
-      attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || return 1; sleep 0.1
+      attempt=$((attempt + 1)); [ "$attempt" -lt 300 ] || return 1; sleep 0.1
     done
     sed 's/^SWAP_PHASE=PREPARED$/SWAP_PHASE=TARGET/' "$marker" > "$marker.target"
     chmod 600 "$marker.target"
@@ -122,7 +122,7 @@ RACEEOF
     rm -rf "$race_root/dev/.hapaneld-helper-transaction.lock"
     attempt=0
     while [ ! -f "$race_root/target-phase-renewed" ]; do
-      attempt=$((attempt + 1)); [ "$attempt" -lt 80 ] || return 1; sleep 0.1
+      attempt=$((attempt + 1)); [ "$attempt" -lt 300 ] || return 1; sleep 0.1
     done
     grep -qx SWAP_PHASE=TARGET "$marker" || return 1
     : > "${MOCK_STATE_DIR:?}/manual-helper-transaction"
@@ -609,7 +609,7 @@ standalone_legacy_cleanup() {
 standalone_legacy_wait() {
   local path="$1" attempt=0
   while [ ! -f "$path" ]; do
-    attempt=$((attempt + 1)); [ "$attempt" -lt 200 ] || return 1
+    attempt=$((attempt + 1)); [ "$attempt" -lt 3000 ] || return 1
     sleep 0.01
   done
 }

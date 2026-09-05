@@ -143,7 +143,10 @@ jobs:
   host-contracts:
     name: Host contracts
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # The host-side shell contracts have crept from ten minutes to nearly fourteen and
+    # crossed the old fifteen-minute ceiling. Give the job real headroom while the
+    # provisioning suite, which dominates the step, is split up.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
