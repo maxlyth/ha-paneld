@@ -11,9 +11,13 @@ on:
 permissions:
   contents: read
 
+# Do not key a push on its own run id. That gives every push a concurrency group of
+# one, so nothing supersedes anything: abandoned runs continue against a commit that
+# is no longer the tip and contend for the self-hosted machine with the run that
+# replaced them. Group by ref and cancel in progress.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -268,8 +272,20 @@ jobs:
       - name: Unit tests
         run: |
           sudo make -C helper test && exit 0
-          echo "::group::standalone installer transaction trace"
-          sudo bash -x helper/test/standalone_installer_transaction_test.sh || true
+          # The suite stops at its first failing script, so one run only ever reveals one
+          # problem. Re-run the shell contracts individually to report all of them at once.
+          echo "::group::remaining helper shell contracts"
+          for contract in root_command_quote_test standalone_installer_transaction_test \
+              standalone_installer_identity_test install_daemon_security_test \
+              direct_root_transport_test; do
+            if sudo bash "helper/test/$contract.sh" > "/tmp/$contract.out" 2>&1; then
+              echo "ok       $contract"
+            else
+              echo "FAILED   $contract"
+              grep -E '^\s*(FAIL|✗)' "/tmp/$contract.out" | head -20 || true
+              tail -25 "/tmp/$contract.out"
+            fi
+          done
           echo "::endgroup::"
           exit 1
 
