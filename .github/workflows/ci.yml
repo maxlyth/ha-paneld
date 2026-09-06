@@ -51,8 +51,15 @@ jobs:
 
   build:
     name: Android build
+    # Hosted, like Host contracts and for the same reason: two cases in this
+    # suite are calibrated to the hosted image and fail on the container. They
+    # are HiveMqTransportBrokerTest, covering an advertised but unroutable AAAA
+    # falling through to IPv4, and the wire-compatibility case in
+    # HelperSocketCompositionTest. Both bind sockets and both pass on hosted and
+    # fail on the runner, with and without parallel workers. Moving the job back
+    # is a change to those tests, not to runs-on.
     needs: runner
-    runs-on: ${{ needs.runner.outputs.label }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       # The runner has 16 cores and 32 GiB; the repository default is sized for a
