@@ -159,7 +159,8 @@ class HaLifecycleSurfaceContractTest {
     }
 
     @Test fun theBannerUsesTextContentSoAServerStateCannotInjectMarkup() {
-        assertTrue("the lifecycle banner must not use innerHTML", buildwatch.contains("b.textContent = text"))
+        assertTrue("the lifecycle banner must use textContent", buildwatch.contains("b.textContent = copy.glyph + \" \" + text"))
+        assertTrue("the lifecycle banner must not use innerHTML", !buildwatch.contains("b.innerHTML"))
     }
 
     @Test fun theHealthLineCarriesTheSourceAlongsideTheState() {

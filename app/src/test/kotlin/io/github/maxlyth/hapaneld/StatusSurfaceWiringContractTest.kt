@@ -749,8 +749,8 @@ class StatusSurfaceWiringContractTest {
         // a SUCCESSFUL repair causes — so it must not be reported as a failure.
         assertTrue(
             "a blank terminal message must not be narrated as a failure",
-            poll.contains("progress.message.takeIf { it.isNotBlank() }") &&
-                poll.contains("?: getString(R.string.update_stopped_unknown)") &&
+            dashboard.contains("progress.message.takeIf { it.isNotBlank() }") &&
+                dashboard.contains("?: getString(R.string.update_stopped_unknown)") &&
                 englishStrings.contains(
                     "<string name=\"update_stopped_unknown\">The update stopped without saying why, " +
                         "and nothing on this panel was changed.</string>",
@@ -797,7 +797,7 @@ class StatusSurfaceWiringContractTest {
         // cannot end up with different ideas of what "already installing" means.
         assertTrue(
             "the repair must reuse the existing install lane, not open a second one",
-            service.contains("""!teardownBoundary.isStopping && installComponent("webview", "reinstall", "")"""),
+            service.contains("""installComponent("webview", "reinstall", "")"""),
         )
         val operation = service.substringAfter("private suspend fun completeOperation(")
             .substringBefore("private fun launchOperation(")

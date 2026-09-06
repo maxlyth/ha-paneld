@@ -171,7 +171,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains("""class="gh gh-inline cnotes"""))
         assertTrue(server.contains("class=\"gh gh-inline\" href=\"\$RELEASES_URL\""))
         assertTrue(css.contains(".gh-inline svg{width:16px;height:16px"))
-        assertTrue(server.contains("""aria-label="Release notes on GitHub"""))
+        assertTrue(server.contains("aria-label=\"\${esc(strings.get(\"install.components.release_notes\"))}\""))
         assertFalse(server.contains("""class="cfglink cnotes"""))
         assertTrue(server.contains("""UpdateChecker.compareVersions(candidate, it)"""))
         assertTrue(server.contains(""""Upgrade" to InstallPresentation("version-upgrade")"""))

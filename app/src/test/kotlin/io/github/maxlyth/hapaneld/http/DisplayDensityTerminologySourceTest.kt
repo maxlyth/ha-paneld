@@ -12,9 +12,9 @@ class DisplayDensityTerminologySourceTest {
         val card = source.substringAfter("private fun displayCardHtml(")
             .substringBefore("private fun asset(")
 
-        assertTrue("Logical density (dpi)" in card)
-        assertTrue("profile recommendation" in card)
-        assertTrue("Reset to firmware default" in card)
+        assertTrue("""strings.get("install.display.logical_density")""" in card)
+        assertTrue("""formattedString(strings, "install.display.profile_recommendation""" in card)
+        assertTrue("""strings.get("install.display.reset_default")""" in card)
         assertFalse("· factory base" in card)
         assertFalse("· native" in card)
     }

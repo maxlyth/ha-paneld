@@ -73,8 +73,8 @@ class AdminUiAssetContractTest {
         assertTrue(server.contains("\"apply-failed\""))
         assertTrue(server.contains("val responseStatus = if (ok) HttpStatusCode.OK else HttpStatusCode.InternalServerError"))
         assertFalse(server.contains("density unchanged"))
-        assertTrue(server.contains("url=/install#cfg-tame"))
-        assertTrue(server.contains("url=/install#cfg-display"))
+        assertTrue(server.contains("""val returnTo = localizedHref("/install#cfg-tame", strings)"""))
+        assertTrue(server.contains("""val returnTo = localizedHref("/install#cfg-display", strings)"""))
     }
 
     @Test fun hardenedModeBlocksDevToolsBeforeApprovalAndDisablesTheControl() {
