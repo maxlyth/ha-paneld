@@ -92,6 +92,7 @@ function consequentialFixture(policyMutation) {
   const performance = "# Performance\n\nChanging the filter can hide required entities.\n\nContinue normally.\n";
   const security = "# Security mode\n\nChanging a protected setting requires physical approval.\n\nContinue normally.\n";
   const provisioningSafety = "# Provisioning safety\n\nResetting the panel irreversibly erases its data.\n\nContinue normally.\n";
+  const adaptiveBrightness = "# Adaptive brightness\n\nAutomatic brightness follows the room.\n\nContinue normally.\n";
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n\nContinue normally.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n\nContinue normally.\n"],
@@ -103,6 +104,7 @@ function consequentialFixture(policyMutation) {
   write(current.repository, "docs/performance.md", performance);
   write(current.repository, "docs/security-mode.md", security);
   write(current.repository, "docs/provisioning-safety.md", provisioningSafety);
+  write(current.repository, "docs/adaptive-brightness.md", adaptiveBrightness);
   for (const [document, source] of hardware) write(current.repository, document, source);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
@@ -111,6 +113,10 @@ function consequentialFixture(policyMutation) {
   const provisioningSafetyInventory = inventoryMarkdown(
     "docs/provisioning-safety.md",
     provisioningSafety,
+  );
+  const adaptiveBrightnessInventory = inventoryMarkdown(
+    "docs/adaptive-brightness.md",
+    adaptiveBrightness,
   );
   const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
   const rendererConsequential = rendererInventory.segments.find(
@@ -124,6 +130,9 @@ function consequentialFixture(policyMutation) {
   );
   const provisioningSafetyConsequential = provisioningSafetyInventory.segments.find(
     (segment) => segment.maskedSource.includes("irreversibly erases"),
+  );
+  const adaptiveBrightnessConsequential = adaptiveBrightnessInventory.segments.find(
+    (segment) => segment.maskedSource.includes("follows the room"),
   );
   const policy = {
     schema: 2,
@@ -166,6 +175,12 @@ function consequentialFixture(policyMutation) {
         sourceSha256: sha256(Buffer.from(provisioningSafety, "utf8")),
         segmentCount: provisioningSafetyInventory.segments.length,
         consequentialSegments: [provisioningSafetyConsequential.segmentId],
+      },
+      {
+        document: "docs/adaptive-brightness.md",
+        sourceSha256: sha256(Buffer.from(adaptiveBrightness, "utf8")),
+        segmentCount: adaptiveBrightnessInventory.segments.length,
+        consequentialSegments: [adaptiveBrightnessConsequential.segmentId],
       },
     ],
   };
@@ -481,6 +496,7 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
     "docs/hardware/tpa10.md",
     "docs/hardware/wf1589t.md",
     "docs/provisioning-safety.md",
+    "docs/adaptive-brightness.md",
   ]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);

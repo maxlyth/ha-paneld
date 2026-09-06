@@ -49,6 +49,10 @@ Changing a protected setting requires physical approval.
 
 Resetting the panel irreversibly erases its data.
 `;
+  const adaptiveBrightness = `# Adaptive brightness
+
+Automatic brightness follows the room.
+`;
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n"],
@@ -60,6 +64,7 @@ Resetting the panel irreversibly erases its data.
   fs.writeFileSync(path.join(repository, "docs/performance.md"), performance);
   fs.writeFileSync(path.join(repository, "docs/security-mode.md"), security);
   fs.writeFileSync(path.join(repository, "docs/provisioning-safety.md"), provisioningSafety);
+  fs.writeFileSync(path.join(repository, "docs/adaptive-brightness.md"), adaptiveBrightness);
   for (const [document, source] of hardware) {
     fs.mkdirSync(path.dirname(path.join(repository, document)), { recursive: true });
     fs.writeFileSync(path.join(repository, document), source);
@@ -77,6 +82,11 @@ Resetting the panel irreversibly erases its data.
     provisioningSafety,
   );
   const provisioningSafetyConsequential = provisioningSafetyInventory.segments[1];
+  const adaptiveBrightnessInventory = inventoryMarkdown(
+    "docs/adaptive-brightness.md",
+    adaptiveBrightness,
+  );
+  const adaptiveBrightnessConsequential = adaptiveBrightnessInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -119,6 +129,12 @@ Resetting the panel irreversibly erases its data.
         segmentCount: provisioningSafetyInventory.segments.length,
         consequentialSegments: [provisioningSafetyConsequential.segmentId],
       },
+      {
+        document: "docs/adaptive-brightness.md",
+        sourceSha256: sha256(Buffer.from(adaptiveBrightness, "utf8")),
+        segmentCount: adaptiveBrightnessInventory.segments.length,
+        consequentialSegments: [adaptiveBrightnessConsequential.segmentId],
+      },
     ],
   }));
   command(repository, ["git", "add", "."]);
@@ -151,6 +167,7 @@ test("CLI plan selects the exact production document prefix", () => {
     "docs/hardware/tpa10.md",
     "docs/hardware/wf1589t.md",
     "docs/provisioning-safety.md",
+    "docs/adaptive-brightness.md",
   ]);
   assert.throws(() => main([
     "plan",

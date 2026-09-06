@@ -401,6 +401,23 @@
       "document": "docs/provisioning-safety.md",
       "segmentCount": 42,
       "sourceSha256": "46ebc912fdd3abdbfca8e86cb45ff775cab4543ce3bfcb0e20fcda2367c3eba7"
+    },
+    {
+      "consequentialSegments": [
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:299c3a9a72b6f1d0f5085d94d20ba704ee7dda434fe1c7aba4f3921022f48d44::paragraph::4e53d94cbdab05d457c8143f917714d0a6357bd800fa17226f52a54ee6f89da3::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:299c3a9a72b6f1d0f5085d94d20ba704ee7dda434fe1c7aba4f3921022f48d44::paragraph::967c256c310f29b621077513c098aba583df25d352b84f7a5447060fc827c76d::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:299c3a9a72b6f1d0f5085d94d20ba704ee7dda434fe1c7aba4f3921022f48d44::paragraph::ff6478eecd67f0b1869148f1d3d33471807892b1849d6597f4882795ef54be41::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:5627015528bf278d6cf3154882de73673af9194d2c96acddf0f95871dc8887e5::paragraph::95aab87502274478078270ab6de3c898a81a99b3317eeb59b206c8a09c732ea7::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:5627015528bf278d6cf3154882de73673af9194d2c96acddf0f95871dc8887e5::paragraph::a8fc597a38c3d571e05eb79cea4865cdd1757f373b427e264ea1b76710cbbace::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:61441d0b065f38539fdfb32764c87381a53bda189a04efebadde049795f58b28::paragraph::34d26b3509cc451002113f972a7c64a819fc5de5ce78b00f7632356bd69dd34e::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:61441d0b065f38539fdfb32764c87381a53bda189a04efebadde049795f58b28::paragraph::41cdc03ce7374ecbf6a41454045109f0ceecc0d5145bc0a08d92e07898d92d52::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:61441d0b065f38539fdfb32764c87381a53bda189a04efebadde049795f58b28::paragraph::899813e8bfccb09d845ab5d65ae9c911a51eeebedccde4bf52714935f7cc01b2::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:61441d0b065f38539fdfb32764c87381a53bda189a04efebadde049795f58b28::paragraph::d3e72649757cb4d54ab4c2e9b9e49de50421309e2456266bb9fb482b4c0506e3::1",
+        "docs/adaptive-brightness.md::1:7a9a88d381ca7e1d609fbfcdc11f6953200b497296c6c4dbf27b24f1136a45a9/2:66321849ae5e23598a62ee0cce785df90fa3d721a4686b203262b1f35d1f7696::paragraph::e2f782681dcb2a0c92536dbc4791a8ac38bbd8333af811192789086dce28c0b1::1"
+      ],
+      "document": "docs/adaptive-brightness.md",
+      "segmentCount": 19,
+      "sourceSha256": "d31a42cf5d8d68e4ab6ae9588d305e98a81b7c2c616b1c59e50a229cc1965bdc"
     }
   ],
   "schema": 2
