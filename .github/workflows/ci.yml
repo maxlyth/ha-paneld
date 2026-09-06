@@ -35,8 +35,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: unit tests
-            tasks: ":app:testDebugUnitTest :app:testReleaseUnitTest"
+          - name: debug unit tests
+            tasks: ":app:testDebugUnitTest"
+            apks: "no"
+          - name: release unit tests
+            tasks: ":app:testReleaseUnitTest"
             apks: "no"
           - name: lint
             tasks: ":app:lintDebug"
@@ -177,6 +180,7 @@ jobs:
           done
 
       - name: Verify V4 release signature sidecar contract
+        if: matrix.apks == 'yes'
         run: scripts/tests/release_idsig_test.sh
 
       - name: Upload debug APK
