@@ -22,7 +22,7 @@ concurrency:
 jobs:
   build:
     name: Android build
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -146,7 +146,7 @@ jobs:
 
   host-contracts:
     name: Host contracts
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     # The host-side shell contracts used to finish in fourteen minutes only because they
     # refused early: unprivileged, every transaction stopped at a lock-busy status before
     # doing any work. Running them with the ownership the installer expects means they now
@@ -210,7 +210,7 @@ jobs:
 
   dependency-integrity:
     name: Dependency integrity
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -269,7 +269,7 @@ jobs:
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
     name: Privileged helper
-    runs-on: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && 'self-hosted' || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
