@@ -19,6 +19,12 @@ import org.junit.Test
  *  - a panel that had no stored theme at all is left with no stored theme at all;
  *  - the `prefers-color-scheme` shim answers only colour-scheme queries and delegates the rest.
  *
+ * The same store has a second writer — `selectedThemeJs`, the Android 9- `dark_mode` seed and toggle —
+ * and it is covered here too, because the property at stake is identical: Home Assistant's stored
+ * `ThemeSettings` is `{theme, dark?, primaryColor?, accentColor?}`, and only `dark` is ha-paneld's.
+ * A writer that replaces the whole object loses the user's named theme SILENTLY, since the frontend
+ * falls back to `default_dark_theme`/`default_theme` and the panel goes on rendering.
+ *
  * Runs the real emitted script text, so a change to the builder that breaks the transaction fails here
  * rather than only moving a golden.
  */
@@ -93,6 +99,8 @@ class DashboardThemePolicyScriptTest {
 
     private fun force(dark: Boolean) = ExternalAuthProtocol.dashboardThemePolicyJs(dark)
     private fun follow() = ExternalAuthProtocol.dashboardThemePolicyJs(null)
+    private fun seed(dark: Boolean) = ExternalAuthProtocol.selectedThemeJs(dark, onlyIfAbsent = true)
+    private fun toggle(dark: Boolean) = ExternalAuthProtocol.selectedThemeJs(dark, onlyIfAbsent = false)
 
     private fun assumeNode() = assumeTrue("node not available (skipping)", nodeAvailable())
 
@@ -223,6 +231,81 @@ class DashboardThemePolicyScriptTest {
         fun stored(json: String) = json.substringAfter(""""selectedTheme":"""").substringBefore("\",\"__")
         assertEquals("a replayed hand-back must not drift", stored(once), stored(interrupted))
         assertTrue("marker eventually cleared: $interrupted", !interrupted.contains("haPaneldForcedThemeDark"))
+    }
+
+    // --- the dark_mode seed and toggle (Android 9-) ----------------------------------------------
+
+    @Test fun theToggleKeepsTheNamedThemeAndItsColours() {
+        assumeNode()
+        // The regression this test exists for: the toggle used to write JSON.stringify({dark:X}),
+        // replacing the whole object and taking these three fields with it.
+        val out = exec(
+            """{"theme":"mushroom","primaryColor":"#ff0000","accentColor":"#00ff00","dark":true}""",
+            toggle(false),
+        )
+        assertTrue("named theme must survive a dark_mode toggle: $out", out.contains("""\"theme\":\"mushroom\""""))
+        assertTrue("primaryColor must survive: $out", out.contains("""\"primaryColor\":\"#ff0000\""""))
+        assertTrue("accentColor must survive: $out", out.contains("""\"accentColor\":\"#00ff00\""""))
+        assertTrue("dark must actually change: $out", out.contains("""\"dark\":false"""))
+    }
+
+    @Test fun theSeedLeavesAnExistingStoredThemeCompletelyAlone() {
+        assumeNode()
+        // Seeding is for a fresh panel. A stored theme is the user's pick and must not gain a `dark`
+        // field it never had — that would turn their Auto into an explicit preference.
+        val out = exec("""{"theme":"mushroom"}""", seed(true))
+        assertTrue("named theme intact: $out", out.contains("""\"theme\":\"mushroom\""""))
+        assertTrue("no dark invented by the seed: $out", !out.contains("""\"dark\""""))
+    }
+
+    @Test fun theSeedWritesTheDefaultOnlyWhenThereIsNoEntryAtAll() {
+        assumeNode()
+        assertTrue(exec(null, seed(true)).contains(""""selectedTheme":"{\"dark\":true}""""))
+        // An empty string is not a stored preference either; the old falsy guard seeded through it and
+        // that behaviour is deliberately preserved.
+        assertTrue(exec("", seed(true)).contains(""""selectedTheme":"{\"dark\":true}""""))
+    }
+
+    @Test fun theSeedDoesNotOverwriteAnEntryItCannotParse() {
+        assumeNode()
+        // Unparseable still means "the user has something here". Recovering it would be indistinguishable
+        // from stomping it, so the seed reads the RAW value and stands down.
+        val out = exec("not json at all", seed(true))
+        assertTrue("the unreadable entry is left exactly as it was: $out", out.contains(""""selectedTheme":"not json at all""""))
+    }
+
+    @Test fun theToggleRecoversAnUnparseableEntryInsteadOfThrowing() {
+        assumeNode()
+        // A deliberate toggle must land. There is nothing to preserve in a value nobody can parse, so
+        // the recovery rebuilds the object — and must not throw, which would abort the rest of the script.
+        val out = exec("not json at all", toggle(true))
+        assertTrue("script completed: $out", out.startsWith("{"))
+        assertTrue("the toggle landed: $out", out.contains(""""selectedTheme":"{\"dark\":true}""""))
+    }
+
+    @Test fun aSeedToggleForceFollowRoundTripNeverLosesTheUsersTheme() {
+        assumeNode()
+        // The whole lifecycle of one Android 9- panel: ha-paneld seeds a default into an empty store, the
+        // user picks a named theme in Home Assistant, the panel's dark_mode toggle flips, a Dark policy
+        // takes over, and the policy is set back to Follow. The named theme must survive every step, and
+        // `dark` must hand back to what the toggle left rather than to what the policy forced.
+        val out = exec(
+            null,
+            seed(true),
+            """localStorage.setItem('selectedTheme', JSON.stringify({theme:'mushroom', dark:true}));""",
+            toggle(false),
+            force(true),
+            follow(),
+        )
+        assertTrue("named theme survived the whole round trip: $out", out.contains("""\"theme\":\"mushroom\""""))
+        assertTrue("dark handed back to the toggle's value, not the policy's: $out", out.contains("""\"dark\":false"""))
+        assertTrue("marker removed: $out", !out.contains("haPaneldForcedThemeDark"))
+    }
+
+    @Test fun theSeedAndToggleRunOnlyInTheTopFrame() {
+        for (script in listOf(seed(true), seed(false), toggle(true), toggle(false))) {
+            assertTrue(script, script.startsWith("(()=>{" + InjectionScript.TOP_FRAME_GUARD))
+        }
     }
 
     // --- the shim -------------------------------------------------------------------------------

@@ -36,6 +36,31 @@ internal object InjectionScript {
      */
     const val FORCED_THEME_MARKER_KEY = "haPaneldForcedThemeDark"
 
+    /**
+     * The three fragments of the read-modify-write transaction every writer of Home Assistant's theme
+     * store shares. They exist because that store is an OBJECT, not a boolean: `ThemeSettings` is
+     * `{theme, dark?, primaryColor?, accentColor?}`, so the named theme and the custom colours in it
+     * are the user's and only `dark` is ever ha-paneld's to set. A writer that stringifies a fresh
+     * `{dark:X}` silently discards the other three fields, and because the frontend falls back to
+     * `default_dark_theme`/`default_theme` when `theme` is absent, the panel still renders — the loss
+     * is invisible until the user notices their theme is gone.
+     *
+     * [readThemeStoreJs] leaves two locals for the caller: `r`, the raw stored string exactly as
+     * `localStorage` returned it (null when the key is absent), and `o`, its parse — null when the
+     * entry is absent OR unparseable, which the caller distinguishes via `r`. [RECOVER_THEME_STORE]
+     * then coerces `o` to an empty object, so a corrupt or non-object value is rebuilt rather than
+     * thrown on. [writeThemeDarkJs] commits the one field.
+     */
+    fun readThemeStoreJs(key: String): String =
+        "var r=localStorage.getItem($key),o=null;try{o=r?JSON.parse(r):null}catch(e){}"
+
+    /** Coerce a corrupt, absent or non-object stored theme to `{}` so the write below cannot throw. */
+    const val RECOVER_THEME_STORE = "if(!o||typeof o!=='object'||o instanceof Array)o={};"
+
+    /** Commit ONLY `dark` back to [key]; every other field in `o` rides along untouched. */
+    fun writeThemeDarkJs(key: String, dark: Boolean): String =
+        "o.dark=$dark;localStorage.setItem($key,JSON.stringify(o));"
+
     /** JS-literal identifiers for the single HA entity WebSocket a document-start wrapper is allowed
      *  to intercept: [origins] is a JSON array of the permitted `wss://`/`ws://` origins and [path]
      *  is the quoted API path. Both are ready to interpolate straight into a script template. */

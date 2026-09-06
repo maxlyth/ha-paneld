@@ -1,1 +1,1 @@
-(()=>{if(window.top&&window.top!==window)return;try{if(!localStorage.getItem('selectedTheme')){localStorage.setItem('selectedTheme', JSON.stringify({dark:true}))}}catch(e){}})();
+(()=>{if(window.top&&window.top!==window)return;try{var r=localStorage.getItem("selectedTheme"),o=null;try{o=r?JSON.parse(r):null}catch(e){}if(r)return;if(!o||typeof o!=='object'||o instanceof Array)o={};o.dark=true;localStorage.setItem("selectedTheme",JSON.stringify(o));}catch(e){}})();

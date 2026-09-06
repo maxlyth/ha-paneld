@@ -3956,13 +3956,25 @@ object ExternalAuthProtocol {
      * AFTER it has already gone dark (verified live on an Android 8.1 panel, 2026-07-10 — the media
      * query never flips, so force-dark alone never darkened HA at all). [onlyIfAbsent] = seed a
      * DEFAULT without stomping a theme the user picked in HA; false = a deliberate dark-mode toggle,
-     * which overrides like the radio does.
+     * which overrides the stored value the way Home Assistant's own radio does.
+     *
+     * Like that radio, it changes exactly one field. The store holds `ThemeSettings`, so a write that
+     * stringified a fresh `{dark:X}` would take the user's named theme and custom colours down with
+     * it — invisibly, because the frontend falls back to `default_dark_theme`/`default_theme` when
+     * `theme` is absent and the panel goes on rendering. It therefore runs the same read-modify-write
+     * the `dashboard_theme` policy uses (see [InjectionScript.readThemeStoreJs]).
+     *
+     * The seed is guarded on the RAW stored string rather than on the parse, so a panel that already
+     * has an entry is left alone even when that entry is unparseable — seeding is for a fresh panel,
+     * and rewriting a value ha-paneld cannot read is not seeding, it is stomping.
      */
     fun selectedThemeJs(dark: Boolean, onlyIfAbsent: Boolean): String {
-        val write = """localStorage.setItem('${InjectionScript.SELECTED_THEME_KEY}', JSON.stringify({dark:$dark}))"""
-        val body = if (onlyIfAbsent) "try{if(!localStorage.getItem('${InjectionScript.SELECTED_THEME_KEY}')){$write}}catch(e){}"
-        else "try{$write}catch(e){}"
-        return "(()=>{${InjectionScript.TOP_FRAME_GUARD}$body})();"
+        val key = JSONObject.quote(InjectionScript.SELECTED_THEME_KEY)
+        val body = InjectionScript.readThemeStoreJs(key) +
+            (if (onlyIfAbsent) "if(r)return;" else "") +
+            InjectionScript.RECOVER_THEME_STORE +
+            InjectionScript.writeThemeDarkJs(key, dark)
+        return "(()=>{${InjectionScript.TOP_FRAME_GUARD}try{$body}catch(e){}})();"
     }
 
     /**
@@ -4016,22 +4028,20 @@ object ExternalAuthProtocol {
             "addListener:function(){},removeListener:function(){}," +
             "addEventListener:function(){},removeEventListener:function(){}," +
             "dispatchEvent:function(){return false}}};}" +
-            "var r=localStorage.getItem($key),o=null;" +
-            "try{o=r?JSON.parse(r):null}catch(e){}" +
-            "if(!o||typeof o!=='object'||o instanceof Array)o={};" +
+            InjectionScript.readThemeStoreJs(key) +
+            InjectionScript.RECOVER_THEME_STORE +
             // Snapshot once, on the first load under this policy. A later load must not re-snapshot, or
             // the recorded original would become the value this script itself wrote.
             "if(localStorage.getItem($marker)===null){" +
             "localStorage.setItem($marker,JSON.stringify({a:r===null,d:typeof o.dark==='boolean'?o.dark:null}))}" +
-            "o.dark=$dark;localStorage.setItem($key,JSON.stringify(o));"
+            InjectionScript.writeThemeDarkJs(key, dark)
         )
 
     /** Give the `dark` field back, and only that field; every other key in the object is the user's. */
     private fun handBackThemeJs(key: String, marker: String): String = (
         "var k=localStorage.getItem($marker);if(k===null)return;" +
             "var m={};try{m=JSON.parse(k)||{}}catch(e){}" +
-            "var r=localStorage.getItem($key),o=null;" +
-            "try{o=r?JSON.parse(r):null}catch(e){}" +
+            InjectionScript.readThemeStoreJs(key) +
             "if(o&&typeof o==='object'&&!(o instanceof Array)){" +
             // Absent originally means absent again: restoring `false` would invent a preference the
             // user never expressed, and `dark:false` is not the same as Auto to the frontend.

@@ -124,14 +124,23 @@ class ExternalAuthProtocolTest {
     @Test fun themeSeedOnlyWritesWhenAbsent() {
         val js = ExternalAuthProtocol.selectedThemeJs(dark = true, onlyIfAbsent = true)
         assertTrue("only the top HA document should receive the theme seed", js.contains("if(window.top&&window.top!==window)return"))
-        assertTrue("guarded on absence — must not stomp a user-picked HA theme", js.contains("if(!localStorage.getItem('selectedTheme'))"))
-        assertTrue(js.contains("""JSON.stringify({dark:true})"""))
+        // Guarded on the RAW stored string, not on its parse: an entry ha-paneld cannot read still
+        // belongs to the user, and overwriting it would be stomping rather than seeding.
+        assertTrue("guarded on absence — must not stomp a user-picked HA theme", js.contains("if(r)return;"))
+        assertTrue("the guard must test the value the script just read", js.indexOf("getItem") < js.indexOf("if(r)return;"))
+        assertTrue("only the dark field is ha-paneld's to write", js.contains("o.dark=true;"))
         assertTrue("localStorage can throw on data: URLs — must be try/caught", js.contains("try{"))
     }
 
-    @Test fun themeToggleOverridesUnconditionally() {
+    @Test fun themeToggleOverridesTheDarkFieldWithoutDiscardingTheRest() {
         val js = ExternalAuthProtocol.selectedThemeJs(dark = false, onlyIfAbsent = false)
-        assertTrue("a deliberate toggle overrides like HA's own radio", !js.contains("getItem"))
-        assertTrue(js.contains("""JSON.stringify({dark:false})"""))
+        assertTrue("a deliberate toggle overrides like HA's own radio, rather than seeding", !js.contains("if(r)return;"))
+        // HA's radio spreads the existing ThemeSettings and sets one field. Stringifying a fresh
+        // {dark:false} instead would silently discard the user's named theme and custom colours —
+        // invisibly, since the frontend falls back to default_theme when `theme` is absent.
+        assertTrue("the toggle must read the stored object before writing", js.contains("JSON.parse(r)"))
+        assertTrue("only the dark field is written", js.contains("o.dark=false;localStorage.setItem"))
+        assertTrue("the read object is what gets re-stringified", js.contains("JSON.stringify(o)"))
+        assertTrue("a freshly built theme object would drop theme/primaryColor/accentColor", !js.contains("{dark:"))
     }
 }
