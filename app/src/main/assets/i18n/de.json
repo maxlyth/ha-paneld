@@ -5988,6 +5988,16 @@
       "sourceHash": "f64d6122a6863eeb7e92750b10ec10aa95bbd839ce976fe59ee4ec41fec7aca7",
       "state": "machine-cross-checked"
     },
+    "install.lock.privileged_required": {
+      "text": "Erfordert privilegierten Panelzugriff – es ist kein freigegebener Zugriffsweg verfügbar, daher sind die Bedienelemente unten deaktiviert. {detail}",
+      "sourceHash": "7bba913f96fed236e76dad8b50defd81d4df49a0da2a2b64197edfb666326e51",
+      "state": "machine-cross-checked"
+    },
+    "install.lock.root_required": {
+      "text": "Erfordert ein gerootetes Panel – dieses Panel hat keinen Root-Zugriff, daher sind die Bedienelemente unten deaktiviert. {detail}",
+      "sourceHash": "1b85272342ba6c37ff54316c3a29125e382a401aa596d0f37725dce332c48a43",
+      "state": "machine-cross-checked"
+    },
     "install.presentation.apk_pending_lost": {
       "text": "Diese APK wurde ersetzt oder ist abgelaufen – wähle sie erneut aus oder lade sie erneut herunter.",
       "sourceHash": "3af6c7bf18bf62cb45bc6d3b0edfb340dc24f09ab9a89263156556259e24dbb1",
@@ -11027,6 +11037,686 @@
       "text": "Die Reparatur des Energieschutzes ist fehlgeschlagen; es wurde kein Neustart versucht.",
       "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
       "state": "machine-cross-checked"
+    },
+    "dashboard.live.led": {
+      "sourceHash": "498785455dcb5a9e49d815731ead0399021427b333d2b29c79075525c12c2c17",
+      "state": "machine-cross-checked",
+      "text": "LED"
+    },
+    "dashboard.screenshot.unavailable": {
+      "sourceHash": "93a81738c6e2f2cd474595a3c03c94a749a7927f173e9cbf420de1b54514205c",
+      "state": "machine-cross-checked",
+      "text": "⚠ Screenshot nicht verfügbar"
+    },
+    "install.apk.choose": {
+      "sourceHash": "93bc2050724e81c543daf449e7bac462859143e1c137bbc254b2660661e4d9dc",
+      "state": "machine-cross-checked",
+      "text": "APK auswählen…"
+    },
+    "install.apk.description": {
+      "sourceHash": "75dc85bc1ebe01d6dd6a1e7bd4ebefb3b58bbc75b27d134a7d1590f6a9a41055",
+      "state": "machine-cross-checked",
+      "text": "Installiere eine App (z. B. einen Dashboard-Renderer) aus einer Datei auf deinem Gerät oder über einen https://-Link, den das Panel selbst herunterlädt. In beiden Fällen werden vor der Installation Paket, Version und Signatur angezeigt."
+    },
+    "install.apk.enable": {
+      "sourceHash": "6db67e8e7579cb2db2500d86bf9c53f8189de1600b3e02868448d523a544e1a8",
+      "state": "machine-cross-checked",
+      "text": "APK-Installation auf diesem Panel aktivieren"
+    },
+    "install.apk.fetch": {
+      "sourceHash": "685bc203ad7d639cb41009ca140de3141621f48313f21ddf72344e1b8a99656a",
+      "state": "machine-cross-checked",
+      "text": "Abrufen und prüfen"
+    },
+    "install.apk.fetch_label": {
+      "sourceHash": "9d7e0624c25f4119df32f19d101ef651546302e05eda6f0015954e146e5348cc",
+      "state": "machine-cross-checked",
+      "text": "Oder über einen Link abrufen"
+    },
+    "install.apk.root_unavailable": {
+      "sourceHash": "12253abdd5c23f5aa5f4fab0e662da4ee9d6ac2716392c0e7e95b205a51a5f04",
+      "state": "machine-cross-checked",
+      "text": "Die Installation einer beliebigen APK benötigt root oder den Hilfsdienst; beides ist auf diesem Panel nicht verfügbar."
+    },
+    "install.apk.security_future_auth": {
+      "sourceHash": "56e615ce71344c71a91105c99eb7f66925d8af8316ec1938f60eba17238be309",
+      "state": "machine-cross-checked",
+      "text": "Der Panelzugriff ist derzeit nur im LAN möglich; ein authentifizierter Zugriff ist für eine spätere Version geplant."
+    },
+    "install.apk.security_title": {
+      "sourceHash": "a1ac876477c082d29fe65395e2b030bc26158edf67a218cb4bc5e95e911fb92f",
+      "state": "machine-cross-checked",
+      "text": "Sicherheit:"
+    },
+    "install.apk.security_warning": {
+      "sourceHash": "80705f000b7eea37fd3ac7d2a71bd56b067ab318ecef4b6eeff8af9f6b8bfdb3",
+      "state": "machine-cross-checked",
+      "text": "Damit wird jede ausgewählte APK per root über die nicht authentifizierte LAN-Weboberfläche des Panels installiert. Installiere nur APKs, denen du vertraust."
+    },
+    "install.apk.title": {
+      "sourceHash": "f2cca01cdf3f8a3350968f38c63fc602cd8aaddf08ac2f183f8f20f8380b9c55",
+      "state": "machine-cross-checked",
+      "text": "APK installieren"
+    },
+    "install.audit.description": {
+      "sourceHash": "1f0badfb07dade0f2e55b2e777f6b2f670f8fb38c5e9fa1445fed2f0fb5b800e",
+      "state": "machine-cross-checked",
+      "text": "Prüfe dieses Panel erneut auf Probleme, die das Rendern des Dashboards verhindern: veraltete WebView, fehlende Dashboard-App oder verfügbare Updates."
+    },
+    "install.audit.diagnostics": {
+      "sourceHash": "85529ca4d488e68a812c6db33828b13074ccd77bea93f820363dc3ef6060410a",
+      "state": "machine-cross-checked",
+      "text": "Diagnosebericht"
+    },
+    "install.audit.diagnostics_help": {
+      "sourceHash": "452b079a22d763b46d9747981ceff3da73cb3f124d10597b03167b77fb0ce24b",
+      "state": "machine-cross-checked",
+      "text": "vollständiger Hardware-/Firmware-/SELinux-/su-Bericht für Fehlermeldungen."
+    },
+    "install.audit.run": {
+      "sourceHash": "8b5f0792883a565c24e85682e2696a76c9a4b17a5a3016fddfc5e898897bd8e9",
+      "state": "machine-cross-checked",
+      "text": "Systemprüfung ausführen"
+    },
+    "install.audit.title": {
+      "sourceHash": "3979e87d0cb5c365bc3a5cdd30579795fff19a7686b673bc7bd660b75544704e",
+      "state": "machine-cross-checked",
+      "text": "Systemprüfung"
+    },
+    "install.backup.companion.helper_required": {
+      "sourceHash": "9655f8357363d49834901a88dc543b16cabe4a485846ff774b48cb707f91c315",
+      "state": "machine-cross-checked",
+      "text": "Für die Sicherung der HA Companion-Anmeldung wird der aktuelle ha-paneld-Hilfsdienst benötigt. Aktualisiere oder provisioniere dieses Panel mit root neu, um sie zu aktivieren."
+    },
+    "install.backup.companion.include_login": {
+      "sourceHash": "68a40664db6b16ee69214a3af245fb6e43dca89c26430278b7d88047bb5e1ff9",
+      "state": "machine-cross-checked",
+      "text": "HA Companion-Anmeldung einschließen"
+    },
+    "install.backup.config_bundle.description": {
+      "sourceHash": "35f454e577b5b356501fa24c7f754d8f5cdd8400c1ab232b4c77431548c645b1",
+      "state": "machine-cross-checked",
+      "text": "kopiert Einstellungen ohne App-Daten zwischen Panels. Vor der Anwendung wird eine Vorschau des Imports angezeigt; gültige Einträge werden übernommen und nicht supportierte übersprungen."
+    },
+    "install.backup.config_bundle.export": {
+      "sourceHash": "4431ea74c18455170de9138c781878cdeb6676ce31f2fadfde8a2e420ca2ad8b",
+      "state": "machine-cross-checked",
+      "text": "Einstellungen exportieren"
+    },
+    "install.backup.config_bundle.export_secrets": {
+      "sourceHash": "0fbd892f4202c8a5d0926759cc492df44e6839b4a86e5502b0bd86bfbd58b18d",
+      "state": "machine-cross-checked",
+      "text": "Export einschließlich Zugangsdaten"
+    },
+    "install.backup.config_bundle.import": {
+      "sourceHash": "5fcef179fdaf94832ae2dff186e01e76209836234f15821fcd77bfafa24b1949",
+      "state": "machine-cross-checked",
+      "text": "Einstellungen importieren…"
+    },
+    "install.backup.config_bundle.title": {
+      "sourceHash": "350429652c723fbbcb5bd5b7526b4cc4626d1c15c8c5895ce3875e8767f08e69",
+      "state": "machine-cross-checked",
+      "text": "Konfigurationspaket"
+    },
+    "install.backup.description.config_only": {
+      "sourceHash": "91a514241747f8e2e032ef08d16b87793106fb5e0cd5cd42fa464df36395aa45",
+      "state": "machine-cross-checked",
+      "text": "Ein Paket mit der ha-paneld-Konfiguration dieses Panels. Sicherungen enthalten Zugangsdaten und werden standardmäßig mit deiner Passphrase verschlüsselt; eine verlorene Passphrase kann nicht wiederhergestellt werden."
+    },
+    "install.backup.description.with_companion": {
+      "sourceHash": "743a323157d7632cf19ecd46e2ac14e44c84ea19bf843eea8bc0a73a5ea7e142",
+      "state": "machine-cross-checked",
+      "text": "Ein Paket mit der ha-paneld-Konfiguration dieses Panels und der HA Companion-Anmeldung. Sicherungen enthalten Zugangsdaten und werden standardmäßig mit deiner Passphrase verschlüsselt; eine verlorene Passphrase kann nicht wiederhergestellt werden."
+    },
+    "install.backup.download": {
+      "sourceHash": "669211280b637c0855891124d3ac8c013d2de7d2a128402cf3a17ab0e6d7bd91",
+      "state": "machine-cross-checked",
+      "text": "Sicherung herunterladen"
+    },
+    "install.backup.passphrase.placeholder": {
+      "sourceHash": "45ac7ff5361e72d6f514d09a6907b1db92799ebce966aed20e5691e16e9695a0",
+      "state": "machine-cross-checked",
+      "text": "Passphrase (für verschlüsselte Sicherung erforderlich)"
+    },
+    "install.backup.plaintext_zip": {
+      "sourceHash": "10683becdcd51177371bbb7dc6e59d3867fe28461c903e261c4258d7db617b34",
+      "state": "machine-cross-checked",
+      "text": "Stattdessen ein unverschlüsseltes ZIP erstellen (enthält Zugangsdaten)"
+    },
+    "install.backup.restore.choose": {
+      "sourceHash": "7ed32bfa384f70542e477b92902d8175f30a7db3c151c4cf734a94463c1e7942",
+      "state": "machine-cross-checked",
+      "text": "Sicherung auswählen (.hpb oder .zip)…"
+    },
+    "install.backup.restore.description.config_only": {
+      "sourceHash": "179a9889a2016aaba29633013b5b7209063b1891b1614fee38ae14a28e916d1e",
+      "state": "machine-cross-checked",
+      "text": "überschreibt die Konfiguration dieses Panels. Vor der Anwendung wird eine Vorschau des Paketinhalts angezeigt."
+    },
+    "install.backup.restore.description.with_companion": {
+      "sourceHash": "1dce4528d79e5fdae184cdef165a48dc161d5db5c0a3ec153bb70ac51e9df771",
+      "state": "machine-cross-checked",
+      "text": "überschreibt die Konfiguration dieses Panels und ersetzt die HA Companion-Anmeldung (die App wird zwangsweise beendet). Vor der Anwendung wird eine Vorschau des Paketinhalts angezeigt."
+    },
+    "install.backup.restore.passphrase_placeholder": {
+      "sourceHash": "241fdd0f0504918a81533d29614db8b5f7b92ffc5c19808ac11fdc94e37df064",
+      "state": "machine-cross-checked",
+      "text": "Passphrase des Pakets"
+    },
+    "install.backup.restore.title": {
+      "sourceHash": "a76e13b9839270eb73ed11417f7d8acca55df0ad52065799361631d0fff74f27",
+      "state": "machine-cross-checked",
+      "text": "Wiederherstellen"
+    },
+    "install.backup.title": {
+      "sourceHash": "0076967a94f3290b2122017687a320ec7412aa0176f3fdfece9b0a0553e513b2",
+      "state": "machine-cross-checked",
+      "text": "Sichern und wiederherstellen"
+    },
+    "install.components.channel": {
+      "sourceHash": "ce4683e7013a18cdf3d224bfcb4e9594ea8f559e946a837c633defe7d3c32172",
+      "state": "machine-cross-checked",
+      "text": "Kanal"
+    },
+    "install.components.channel_prefix": {
+      "sourceHash": "30d6848424f391846957a9495afa1f13e3bf40f325aca8e47b0ead771fb8287a",
+      "state": "machine-cross-checked",
+      "text": "Der Standardkanal wird auf der Registerkarte"
+    },
+    "install.components.channel_suffix": {
+      "sourceHash": "8b7d827c3ce2ad662c8c8d9306b48e692d582b6399c5935ec3944baee29c987e",
+      "state": "machine-cross-checked",
+      "text": " festgelegt; eine Änderung hier gilt nur für diese Auswahl."
+    },
+    "install.components.download_apk": {
+      "sourceHash": "3182bf9f023a412f0dd6d9e422436aa2fe66e5d93dbce33f1cc76a1f265fba72",
+      "state": "machine-cross-checked",
+      "text": "APK herunterladen"
+    },
+    "install.components.download_apk_help": {
+      "sourceHash": "19393a12c42c93a084c32c1d815cf5f654f4611413757b29b2ae0d9d5f0969fa",
+      "state": "machine-cross-checked",
+      "text": "Dieses Panel verfügt über kein privilegiertes Installationsprogramm, daher kann ha-paneld APKs nicht selbst installieren. Lade die APK herunter und installiere sie anschließend von deinem Administratorrechner: adb install -r <file>"
+    },
+    "install.components.google_play_managed": {
+      "sourceHash": "9dc31793c17a510887425b5313c313480f05dde4694dd3113b02e1eb38b364f6",
+      "state": "machine-cross-checked",
+      "text": "Von Google Play verwaltet – Updates über den Play Store"
+    },
+    "install.components.no_known_build": {
+      "sourceHash": "81ea415d8bdb2fb5ec23f053de58c6ca10d217d15c0c3e962a59d938ae8044fb",
+      "state": "machine-cross-checked",
+      "text": "kein bekanntermaßen geeigneter Build für dieses Panel"
+    },
+    "install.components.play_managed": {
+      "sourceHash": "9914a6bf26bd266b5e3e76c4d16283698ba10c6774ed7cca99a27e32ebd9df6e",
+      "state": "machine-cross-checked",
+      "text": "Von Play verwaltet – Updates über den Play Store"
+    },
+    "install.components.prerelease": {
+      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
+      "state": "machine-cross-checked",
+      "text": "Vorabversion"
+    },
+    "install.components.privileged_unavailable": {
+      "sourceHash": "c580f4004f76a4e5ba9b1d0efa0c7c6717c74299399f703ecb017e83bf90282d",
+      "state": "machine-cross-checked",
+      "text": "Zum Installieren oder Aktualisieren ist ein vom Projekt supportierter privilegierter Panelzugriff erforderlich, der auf diesem Panel nicht verfügbar ist."
+    },
+    "install.components.release_notes": {
+      "sourceHash": "2d3813e25ffaf552dffc724814881a1e40138bab741d700e95ffc5cac29e726d",
+      "state": "machine-cross-checked",
+      "text": "Versionshinweise auf GitHub"
+    },
+    "install.components.root_update_required": {
+      "sourceHash": "eb5c65ee970f6d856220974f20da3feb9c55907fb04590447fc75d0ce3d99d2f",
+      "state": "machine-cross-checked",
+      "text": "Aktualisierung benötigt root/Hilfsdienst"
+    },
+    "install.components.stable": {
+      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
+      "state": "machine-cross-checked",
+      "text": "Stabil"
+    },
+    "install.components.title": {
+      "sourceHash": "e07e232bf8cd226074afb4dfd24b3bbb453dc406667505ac39beeb7f716c4516",
+      "state": "machine-cross-checked",
+      "text": "Verwaltete Komponenten"
+    },
+    "install.components.up_to_date": {
+      "sourceHash": "bef6a4bb30a9d489f3b5dbb5d2e43b64a72e4ec04109629d0a158d33aba64c59",
+      "state": "machine-cross-checked",
+      "text": "aktuell"
+    },
+    "install.components.update_webview": {
+      "sourceHash": "76b51b5359e778d9a937a60808678b07dfe6270b8641f40a04a79e211d5123a2",
+      "state": "machine-cross-checked",
+      "text": "WebView aktualisieren"
+    },
+    "install.display.apply": {
+      "sourceHash": "31e392d1c0378beca611de66c0f4c71cba29159905cc54242d9bddee5b23d851",
+      "state": "machine-cross-checked",
+      "text": "Anwenden"
+    },
+    "install.display.approval": {
+      "sourceHash": "815c1f48a68f28f90917791a55c702e08b9b4acf37701d75caaa925a6a29ae73",
+      "state": "machine-cross-checked",
+      "text": "Dauerhafte Anzeigedichte oder Textgröße ändern"
+    },
+    "install.display.badge.experimental": {
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-cross-checked",
+      "text": "experimentell"
+    },
+    "install.display.default_scale": {
+      "sourceHash": "0c38c1867edacb328ec3f26ead7251ce282076b4533f6f4ae5dc503b88bd2d11",
+      "state": "machine-cross-checked",
+      "text": "Standard 1,0"
+    },
+    "install.display.description": {
+      "sourceHash": "1eb292dfc02940bac236c1e68132d3a14997fb03b39eba6a834066faa93eb703",
+      "state": "machine-cross-checked",
+      "text": "Experimentell / F&E – die richtigen Werte sind noch nicht abschließend bestimmt; probiere sie in deinem eigenen Tempo aus. Passe die Größe eines HA-Dashboards an einen Desktopbrowser an. Die Dichte skaliert das gesamte Layout (niedrigere dpi = mehr Inhalt); die Textgröße skaliert den WebView-Text. In der Panel-Firmware sind diese Werte oft nicht auf den physischen Bildschirm abgestimmt. Änderungen werden sofort angewendet und bleiben nach einem Neustart erhalten; ein vom Projekt supportierter privilegierter Panelzugriff ist erforderlich."
+    },
+    "install.display.firmware_default": {
+      "sourceHash": "49268b9bbeb39f9441dc4a28b46199dcb9f20572b8ca02a97c714be9e6396311",
+      "state": "machine-cross-checked",
+      "text": "Firmwarestandard {value}"
+    },
+    "install.display.ha_optimised": {
+      "sourceHash": "b7e6604e3f9a20e7206aa2d138082c7e37748631dede8593e14d0d98d861e905",
+      "state": "machine-cross-checked",
+      "text": "für HA optimiert"
+    },
+    "install.display.logical_density": {
+      "sourceHash": "1ebfed81e0867af6750370593a59267815680875953941984c9cf299ff46b0f8",
+      "state": "machine-cross-checked",
+      "text": "Logische Dichte (dpi)"
+    },
+    "install.display.profile_recommendation": {
+      "sourceHash": "32ae5b2bf824b2bcdc68ddcdaad7dc1523ec559822b261fa16f65d185a1cea1f",
+      "state": "machine-cross-checked",
+      "text": "Profilempfehlung {value}"
+    },
+    "install.display.reset": {
+      "sourceHash": "daee7606b339f3c339076fe2c9f372a3ff40c8ee896005d829c7481b64ca5303",
+      "state": "machine-cross-checked",
+      "text": "Zurücksetzen"
+    },
+    "install.display.reset_default": {
+      "sourceHash": "bdc8427cd16cd5932c90aff5d95b8e465317301a54f61f708ebdda27e4a4b983",
+      "state": "machine-cross-checked",
+      "text": "Auf Firmwarestandard zurücksetzen"
+    },
+    "install.display.reset_default_with_dpi": {
+      "sourceHash": "9136f210c5e7bf3807712f1a8b94b0ad6d79df441d1df63a2e3de6d0b9e91565",
+      "state": "machine-cross-checked",
+      "text": "Auf Firmwarestandard zurücksetzen ({value} dpi)"
+    },
+    "install.display.result.applied": {
+      "sourceHash": "93dad308df29648911ed2dd92ca7ada3b01217b778c0b7364ab3c4d2e14bae39",
+      "state": "machine-cross-checked",
+      "text": "Anzeigegröße angewendet."
+    },
+    "install.display.result.failed": {
+      "sourceHash": "9085a4a51781ac21a82a34b13505d3e35804e0f4f70796c3f7a3dac6db41224a",
+      "state": "machine-cross-checked",
+      "text": "Die Anzeigegröße wurde nicht angewendet; der privilegierte Anzeigebefehl ist fehlgeschlagen oder es wurde keine gültige Änderung angefordert."
+    },
+    "install.display.return": {
+      "sourceHash": "88aa2e92a88a0d5331f35eb6ce94045526e6806b2cd908dbb316c3807c8b631b",
+      "state": "machine-cross-checked",
+      "text": "Zurück zur Anzeigegröße"
+    },
+    "install.display.root_required": {
+      "sourceHash": "4b9f694dd446966b410427033f5855e75c853c22cb7c3d083e7b095fbfa094b9",
+      "state": "machine-cross-checked",
+      "text": "Mit einem vom Projekt supportierten privilegierten Panelzugriff kann ha-paneld Dichte und Textgröße des Dashboards an den physischen Bildschirm anpassen."
+    },
+    "install.display.text_size": {
+      "sourceHash": "d68761cc1eb296478531e007ff1fda9252fb7be5d24429a97eb05765211dafe5",
+      "state": "machine-cross-checked",
+      "text": "Textgröße"
+    },
+    "install.display.title": {
+      "sourceHash": "75aebbbcd5f71341cc126ea916a97a7a1ece8578d4c559f53039d4228fec6d57",
+      "state": "machine-cross-checked",
+      "text": "Anzeigegröße"
+    },
+    "install.radio.configure_join": {
+      "sourceHash": "843846f36311ad7aba87d1c8536aa89c973a28e63d593e45550d9b1c83f175d2",
+      "state": "machine-cross-checked",
+      "text": "Konfigurieren → Zigbee-Netzwerk beitreten"
+    },
+    "install.radio.efr32": {
+      "sourceHash": "dde87983949635a3374006302e8fcaf3acba9420496567a0810f4f699f9e679c",
+      "state": "machine-cross-checked",
+      "text": "EFR32-Funkmodul"
+    },
+    "install.radio.gateway_health": {
+      "sourceHash": "596df1c31c28dc7246e5800d5e578b4c428528f03e73441ce8f5e2c49ef7db47",
+      "state": "machine-cross-checked",
+      "text": "Gateway-Status"
+    },
+    "install.radio.note_prefix": {
+      "sourceHash": "9826954ce0ab47870f4e5026c43631c629d449185c859ca06e12bdab31d2b929",
+      "state": "machine-cross-checked",
+      "text": "Zigbee-Gateway auf dem Silicon Labs EFR32 dieses Panels. Aktiviere den Beitritt oder versuche ihn erneut unter"
+    },
+    "install.radio.thread_planned": {
+      "sourceHash": "7891edb2cba374dfaf02489aff727159d6ab084079c75383abaccf4b0cad8192",
+      "state": "machine-cross-checked",
+      "text": "Das Flashen des Thread NCP ist geplant (experimentell), aber noch nicht verfügbar."
+    },
+    "install.radio.title": {
+      "sourceHash": "6117cf43d34093b4f6a3d4a7a6f1a085790200d929b26deb6da34afc5060b20a",
+      "state": "machine-cross-checked",
+      "text": "Funkmodul-Firmware"
+    },
+    "install.ready": {
+      "sourceHash": "dc58e98e6af15e943f469a0545cdc4eebe7a6d6e3a38ab96d11f60ffccbf1eac",
+      "state": "machine-cross-checked",
+      "text": "Keine Einrichtungsprobleme erkannt – dieses Panel scheint bereit zu sein."
+    },
+    "install.shared.close": {
+      "sourceHash": "7d9eb7acb13e24625c404401d8e88b2350e32162455885f18276cf802f7701ed",
+      "state": "machine-cross-checked",
+      "text": "Schließen"
+    },
+    "install.shared.installed": {
+      "sourceHash": "a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c",
+      "state": "machine-cross-checked",
+      "text": "installiert"
+    },
+    "install.tame.action.reenable": {
+      "sourceHash": "63de421725fe824d9997872b1130d48e684b08da4b2784054049002f95684303",
+      "state": "machine-cross-checked",
+      "text": "Wieder aktivieren"
+    },
+    "install.tame.action.tame": {
+      "sourceHash": "c85a15907c0bd6abe4808730c7d422f32a57b8247f11402e47f72ef842b049ed",
+      "state": "machine-cross-checked",
+      "text": "Einschränken"
+    },
+    "install.tame.approval.package": {
+      "sourceHash": "699fa472f4a1b392599fc62e2cbbd912a7658ef16b5276c0d156da5090153d15",
+      "state": "machine-cross-checked",
+      "text": "Herstellerpaket {package}: {action}"
+    },
+    "install.tame.approval.recommended": {
+      "sourceHash": "3a77da60cbcfc809f72b7fd8d18d38f88119734d8ec517da65b2653c1bdcc833",
+      "state": "machine-cross-checked",
+      "text": "Die vom Profil empfohlenen Herstellerpakete einschränken"
+    },
+    "install.tame.badge.recommended": {
+      "sourceHash": "dd6d876548037ec722252b45795206575e7040eba1ca076cf1732a4a903cadba",
+      "state": "machine-cross-checked",
+      "text": "empfohlen"
+    },
+    "install.tame.description": {
+      "sourceHash": "c8e1bf9423f5c649f86cfd13f5ebc7febeb598ec77ded15e361f3ec478710626",
+      "state": "machine-cross-checked",
+      "text": "„Einschränken“ beendet eine App zwangsweise, verhindert ihren erneuten Start beim Booten und blockiert ihre Anzeige über dem Dashboard. Dies wird sofort und bei jedem Start angewendet. „Wieder aktivieren“ macht die Änderung rückgängig. Kritische System-Apps werden nie angeboten; bis zum Drücken einer Schaltfläche ändert sich nichts."
+    },
+    "install.tame.dialog.description": {
+      "sourceHash": "90509ec5716b821b042c4dec4152d4a11a6b254973eda945231926b965d1d16b",
+      "state": "machine-cross-checked",
+      "text": "Apps auf diesem Panel, die du möglicherweise einschränken möchtest. Wähle eine aus, um sie zu bearbeiten. Nicht jeder Eintrag ist unerwünscht; schränke nur Apps ein, die du kennst."
+    },
+    "install.tame.dialog.list_failed": {
+      "sourceHash": "531a8caebdccc2a084ce37e0f045e2c12b7480dae2317d72077feabb318da5e0",
+      "state": "machine-cross-checked",
+      "text": "Pakete konnten nicht aufgelistet werden."
+    },
+    "install.tame.dialog.title": {
+      "sourceHash": "87c2554fbf6da43ccc5c371f7162f0c2e7ec33b029107f27e868f6c2ac003827",
+      "state": "machine-cross-checked",
+      "text": "Zu steuerndes Paket suchen"
+    },
+    "install.tame.empty": {
+      "sourceHash": "a981e300306491f64f11d63e52e6717d9f2fc3b9b8504f73e980ed3de78a031c",
+      "state": "machine-cross-checked",
+      "text": "Noch keine Pakete eingeschränkt. Drücke „Paket suchen…“, um die Apps auf diesem Panel anzuzeigen."
+    },
+    "install.tame.error.invalid_or_protected": {
+      "sourceHash": "90087905ff9c9f3a0c2a97476a419ae53497edf6984f94172b9ef5e95a100d9c",
+      "state": "machine-cross-checked",
+      "text": "ungültiges oder geschütztes Paket"
+    },
+    "install.tame.error.reenable_failed": {
+      "sourceHash": "174308fa4d6223b8b7392e54304ee3f79ae604e0a36370c6b1c8187f9cc4a9d4",
+      "state": "machine-cross-checked",
+      "text": "Paket konnte nicht wieder aktiviert werden"
+    },
+    "install.tame.error.selection_commit": {
+      "sourceHash": "6d59b2bd714654f51c7eaba2f074088b469cb849da87ba2cd9215737c34348c4",
+      "state": "machine-cross-checked",
+      "text": "Herstellerpaketauswahl konnte nicht gespeichert werden"
+    },
+    "install.tame.find": {
+      "sourceHash": "1420c824157d194bfb0f0d4ba2a38feb1696d652b95e1236b069ff902b2f56a4",
+      "state": "machine-cross-checked",
+      "text": "Paket suchen…"
+    },
+    "install.tame.group.cpu": {
+      "sourceHash": "09d727b8c92dd8bb86d1eb56ae3a7c034a180c1d4b5cf46dc2efedf9e6106348",
+      "state": "machine-cross-checked",
+      "text": "Höchste CPU-Auslastung"
+    },
+    "install.tame.group.cpu_hint": {
+      "sourceHash": "b746ca190d1092c50a674ab3602eec2b56d98bc37bbb69654b6a3083f5734130",
+      "state": "machine-cross-checked",
+      "text": "Apps mit der derzeit höchsten CPU-Auslastung. Kern- und System-Apps werden zur Einordnung angezeigt, können aber nicht deaktiviert werden. Schränke nur Hersteller-Apps ein, die du kennst."
+    },
+    "install.tame.group.other": {
+      "sourceHash": "2f4115e8b1a8e81958230c00ffc44d18d364797bd3307d564851d500cfa50d00",
+      "state": "machine-cross-checked",
+      "text": "Andere Apps"
+    },
+    "install.tame.group.other_hint": {
+      "sourceHash": "439ed72206442cb714a94d01902328530ff10143627594fba65f514686f881cf",
+      "state": "machine-cross-checked",
+      "text": "Apps auf diesem Panel, die nicht zum Android-Kernsystem gehören."
+    },
+    "install.tame.group.recommended": {
+      "sourceHash": "176620bd60cea2ffd0525c344fdcff9db0b5189442bf8ab90f5dedd57aa2cae6",
+      "state": "machine-cross-checked",
+      "text": "Für dieses Panel empfohlen"
+    },
+    "install.tame.group.recommended_hint": {
+      "sourceHash": "ec79e0601b3e0d3e9f7717f6804c7d573c31063d5b87aa073ff074cf96e94cff",
+      "state": "machine-cross-checked",
+      "text": "Bekannte störende Firmware-Apps für deine Hardware – sichere erste Auswahl."
+    },
+    "install.tame.locked_empty": {
+      "sourceHash": "f638c4792f18277b2fda27370331e5e442a456222176012a8fedcf1b0cb20b46",
+      "state": "machine-cross-checked",
+      "text": "Hier würden die Hersteller-Apps aufgeführt, die dieses Panel ausblenden könnte."
+    },
+    "install.tame.package_hint": {
+      "sourceHash": "e6fdbaa3a572da4f8b627fcb2e82fe254256874683df190fca4bf589cf6605da",
+      "state": "machine-cross-checked",
+      "text": "Verwende die Android-Paket-ID, zum Beispiel io.example.app."
+    },
+    "install.tame.package_name": {
+      "sourceHash": "b2435d15ef23feed93deb1f778db35b57a28affcfbc1f87a3ca70ca9958aff12",
+      "state": "machine-cross-checked",
+      "text": "Android-Paketname"
+    },
+    "install.tame.result.applying_recommended": {
+      "sourceHash": "44dd56a6ca5fd07d13f582f357846894e053f0d14f5805a9650f9cc4b7e7a6e1",
+      "state": "machine-cross-checked",
+      "text": "Empfohlene Einschränkungen für Herstellerpakete werden angewendet."
+    },
+    "install.tame.result.applying_recommended_progress": {
+      "sourceHash": "9218e52c42743c2c02acee7eb6dc8e11e6873f7dd0ba056a126fb8e5175d48fb",
+      "state": "machine-cross-checked",
+      "text": "Empfohlene Einschränkungen für Hersteller-Apps werden angewendet…"
+    },
+    "install.tame.result.reenabling": {
+      "sourceHash": "82a18262ec1179153502829ef003b92634511def6476def26a4a15383eaa478c",
+      "state": "machine-cross-checked",
+      "text": "{package} wird wieder aktiviert."
+    },
+    "install.tame.result.taming": {
+      "sourceHash": "db713bae3f079b8dca46e450c757bb590ce42f5b5b9a305bb031ef56876d20e6",
+      "state": "machine-cross-checked",
+      "text": "{package} wird eingeschränkt."
+    },
+    "install.tame.root_required": {
+      "sourceHash": "ecd0efd425027a2ac33a1659039be693c803ee8cace28a907789aa48dd2f2b0c",
+      "state": "machine-cross-checked",
+      "text": "Mit root kann ha-paneld störende Hersteller-Apps (Testwerkzeuge, Hersteller-Launcher) ausblenden, sodass nur dein Dashboard angezeigt wird."
+    },
+    "install.tame.state.active": {
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked",
+      "text": "aktiv"
+    },
+    "install.tame.state.disabled": {
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked",
+      "text": "deaktiviert"
+    },
+    "install.tame.state.protected": {
+      "sourceHash": "9b2bbce6c72dd9bbd9c7a9976d5d76d1fcc2bb9832dec246375bb92006beccc3",
+      "state": "machine-cross-checked",
+      "text": "geschützt"
+    },
+    "install.tame.suggest.all_recommended": {
+      "sourceHash": "0790cffb17e5594b9161338a945622906deb76441ef1a6c46b0c71edd9f43df7",
+      "state": "machine-cross-checked",
+      "text": "Alle empfohlenen einschränken"
+    },
+    "install.tame.suggest.none": {
+      "sourceHash": "13915b13d9ae64ddbe741da3fea94afbf3f422848a695f74accf6c6fabee2f9f",
+      "state": "machine-cross-checked",
+      "text": "– keine –"
+    },
+    "install.tame.suggest.none_found": {
+      "sourceHash": "f9d4b4c3489e6a81c635863cd0de78db7c49ef9e1b07f920ccbd0116e1fd0776",
+      "state": "machine-cross-checked",
+      "text": "Keine weiteren Pakete gefunden – du kannst weiterhin eines anhand seines Namens einschränken."
+    },
+    "install.tame.suggest.recommended_hint": {
+      "sourceHash": "96398f11d6dabc58ca6aac668c85c5c3f3a416028ba47b64f36c865068c54f0a",
+      "state": "machine-cross-checked",
+      "text": "die unten gekennzeichnete erste Auswahl mit einem Klick"
+    },
+    "install.tame.tag.core": {
+      "sourceHash": "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c",
+      "state": "machine-cross-checked",
+      "text": "Kernsystem"
+    },
+    "install.tame.tag.overlay": {
+      "sourceHash": "b4b33d2441645d4dd0a0694b5989a0a14a5cc22fe9865e6b7b7eae966e0de36c",
+      "state": "machine-cross-checked",
+      "text": "Einblendung"
+    },
+    "install.tame.tag.user": {
+      "sourceHash": "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+      "state": "machine-cross-checked",
+      "text": "Benutzer"
+    },
+    "install.tame.tag.vendor": {
+      "sourceHash": "630ba09448af522154f38ef7685ef1f44b0f3e9430f80829a03ce24f400f3754",
+      "state": "machine-cross-checked",
+      "text": "Hersteller"
+    },
+    "install.uninstall.action": {
+      "sourceHash": "fe199528850a4e24c14d9ece87a07b40bdcfa5fe504c175c117b997c29259ca6",
+      "state": "machine-cross-checked",
+      "text": "Deinstallieren"
+    },
+    "install.uninstall.description_prefix": {
+      "sourceHash": "45d78d103a3468d3c099df705abfae73165f5ce0923ebcde6f8b06b96890a510",
+      "state": "machine-cross-checked",
+      "text": "Entferne eine installierte App. Es werden nur entfernbare Apps (von Drittanbietern oder aktualisierte Apps) aufgeführt; ha-paneld und vorinstallierte System-Apps sind ausgeschlossen. Um eine Hersteller-App nur auszublenden,"
+    },
+    "install.uninstall.description_suffix": {
+      "sourceHash": "1462a8fa2c5b0daa167e77a39e18f19c323d99aab25200867a59af48ea5b344b",
+      "state": "machine-cross-checked",
+      "text": ", statt sie zu entfernen."
+    },
+    "install.uninstall.root_unavailable": {
+      "sourceHash": "7137e48e950d350e4fa1f3662dbc28ae2eeae9cdcfeb44667641d13fc08ea053",
+      "state": "machine-cross-checked",
+      "text": "Zum Deinstallieren einer App wird root benötigt; dies ist auf diesem Panel nicht verfügbar."
+    },
+    "install.uninstall.tame_link": {
+      "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
+      "state": "machine-cross-checked",
+      "text": "schränke sie ein"
+    },
+    "install.uninstall.title": {
+      "sourceHash": "d1eb4f43f07eaf3e5808ba989b8fa77fadf5bf6898af4321c2e808e669c111f9",
+      "state": "machine-cross-checked",
+      "text": "App deinstallieren"
+    },
+    "install.warning.no_renderer.install_companion": {
+      "sourceHash": "0117aa1b31dd5f775fd4a3a105fbed38418eb5f679289dfc65c49ca56fa99084",
+      "state": "machine-cross-checked",
+      "text": "HA Companion installieren"
+    },
+    "install.warning.no_renderer.prefix": {
+      "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
+      "state": "machine-cross-checked",
+      "text": "Wähle den integrierten Renderer von ha-paneld unter"
+    },
+    "install.warning.no_renderer.progress": {
+      "sourceHash": "e44a9bcadf0eb8b464b5dcb387834d5eade7ed452fc4ce9b161eb4e41ca6ee6a",
+      "state": "machine-cross-checked",
+      "text": "der Fortschritt wird unten unter „Verwaltete Komponenten“ angezeigt."
+    },
+    "install.warning.no_renderer.suffix": {
+      "sourceHash": "b549f0661d976d7f7a491c492571e2459a614d197633e47ce821e2b5e984afd9",
+      "state": "machine-cross-checked",
+      "text": ", installiere die Home Assistant Companion App oder lege dort ein anderes Dashboard-Paket fest."
+    },
+    "install.warning.no_renderer.title": {
+      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
+      "state": "machine-cross-checked",
+      "text": "MQTT ist konfiguriert. Wähle als Nächstes einen Dashboard-Renderer aus."
+    },
+    "install.warning.schema_rollback.prefix": {
+      "sourceHash": "1060ef4b650f103ab5b7f1f76eace082786393841e8bc926a034ab8e3a1cf0f6",
+      "state": "machine-cross-checked",
+      "text": "Dieser Build hat einen neuen Zustandsspeicher geöffnet, weil sein Schema älter ist. Einige Einstellungen wurden möglicherweise zurückgesetzt. Die vorherige Datenbank bleibt zur Wiederherstellung auf dem Panel erhalten. Prüfe"
+    },
+    "install.warning.schema_rollback.suffix": {
+      "sourceHash": "909f755050e1a23e3aa37bc3c74d6b3ebce0486db888b50b66519a83d11dbe3a",
+      "state": "machine-cross-checked",
+      "text": " oder stelle unten eine Sicherung wieder her."
+    },
+    "install.warning.schema_rollback.title": {
+      "sourceHash": "c6b434eb6d5f96ee9185ae968a89e7a1039ba9b2aad65bde00e6555a02b7fc78",
+      "state": "machine-cross-checked",
+      "text": "Neuere Datenbank nach Versions-Downgrade beibehalten"
+    },
+    "install.warning.webview_old.body": {
+      "sourceHash": "cdaa9385ecdff69e20e8fbe71c147fe127a7a896c85f157fd9ac902fb995ebe4",
+      "state": "machine-cross-checked",
+      "text": "Das Home Assistant-Dashboard wird möglicherweise leer oder fehlerhaft dargestellt."
+    },
+    "install.warning.webview_old.help": {
+      "sourceHash": "e47c274a443c3dfb22bfdfa0a49f6908e720d8b1518a6ba71e5d5014f52daea8",
+      "state": "machine-cross-checked",
+      "text": "Wie und warum aktualisieren?"
+    },
+    "install.warning.webview_old.target": {
+      "sourceHash": "db38fba435a5055d846977c64682f2d278a25417425662847e351907db7d38a7",
+      "state": "machine-cross-checked",
+      "text": "Ziel: Chromium {version}+"
+    },
+    "install.warning.webview_old.title": {
+      "sourceHash": "32f9602603cf386e8accd721782721ab0c29ff77a86e739370a819d2c2ae5d59",
+      "state": "machine-cross-checked",
+      "text": "System WebView ist zu alt"
+    },
+    "install.warning.webview_old.update": {
+      "sourceHash": "71d8ebe0fdc7922d4dc02071672fdd8aee2e27c8af3694a32166ff337dbd52eb",
+      "state": "machine-cross-checked",
+      "text": "WebView jetzt aktualisieren"
     }
   }
 }

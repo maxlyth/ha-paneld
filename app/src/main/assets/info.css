@@ -186,7 +186,7 @@ body.revealed input.secret,input.secret:focus,input.secret.shown{color:var(--tex
 .shot::after{content:"";position:absolute;inset:0;background:linear-gradient(110deg,var(--shimA) 30%,var(--shimB) 50%,var(--shimA) 70%);background-size:220% 100%;animation:shot-sheen 1.2s linear infinite}
 .shot.loaded::after{display:none}                          /* image arrived — drop the shimmer */
 .shot.failed::after{animation:none;background:var(--shimA)}      /* capture failed — stop animating */
-.shot.failed::before{content:"⚠ screenshot unavailable";position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a88;font-size:.85rem}
+.shot.failed::before{content:attr(data-error-label);position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#a88;font-size:.85rem}
 @keyframes shot-sheen{0%{background-position:120% 0}100%{background-position:-120% 0}}
 @media (prefers-reduced-motion:reduce){.shot::after{animation:none}}
 /* Screenshot remote-control PoC: preserve the ordinary full-size link as the no-JS/no-dialog fallback.

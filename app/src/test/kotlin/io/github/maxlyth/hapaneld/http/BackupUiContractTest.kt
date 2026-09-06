@@ -30,7 +30,7 @@ class BackupUiContractTest {
         assertTrue("empty passphrase must not silently download credentials", "if (!pw && !plain)" in script)
         assertTrue("plaintext v2 archive must download as ZIP", "'zip'" in script)
         assertTrue("server artifact must advertise ZIP", "PanelBackup.Artifact(plain, \"zip\")" in serverSource)
-        assertTrue("restore picker must identify encrypted and plaintext backup extensions", "Choose backup (.hpb or .zip)" in serverSource)
+        assertTrue("restore picker must localize the encrypted and plaintext backup label", "install.backup.restore.choose" in serverSource)
         assertTrue("restore picker must accept encrypted and plaintext backup extensions", """accept=".hpb,.zip,application/octet-stream,application/zip"""" in serverSource)
         assertTrue("OpenAPI must document plaintext acknowledgement", "\"allow_plaintext\"" in openApi)
         assertTrue("legacy JSON filename must not remain", "'json'" !in script.substring(
@@ -46,24 +46,19 @@ class BackupUiContractTest {
     @Test fun theBackupCardIsSilentAboutTheCompanionWhenItIsNotInstalled() {
         listOf(true, false).forEach { helper ->
             val copy = backupCompanionCopy(installed = false, helper = helper)
-            assertEquals(BackupCompanionCopy("", "", ""), copy)
-            listOf(copy.row, copy.restoreWarning, copy.bundleSuffix).forEach { text ->
-                assertTrue("must not name the Companion (helper=$helper): $text", "Companion" !in text)
-            }
+            assertEquals(BackupCompanionCopy(showLoginChoice = false, explainHelperRequirement = false), copy)
         }
     }
 
     @Test fun theCompanionLoginIsOfferedOnlyWithBothTheAppAndTheHelper() {
         val offered = backupCompanionCopy(installed = true, helper = true)
-        assertTrue("the include-login checkbox belongs here", """id="bk-comp"""" in offered.row)
-        assertTrue(offered.restoreWarning.isNotEmpty() && offered.bundleSuffix.isNotEmpty())
+        assertTrue("the include-login choice belongs here", offered.showLoginChoice)
+        assertTrue("the helper requirement must not also show", !offered.explainHelperRequirement)
 
         // Installed but the helper is stale: explain why, and do not promise it in the bundle or warning.
         val explained = backupCompanionCopy(installed = true, helper = false)
-        assertTrue("must explain the helper requirement", "needs the current ha-paneld helper" in explained.row)
-        assertTrue("must not offer the checkbox", """id="bk-comp"""" !in explained.row)
-        assertEquals("", explained.restoreWarning)
-        assertEquals("", explained.bundleSuffix)
+        assertTrue("must explain the helper requirement", explained.explainHelperRequirement)
+        assertTrue("must not offer the checkbox", !explained.showLoginChoice)
     }
 
     /** The card must gate on the app being installed, not only on helper capability. */
@@ -91,15 +86,6 @@ class BackupUiContractTest {
         assertTrue("the choice must be sent on every request", "'&include_companion=' + (comp && comp.checked ? '1' : '0')" in backup)
         assertTrue("the parameter must never be conditionally omitted", "include_companion" in backup)
         assertEquals("exactly one include_companion parameter belongs in the request", 1, backup.split("include_companion").size - 1)
-        // Nothing on the card may promise behaviour the server no longer has.
-        listOf("by default", "defaults to").forEach { claim ->
-            assertTrue(
-                "the Companion copy must not claim a server default ($claim)",
-                listOf(
-                    backupCompanionCopy(installed = true, helper = true),
-                    backupCompanionCopy(installed = true, helper = false),
-                ).none { copy -> claim in (copy.row + copy.restoreWarning + copy.bundleSuffix) },
-            )
-        }
+        assertTrue("the semantic copy model cannot carry claims about server defaults", BackupCompanionCopy::class.java.declaredFields.none { it.type == String::class.java })
     }
 }

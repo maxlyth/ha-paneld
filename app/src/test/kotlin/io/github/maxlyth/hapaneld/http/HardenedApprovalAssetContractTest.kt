@@ -201,8 +201,8 @@ class HardenedApprovalAssetContractTest {
             "id=\"profile-activate\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
             "id=\"profile-auto\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
             "id=\"profile-rollback\" type=\"button\"\${hardenedApprovalAttrs(strings = strings)}",
-            "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"healWebView(this)\">⬇ Update WebView now",
-            "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"installComp('companion','update',this)\">⬇ Install HA Companion",
+            "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"healWebView(this)\">⬇ \${esc(strings.get(\"install.warning.webview_old.update\"))}",
+            "<button class=\"pbtn\"\${hardenedApprovalAttrs(strings = strings)} onclick=\"installComp('companion','update',this)\">⬇ \${esc(strings.get(\"install.warning.no_renderer.install_companion\"))}",
             "<button class=\"pbtn\"\${hardenedApprovalAttrs()} onclick=\"repairCompUrl(this)\">⚙ \${esc(strings.get(\"dashboard.banner.companion_url.repair\"))}",
         ).forEach { snippet -> assertTrue("missing protected-action marker near $snippet", source.contains(snippet)) }
 
@@ -217,11 +217,11 @@ class HardenedApprovalAssetContractTest {
         )
         assertTrue(install.contains("'<button class=\"pbtn\"' + hardenedApprovalA11yAttrs + ' style=\"margin-top:8px\" onclick=\"restoreConfirm(this)\""))
         listOf(
-            "hardenedApprovalCardTitle(\"Managed components\", conditional = true, strings = strings)",
-            "hardenedApprovalCardTitle(\"Uninstall an app\", strings = strings)",
+            "hardenedApprovalCardTitle(esc(strings.get(\"install.components.title\")), conditional = true, strings = strings)",
+            "hardenedApprovalCardTitle(esc(strings.get(\"install.uninstall.title\")), strings = strings)",
             "hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)",
-            "hardenedApprovalCardTitle(\"Display sizing\"",
-            "hardenedApprovalCardTitle(\"Backup &amp; restore\", conditional = true, strings = strings)",
+            "hardenedApprovalCardTitle(esc(strings.get(\"install.display.title\")), badge, strings = strings)",
+            "hardenedApprovalCardTitle(esc(strings.get(\"install.backup.title\")), conditional = true, strings = strings)",
         ).forEach { assertTrue("missing shielded Install card title $it", source.contains(it)) }
         val installCards = source.substringAfter("private fun componentsCardHtml").substringBefore("private fun logsBody")
         assertFalse("shielded-card actions must not repeat the visible shield", installCards.contains("hardenedApprovalAttrs()"))
@@ -236,7 +236,7 @@ class HardenedApprovalAssetContractTest {
             val line = installCards.lineSequence().firstOrNull { it.contains(action) }.orEmpty()
             assertTrue("$action must retain its accessible approval description", line.contains("hardenedApprovalA11yAttrs("))
         }
-        assertTrue(source.lineSequence().first { it.contains("Tame all recommended</button>") }.contains("hardenedApprovalA11yAttrs("))
+        assertTrue(source.lineSequence().first { it.contains("install.tame.suggest.all_recommended") }.contains("hardenedApprovalA11yAttrs("))
         val vendorCard = source.substringAfter("private fun tameRowHtml").substringBefore("/** Display-sizing card")
         assertFalse(vendorCard.contains("hardenedApprovalAttrs()"))
         assertFalse("Vendor packages is no longer an experimental feature", vendorCard.contains("cardbadge exp"))
@@ -247,11 +247,11 @@ class HardenedApprovalAssetContractTest {
         assertTrue(Regex("hardenedApprovalA11yAttrs\\([^)]*\\)").findAll(displayCard).count() >= 2)
         assertTrue(source.contains("hardened-approval-section-conditional-description"))
         assertTrue(source.contains("if (installer || (wv.tooOld && rec != null && root))"))
-        assertTrue(source.contains("if (root) hardenedApprovalCardTitle(\"Uninstall an app\", strings = strings)"))
+        assertTrue(source.contains("if (root) hardenedApprovalCardTitle(esc(strings.get(\"install.uninstall.title\")), strings = strings)"))
         assertTrue(source.contains("val titleText = esc(strings.get(\"install.card.vendor_packages\"))"))
         assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)"))
         assertTrue(source.contains("else \"<h2>\$titleText</h2>\""))
-        assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(\"Display sizing\", badge, strings = strings)"))
+        assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(esc(strings.get(\"install.display.title\")), badge, strings = strings)"))
         listOf("self_update", "update_channel", "companion_auto_update", "companion_update_channel", "webview_auto_update")
             .forEach { assertTrue(configure.contains("$it: true")) }
         assertTrue(configure.contains("shieldTail.setAttribute(\"data-hardened-approval\", \"conditional\")"))
@@ -314,7 +314,7 @@ class HardenedApprovalAssetContractTest {
         assertFalse(devtools.contains("hardenedApprovalAttrs"))
         val profileDelete = source.substringAfter("id=\"profile-delete\"").substringBefore("</div>")
         assertFalse(profileDelete.contains("hardenedApprovalAttrs"))
-        assertTrue(source.contains("<a class=\"pbtn\" href=\"/api/v1/config/export\">⭳ Export settings</a>"))
+        assertTrue(source.contains("<a class=\"pbtn\" href=\"/api/v1/config/export\">⭳ \${esc(strings.get(\"install.backup.config_bundle.export\"))}</a>"))
     }
 
     @Test fun backupApprovalJsonIsNeverSavedAsAnArchive() {

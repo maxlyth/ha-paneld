@@ -971,11 +971,13 @@ internal fun dashboardControlButtonHtml(
 internal fun shouldSnapshotConfigSetting(key: String, zigbeeRouterConfigured: Boolean): Boolean =
     key != "zigbee_router" || zigbeeRouterConfigured
 
+internal fun installFormWantsHtml(accept: String?): Boolean =
+    accept?.contains("text/html", ignoreCase = true) == true
+
 /** The Companion-dependent parts of the backup card. Empty throughout when the app is absent. */
 internal data class BackupCompanionCopy(
-    val row: String,
-    val restoreWarning: String,
-    val bundleSuffix: String,
+    val showLoginChoice: Boolean,
+    val explainHelperRequirement: Boolean,
 )
 
 /**
@@ -987,21 +989,8 @@ internal data class BackupCompanionCopy(
  * *offer* additionally requires the [helper]. Keeping this pure keeps it directly testable.
  */
 internal fun backupCompanionCopy(installed: Boolean, helper: Boolean): BackupCompanionCopy {
-    if (!installed) return BackupCompanionCopy("", "", "")
-    if (!helper) {
-        return BackupCompanionCopy(
-            row = """<p class="note">HA Companion login backup needs the current ha-paneld helper. """ +
-                """Update or reprovision this rooted panel to enable it.</p>""",
-            restoreWarning = "",
-            bundleSuffix = "",
-        )
-    }
-    return BackupCompanionCopy(
-        row = """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem">""" +
-            """<input type="checkbox" id="bk-comp" checked> Include HA Companion login</label>""",
-        restoreWarning = " and rewrites the HA Companion login (force-stops it)",
-        bundleSuffix = " + the HA Companion login",
-    )
+    if (!installed) return BackupCompanionCopy(showLoginChoice = false, explainHelperRequirement = false)
+    return BackupCompanionCopy(showLoginChoice = helper, explainHelperRequirement = !helper)
 }
 
 internal fun projectConfigSnapshot(
@@ -3492,6 +3481,8 @@ class PaneldServer internal constructor(
                     // never owned and therefore have no restoration marker. The work is privileged + slow, so it
                     // runs off-thread and the browser gets a short auto-reload back to the Install card.
                     post("/tame") {
+                        val strings = requestStrings(call)
+                        val returnTo = localizedHref("/install#cfg-tame", strings)
                         val p = receiveBoundedFormParameters(call) ?: return@post
                         // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
                         // Persist the safe installed selection first. The one desired-state owner then converges
@@ -3504,27 +3495,35 @@ class PaneldServer internal constructor(
                                     call,
                                     SensitiveOperation.PACKAGE_TAME,
                                     exactHttpApprovalPayload(call, digest),
-                                    "Tame the profile's recommended vendor packages",
+                                    strings.get("install.tame.approval.recommended"),
                                 )
                             ) return@post
                             val committed = withContext(Dispatchers.IO) {
                                 updateTameSelection { it.addAll(recommendedSelections) }
                             }
                             if (!committed) {
-                                call.respondText("vendor selection commit failed\n", status = HttpStatusCode.InternalServerError)
+                                respondInstallFormError(
+                                    call,
+                                    strings,
+                                    "install.tame.error.selection_commit",
+                                    "vendor selection commit failed",
+                                    HttpStatusCode.InternalServerError,
+                                )
                                 return@post
                             }
                             snapInvalidate()
                             if (call.request.headers["Accept"]?.contains("application/json") == true) {
                                 call.respondText(
-                                    """{"ok":true,"status":"started","message":"Applying recommended vendor-package taming.","return_to":"/install#cfg-tame"}""",
+                                    "{" +
+                                        "\"ok\":true,\"status\":\"started\",\"message\":" + jsonStr(strings.get("install.tame.result.applying_recommended")) + "," +
+                                        "\"return_to\":" + jsonStr(returnTo) + "}",
                                     ContentType.Application.Json,
                                 )
                             } else {
                                 call.respondText(
-                                    "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/install#cfg-tame'>" +
+                                    "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
                                         "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                        "applying recommended vendor-app taming…</body>",
+                                        esc(strings.get("install.tame.result.applying_recommended_progress")) + "</body>",
                                     ContentType.Text.Html,
                                 )
                             }
@@ -3536,18 +3535,35 @@ class PaneldServer internal constructor(
                         // — critical AOSP names, vendor-renamed persistent system services, launchers, the IME)
                         // so a hand-typed package name can't disable something the panel needs.
                         if (!AndroidInput.isPackage(pkg) || (!untame && tame.isProtected(pkg))) {
-                            call.respondText("invalid or protected package\n", status = HttpStatusCode.BadRequest)
+                            respondInstallFormError(
+                                call,
+                                strings,
+                                "install.tame.error.invalid_or_protected",
+                                "invalid or protected package",
+                                HttpStatusCode.BadRequest,
+                            )
                             return@post
                         }
                         if (!authorizeSensitive(
                                 call,
                                 SensitiveOperation.PACKAGE_TAME,
                                 exactHttpApprovalPayload(call, p.canonicalDigest()),
-                                "${if (untame) "Re-enable" else "Tame"} vendor package $pkg",
+                                formattedString(
+                                    strings,
+                                    "install.tame.approval.package",
+                                    "action" to strings.get(if (untame) "install.tame.action.reenable" else "install.tame.action.tame"),
+                                    "package" to pkg,
+                                ),
                             )
                         ) return@post
                         if (untame && !withContext(Dispatchers.IO) { tame.reenable(pkg) }) {
-                            call.respondText("could not re-enable package\n", status = HttpStatusCode.ServiceUnavailable)
+                            respondInstallFormError(
+                                call,
+                                strings,
+                                "install.tame.error.reenable_failed",
+                                "could not re-enable package",
+                                HttpStatusCode.ServiceUnavailable,
+                            )
                             return@post
                         }
                         val committed = withContext(Dispatchers.IO) {
@@ -3556,23 +3572,33 @@ class PaneldServer internal constructor(
                             }
                         }
                         if (!committed) {
-                            call.respondText("vendor selection commit failed\n", status = HttpStatusCode.InternalServerError)
+                            respondInstallFormError(
+                                call,
+                                strings,
+                                "install.tame.error.selection_commit",
+                                "vendor selection commit failed",
+                                HttpStatusCode.InternalServerError,
+                            )
                             return@post
                         }
                         snapInvalidate()
-                        val verb = if (untame) "re-enabling" else "taming"
+                        val result = formattedString(
+                            strings,
+                            if (untame) "install.tame.result.reenabling" else "install.tame.result.taming",
+                            "package" to pkg,
+                        )
                         if (call.request.headers["Accept"]?.contains("application/json") == true) {
                             call.respondText(
                                 "{" +
-                                    "\"ok\":true,\"status\":\"started\",\"message\":" + jsonStr("${verb.replaceFirstChar { it.uppercase() }} $pkg.") + "," +
-                                    "\"return_to\":\"/install#cfg-tame\"}",
+                                    "\"ok\":true,\"status\":\"started\",\"message\":" + jsonStr(result) + "," +
+                                    "\"return_to\":" + jsonStr(returnTo) + "}",
                                 ContentType.Application.Json,
                             )
                         } else {
                             call.respondText(
-                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/install#cfg-tame'>" +
+                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
                                     "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                    "$verb ${esc(pkg)}…</body>",
+                                    esc(result) + "</body>",
                                 ContentType.Text.Html,
                             )
                         }
@@ -3582,27 +3608,29 @@ class PaneldServer internal constructor(
                     // CPU. Lazy (only built when the dialog opens) and excludes what's already tamed (the card).
                     get("/tame/suggest") {
                         if (!admitActiveRead(call)) return@get
+                        val strings = requestStrings(call)
                         PerfReader.touch()   // keep the CPU sampler warm so the "most CPU" group can populate
                         val groups = runCatching {
                             tame.suggestionGroups(tameProfileCandidates, config.tameVendorPackages.toSet(), PerfReader.topNames())
                         }.getOrDefault(emptyList())
                         val frag = if (groups.isEmpty())
-                            """<p class="note">No other packages found — you can still tame one by name.</p>"""
+                            """<p class="note">${esc(strings.get("install.tame.suggest.none_found"))}</p>"""
                         else groups.joinToString("\n") { g ->
                             val items = if (g.items.isEmpty())
-                                """<p class="note" style="margin:0 0 4px;color:#666">— none —</p>"""
-                            else g.items.joinToString("\n") { tameRowHtml(it) }
-                            """<h4 style="margin:14px 0 1px">${esc(g.title)}</h4>""" +
-                                """<p class="note" style="margin:0 0 4px">${esc(g.hint)}</p>$items"""
+                                """<p class="note" style="margin:0 0 4px;color:#666">${esc(strings.get("install.tame.suggest.none"))}</p>"""
+                            else g.items.joinToString("\n") { tameRowHtml(it, strings = strings) }
+                            """<h4 style="margin:14px 0 1px">${esc(localizedTameGroupTitle(g.title, strings))}</h4>""" +
+                                """<p class="note" style="margin:0 0 4px">${esc(localizedTameGroupHint(g.hint, strings))}</p>$items"""
                         }
                         // One-click "Tame all recommended", shown only when there's an active recommended pick.
                         val hasRec = groups.any { g -> g.items.any { it.recommended && !it.blocked && !it.disabled && it.installed } }
                         val recBtn = if (hasRec)
-                            """<form method="post" action="/api/v1/tame" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit"${hardenedApprovalA11yAttrs()} style="background:#2e6b3f;border-color:#2e6b3f">✓ Tame all recommended</button> <span class="note" style="font-size:.8em">the badged first-picks below, in one click</span></form>"""
+                            """<form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="background:#2e6b3f;border-color:#2e6b3f">✓ ${esc(strings.get("install.tame.suggest.all_recommended"))}</button> <span class="note" style="font-size:.8em">${esc(strings.get("install.tame.suggest.recommended_hint"))}</span></form>"""
                             else ""
                         call.respondText(recBtn + frag, ContentType.Text.Html)
                     }
                     post("/display/density") {
+                        val strings = requestStrings(call)
                         val p = receiveBoundedFormParameters(call) ?: return@post
                         val action = p["action"]                          // "reset" | "rec" (buttons)
                         val d = p["density"]?.trim()?.toIntOrNull()       // custom density (Apply)
@@ -3611,7 +3639,7 @@ class PaneldServer internal constructor(
                                 call,
                                 SensitiveOperation.DISPLAY_CONFIGURATION,
                                 exactHttpApprovalPayload(call, p.canonicalDigest()),
-                                "Change persistent display density or text size",
+                                strings.get("install.display.approval"),
                             )
                         ) return@post
                         val ok = when (action) {
@@ -3648,25 +3676,26 @@ class PaneldServer internal constructor(
                         snapInvalidate()
                         if (ok) densityCache.set(DisplaySizingObservation(postDpi, base, postFont))
                         val message = if (ok) {
-                            "Display sizing applied."
+                            strings.get("install.display.result.applied")
                         } else {
-                            "Display sizing was not applied; the privileged display command failed or no valid change was requested."
+                            strings.get("install.display.result.failed")
                         }
+                        val returnTo = localizedHref("/install#cfg-display", strings)
                         val responseStatus = if (ok) HttpStatusCode.OK else HttpStatusCode.InternalServerError
                         if (call.request.headers["Accept"]?.contains("application/json") == true) {
                             call.respondText(
                                 "{" +
                                     "\"ok\":$ok,\"status\":\"${if (ok) "applied" else "apply-failed"}\"," +
-                                    "\"message\":${jsonStr(message)},\"return_to\":\"/install#cfg-display\"}",
+                                    "\"message\":${jsonStr(message)},\"return_to\":${jsonStr(returnTo)}}",
                                 ContentType.Application.Json,
                                 responseStatus,
                             )
                         } else {
                             call.respondText(
                                 "<!doctype html><meta charset=utf-8>" +
-                                    (if (ok) "<meta http-equiv=refresh content='1;url=/install#cfg-display'>" else "") +
+                                    (if (ok) "<meta http-equiv=refresh content='1;url=${esc(returnTo)}'>" else "") +
                                     "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
-                                    esc(message) + (if (ok) "…" else " <a href='/install#cfg-display' style='color:#9cf'>Return to Display sizing</a>") + "</body>",
+                                    esc(message) + (if (ok) "…" else " <a href='${esc(returnTo)}' style='color:#9cf'>${esc(strings.get("install.display.return"))}</a>") + "</body>",
                                 ContentType.Text.Html,
                                 responseStatus,
                             )
@@ -4466,21 +4495,21 @@ $proximityScript"""
         ) +
             adHocWarnings(management, companion, inlineRepair = true, strings = strings)
         val warnings = extra + problems.joinToString("") { installWarning(it, canHeal, canInstallCompanion, strings) }
-        val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty() && !powerAdvisory.assessment.warning) """<div class="card" data-layout-key="ready"><p class="note">✓ No setup problems detected — this panel looks ready.</p></div>""" else ""
+        val allGood = if (h.brokerConfigured && problems.isEmpty() && extra.isEmpty() && !powerAdvisory.assessment.warning) """<div class="card" data-layout-key="ready"><p class="note">✓ ${esc(strings.get("install.ready"))}</p></div>""" else ""
         return """$warnings
 <div class="cards" id="install-cards" data-card-size-page="install" data-card-size-epoch="1" data-card-size-restore="1">
 ${componentsCardHtml(wv, root, installer, strings)}
 ${apkCardHtml(root, strings)}
 ${uninstallCardHtml(su, strings)}
-<div class="card" id="radiocard" data-layout-key="radio-firmware" style="display:none"><h2>Radio firmware</h2>
-<table><tr><th>EFR32 radio</th><td id="radio-status">…</td></tr>
-<tr><th>Gateway health</th><td id="radio-health">…</td></tr></table>
-<p class="note">Zigbee gateway on this panel's Silicon Labs EFR32. Enable or retry joining from <a href="/configure#cfg-zigbee_join">Configure → Join Zigbee network</a>. <span class="muted">Thread NCP flashing is planned (experimental) — not yet available.</span></p></div>
-<div class="card" data-layout-key="health-audit"><h2>Health audit</h2>
-<p class="note">Re-check this panel for problems that stop the dashboard rendering — old WebView, no dashboard app, available updates.</p>
-<button class="pbtn" onclick="healthAudit(this)">Run health audit</button>
+<div class="card" id="radiocard" data-layout-key="radio-firmware" style="display:none"><h2>${esc(strings.get("install.radio.title"))}</h2>
+<table><tr><th>${esc(strings.get("install.radio.efr32"))}</th><td id="radio-status">…</td></tr>
+<tr><th>${esc(strings.get("install.radio.gateway_health"))}</th><td id="radio-health">…</td></tr></table>
+<p class="note">${esc(strings.get("install.radio.note_prefix"))} <a href="${localizedHref("/configure#cfg-zigbee_join", strings)}">${esc(strings.get("install.radio.configure_join"))}</a>. <span class="muted">${esc(strings.get("install.radio.thread_planned"))}</span></p></div>
+<div class="card" data-layout-key="health-audit"><h2>${esc(strings.get("install.audit.title"))}</h2>
+<p class="note">${esc(strings.get("install.audit.description"))}</p>
+<button class="pbtn" onclick="healthAudit(this)">${esc(strings.get("install.audit.run"))}</button>
 <div id="audit-out" style="margin-top:10px"></div>
-<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ Diagnostics dump</a> — full hardware/firmware/SELinux/su report for bug reports.</p></div>
+<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ ${esc(strings.get("install.audit.diagnostics"))}</a> — ${esc(strings.get("install.audit.diagnostics_help"))}</p></div>
 ${tameCardHtml(root, strings)}
 ${displayCardHtml(management.privilege.typedShellControlReady, displaySizing, strings)}
 ${backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null, strings)}
@@ -4500,23 +4529,16 @@ $allGood</div>
         strings: AppStrings,
     ): String = when (f.kind) {
         HealthAudit.Kind.WEBVIEW_OLD ->
-            """<div class="setup crit">⚠ <b>System WebView is too old</b> (${esc(f.detail)}) — the Home Assistant """ +
-                """dashboard may render blank or broken. <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">""" +
-                """How &amp; why to update</a> (target: Chromium ${PanelHealth.MIN_CHROMIUM}+).""" +
-                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="healWebView(this)">⬇ Update WebView now</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
+            """<div class="setup crit">⚠ <b>${esc(strings.get("install.warning.webview_old.title"))}</b> (${esc(f.detail)}) — ${esc(strings.get("install.warning.webview_old.body"))} <a href="$WEBVIEW_DOC" target="_blank" rel="noopener">${esc(strings.get("install.warning.webview_old.help"))}</a> (${esc(formattedString(strings, "install.warning.webview_old.target", "version" to PanelHealth.MIN_CHROMIUM.toString()))}).""" +
+                (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="healWebView(this)">⬇ ${esc(strings.get("install.warning.webview_old.update"))}</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.NO_RENDERER ->
-            """<div class="setup">ℹ <b>MQTT is configured. Next: choose a dashboard renderer.</b> Select ha-paneld's built-in renderer """ +
-                """on <a href="/configure">Configure</a>, install the Home Assistant Companion app, or set another """ +
-                """dashboard package there.""" +
-                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="installComp('companion','update',this)">⬇ Install HA Companion</button> <span class="muted">progress shows in Managed components below.</span></div>""" else "") +
+            """<div class="setup">ℹ <b>${esc(strings.get("install.warning.no_renderer.title"))}</b> ${esc(strings.get("install.warning.no_renderer.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.no_renderer.suffix"))}""" +
+                (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="installComp('companion','update',this)">⬇ ${esc(strings.get("install.warning.no_renderer.install_companion"))}</button> <span class="muted">${esc(strings.get("install.warning.no_renderer.progress"))}</span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
         HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
-            """<div class="setup crit">⚠ <b>Newer database preserved after a version downgrade</b> (${esc(f.detail)}) — """ +
-                """this build opened a fresh state store because its schema is older. Some settings may have reset. """ +
-                """The previous database is preserved on the panel for recovery. Check """ +
-                """<a href="/configure">Configure</a>, or restore a backup below.</div>"""
+            """<div class="setup crit">⚠ <b>${esc(strings.get("install.warning.schema_rollback.title"))}</b> — ${esc(strings.get("install.warning.schema_rollback.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.schema_rollback.suffix"))}</div>"""
     }
 
     /** Managed-components card. ha-paneld + HA Companion get a channel + version picker (default channel
@@ -4538,27 +4560,27 @@ $allGood</div>
         val paneldRow = pickerRow("paneld", "ha-paneld", paneldCur, config.updateChannel, installer, strings)
         // A Play-managed FULL Companion must never be touched by ha-paneld — show it read-only.
         val compRow = if (compFull)
-            simpleRow("HA Companion", compCur, """<span class="muted">Play-managed — updates via the Play Store</span>""")
+            simpleRow("HA Companion", compCur, """<span class="muted">${esc(strings.get("install.components.play_managed"))}</span>""", strings)
         else pickerRow("companion", "HA Companion", compCur, config.companionUpdateChannel, installer, strings)
         val wvAction = when {
-            wv.playManaged -> """<span class="muted">Managed by Google Play — updates via the Play Store</span>"""
-            wv.tooOld && rec != null && root -> """<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installComp('webview','update',this)">⬇ Update WebView</button>"""
-            wv.tooOld && rec != null -> """<span class="muted">needs root/daemon to update</span>"""
-            wv.tooOld -> """<span class="muted">no known-good build for this panel</span>"""
-            else -> """<span class="muted">up to date</span>"""
+            wv.playManaged -> """<span class="muted">${esc(strings.get("install.components.google_play_managed"))}</span>"""
+            wv.tooOld && rec != null && root -> """<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installComp('webview','update',this)">⬇ ${esc(strings.get("install.components.update_webview"))}</button>"""
+            wv.tooOld && rec != null -> """<span class="muted">${esc(strings.get("install.components.root_update_required"))}</span>"""
+            wv.tooOld -> """<span class="muted">${esc(strings.get("install.components.no_known_build"))}</span>"""
+            else -> """<span class="muted">${esc(strings.get("install.components.up_to_date"))}</span>"""
         }
-        val installNote = if (installer) "" else """<p class="note">⚠ Installing or updating needs supported privileged panel access, which is unavailable on this panel.</p>"""
+        val installNote = if (installer) "" else """<p class="note">⚠ ${esc(strings.get("install.components.privileged_unavailable"))}</p>"""
         val title = if (installer || (wv.tooOld && rec != null && root)) {
-            hardenedApprovalCardTitle("Managed components", conditional = true, strings = strings)
+            hardenedApprovalCardTitle(esc(strings.get("install.components.title")), conditional = true, strings = strings)
         } else {
-            "<h2>Managed components</h2>"
+            "<h2>${esc(strings.get("install.components.title"))}</h2>"
         }
         return """<div class="card" data-layout-key="managed-components">$title
 $paneldRow
 $compRow
-${simpleRow("System WebView", wv.display, wvAction)}
+${simpleRow("System WebView", wv.display, wvAction, strings)}
 $installNote
-<p class="note">The default channel is set on the <a href="/configure">Configure</a> tab; changing it here only affects this picker.</p>
+<p class="note">${esc(strings.get("install.components.channel_prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.components.channel_suffix"))}</p>
 <p class="note" id="comp-msg"></p></div>"""
     }
 
@@ -4571,30 +4593,35 @@ $installNote
         strings: AppStrings,
     ): String {
         val companion = backupCompanionCopy(installed = companionInstalled, helper = companionHelper)
-        val compRow = companion.row
-        val restoreWarn = companion.restoreWarning
-        return """<div class="card" data-layout-key="backup-restore">${hardenedApprovalCardTitle("Backup &amp; restore", conditional = true, strings = strings)}
-<p class="note">A bundle of this panel's ha-paneld config${companion.bundleSuffix}. Backups contain credentials and are encrypted with your passphrase by default; it can't be recovered if lost.</p>
+        val compRow = when {
+            companion.showLoginChoice -> """<label style="display:flex;flex-direction:row;gap:8px;align-items:center;font-size:.85rem"><input type="checkbox" id="bk-comp" checked> ${esc(strings.get("install.backup.companion.include_login"))}</label>"""
+            companion.explainHelperRequirement -> """<p class="note">${esc(strings.get("install.backup.companion.helper_required"))}</p>"""
+            else -> ""
+        }
+        val descriptionKey = if (companion.showLoginChoice) "install.backup.description.with_companion" else "install.backup.description.config_only"
+        val restoreKey = if (companion.showLoginChoice) "install.backup.restore.description.with_companion" else "install.backup.restore.description.config_only"
+        return """<div class="card" data-layout-key="backup-restore">${hardenedApprovalCardTitle(esc(strings.get("install.backup.title")), conditional = true, strings = strings)}
+<p class="note">${esc(strings.get(descriptionKey))}</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
 $compRow
-<input type="password" id="bk-pw" placeholder="Passphrase (required for encrypted backup)">
-<label style="display:flex;flex-direction:row;gap:8px;align-items:flex-start;font-size:.85rem;color:#c88"><input type="checkbox" id="bk-plain"> Create an unencrypted plaintext ZIP instead (contains credentials)</label>
-<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doBackup(this)">⭳ Download backup</button>
+<input type="password" id="bk-pw" placeholder="${esc(strings.get("install.backup.passphrase.placeholder"))}">
+<label style="display:flex;flex-direction:row;gap:8px;align-items:flex-start;font-size:.85rem;color:#c88"><input type="checkbox" id="bk-plain"> ${esc(strings.get("install.backup.plaintext_zip"))}</label>
+<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doBackup(this)">⭳ ${esc(strings.get("install.backup.download"))}</button>
 </div>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
-<p class="note"><b>Restore</b> overwrites this panel's config$restoreWarn — you'll see a preview of the bundle's contents before it applies.</p>
+<p class="note"><b>${esc(strings.get("install.backup.restore.title"))}</b> ${esc(strings.get(restoreKey))}</p>
 <div style="display:flex;flex-direction:column;gap:8px;max-width:440px">
-<input type="password" id="rs-pw" placeholder="Bundle passphrase">
-<label class="pbtn" style="cursor:pointer">⭱ Choose backup (.hpb or .zip)…<input type="file" id="rs-file" accept=".hpb,.zip,application/octet-stream,application/zip" style="display:none" onchange="restorePick(this)"></label>
+<input type="password" id="rs-pw" placeholder="${esc(strings.get("install.backup.restore.passphrase_placeholder"))}">
+<label class="pbtn" style="cursor:pointer">⭱ ${esc(strings.get("install.backup.restore.choose"))}<input type="file" id="rs-file" accept=".hpb,.zip,application/octet-stream,application/zip" style="display:none" onchange="restorePick(this)"></label>
 <div id="rs-preview"></div>
 </div>
 <p class="note" id="bk-msg"></p>
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
-<p class="note"><b>Configuration bundle</b> copies settings between panels without app data. Preview an import before applying it; valid entries are applied and unsupported entries are skipped.</p>
+<p class="note"><b>${esc(strings.get("install.backup.config_bundle.title"))}</b> ${esc(strings.get("install.backup.config_bundle.description"))}</p>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
- <a class="pbtn" href="/api/v1/config/export">⭳ Export settings</a>
- <button class="pbtn" type="button"${hardenedApprovalA11yAttrs(strings = strings)} onclick="configExport(true,this)">⭳ Export incl. secrets</button>
- <label class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} style="cursor:pointer">⭱ Import settings…<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
+ <a class="pbtn" href="/api/v1/config/export">⭳ ${esc(strings.get("install.backup.config_bundle.export"))}</a>
+ <button class="pbtn" type="button"${hardenedApprovalA11yAttrs(strings = strings)} onclick="configExport(true,this)">⭳ ${esc(strings.get("install.backup.config_bundle.export_secrets"))}</button>
+ <label class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} style="cursor:pointer">⭱ ${esc(strings.get("install.backup.config_bundle.import"))}<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
 </div>
 <p id="cfg-export-result" class="note" role="status" aria-live="polite"></p>
 <pre id="cfg-import-result" class="muted" style="white-space:pre-wrap;margin-top:10px"></pre></div>"""
@@ -4610,26 +4637,25 @@ $compRow
      *  the same confirm-before-install button. */
     private fun apkCardHtml(root: Boolean, strings: AppStrings): String {
         val body = if (!root) {
-            """<p class="note">⚠ Installing an arbitrary APK needs root or the helper daemon — unavailable on this panel.</p>"""
+            """<p class="note">⚠ ${esc(strings.get("install.apk.root_unavailable"))}</p>"""
         } else {
             val allowed = config.apkUploadAllowed
-            """<div class="setup">⚠ <b>Security:</b> this root-installs <b>any</b> APK you choose, over the panel's """ +
-                """<b>unauthenticated</b> LAN web UI. Only install APKs you trust. """ +
-                """<small>(Panel access is LAN-only today; authenticated access is planned for a later release.)</small></div>
-<label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> Enable APK install on this panel</label>
+            """<div class="setup">⚠ <b>${esc(strings.get("install.apk.security_title"))}</b> ${esc(strings.get("install.apk.security_warning"))} """ +
+                """<small>(${esc(strings.get("install.apk.security_future_auth"))})</small></div>
+<label style="display:flex;flex-direction:row;gap:8px;align-items:center;margin:10px 0"><input type="checkbox" id="apk-allow" ${if (allowed) "checked" else ""} onchange="apkAllow(this)"> ${esc(strings.get("install.apk.enable"))}</label>
 <div id="apk-ui"${if (allowed) "" else " style=\"display:none\""}>
-<label class="pbtn" style="cursor:pointer">⭱ Choose APK…<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
-<label style="margin-top:10px">Or fetch from a link<input type="url" id="apk-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/app.apk"></label>
-<button class="pbtn" style="margin-top:8px" onclick="apkFetchUrl()">⇩ Fetch and inspect</button>
+<label class="pbtn" style="cursor:pointer">⭱ ${esc(strings.get("install.apk.choose"))}<input type="file" id="apk-file" accept=".apk,application/vnd.android.package-archive" style="display:none" onchange="apkPick(this)"></label>
+<label style="margin-top:10px">${esc(strings.get("install.apk.fetch_label"))}<input type="url" id="apk-url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://example.com/app.apk"></label>
+<button class="pbtn" style="margin-top:8px" onclick="apkFetchUrl()">⇩ ${esc(strings.get("install.apk.fetch"))}</button>
 <div id="apk-preview" style="margin-top:10px"></div>
 </div>"""
         }
         // Both actions in this card are approval-gated in Hardened mode — fetching, because it aims the
         // panel at a destination someone chose remotely, and installing — so the card title carries the
         // shield rather than each control repeating it.
-        val title = if (root) hardenedApprovalCardTitle("Install an APK", strings = strings) else "<h2>Install an APK</h2>"
+        val title = if (root) hardenedApprovalCardTitle(esc(strings.get("install.apk.title")), strings = strings) else "<h2>${esc(strings.get("install.apk.title"))}</h2>"
         return """<div class="card" data-layout-key="apk-install">$title
-<p class="note">Sideload an app (e.g. a dashboard renderer) from a file on your device or an <code>https://</code> link the panel downloads itself — either way you'll see its package, version and signer before it installs.</p>
+<p class="note">${esc(strings.get("install.apk.description"))}</p>
 $body
 <p class="note" id="apk-msg"></p></div>"""
     }
@@ -4637,14 +4663,14 @@ $body
     /** "Uninstall an app" card. Lists only removable apps (see packagesJson) so the picker can't strand the
      *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
     private fun uninstallCardHtml(root: Boolean, strings: AppStrings): String {
-        val body = if (!root) """<p class="note">⚠ Uninstalling an app needs root — unavailable on this panel.</p>"""
-        else """<p class="note">Remove an installed app. Only removable (third-party / updated) apps are listed — ha-paneld and stock system apps are excluded. To just hide a vendor app, <a href="/install#cfg-tame">tame</a> it instead.</p>
+        val body = if (!root) """<p class="note">⚠ ${esc(strings.get("install.uninstall.root_unavailable"))}</p>"""
+        else """<p class="note">${esc(strings.get("install.uninstall.description_prefix"))} <a href="${localizedHref("/install#cfg-tame", strings)}">${esc(strings.get("install.uninstall.tame_link"))}</a>${esc(strings.get("install.uninstall.description_suffix"))}</p>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-<select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>loading…</option></select>
-<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doUninstall(this)">Uninstall</button>
+<select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>${esc(strings.get("install.shared.loading"))}</option></select>
+<button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doUninstall(this)">${esc(strings.get("install.uninstall.action"))}</button>
 </div>
 <p class="note" id="uninst-msg"></p>"""
-        val title = if (root) hardenedApprovalCardTitle("Uninstall an app", strings = strings) else "<h2>Uninstall an app</h2>"
+        val title = if (root) hardenedApprovalCardTitle(esc(strings.get("install.uninstall.title")), strings = strings) else "<h2>${esc(strings.get("install.uninstall.title"))}</h2>"
         return """<div class="card" data-layout-key="uninstall-app">$title
 $body</div>"""
     }
@@ -4725,21 +4751,21 @@ $body</div>"""
     ): String {
         fun sel(v: String) = if (defaultChannel == v) " selected" else ""
         return """<div class="comprow" data-name="${esc(name)}">
-<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
+<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """${esc(strings.get("install.shared.installed"))} <span class="cver">${esc(installed)}</span>""" else """<span class="cver">${esc(strings.get("install.shared.not_installed"))}</span>"""}</span></div>
 <div class="comppick">
-<label class="muted">Channel <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>Stable</option><option value="prerelease"${sel("prerelease")}>Prerelease</option></select></label>
-<label class="muted">Version <select class="cvsel" onchange="verChanged('$name')"><option>loading…</option></select></label>
-<a class="gh gh-inline cnotes" target="_blank" rel="noopener" title="Release notes on GitHub" aria-label="Release notes on GitHub" style="visibility:hidden"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="$GH_ICON"/></svg></a>
-${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installSel('$name',this)" data-root="1" disabled>Install</button>"""
-        else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="This panel has no privileged installer, so ha-paneld can't install APKs itself — download the APK, then install it from your admin machine: adb install -r <file>">⬇ Download APK</a>"""}
+<label class="muted">${esc(strings.get("install.components.channel"))} <select class="cchan" onchange="loadVersions('$name')"><option value="stable"${sel("stable")}>${esc(strings.get("install.components.stable"))}</option><option value="prerelease"${sel("prerelease")}>${esc(strings.get("install.components.prerelease"))}</option></select></label>
+<label class="muted">${esc(strings.get("install.shared.version"))} <select class="cvsel" onchange="verChanged('$name')"><option>${esc(strings.get("install.shared.loading"))}</option></select></label>
+<a class="gh gh-inline cnotes" target="_blank" rel="noopener" title="${esc(strings.get("install.components.release_notes"))}" aria-label="${esc(strings.get("install.components.release_notes"))}" style="visibility:hidden"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="$GH_ICON"/></svg></a>
+${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs(strings = strings)} onclick="installSel('$name',this)" data-root="1" disabled>${esc(strings.get("install.components.install"))}</button>"""
+        else """<a class="pbtn cdl" style="display:none" target="_blank" rel="noopener" title="${esc(strings.get("install.components.download_apk_help"))}">⬇ ${esc(strings.get("install.components.download_apk"))}</a>"""}
 </div></div>"""
     }
 
     /** A component row with no picker — installed version + a single action/state (System WebView, or a
      *  Play-managed Companion). */
-    private fun simpleRow(label: String, installed: String?, action: String): String =
+    private fun simpleRow(label: String, installed: String?, action: String, strings: AppStrings): String =
         """<div class="comprow">
-<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """installed <span class="cver">${esc(installed)}</span>""" else """<span class="cver">not installed</span>"""}</span></div>
+<div class="compname"><b>${esc(label)}</b> <span class="muted">${if (installed != null) """${esc(strings.get("install.shared.installed"))} <span class="cver">${esc(installed)}</span>""" else """<span class="cver">${esc(strings.get("install.shared.not_installed"))}</span>"""}</span></div>
 <div class="comppick">$action</div></div>"""
 
     /** Logs tab — live log tail over SSE. App source always; system source needs root (gated live). */
@@ -5633,6 +5659,26 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
     private fun formattedString(strings: AppStrings, key: String, vararg values: Pair<String, String>): String =
         values.fold(strings.get(key)) { text, (name, value) -> text.replace("{$name}", value) }
 
+    /** Browser form failures get a localized, escaped mini-page; API callers retain the stable legacy token. */
+    private suspend fun respondInstallFormError(
+        call: ApplicationCall,
+        strings: AppStrings,
+        key: String,
+        machineText: String,
+        status: HttpStatusCode,
+    ) {
+        if (!installFormWantsHtml(call.request.headers["Accept"])) {
+            call.respondText("$machineText\n", status = status)
+            return
+        }
+        call.respondText(
+            "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+                esc(strings.get(key)) + "</body>",
+            ContentType.Text.Html,
+            status,
+        )
+    }
+
     private fun localizedSetupNeeds(needs: List<String>, strings: AppStrings): String = needs.joinToString(
         separator = " ${strings.get("dashboard.banner.setup_needs.joiner")} ",
     ) { need ->
@@ -6054,7 +6100,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             strings.get("dashboard.live.screen_brightness") to brightnessShown,
             strings.get("dashboard.live.volume") to "${volume.getPercent()}%",
             strings.get("dashboard.live.navigate") to config.lastNavigate.ifEmpty { "/" },
-            "LED" to ledShown,
+            strings.get("dashboard.live.led") to ledShown,
         ).joinToString("\n") { (k, v) -> """<tr><th>${esc(k)}</th><td>${esc(v)}</td></tr>""" }
     }
 
@@ -6272,11 +6318,11 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
 
     /** Visible "this needs root" banner for a root-gated card/control group — shown (never hidden) so a
      *  no-root user sees the feature and what root would unlock, next to controls rendered disabled. */
-    private fun rootLockBanner(unlocks: String): String =
-        """<div class="setup rootlock">🔒 Needs a rooted panel — this one has no root, so the controls below are disabled. $unlocks</div>"""
+    private fun rootLockBanner(unlocks: String, strings: AppStrings): String =
+        """<div class="setup rootlock">🔒 ${esc(formattedString(strings, "install.lock.root_required", "detail" to unlocks))}</div>"""
 
-    private fun privilegedLockBanner(unlocks: String): String =
-        """<div class="setup rootlock">🔒 Needs privileged panel access — no approved route is ready, so the controls below are disabled. $unlocks</div>"""
+    private fun privilegedLockBanner(unlocks: String, strings: AppStrings): String =
+        """<div class="setup rootlock">🔒 ${esc(formattedString(strings, "install.lock.privileged_required", "detail" to unlocks))}</div>"""
 
     /** The Controls-card button rows. [s] null (cold shell) → everything disabled as "checking…";
      *  hydration swaps in the capability-gated real state. */
@@ -6385,7 +6431,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         val shotTitle = """<h2>${esc(strings.get("dashboard.card.screenshot"))} <small>· ${esc(strings.get("dashboard.card.live_panel"))}</small><a class="card-title-action" href="#" onclick="refreshScreenshot(this.closest('.card'));return false" title="${esc(strings.get("dashboard.screenshot.capture_title"))}">↻ ${esc(strings.get("dashboard.action.refresh"))}</a></h2>"""
         val shotInner = { src: String? ->
             val source = src?.let { """src="${esc(it)}"""" } ?: ""
-            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.screenshot.open_full_size"))}" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="${esc(strings.get("dashboard.screenshot.alt"))}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>"""
+            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.screenshot.open_full_size"))}" data-error-label="${esc(strings.get("dashboard.screenshot.unavailable"))}" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="${esc(strings.get("dashboard.screenshot.alt"))}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>"""
         }
         val shotCard = when {
             s == null && cachedShot != null ->
@@ -6480,6 +6526,22 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
     /** One Vendor-packages row: label + package id, an optional state badge, and the single action button.
      *  Shared by the card and the picker. [showState] is false on the card — every row there is already
      *  tamed (disabled), so the column is redundant and just crowds the layout. */
+    private fun localizedTameGroupTitle(title: String, strings: AppStrings): String = when (title) {
+        "Recommended for this panel" -> strings.get("install.tame.group.recommended")
+        "Other apps" -> strings.get("install.tame.group.other")
+        "Using the most CPU" -> strings.get("install.tame.group.cpu")
+        else -> title
+    }
+
+    private fun localizedTameGroupHint(hint: String, strings: AppStrings): String = when (hint) {
+        "Known intrusive firmware apps for your hardware — safe first picks." ->
+            strings.get("install.tame.group.recommended_hint")
+        "Apps on this panel that aren't part of core Android." -> strings.get("install.tame.group.other_hint")
+        "Top CPU users right now. Core/system ones are shown for context but can't be disabled; only tame a vendor app you recognise." ->
+            strings.get("install.tame.group.cpu_hint")
+        else -> hint
+    }
+
     private fun tameRowHtml(
         c: TameController.Candidate,
         showState: Boolean = true,
@@ -6488,29 +6550,36 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
     ): String {
         val tamed = c.blocked || c.disabled
         val state = if (!showState) "" else when {
-            !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:var(--dim)">not installed</span>"""
-            c.disabled -> """<span style="width:80px;text-align:right;font-size:.85em;color:#d9a528">disabled</span>"""
-            else -> """<span style="width:80px;text-align:right;font-size:.85em;color:#3fb950">active</span>"""
+            !c.installed -> """<span style="width:80px;text-align:right;font-size:.85em;color:var(--dim)">${esc(strings.get("install.shared.not_installed"))}</span>"""
+            c.disabled -> """<span style="width:80px;text-align:right;font-size:.85em;color:#d9a528">${esc(strings.get("install.tame.state.disabled"))}</span>"""
+            else -> """<span style="width:80px;text-align:right;font-size:.85em;color:#3fb950">${esc(strings.get("install.tame.state.active"))}</span>"""
         }
         val action = if (tamed) "untame" else "tame"
-        val label = if (tamed) "Re-enable" else "Tame"
+        val label = strings.get(if (tamed) "install.tame.action.reenable" else "install.tame.action.tame")
         val btn = if (tamed) "" else "background:#7a2e2e;border-color:#7a2e2e"
         // Tags (authored or heuristic: core/vendor/user/overlay) after the label; note below the package id.
-        val tags = c.tags.joinToString("") {
-            """<span class="vtag">${esc(it)}</span>"""
+        val tags = c.tags.joinToString("") { tag ->
+            val localized = when (tag.lowercase(java.util.Locale.ROOT)) {
+                "core" -> strings.get("install.tame.tag.core")
+                "vendor" -> strings.get("install.tame.tag.vendor")
+                "user" -> strings.get("install.tame.tag.user")
+                "overlay" -> strings.get("install.tame.tag.overlay")
+                else -> tag
+            }
+            """<span class="vtag">${esc(localized)}</span>"""
         }
         // A "recommended" badge marks the profile's defaultTame picks (safe first picks / the "Tame all
         // recommended" set) while they're still active.
         val recBadge = if (c.recommended && !tamed)
-            """<span class="vtag rec">recommended</span>""" else ""
+            """<span class="vtag rec">${esc(strings.get("install.tame.badge.recommended"))}</span>""" else ""
         val note = if (c.note.isNotBlank())
             """<br><small style="color:#9aa">${esc(c.note)}</small>""" else ""
         // A non-removable package (core Android / dashboard / ourselves) is shown for context with a muted
         // "protected" label where the action button would be — no way to disable it.
         val control = if (!c.removable)
-            """<span style="font-size:.8em;color:#777;white-space:nowrap">protected</span>"""
+            """<span style="font-size:.8em;color:#777;white-space:nowrap">${esc(strings.get("install.tame.state.protected"))}</span>"""
         else
-            """<form method="post" action="/api/v1/tame" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>$label</button></form>"""
+            """<form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>${esc(label)}</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
@@ -6531,38 +6600,38 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         }.getOrDefault(emptyList())
         val rows = cands.joinToString("\n") { tameRowHtml(it, showState = false, disabled = locked, strings = strings) }
         val body = when {
-            locked -> """<div class="locked">${rows.ifBlank { """<p class="note">The vendor apps this panel could hide would be listed here.</p>""" }}</div>"""
+            locked -> """<div class="locked">${rows.ifBlank { """<p class="note">${esc(strings.get("install.tame.locked_empty"))}</p>""" }}</div>"""
             else -> rows.ifBlank {
-                """<p class="note">Nothing tamed yet. Press <b>Find a package…</b> to see what's on this panel.</p>"""
+                """<p class="note">${esc(strings.get("install.tame.empty"))}</p>"""
             }
         }
         val dis = if (locked) " disabled" else ""
-        val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
+        val lock = if (locked) rootLockBanner(strings.get("install.tame.root_required"), strings) else ""
         val titleText = esc(strings.get("install.card.vendor_packages"))
         val title = if (!locked) hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)
             else "<h2>$titleText</h2>"
         return """<div class="card" id="cfg-tame" data-layout-key="vendor-packages">$title
-$lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
+$lock<p class="note">${esc(strings.get("install.tame.description"))}</p>
 $body
 <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px" class="${if (locked) "locked" else ""}">
- <button type="button" onclick="pkgPick()"$dis>Find a package…</button>
- <form method="post" action="/api/v1/tame" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin:0">
-  <label for="tame-pkg" style="grid-column:1/-1">Android package name</label>
+ <button type="button" onclick="pkgPick()"$dis>${esc(strings.get("install.tame.find"))}</button>
+ <form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin:0">
+  <label for="tame-pkg" style="grid-column:1/-1">${esc(strings.get("install.tame.package_name"))}</label>
   <input id="tame-pkg" name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" required pattern="[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*" maxlength="255" aria-describedby="tame-pkg-hint" placeholder="io.example.app" style="min-width:0"$dis oninput="updateTamePackageSubmit()">
   <input type="hidden" name="action" value="tame">
-  <button id="tame-package-submit" type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>Tame</button>
-  <small id="tame-pkg-hint" class="note" style="grid-column:1/-1">Use the Android package id, for example io.example.app.</small>
+  <button id="tame-package-submit" type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>${esc(strings.get("install.tame.action.tame"))}</button>
+  <small id="tame-pkg-hint" class="note" style="grid-column:1/-1">${esc(strings.get("install.tame.package_hint"))}</small>
  </form>
 </div>
 <dialog id="pkgdlg" style="background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:12px;max-width:520px;width:92%;padding:16px">
- <h3 data-hardened-approval="conditional" aria-describedby="hardened-approval-section-conditional-description" title="${esc(strings.get("shell.hardened.section_conditional"))}" style="margin:0 0 4px">Find a package to control</h3>
- <p class="note" style="margin:0 0 8px">Apps on this panel you might want to tame — pick one to act on it. Not every entry is unwanted; only tame things you recognise.</p>
- <div id="pkgdlgbody" style="max-height:55vh;overflow:auto">Loading…</div>
- <form method="dialog" style="margin-top:12px;text-align:right"><button>Close</button></form>
+ <h3 data-hardened-approval="conditional" aria-describedby="hardened-approval-section-conditional-description" title="${esc(strings.get("shell.hardened.section_conditional"))}" style="margin:0 0 4px">${esc(strings.get("install.tame.dialog.title"))}</h3>
+ <p class="note" style="margin:0 0 8px">${esc(strings.get("install.tame.dialog.description"))}</p>
+ <div id="pkgdlgbody" style="max-height:55vh;overflow:auto">${esc(strings.get("install.shared.loading"))}</div>
+ <form method="dialog" style="margin-top:12px;text-align:right"><button>${esc(strings.get("install.shared.close"))}</button></form>
 </dialog>
 <script>function pkgPick(){var d=document.getElementById('pkgdlg');d.showModal();
-document.getElementById('pkgdlgbody').innerHTML='Loading…';
-fetch('/api/v1/tame/suggest').then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent='Could not list packages.'});}
+document.getElementById('pkgdlgbody').textContent=${jsonStr(strings.get("install.shared.loading"))};
+fetch(${jsonStr(localizedHref("/api/v1/tame/suggest", strings))}).then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent=${jsonStr(strings.get("install.tame.dialog.list_failed"))};});}
 function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg'),button=document.getElementById('tame-package-submit');if(!input||!button)return;button.disabled=input.disabled||!input.checkValidity();}updateTamePackageSubmit();</script></div>"""
     }
 
@@ -6581,32 +6650,30 @@ function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg')
         // Prefill: the active override if one is set, else the profile's HA-optimised recommendation
         // (so a fresh panel offers the right value to Apply rather than the factory base), else the base.
         val cur = curOverride?.takeIf { it != base } ?: recommendedDensity ?: base ?: DensityController.MIN_DPI
-        val densityHint = recommendedDensity?.let { "profile recommendation $it" }
-            ?: "firmware default ${base ?: "?"}"
-        val resetTitle = base?.let { "Reset to firmware default ($it dpi)" } ?: "Reset to firmware default"
+        val densityHint = recommendedDensity?.let { formattedString(strings, "install.display.profile_recommendation", "value" to it.toString()) }
+            ?: formattedString(strings, "install.display.firmware_default", "value" to (base?.toString() ?: "?"))
+        val resetTitle = base?.let { formattedString(strings, "install.display.reset_default_with_dpi", "value" to it.toString()) }
+            ?: strings.get("install.display.reset_default")
         val dis = if (locked) " disabled" else ""
         val rec = if (!locked && (recommendedDensity != null || recommendedFontScale != null))
-            """ <button type="submit" name="action" value="rec"${hardenedApprovalA11yAttrs(strings = strings)} formnovalidate>HA-optimised</button>""" else ""
-        val lock = if (locked) privilegedLockBanner("With supported privileged panel access, ha-paneld can match the dashboard's density and text size to the physical screen.") else ""
-        val badge = """<span class="cardbadge exp">experimental</span>"""
-        val title = if (!locked) hardenedApprovalCardTitle("Display sizing", badge, strings = strings) else "<h2>Display sizing$badge</h2>"
+            """ <button type="submit" name="action" value="rec"${hardenedApprovalA11yAttrs(strings = strings)} formnovalidate>${esc(strings.get("install.display.ha_optimised"))}</button>""" else ""
+        val lock = if (locked) privilegedLockBanner(strings.get("install.display.root_required"), strings) else ""
+        val badge = """<span class="cardbadge exp">${esc(strings.get("install.display.badge.experimental"))}</span>"""
+        val title = if (!locked) hardenedApprovalCardTitle(esc(strings.get("install.display.title")), badge, strings = strings) else "<h2>${esc(strings.get("install.display.title"))}$badge</h2>"
         return """<div class="card" id="cfg-display" data-layout-key="display-sizing">$title
-$lock<p class="note"><b>Experimental / R&amp;D — the right values aren't dialled in yet; experiment at your own
-pace.</b> Match an HA dashboard's size to a desktop browser. <b>Density</b> scales the whole layout
-(lower dpi = more fits); <b>text size</b> scales WebView text. Panel firmware often ships these
-mismatched to the physical screen. Applies live, persists across reboot; needs supported privileged panel access.</p>
-<form method="post" action="/api/v1/display/density" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
+$lock<p class="note">${esc(strings.get("install.display.description"))}</p>
+<form method="post" action="${localizedHref("/api/v1/display/density", strings)}" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
-  <span>Logical density (dpi) <small style="color:#888">· $densityHint</small></span>
+  <span>${esc(strings.get("install.display.logical_density"))} <small style="color:#888">· ${esc(densityHint)}</small></span>
   <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px"$dis>
  </label>
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
-  <span>Text size <small style="color:#888">· default 1.0</small></span>
+  <span>${esc(strings.get("install.display.text_size"))} <small style="color:#888">· ${esc(strings.get("install.display.default_scale"))}</small></span>
   <input name="font" type="number" step="0.05" min="${DensityController.MIN_FONT}" max="${DensityController.MAX_FONT}" value="$fs" style="width:96px"$dis>
  </label>
  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:2px">
-  <button type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>Apply</button>$rec
-  <button type="submit" name="action" value="reset" aria-describedby="hardened-approval-description" formnovalidate title="$resetTitle · ${esc(strings.get("configure.hardened.action_approval"))}"$dis>Reset</button>
+  <button type="submit"${hardenedApprovalA11yAttrs(strings = strings)}$dis>${esc(strings.get("install.display.apply"))}</button>$rec
+  <button type="submit" name="action" value="reset" aria-describedby="hardened-approval-description" formnovalidate title="${esc(resetTitle)} · ${esc(strings.get("configure.hardened.action_approval"))}"$dis>${esc(strings.get("install.display.reset"))}</button>
  </div>
 </form></div>"""
     }
