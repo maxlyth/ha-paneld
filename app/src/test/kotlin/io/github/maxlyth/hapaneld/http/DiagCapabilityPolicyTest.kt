@@ -177,7 +177,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains(""""Upgrade" to InstallPresentation("version-upgrade")"""))
         assertTrue(server.contains(""""Downgrade" to InstallPresentation("version-downgrade")"""))
         assertTrue(server.contains("""wv.playManaged -> """))
-        assertTrue(server.contains("Managed by Google Play — updates via the Play Store"))
+        assertTrue(server.contains("""strings.get("install.components.google_play_managed")"""))
         val install = java.io.File("src/main/assets/install.js").readText()
         assertTrue(install.contains("o.setAttribute('data-action', presentation(v.presentations && v.presentations.action, v.action || 'Install').text)"))
         assertTrue(install.contains("t('install.components.install', 'Install')"))
