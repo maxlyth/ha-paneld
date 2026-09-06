@@ -8,6 +8,7 @@ EXPECTED_TOTAL="${PROVISION_GATE_EXPECTED_TOTAL:-2361}"
 JOBS=11
 OUTPUT_DIR=""
 TEMP_OUTPUT=0
+AGGREGATE_ONLY=0
 
 ALL_SHARDS=(
   database-host
@@ -29,9 +30,11 @@ ALL_SHARDS=(
 usage() {
   cat <<'EOF'
 Usage: provision_gate_parallel.sh [-j JOBS] [--output DIR] [SHARD ...]
+       provision_gate_parallel.sh --aggregate DIR [SHARD ...]
 
 Runs all provisioning shards by default. A named subset may be supplied for a
-focused gate. Valid shards:
+focused gate. --aggregate validates retained shard results without running the
+shards again. Valid shards:
   database-host database-runtime install-export install-runtime
   helper-transaction release-integrity renderer-seeding install-finish
   backup publication database-authority fleet-installer
@@ -47,6 +50,12 @@ while [ "$#" -gt 0 ]; do
       JOBS="$2"; shift 2 ;;
     --output)
       [ "$#" -ge 2 ] || { echo "missing value for --output" >&2; exit 2; }
+      [ "$AGGREGATE_ONLY" -eq 0 ] || { echo "--output cannot be combined with --aggregate" >&2; exit 2; }
+      OUTPUT_DIR="$2"; shift 2 ;;
+    --aggregate)
+      [ "$#" -ge 2 ] || { echo "missing value for --aggregate" >&2; exit 2; }
+      [ -z "$OUTPUT_DIR" ] || { echo "--aggregate cannot be combined with --output" >&2; exit 2; }
+      AGGREGATE_ONLY=1
       OUTPUT_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     --) shift; while [ "$#" -gt 0 ]; do requested+=("$1"); shift; done ;;
@@ -57,7 +66,9 @@ done
 
 case "$JOBS" in ''|*[!0-9]*|0) echo "jobs must be a positive integer" >&2; exit 2 ;; esac
 case "$EXPECTED_TOTAL" in ''|*[!0-9]*) echo "expected total must be a non-negative integer" >&2; exit 2 ;; esac
-[ -f "$RUNNER" ] || { echo "provision shard runner not found: $RUNNER" >&2; exit 2; }
+if [ "$AGGREGATE_ONLY" -eq 0 ]; then
+  [ -f "$RUNNER" ] || { echo "provision shard runner not found: $RUNNER" >&2; exit 2; }
+fi
 
 if [ "${#requested[@]}" -eq 0 ]; then
   requested=("${ALL_SHARDS[@]}")
@@ -83,7 +94,9 @@ if [ "$complete_set" -eq 1 ]; then
   done
 fi
 
-if [ -n "$OUTPUT_DIR" ]; then
+if [ "$AGGREGATE_ONLY" -eq 1 ]; then
+  [ -d "$OUTPUT_DIR" ] || { echo "aggregate directory not found: $OUTPUT_DIR" >&2; exit 2; }
+elif [ -n "$OUTPUT_DIR" ]; then
   if [ -e "$OUTPUT_DIR" ] && [ -n "$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
     echo "output directory is not empty: $OUTPUT_DIR" >&2
     exit 2
@@ -183,26 +196,28 @@ owns_process_group_signals() {
 }
 
 gate_start="$(date +%s)"
-# Signal-owner shards must run before monitor mode has ever been enabled. Merely draining prior
-# background jobs is insufficient: Bash retains job-control state that changes nested process-group
-# status and timeout evidence. These three total about one minute when run in this clean context.
-for shard in "${requested[@]}"; do
-  owns_process_group_signals "$shard" || continue
-  ( run_shard "$shard" )
-done
+if [ "$AGGREGATE_ONLY" -eq 0 ]; then
+  # Signal-owner shards must run before monitor mode has ever been enabled. Merely draining prior
+  # background jobs is insufficient: Bash retains job-control state that changes nested process-group
+  # status and timeout evidence. These three total about one minute when run in this clean context.
+  for shard in "${requested[@]}"; do
+    owns_process_group_signals "$shard" || continue
+    ( run_shard "$shard" )
+  done
 
-# Monitor mode gives every background shard its own process group. The group
-# leader is the run_shard subshell in $!, so signal cleanup reaches the runner
-# and every process it started rather than abandoning grandchildren.
-set -m
-for shard in "${requested[@]}"; do
-  owns_process_group_signals "$shard" && continue
-  while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
-  run_shard "$shard" &
-  pids+=("$!")
-done
-wait_all_active
-set +m
+  # Monitor mode gives every background shard its own process group. The group
+  # leader is the run_shard subshell in $!, so signal cleanup reaches the runner
+  # and every process it started rather than abandoning grandchildren.
+  set -m
+  for shard in "${requested[@]}"; do
+    owns_process_group_signals "$shard" && continue
+    while [ "${#pids[@]}" -ge "$JOBS" ]; do wait_oldest; done
+    run_shard "$shard" &
+    pids+=("$!")
+  done
+  wait_all_active
+  set +m
+fi
 
 aggregate_cases=0
 aggregate_failures=0
