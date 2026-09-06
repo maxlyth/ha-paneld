@@ -1531,6 +1531,7 @@ class PaneldService : Service() {
                 }
             },
             pendingLiveSettings = liveSettingAuthority::pendingSnapshot,
+            stalledLiveSettings = liveSettingAuthority::pendingStalledSnapshot,
             assistPipelines = io.github.maxlyth.hapaneld.assist.HaAssistPipelineDirectory(config),
             voiceTest = io.github.maxlyth.hapaneld.assist.VoiceTestTrigger { voice.trigger() },
             // Controller-sourced setting values (their state isn't in the config namespace) so the

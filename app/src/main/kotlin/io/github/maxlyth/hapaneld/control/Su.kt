@@ -144,6 +144,10 @@ object Su : RootShell {
         return oneShotOutput(cmd)
     }
 
+    /** The cache is written only by a launch that actually raised ENOENT, so this reports the one root
+     *  failure that is a property of the device rather than of the moment. */
+    override fun executableMissing(): Boolean = execFailureCache.shouldSkipExec()
+
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
     override fun fireAndForget(cmd: String): Boolean {

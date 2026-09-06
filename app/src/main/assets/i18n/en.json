@@ -4288,6 +4288,18 @@
       "softMaxChars": 67,
       "hardMaxChars": 96
     },
+    "configure.save.hardware_unavailable": {
+      "text": "Saved. This panel has no way to apply it yet; it will be applied if that changes.",
+      "sourceHash": "67b5afeafe3ae46c4d5fe55a308ba88d39ff45f61c663e5fae47d17317334f3b",
+      "surface": "configure",
+      "context": "save",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 95,
+      "hardMaxChars": 130
+    },
     "configure.save.now_applied": {
       "text": "Saved settings are now applied.",
       "sourceHash": "f7bfcea102edeb4ba0e93aa5a17733d1de0cc1183edc5b707e474640363b018e",
@@ -4363,6 +4375,22 @@
       "frozen": [],
       "softMaxChars": 24,
       "hardMaxChars": 40
+    },
+    "configure.save.unavailable_to_apply": {
+      "text": "Saved, but this panel has no way to apply them yet: {settings}.",
+      "sourceHash": "54f575188113309c907825190ece15259dc8d17ae43647dbc27c593b497258d9",
+      "surface": "configure",
+      "context": "save",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{settings}"
+      ],
+      "frozen": [
+        "{settings}"
+      ],
+      "softMaxChars": 75,
+      "hardMaxChars": 110
     },
     "configure.save.waiting_to_apply": {
       "text": "Saved settings waiting to apply: {settings}.",

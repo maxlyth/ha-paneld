@@ -12,6 +12,17 @@ interface RootShell {
     /** Run [cmd] as root, waiting for completion; true on exit 0. */
     fun run(cmd: String): Boolean
 
+    /**
+     * True once an actual exec attempt has proved there is no su executable on this device.
+     *
+     * This is an operation result, not a probe: it is set only when a real command launch failed with
+     * ENOENT, and it is never set by a root manager that exists and denied the request, by a timeout, or
+     * by a negative availability check. Callers use it to tell "this panel has no root at all" from
+     * "root did not work this time"; the default is false so no fake or older implementation can claim
+     * a capability is structurally absent.
+     */
+    fun executableMissing(): Boolean = false
+
     /** Run exactly one command attempt, waiting at most [timeoutMs]. Implementations must not retry
      * [cmd] after an ambiguous timeout. The default preserves test/legacy implementations. */
     fun runSingleAttempt(cmd: String, timeoutMs: Long = 5_000L): Boolean = run(cmd)

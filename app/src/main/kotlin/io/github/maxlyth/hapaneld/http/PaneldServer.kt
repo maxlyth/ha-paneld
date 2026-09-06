@@ -1303,6 +1303,16 @@ internal fun databaseObservationProof(
     observation: RefreshedStatusStorage,
 ): String? = validDatabaseObservationNonce(rawNonce).takeIf { refreshRequested && observation.fresh }
 
+/**
+ * The pending keys the Configure page may present as unappliable rather than about to apply.
+ *
+ * Every stalled key is also a pending key, and the page reads the desired value from `apply_pending`, so
+ * a stall reported for anything outside it would mark a row the page is not showing as saved-and-waiting
+ * — the value would appear unappliable with nothing to say what value. Ordered so the response is stable.
+ */
+internal fun stalledApplyKeys(pending: Set<String>, stalled: Set<String>): List<String> =
+    stalled.filter { it in pending }.sorted()
+
 /** Server-side equality is the transaction authority; browser dirty tracking is only a UX hint. */
 internal fun planDirectConfigMutation(
     posted: Map<String, String>,
@@ -1425,6 +1435,9 @@ class PaneldServer internal constructor(
     // to an HA command while preserving whether durable desired state is still waiting for actuation.
     private val applySetting: (String, String) -> LiveSettingRequestOutcome,
     private val pendingLiveSettings: () -> Map<String, String> = { emptyMap() },
+    // The subset of the above whose apply path independent boots have found absent. Still durable, still
+    // replayed; reported separately only so the Configure page can stop promising it is about to apply.
+    private val stalledLiveSettings: () -> Set<String> = { emptySet() },
     // Fresh non-transient controller authorities for config export/diff/concurrency (touch sound,
     // network ADB and Zigbee intent). ManagementProjection owns the broader render/capability view.
     private val configLiveValues: () -> Map<String, String> = { emptyMap() },
@@ -10552,9 +10565,11 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                 "\"rejected\":${jarr(rejected)}," +
                 "\"message\":${s(message.orEmpty())},"
         }.orEmpty()
-        val pendingDesired = pendingLiveSettings().entries.joinToString(",") { (key, value) ->
+        val pending = pendingLiveSettings()
+        val pendingDesired = pending.entries.joinToString(",") { (key, value) ->
             "${s(key)}:${s(value)}"
         }
+        val stalledDesired = jarr(stalledApplyKeys(pending.keys, stalledLiveSettings()))
         return "{" +
             mutation +
             "\"panel_id\":${s(config.panelId)}," +
@@ -10584,7 +10599,8 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
             "\"settings\":${settingsValuesJson()}," +
             "\"ha_expose\":${haExposeJson()}," +
             haAreaCatalogJson()?.let { "\"ha_area_catalog\":$it," }.orEmpty() +
-            "\"apply_pending\":{$pendingDesired}" +
+            "\"apply_pending\":{$pendingDesired}," +
+            "\"apply_stalled\":$stalledDesired" +
             "}"
     }
 

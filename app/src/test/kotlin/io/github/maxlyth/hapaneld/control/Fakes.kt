@@ -62,12 +62,16 @@ class FakeRootShell(
     /** The effect a real root command would have had on the panel. Lets a test tell an actuator that
      *  genuinely changed the device from one that only reported success. */
     private val onRun: (String) -> Unit = {},
+    /** A panel with no su binary at all, as an exec would discover — never a root manager that denied
+     *  the command, which is [runResult] false with this left alone. */
+    private val executableMissing: Boolean = false,
 ) : RootShell {
     val ran = mutableListOf<String>()
     val outputRan = mutableListOf<String>()
     val isolatedOutputRan = mutableListOf<String>()
     override fun available() = available
     override fun run(cmd: String): Boolean { ran += cmd; onRun(cmd); return runResult }
+    override fun executableMissing(): Boolean = executableMissing
     override fun runOutput(cmd: String): String? {
         outputRan += cmd
         return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value

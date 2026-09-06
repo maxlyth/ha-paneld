@@ -4945,3 +4945,61 @@ browserTest('Two readings that already span the window are still not enough to j
 
   await untilCamera(page, 'not keeping up');
 });
+
+browserTest('Configure stops promising a value is about to apply once the panel cannot apply it', async (t) => {
+  // The defect this closes: "Saved settings waiting to apply: silence_boot_chime" stands forever on a
+  // panel whose root path is absent, over a setting the user never touched. The desired value is still
+  // saved and still retried, so the row keeps showing it — only the promise changes.
+  let stalled = [];
+  const schema = [
+    { key: 'silence_boot_chime', label: 'Silence boot chime', group: 'Behaviour', type: 'BOOL', available: true },
+    { key: 'touch_sound', label: 'Touch sound', group: 'Behaviour', type: 'BOOL', available: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      return json({
+        settings: { silence_boot_chime: false, touch_sound: false },
+        apply_pending: { silence_boot_chime: 'true', touch_sound: 'true' },
+        apply_stalled: stalled,
+        ha_expose: {}, ha_auth: { configured: false },
+      });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+
+  await page.locator('#cfg-silence_boot_chime .apply-pending-status').waitFor();
+  assert.match(await page.locator('#cfg-msg').textContent(),
+    /Saved settings waiting to apply: silence_boot_chime, touch_sound\./,
+    'while the panel may still apply them, waiting is the truthful thing to say');
+  assert.match(await page.locator('#cfg-silence_boot_chime .apply-pending-status').textContent(),
+    /hardware application is pending/);
+
+  // Two independent boots have now found no apply path for the boot chime. Touch sound has not stalled.
+  stalled = ['silence_boot_chime'];
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.locator('#cfg-silence_boot_chime .apply-pending-status').waitFor();
+
+  const banner = await page.locator('#cfg-msg').textContent();
+  assert.match(banner, /Saved settings waiting to apply: touch_sound\./,
+    'a key that has not stalled keeps the ordinary message');
+  assert.match(banner, /Saved, but this panel has no way to apply them yet: silence_boot_chime\./);
+  assert.doesNotMatch(banner, /waiting to apply: silence_boot_chime/,
+    'the stalled key must not still be promised');
+  assert.match(await page.locator('#cfg-silence_boot_chime .apply-pending-status').textContent(),
+    /no way to apply it yet/);
+  assert.match(await page.locator('#cfg-touch_sound .apply-pending-status').textContent(),
+    /hardware application is pending/);
+
+  // The desired value is unchanged durable state: the row still shows what was saved, not the hardware.
+  assert.equal(
+    await page.locator('#cfg-silence_boot_chime [role=switch]').getAttribute('aria-checked'), 'true',
+    'a stalled value is still the saved desired value');
+});

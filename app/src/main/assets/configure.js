@@ -4,7 +4,7 @@
 (function () {
   "use strict";
   // Advanced is the DEFAULT view until the reduced Basic set is settled (user, 2026-07-01).
-  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, schemaLanguageRequest = 0, apps = [], rendererChoices = [], radio = null;
+  var schema = [], values = {}, expose = {}, haAuth = {}, applyPending = {}, applyStalled = {}, applyPendingTimer = null, advanced = true, dirty = false, saving = false, editGeneration = 0, configDiscoveryRequest = 0, schemaLanguageRequest = 0, apps = [], rendererChoices = [], radio = null;
   var savedValues = {}, savedExpose = {};
   var dirtyValues = Object.create(null), dirtyExpose = Object.create(null);
   var joinCooldownUntil = 0, joinPollTimer = null, hashFocused = false;
@@ -2629,7 +2629,7 @@
       labelText,
       help,
       Object.prototype.hasOwnProperty.call(applyPending, f.key) ?
-        el("small", { class: "apply-pending-status", text: i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.") }) : null,
+        el("small", { class: "apply-pending-status", text: applyPendingStatusText(f.key) }) : null,
     ]);
     // Read-only rows (diagnostic sensors) have no editable value — just the expose-to-HA pip.
     var valueControl = f.readOnly ? null : control(f);
@@ -2803,7 +2803,8 @@
           shouldRenderRow(field),
           values[field.key],
           field.ha ? expose[field.key] !== false : null,
-          Object.prototype.hasOwnProperty.call(applyPending, field.key)
+          Object.prototype.hasOwnProperty.call(applyPending, field.key),
+          applyStalled[field.key] === true
         ];
       })
     ]);
@@ -3265,6 +3266,7 @@
       expose = res[1].ha_expose || {};
       haAuth = res[1].ha_auth || {};
       applyPending = res[1].apply_pending || {};
+      applyStalled = stalledMap(res[1].apply_stalled);
       haAreaSeed = res[1].ha_area_catalog || null;
       haAreaUserOverride = res[1].ha_area_user_override === true;
       if (values.auto_sleep === "true") configCardExpected.autoSleep = true;
@@ -3304,9 +3306,7 @@
       loadDiscoverySuggestions();
       loadHomeDashboards();
       if (!done && Object.keys(applyPending).length) {
-        document.getElementById("cfg-msg").textContent = i18nText("configure.save.waiting_to_apply", "Saved settings waiting to apply: {settings}.", {
-          settings: Object.keys(applyPending).join(", ")
-        });
+        document.getElementById("cfg-msg").textContent = applyPendingBannerText();
       }
       scheduleApplyPendingPoll();
       if (refreshAutoSleepPrerequisite !== false) scheduleAutoSleepPrerequisite();
@@ -3401,6 +3401,40 @@
     });
   }
 
+  // The keys whose apply path this panel has been found not to have. Their desired value is still saved
+  // and still retried; only the sentence about it changes, because "waiting to apply" was a promise the
+  // panel could not keep and it never went away.
+  function stalledMap(list) {
+    var map = {};
+    (Array.isArray(list) ? list : []).forEach(function (key) { map[key] = true; });
+    return map;
+  }
+
+  function applyPendingStatusText(key) {
+    return applyStalled[key] === true
+      ? i18nText("configure.save.hardware_unavailable", "Saved. This panel has no way to apply it yet; it will be applied if that changes.")
+      : i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.");
+  }
+
+  function applyPendingBannerText() {
+    var waiting = [], stalled = [];
+    Object.keys(applyPending).forEach(function (key) {
+      (applyStalled[key] === true ? stalled : waiting).push(key);
+    });
+    var parts = [];
+    if (waiting.length) {
+      parts.push(i18nText("configure.save.waiting_to_apply", "Saved settings waiting to apply: {settings}.", {
+        settings: waiting.join(", ")
+      }));
+    }
+    if (stalled.length) {
+      parts.push(i18nText("configure.save.unavailable_to_apply", "Saved, but this panel has no way to apply them yet: {settings}.", {
+        settings: stalled.join(", ")
+      }));
+    }
+    return parts.join(" ");
+  }
+
   function scheduleApplyPendingPoll() {
     if (applyPendingTimer) clearTimeout(applyPendingTimer);
     applyPendingTimer = null;
@@ -3410,10 +3444,12 @@
         .then(function (response) { if (!response.ok) throw response.status; return response.json(); })
         .then(function (body) {
           var next = body.apply_pending || {};
+          var nextStalled = stalledMap(body.apply_stalled);
           var currentKeys = Object.keys(applyPending), nextKeys = Object.keys(next);
           var changed = currentKeys.length !== nextKeys.length || nextKeys.some(function (key) {
             return !Object.prototype.hasOwnProperty.call(applyPending, key) ||
-              String(applyPending[key]) !== String(next[key]);
+              String(applyPending[key]) !== String(next[key]) ||
+              (nextStalled[key] === true) !== (applyStalled[key] === true);
           });
           if (!changed) return;
           var changedKeys = currentKeys.concat(nextKeys).filter(function (key, index, keys) {
@@ -3428,15 +3464,16 @@
             return;
           }
           applyPending = next;
+          applyStalled = nextStalled;
           changedKeys.forEach(function (key) {
             var row = document.getElementById("cfg-" + key);
             var label = row && row.querySelector(".flabel");
             if (!label) return;
             var status = label.querySelector(".apply-pending-status");
             if (Object.prototype.hasOwnProperty.call(next, key)) {
-              if (!status) label.appendChild(el("small", {
-                class: "apply-pending-status", text: i18nText("configure.save.hardware_pending", "Saved desired value; hardware application is pending.")
-              }));
+              var statusText = applyPendingStatusText(key);
+              if (!status) label.appendChild(el("small", { class: "apply-pending-status", text: statusText }));
+              else if (status.textContent !== statusText) status.textContent = statusText;
             } else if (status) status.remove();
           });
           syncBehaviourCardSignature();

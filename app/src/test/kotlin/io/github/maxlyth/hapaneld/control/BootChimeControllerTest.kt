@@ -112,7 +112,7 @@ class BootChimeControllerTest {
     @Test fun directTransitionAttemptsEveryDurableSettingAndLiveStream() {
         val attempted = mutableListOf<String>()
 
-        assertFalse(applyBootChimeDirect(
+        assertEquals(ControlApplyOutcome.FAILED, applyBootChimeDirect(
             state = prior,
             writeSetting = { key, value ->
                 attempted += "setting:$key=${value ?: "-"}"
@@ -143,7 +143,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(available = false, runResult = false)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertEquals(listOf(BootChimeState(0, 0, 0, 0, 0)), direct.applied)
         assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
@@ -156,7 +156,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = true)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
         assertEquals(listOf(silenceShellCommand(0)), root.ran)
@@ -169,7 +169,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = false)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.restore(prior))
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.restore(prior))
 
         assertEquals(command, restoreHelperCommand(prior))
         assertEquals(listOf(command), daemon.sent)
@@ -182,7 +182,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = true)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertTrue(daemon.sent.isEmpty())
         assertTrue(root.ran.isEmpty())
@@ -258,27 +258,29 @@ class BootChimeControllerTest {
             events += "capture"
             return captured
         }
-        override fun silence(): Boolean {
+        override fun silence(): ControlApplyOutcome {
             events += "silence"
             silenced = true
-            return true
+            return ControlApplyOutcome.APPLIED
         }
-        override fun restore(state: BootChimeState): Boolean {
+        override fun restore(state: BootChimeState): ControlApplyOutcome {
             events += "restore:$state"
             restored = state
-            return restoreSucceeds
+            return if (restoreSucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
         }
     }
 
     private class FakeBootChimeDirect(
         private val captured: BootChimeState,
         private val applySucceeds: Boolean,
+        private val outcome: ControlApplyOutcome =
+            if (applySucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED,
     ) : BootChimeDirectAccess {
         val applied = mutableListOf<BootChimeState>()
         override fun capture(): BootChimeState = captured
-        override fun apply(state: BootChimeState): Boolean {
+        override fun apply(state: BootChimeState): ControlApplyOutcome {
             applied += state
-            return applySucceeds
+            return outcome
         }
     }
 }
