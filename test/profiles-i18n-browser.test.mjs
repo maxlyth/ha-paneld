@@ -109,12 +109,14 @@ async function rig(t, { translations = {}, withHelper = true, editorProbe = fals
   return { page, requests };
 }
 
-test('Profiles maps the complete pinned CodeMirror phrase vocabulary to finite catalogue keys', async () => {
+test('Profiles maps the complete live CodeMirror phrase vocabulary to finite catalogue keys', async () => {
   const [source, bundle, catalogue] = await Promise.all([
     readFile(asset, 'utf8'),
     readFile(editorBundle, 'utf8'),
     readFile(englishCatalogue, 'utf8').then(JSON.parse),
   ]);
+  // The pinned bundle also contains Folded lines, Unfolded lines and to, but the wrapper installs
+  // neither foldKeymap nor direct fold commands, so those announcement phrases are unreachable.
   const expected = [
     'Find', 'Replace', 'next', 'previous', 'all', 'match case', 'regexp', 'by word', 'replace',
     'replace all', 'replaced match on line $', 'replaced $ matches', 'close', 'Go to line', 'go',
