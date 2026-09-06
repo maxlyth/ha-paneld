@@ -4264,7 +4264,7 @@ $approvalKeyAfter""",
 
     /** Configure tab — schema-driven, save-together settings only. */
     private fun configureBody(strings: AppStrings): String {
-        val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave
+        val proximityLearningEnabled = sensors.hasProximity()
         val proximityMount = if (proximityLearningEnabled) """<div id="proximity-learning-mount" hidden></div>""" else ""
         val proximityScript = if (proximityLearningEnabled) """<script src="/assets/proximity-learning.js"></script>""" else ""
         val setup = configureSetupBanners(strings)
