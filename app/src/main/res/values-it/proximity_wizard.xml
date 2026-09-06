@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="proximity_wizard_title">Configurazione del sensore di prossimità</string>
+    <string name="proximity_wizard_intro">Configura il risveglio del pannello con un gesto</string>
+    <string name="proximity_wizard_intro_hint">Segui i passaggi sul pannello. Lascia libero lo spazio davanti al sensore finché non ti viene chiesto di muovere la mano.</string>
+    <string name="proximity_wizard_clear">Allontana la mano</string>
+    <string name="proximity_wizard_clear_hint">Lascia libero lo spazio davanti al pannello. Resta fermo durante la verifica del sensore.</string>
+    <string name="proximity_wizard_near">Avvicina la mano al sensore</string>
+    <string name="proximity_wizard_near_hint">Tieni la mano ferma vicino al sensore finché non appare il passaggio successivo.</string>
+    <string name="proximity_wizard_return_clear">Allontana di nuovo la mano</string>
+    <string name="proximity_wizard_return_clear_hint">Lascia libero lo spazio finché il pannello non è pronto per un gesto.</string>
+    <string name="proximity_wizard_waves">Avvicina e poi allontana la mano</string>
+    <string name="proximity_wizard_waves_hint">Avvicina la mano al sensore, poi allontanala. Attendi il segnale del pannello prima di ripetere.</string>
+    <string name="proximity_wizard_review">Il gesto è pronto</string>
+    <string name="proximity_wizard_review_hint">Salva per usare queste impostazioni. Annulla mantiene le impostazioni precedenti.</string>
+    <string name="proximity_wizard_saved">Impostazioni di prossimità salvate</string>
+    <string name="proximity_wizard_saving">Salvataggio della calibrazione…</string>
+    <string name="proximity_wizard_saving_hint">Attendi il salvataggio delle impostazioni.</string>
+    <string name="proximity_wizard_saved_hint">Se attivato, il risveglio con un gesto usa queste impostazioni. Il risveglio al tocco resta disponibile.</string>
+    <string name="proximity_wizard_cancelled">Configurazione annullata</string>
+    <string name="proximity_wizard_unchanged">Le impostazioni di prossimità precedenti sono state mantenute.</string>
+    <string name="proximity_wizard_timed_out">Tempo per la configurazione scaduto</string>
+    <string name="proximity_wizard_failed">Impossibile verificare il sensore</string>
+    <string name="proximity_wizard_unavailable">La configurazione non è più attiva</string>
+    <string name="proximity_wizard_unavailable_hint">Le impostazioni precedenti sono state mantenute. Puoi riavviare la procedura dalla pagina di configurazione.</string>
+    <string name="proximity_wizard_binary">Questo sensore rileva solo presenza o assenza di un ostacolo vicino. La distanza di rilevamento non è regolabile.</string>
+    <string name="proximity_wizard_progress">Gesti accettati: %1$d di %2$d</string>
+    <string name="proximity_wizard_time">%1$d secondi rimanenti</string>
+    <string name="proximity_wizard_start">Avvia</string>
+    <string name="proximity_wizard_retry">Riprova</string>
+    <string name="proximity_wizard_save">Salva</string>
+    <string name="proximity_wizard_cancel">Annulla</string>
+    <string name="proximity_wizard_done">Fine</string>
+    <string name="proximity_wizard_action_failed">Impossibile completare questo passaggio. Le impostazioni precedenti sono al sicuro.</string>
+</resources>

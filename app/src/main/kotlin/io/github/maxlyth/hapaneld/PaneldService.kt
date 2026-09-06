@@ -900,6 +900,7 @@ class PaneldService : Service() {
     // Adopting a wake nobody here performed must not depend on the broker being up, so it gets its own
     // worker rather than sharing the MQTT sync tick. Single-flight is right for it: the work is
     // idempotent and generation-guarded, so a dropped duplicate costs nothing.
+    private var proximityWizard: ProximityWizardCoordinator? = null
     private val screenWakeWorker = SingleFlightExecutor("ha-paneld-screen-reconcile")
     @Volatile private var screenOnReceiver: BroadcastReceiver? = null
     @Volatile private var webViewRebindReceiver: BroadcastReceiver? = null
@@ -1530,6 +1531,7 @@ class PaneldService : Service() {
                     ) { key, value, previous -> applyLiveSettingObserved(mqtt, key, value, previous) }
                 }
             },
+            onProximityCalibration = { action, id -> proximityWizard?.remote(action, id) == true },
             pendingLiveSettings = liveSettingAuthority::pendingSnapshot,
             assistPipelines = io.github.maxlyth.hapaneld.assist.HaAssistPipelineDirectory(config),
             voiceTest = io.github.maxlyth.hapaneld.assist.VoiceTestTrigger { voice.trigger() },
@@ -3175,6 +3177,19 @@ class PaneldService : Service() {
             if (touchSound.isEnabled()) touchSound.set(true)
             bootChime.applyPersisted()
             sensors.prepare()
+            proximityWizard = ProximityWizardCoordinator(
+                startSession = sensors::startProximityCalibration,
+                active = sensors::proximityCalibrationActive,
+                status = sensors::proximityJson,
+                visible = sensors::proximityCalibrationVisible,
+                localAction = sensors::proximityCalibrationAction,
+                cancel = sensors::cancelProximitySession,
+                heartbeat = sensors::proximityCalibrationHeartbeat,
+                reset = sensors::resetProximityToProfile,
+                acquireDisplay = screen::acquireVisibleHold,
+                releaseDisplay = screen::releaseVisibleHold,
+                launch = system::launchProximityWizard,
+            )
             when (BundledHelperInstaller.ensureCurrent(this@PaneldService)) {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")
                 BundledHelperInstaller.Result.FAILED ->
@@ -3285,22 +3300,35 @@ class PaneldService : Service() {
                     autoSleep.noteProximityState(near)
                 },
                 onGesture = gesture@{
-                    if (!config.wakeOnWave || !sensors.hasLearnedProximity()) return@gesture
-                    val generation = screen.currentOffGeneration() ?: return@gesture
-                    val settingGeneration = config.wakeOnWaveGeneration
-                    wakeOnWaveWorker.execute {
-                        if (
-                            teardownBoundary.isStopping || !config.wakeOnWave || !sensors.hasLearnedProximity() ||
-                            config.wakeOnWaveGeneration != settingGeneration
-                        ) return@execute
-                        if (screen.wakeIfStillDark(generation) {
-                                !teardownBoundary.isStopping && config.wakeOnWave && sensors.hasLearnedProximity() &&
-                                    config.wakeOnWaveGeneration == settingGeneration
-                            } == WakeOutcome.WOKEN && !teardownBoundary.isStopping
-                        ) {
-                            mqtt.publishScreenOn()
-                        }
+                    val token = sensors.proximityGestureToken()
+                    if (!config.wakeOnWave || !sensors.proximityReady()) {
+                        sensors.completeProximityGesture(token, false)
+                        return@gesture
                     }
+                    val proximityGeneration = sensors.proximityGeneration()
+                    val generation = screen.currentOffGeneration()
+                    if (generation == null) {
+                        sensors.completeProximityGesture(token, false)
+                        return@gesture
+                    }
+                    val settingGeneration = config.wakeOnWaveGeneration
+                    val submitted = wakeOnWaveWorker.execute {
+                        var accepted = false
+                        try {
+                            if (
+                                teardownBoundary.isStopping || !config.wakeOnWave || !sensors.proximityReady() ||
+                                sensors.proximityGeneration() != proximityGeneration ||
+                                config.wakeOnWaveGeneration != settingGeneration
+                            ) return@execute
+                            accepted = screen.wakeIfStillDark(generation) {
+                                !teardownBoundary.isStopping && config.wakeOnWave && sensors.proximityReady() &&
+                                    sensors.proximityGeneration() == proximityGeneration &&
+                                    config.wakeOnWaveGeneration == settingGeneration
+                            } == WakeOutcome.WOKEN
+                            if (accepted && !teardownBoundary.isStopping) mqtt.publishScreenOn()
+                        } finally { sensors.completeProximityGesture(token, accepted) }
+                    }
+                    if (!submitted) sensors.completeProximityGesture(token, false)
                 },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
@@ -4064,6 +4092,7 @@ class PaneldService : Service() {
      * every controller exists; normal destruction has already initialized all of them.
      */
     private fun closeServiceAdmissions() {
+        proximityWizard?.close()
         if (::audio.isInitialized) beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
         if (::kiosk.isInitialized) kiosk.closeAdmission()
         if (::navbar.isInitialized) navbar.closeAdmission()

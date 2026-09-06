@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="proximity_wizard_title">Configuración de proximidad</string>
+    <string name="proximity_wizard_intro">Configura un gesto para activar este panel</string>
+    <string name="proximity_wizard_intro_hint">Sigue los pasos en el panel. Mantén despejado el espacio frente al sensor hasta que se te indique mover la mano.</string>
+    <string name="proximity_wizard_clear">Aleja la mano</string>
+    <string name="proximity_wizard_clear_hint">Deja despejado el espacio frente al panel. Quédate quieto mientras se comprueba el sensor.</string>
+    <string name="proximity_wizard_near">Acerca la mano al sensor</string>
+    <string name="proximity_wizard_near_hint">Mantén la mano quieta cerca del sensor hasta que aparezca el siguiente paso.</string>
+    <string name="proximity_wizard_return_clear">Vuelve a alejar la mano</string>
+    <string name="proximity_wizard_return_clear_hint">Mantén el espacio despejado hasta que el panel esté listo para un gesto.</string>
+    <string name="proximity_wizard_waves">Acerca y luego aleja la mano</string>
+    <string name="proximity_wizard_waves_hint">Acerca la mano al sensor y luego aléjala. Espera a que el panel lo indique antes de repetir.</string>
+    <string name="proximity_wizard_review">Tu gesto está listo</string>
+    <string name="proximity_wizard_review_hint">Guarda para usar estos ajustes. Cancelar conserva los ajustes anteriores.</string>
+    <string name="proximity_wizard_saved">Ajustes de proximidad guardados</string>
+    <string name="proximity_wizard_saving">Guardando la calibración…</string>
+    <string name="proximity_wizard_saving_hint">Espera mientras se guardan los ajustes.</string>
+    <string name="proximity_wizard_saved_hint">La activación por gesto usa estos ajustes cuando está habilitada. La activación por toque sigue disponible.</string>
+    <string name="proximity_wizard_cancelled">Configuración cancelada</string>
+    <string name="proximity_wizard_unchanged">Se han conservado los ajustes de proximidad anteriores.</string>
+    <string name="proximity_wizard_timed_out">Se agotó el tiempo de configuración</string>
+    <string name="proximity_wizard_failed">No se pudo verificar el sensor</string>
+    <string name="proximity_wizard_unavailable">La configuración ya no está activa</string>
+    <string name="proximity_wizard_unavailable_hint">Se han conservado los ajustes anteriores. Puedes volver a iniciar el proceso desde la página de configuración.</string>
+    <string name="proximity_wizard_binary">Este sensor solo detecta si hay algo cerca o si el espacio está despejado. Su distancia de detección no se puede ajustar.</string>
+    <string name="proximity_wizard_progress">Gestos aceptados: %1$d de %2$d</string>
+    <string name="proximity_wizard_time">Quedan %1$d segundos</string>
+    <string name="proximity_wizard_start">Iniciar</string>
+    <string name="proximity_wizard_retry">Reintentar</string>
+    <string name="proximity_wizard_save">Guardar</string>
+    <string name="proximity_wizard_cancel">Cancelar</string>
+    <string name="proximity_wizard_done">Listo</string>
+    <string name="proximity_wizard_action_failed">No se pudo completar este paso. Los ajustes anteriores están a salvo.</string>
+</resources>

@@ -10,6 +10,8 @@ import io.github.maxlyth.hapaneld.platform.WakeTap
 import io.github.maxlyth.hapaneld.util.HelperClient
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Collections
+import java.util.IdentityHashMap
 
 enum class WakeOutcome { WOKEN, ALREADY_ON, STALE_GENERATION, ACTUATION_FAILED }
 
@@ -82,6 +84,26 @@ class ScreenController(
     @Volatile private var observedDarkGeneration = 0L
     @Volatile private var automaticOffGeneration = 0L
     private val admissionClosed = AtomicBoolean(false)
+    private val visibleHolds = Collections.newSetFromMap(IdentityHashMap<Any, Boolean>())
+
+    /** A service-owned interactive journey temporarily refuses every app-controlled off route. */
+    @Synchronized
+    fun acquireVisibleHold(owner: Any): Boolean {
+        if (admissionClosed.get()) return false
+        if (ensureOn() == WakeOutcome.ACTUATION_FAILED) return false
+        return synchronized(visibleHolds) {
+            if (admissionClosed.get()) false else {
+                visibleHolds.add(owner)
+                true
+            }
+        }
+    }
+
+    /** Release does not restore an earlier dark state; ordinary policy may sleep again afterwards. */
+    @Synchronized
+    fun releaseVisibleHold(owner: Any) {
+        synchronized(visibleHolds) { visibleHolds.remove(owner) }
+    }
 
     fun isOn(): Boolean = power.isInteractive()
 
@@ -190,7 +212,7 @@ class ScreenController(
     fun sleepAutomatically(): AutomaticOffEpoch? = sleepInternal(automatic = true)
 
     private fun sleepInternal(automatic: Boolean): AutomaticOffEpoch? {
-        if (admissionClosed.get() || (automatic && intendedOff)) return null
+        if (admissionClosed.get() || synchronized(visibleHolds) { visibleHolds.isNotEmpty() } || (automatic && intendedOff)) return null
         intendedOffGeneration = stateGeneration.incrementAndGet()
         automaticOffGeneration = if (automatic) intendedOffGeneration else 0L
         observedDarkGeneration = 0L
@@ -542,7 +564,10 @@ class ScreenController(
 
     /** Close future screen-off and brightness admission without performing any hardware I/O. */
     fun closeAdmission() {
-        admissionClosed.set(true)
+        synchronized(visibleHolds) {
+            admissionClosed.set(true)
+            visibleHolds.clear()
+        }
         onWakeByTap = null
         onWakeCompleted = null
     }

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="proximity_wizard_title">接近传感器设置</string>
+    <string name="proximity_wizard_intro">设置挥手唤醒面板</string>
+    <string name="proximity_wizard_intro_hint">请按照面板上的步骤操作。在提示您移动手之前，请保持传感器前方无遮挡。</string>
+    <string name="proximity_wizard_clear">请将手移开</string>
+    <string name="proximity_wizard_clear_hint">请保持面板前方无遮挡。检查传感器时，请保持不动。</string>
+    <string name="proximity_wizard_near">请将手靠近传感器</string>
+    <string name="proximity_wizard_near_hint">请将手停在传感器附近并保持不动，直到显示下一步。</string>
+    <string name="proximity_wizard_return_clear">请再次将手移开</string>
+    <string name="proximity_wizard_return_clear_hint">请保持前方无遮挡，直到面板准备好检测挥手动作。</string>
+    <string name="proximity_wizard_waves">请靠近，再将手移开</string>
+    <string name="proximity_wizard_waves_hint">请将手靠近传感器，然后移开。等待面板提示后再重复。</string>
+    <string name="proximity_wizard_review">挥手验证完成</string>
+    <string name="proximity_wizard_review_hint">保存后即可使用这些设置。取消会保留之前的设置。</string>
+    <string name="proximity_wizard_saved">接近传感器设置已保存</string>
+    <string name="proximity_wizard_saving">正在保存校准…</string>
+    <string name="proximity_wizard_saving_hint">正在保存设置，请稍候。</string>
+    <string name="proximity_wizard_saved_hint">启用挥手唤醒后，将使用这些设置。触摸唤醒仍然可用。</string>
+    <string name="proximity_wizard_cancelled">设置已取消</string>
+    <string name="proximity_wizard_unchanged">已保留之前的接近传感器设置。</string>
+    <string name="proximity_wizard_timed_out">设置超时</string>
+    <string name="proximity_wizard_failed">无法验证传感器</string>
+    <string name="proximity_wizard_unavailable">设置流程已结束</string>
+    <string name="proximity_wizard_unavailable_hint">已保留之前的设置。您可以从配置页面重新开始设置。</string>
+    <string name="proximity_wizard_binary">此传感器只能区分靠近和无遮挡两种状态，无法调整检测距离。</string>
+    <string name="proximity_wizard_progress">已通过的挥手次数：%1$d，共 %2$d 次</string>
+    <string name="proximity_wizard_time">剩余 %1$d 秒</string>
+    <string name="proximity_wizard_start">开始</string>
+    <string name="proximity_wizard_retry">重试</string>
+    <string name="proximity_wizard_save">保存</string>
+    <string name="proximity_wizard_cancel">取消</string>
+    <string name="proximity_wizard_done">完成</string>
+    <string name="proximity_wizard_action_failed">无法完成此步骤。之前的设置已安全保留。</string>
+</resources>

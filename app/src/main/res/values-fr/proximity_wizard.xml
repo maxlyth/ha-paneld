@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="proximity_wizard_title">Configuration de la proximité</string>
+    <string name="proximity_wizard_intro">Réveiller ce panneau par un geste de la main</string>
+    <string name="proximity_wizard_intro_hint">Suivez les étapes sur le panneau. Laissez l’espace devant le capteur dégagé jusqu’à ce qu’il vous soit demandé de déplacer la main.</string>
+    <string name="proximity_wizard_clear">Éloignez la main</string>
+    <string name="proximity_wizard_clear_hint">Laissez l’espace devant le panneau dégagé. Restez immobile pendant la vérification du capteur.</string>
+    <string name="proximity_wizard_near">Approchez la main du capteur</string>
+    <string name="proximity_wizard_near_hint">Gardez la main immobile près du capteur jusqu’à ce que l’étape suivante s’affiche.</string>
+    <string name="proximity_wizard_return_clear">Éloignez à nouveau la main</string>
+    <string name="proximity_wizard_return_clear_hint">Laissez l’espace dégagé jusqu’à ce que le panneau soit prêt à détecter un geste.</string>
+    <string name="proximity_wizard_waves">Approchez puis éloignez la main</string>
+    <string name="proximity_wizard_waves_hint">Approchez la main du capteur, puis éloignez-la. Attendez le signal du panneau avant de recommencer.</string>
+    <string name="proximity_wizard_review">Votre geste est reconnu</string>
+    <string name="proximity_wizard_review_hint">Enregistrez pour utiliser ces réglages. Annuler conserve vos réglages précédents.</string>
+    <string name="proximity_wizard_saved">Réglages de proximité enregistrés</string>
+    <string name="proximity_wizard_saving">Enregistrement de l’étalonnage…</string>
+    <string name="proximity_wizard_saving_hint">Veuillez patienter pendant l’enregistrement de vos réglages.</string>
+    <string name="proximity_wizard_saved_hint">Le réveil par geste utilise ces réglages lorsqu’il est activé. Le réveil par toucher reste disponible.</string>
+    <string name="proximity_wizard_cancelled">Configuration annulée</string>
+    <string name="proximity_wizard_unchanged">Vos réglages de proximité précédents ont été conservés.</string>
+    <string name="proximity_wizard_timed_out">Délai de configuration dépassé</string>
+    <string name="proximity_wizard_failed">Le capteur n’a pas pu être vérifié</string>
+    <string name="proximity_wizard_unavailable">La configuration n’est plus active</string>
+    <string name="proximity_wizard_unavailable_hint">Vos réglages précédents ont été conservés. Vous pouvez relancer la configuration depuis la page de configuration.</string>
+    <string name="proximity_wizard_binary">Ce capteur indique uniquement « proche » ou « dégagé ». Sa distance de détection ne peut pas être réglée.</string>
+    <string name="proximity_wizard_progress">Gestes acceptés : %1$d sur %2$d</string>
+    <string name="proximity_wizard_time">%1$d secondes restantes</string>
+    <string name="proximity_wizard_start">Démarrer</string>
+    <string name="proximity_wizard_retry">Réessayer</string>
+    <string name="proximity_wizard_save">Enregistrer</string>
+    <string name="proximity_wizard_cancel">Annuler</string>
+    <string name="proximity_wizard_done">Terminé</string>
+    <string name="proximity_wizard_action_failed">Cette étape n’a pas pu être terminée. Vos réglages précédents sont préservés.</string>
+</resources>

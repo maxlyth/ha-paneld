@@ -1,0 +1,315 @@
+package io.github.maxlyth.hapaneld.sensors
+
+import android.content.Context
+import android.os.SystemClock
+import io.github.maxlyth.hapaneld.dashboard.EntityCatalogStore
+import io.github.maxlyth.hapaneld.device.profile.ProfileProximityCalibration
+import java.security.MessageDigest
+import java.util.Locale
+import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import org.json.JSONObject
+
+/** Fixed calibration, an explicit local wizard, and one atomic durable save. No ambient model writes. */
+internal class ProximityCalibrationRuntime(
+    sourceIdentity: String,
+    profileIdentity: String,
+    private val baseline: ProximityCalibrationEngine.Calibration?,
+    private val store: ProximityModelStore,
+    private val elapsed: () -> Long = SystemClock::elapsedRealtime,
+    private val wall: () -> Long = System::currentTimeMillis,
+) : AutoCloseable {
+    data class Decision(val reportMask: Int, val near: Boolean?, val normalizedLevel: Int?, val deliberateGesture: Boolean)
+
+    private val fingerprint = fingerprint("$profileIdentity|$sourceIdentity")
+    private val reportGate = ProximityReportGate(densePresenceStabilityMs = 0)
+    private var userOverride = false
+    private var readFailed = false
+    private val engine = ProximityCalibrationEngine(readCalibration()) { candidate ->
+        val now = wall()
+        // This is the only calibration write. The store commits the whole row in one transaction;
+        // observation, cancellation, close, and restart have no persistence queue to race it.
+        runCatching {
+            store.writeProximityBatch(
+                EntityCatalogStore.ProximityModelRow(
+                    fingerprint, STORAGE_VERSION, "explicit-calibration-v1", encode(candidate), true, now,
+                ), emptyList(), emptyList(), now,
+            )
+        }.isSuccess.also { if (it) { userOverride = true; readFailed = false } }
+    }
+    @Volatile private var view = engine.current()
+    @Volatile private var sessionId = ""
+    @Volatile private var browserAt = 0L
+    @Volatile private var visibleAt = 0L
+    @Volatile private var startedAt = 0L
+    @Volatile private var closed = false
+    @Volatile private var failureMessage = ""
+    @Volatile private var sourceProven = false
+    @Volatile private var saving = false
+    @Volatile private var gestureToken = 0L
+    private var completedGestureToken = 0L
+    private var processedAt = 0L
+
+    constructor(context: Context, sourceIdentity: String, profileIdentity: String, profile: ProfileProximityCalibration?) : this(
+        sourceIdentity, profileIdentity, profile?.let(::fromProfile),
+        SqliteProximityModelStore(EntityCatalogStore(context.applicationContext)),
+    )
+
+    @Synchronized
+    fun observe(raw: Float, receivedAt: Long, sparseReporting: Boolean, live: Boolean = true, calibrationLive: Boolean = live): Decision {
+        val now = processingTime(receivedAt)
+        if (closed) return Decision(ProximityReportGate.NONE, null, null, false)
+        expireOwner(now)
+        if (!raw.isFinite()) sourceProven = false
+        else if (calibrationLive) sourceProven = true
+        view = engine.observe(raw, now, live, calibrationLive)
+        return decision(now, sparseReporting)
+    }
+
+    @Synchronized
+    fun tick(receivedAt: Long = elapsed(), sparseReporting: Boolean = false): Decision {
+        val now = processingTime(receivedAt)
+        if (closed) return Decision(ProximityReportGate.NONE, null, null, false)
+        expireOwner(now)
+        view = engine.tick(now)
+        return decision(now, sparseReporting)
+    }
+
+    @Synchronized
+    fun sourceUnavailable(receivedAt: Long = elapsed()): Decision {
+        val now = processingTime(receivedAt)
+        sourceProven = false
+        if (!closed) view = engine.sourceUnavailable(now)
+        return decision(now, false)
+    }
+
+    fun needsTick(): Boolean = !closed && (view.active || engine.needsTick())
+    fun isReady(): Boolean = !closed && sourceProven && view.available && view.near != null
+    fun isWaveReady(): Boolean = !closed && sourceProven && !saving && view.wakeReady
+    fun isLearnedSignal(): Boolean = !closed && view.calibration != null
+    fun generation(): Long = view.generation
+    fun gestureToken(): Long = gestureToken
+
+    @Synchronized
+    fun completeGesture(token: Long, accepted: Boolean) {
+        if (token != gestureToken || token <= completedGestureToken) return
+        completedGestureToken = token
+        if (!accepted) engine.releaseGestureCooldown()
+    }
+    fun active(): Boolean = !closed && view.active
+
+    /** HTML creates only the introduction. Only a visible local Activity can begin collecting. */
+    @Synchronized
+    fun start(): Boolean {
+        if (closed || view.active || saving) return false
+        val now = processingTime(elapsed())
+        sessionId = UUID.randomUUID().toString()
+        browserAt = now
+        visibleAt = 0L
+        startedAt = now
+        failureMessage = ""
+        view = engine.start(now)
+        return view.active
+    }
+
+    fun visible(): Boolean {
+        if (closed || sessionId.isEmpty()) return false
+        visibleAt = elapsed()
+        return true
+    }
+
+    @Synchronized
+    fun heartbeat(id: String): Boolean {
+        if (closed || id.isEmpty() || id != sessionId) return false
+        browserAt = elapsed()
+        return true
+    }
+
+    /** Invoked on the service's background action lane, never on the Activity main thread. */
+    @Synchronized
+    fun localAction(action: String): Boolean {
+        if (closed || sessionId.isEmpty() || saving) return false
+        val now = processingTime(elapsed())
+        expireOwner(now)
+        if (action !in setOf("begin", "retry", "save", "cancel")) return false
+        if (action != "cancel" && (visibleAt <= 0L || now - visibleAt > LOCAL_VISIBILITY_MS)) return false
+        if (action == "retry") {
+            startedAt = now
+            browserAt = now
+            failureMessage = ""
+        }
+        val before = view
+        saving = action == "save" && before.stage == ProximityCalibrationEngine.Stage.REVIEW
+        try {
+            view = engine.action(action, now)
+        } finally { saving = false }
+        return before != view
+    }
+
+    @Synchronized
+    fun cancel(id: String? = null, message: String = ""): Boolean {
+        if (closed || (id != null && id != sessionId)) return false
+        val wasActive = view.active
+        if (wasActive) {
+            view = engine.action("cancel", processingTime(elapsed()))
+            failureMessage = message
+        }
+        return wasActive
+    }
+
+    @Synchronized
+    fun resetToProfile(): Boolean {
+        if (closed || view.active || saving) return false
+        if (runCatching { store.clearProximityLearning(fingerprint) }.isFailure) return false
+        userOverride = false
+        readFailed = false
+        sessionId = ""
+        failureMessage = ""
+        view = engine.reset(baseline, processingTime(elapsed()))
+        reportGate.reset()
+        return true
+    }
+
+    fun summary(): String = when {
+        closed || !sourceProven || !view.available -> "Proximity source unavailable"
+        view.active -> "Follow proximity setup on the panel"
+        view.calibration == null -> "Proximity setup is available on the panel"
+        else -> "Calibrated proximity · ${view.mode?.name?.lowercase(Locale.ROOT)}"
+    }
+
+    /** Status never waits for a save transaction; the native instruction surface must stay responsive. */
+    fun json(raw: Float = Float.NaN, ageSeconds: Long? = null): String {
+        val state = view
+        val phase = when {
+            state.active -> "calibrating"
+            !sourceProven || !state.available -> "source_unavailable"
+            state.calibration == null -> "calibration_required"
+            else -> "ready"
+        }
+        val mode = state.mode?.name?.lowercase(Locale.ROOT) ?: "unknown"
+        return JSONObject().apply {
+            put("present", true)
+            put("phase", phase)
+            put("learning", phase)
+            put("stage", if (saving) "saving" else state.stage?.name?.lowercase(Locale.ROOT) ?: "")
+            put("sessionId", sessionId)
+            put("sessionActive", state.active)
+            put("session", JSONObject().put("active", state.active).put("kind", "calibration").put("message", state.message))
+            put("message", failureMessage.ifEmpty { state.message.ifEmpty { summary() } })
+            put("mode", mode)
+            put("signalMode", mode)
+            put("rangedEligible", state.mode == ProximityCalibrationEngine.Mode.RANGED)
+            put("health", if (sourceProven && state.available) "healthy" else "source_unavailable")
+            put("polarity", state.calibration?.let { if (it.nearRaw > it.clearRaw) "near_is_higher" else "near_is_lower" } ?: "unknown")
+            put("acceptedGestures", state.accepted)
+            put("requiredGestures", 3)
+            put("remainingSeconds", ((SESSION_TIMEOUT_MS - (elapsed() - startedAt)).coerceAtLeast(0L) / 1000L))
+            put("ready", isReady())
+            put("wakeReady", isWaveReady())
+            put("canCalibrate", !closed && !state.active && !saving)
+            put("canTeach", !closed && !state.active && !saving)
+            put("canTest", false)
+            put("near", state.near ?: JSONObject.NULL)
+            put("level", state.level ?: JSONObject.NULL)
+            put("raw", if (raw.isFinite()) raw else JSONObject.NULL)
+            put("age_s", ageSeconds ?: JSONObject.NULL)
+            put("calibrationSource", if (userOverride) "user" else if (baseline != null) "profile" else "none")
+            put("profileDefaultAvailable", baseline != null)
+            put("calibrationReadFailed", readFailed)
+        }.toString()
+    }
+
+    /** Callers capture receipt time before taking this monitor. A queued callback must not make a
+     * later local action look like a clock rollback; sensor-event freshness is checked separately. */
+    private fun processingTime(receivedAt: Long): Long = maxOf(receivedAt, elapsed(), processedAt).also { processedAt = it }
+
+    private fun expireOwner(now: Long) {
+        if (!view.active) return
+        val reason = when {
+            now < startedAt || now - startedAt >= SESSION_TIMEOUT_MS -> "Setup timed out. Your previous calibration is unchanged."
+            now < browserAt || now - browserAt > BROWSER_LEASE_MS -> "The setup browser disconnected. Your previous calibration is unchanged."
+            visibleAt == 0L && now - startedAt > LAUNCH_TIMEOUT_MS -> "Could not show setup on the panel. Your previous calibration is unchanged."
+            visibleAt > 0L && now - visibleAt > LOCAL_VISIBILITY_MS -> "The panel setup screen closed. Your previous calibration is unchanged."
+            else -> null
+        }
+        if (reason != null) {
+            view = engine.action("cancel", now)
+            failureMessage = reason
+        }
+    }
+
+    private fun decision(now: Long, sparseReporting: Boolean): Decision {
+        val state = view
+        val near = state.near.takeIf { sourceProven && state.available }
+        val level = state.level.takeIf { near != null }?.let { if (near == false) 0 else it }
+        val gesture = state.gesture && sourceProven && !saving
+        if (gesture) gestureToken++
+        return Decision(reportGate.project(near, level, now, sparseReporting), near, level, gesture)
+    }
+
+    private fun readCalibration(): ProximityCalibrationEngine.Calibration? {
+        val row = runCatching { store.readProximityModel(fingerprint) }.getOrElse { readFailed = true; return baseline }
+            ?: return baseline
+        if (row.algorithmVersion != STORAGE_VERSION || row.fingerprint != fingerprint || !row.ready) return baseline
+        val value = decode(row.snapshotJson) ?: return baseline
+        userOverride = true
+        return value
+    }
+
+    @Synchronized
+    override fun close() {
+        if (closed) return
+        view = engine.action("cancel", processingTime(elapsed()))
+        closed = true
+        store.close()
+    }
+
+    fun closeAsync(): CompletableFuture<Unit> = runCatching { close(); CompletableFuture.completedFuture(Unit) }
+        .getOrElse { CompletableFuture<Unit>().also { future -> future.completeExceptionally(it) } }
+
+    companion object {
+        const val STORAGE_VERSION = 1001
+        const val SESSION_TIMEOUT_MS = 300_000L
+        const val BROWSER_LEASE_MS = 30_000L
+        const val LOCAL_VISIBILITY_MS = 5_000L
+        const val LAUNCH_TIMEOUT_MS = 15_000L
+
+        fun fingerprint(identity: String): String = MessageDigest.getInstance("SHA-256")
+            .digest("explicit-proximity-v1|$identity".toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 255) }
+
+        fun fromProfile(value: ProfileProximityCalibration) = ProximityCalibrationEngine.Calibration(
+            mode = ProximityCalibrationEngine.Mode.valueOf(value.mode.uppercase(Locale.ROOT)),
+            clearRaw = value.clearRaw, nearRaw = value.nearRaw,
+            nearEnter = value.nearEnter, clearExit = value.clearExit,
+            debounceMs = value.debounceMs.toLong(), clearArmMs = value.clearArmMs.toLong(),
+            minimumNearMs = value.minimumNearMs.toLong(), maximumNearMs = value.maximumNearMs.toLong(),
+            cooldownMs = value.cooldownMs.toLong(),
+        )
+
+        fun encode(value: ProximityCalibrationEngine.Calibration): String = JSONObject().apply {
+            put("version", value.version); put("mode", value.mode.name)
+            put("clearRaw", value.clearRaw); put("nearRaw", value.nearRaw)
+            put("nearEnter", value.nearEnter); put("clearExit", value.clearExit)
+            put("debounceMs", value.debounceMs); put("clearArmMs", value.clearArmMs)
+            put("minimumNearMs", value.minimumNearMs); put("maximumNearMs", value.maximumNearMs)
+            put("cooldownMs", value.cooldownMs)
+        }.toString()
+
+        fun decode(raw: String): ProximityCalibrationEngine.Calibration? = runCatching {
+            require(raw.length <= 4096)
+            val value = JSONObject(raw)
+            ProximityCalibrationEngine.Calibration(
+                version = value.getInt("version"), mode = ProximityCalibrationEngine.Mode.valueOf(value.getString("mode")),
+                clearRaw = value.getDouble("clearRaw").toFloat(), nearRaw = value.getDouble("nearRaw").toFloat(),
+                nearEnter = value.getDouble("nearEnter").toFloat(), clearExit = value.getDouble("clearExit").toFloat(),
+                debounceMs = value.getLong("debounceMs"), clearArmMs = value.getLong("clearArmMs"),
+                minimumNearMs = value.getLong("minimumNearMs"), maximumNearMs = value.getLong("maximumNearMs"),
+                cooldownMs = value.getLong("cooldownMs"),
+            ).also {
+                require(it.debounceMs in 0..5_000 && it.clearArmMs in 0..30_000 && it.minimumNearMs in 0..10_000)
+                require(it.maximumNearMs <= 30_000 && it.cooldownMs <= 60_000)
+            }
+        }.getOrNull()
+    }
+}

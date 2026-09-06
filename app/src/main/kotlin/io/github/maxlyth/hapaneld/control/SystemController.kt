@@ -63,6 +63,16 @@ class SystemController(
         Log.i(TAG, "$label -> $component")
     }
 
+    /** Open the local instruction surface; visibility is acknowledged separately by its session. */
+    fun launchProximityWizard(): Boolean {
+        val component = "${env.ownPackage}/.ProximityWizardActivity"
+        return when (privilegedStart(component)) {
+            PrivilegedStartResult.STARTED -> true
+            PrivilegedStartResult.BLOCKED -> false
+            PrivilegedStartResult.FAILED -> runCatching { env.directStart(component); true }.getOrDefault(false)
+        }
+    }
+
     /** True when [pkg] selects ha-paneld's own built-in WebView renderer rather than a foreign app.
      *  Our own package name is treated as the sentinel too: some callers resolve the renderer to a real
      *  package (e.g. for perf attribution), and letting it fall through to the foreign-app paths would

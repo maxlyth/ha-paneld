@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="proximity_wizard_title">Näherungssensor einrichten</string>
+    <string name="proximity_wizard_intro">Dieses Panel durch eine Handbewegung aufwecken</string>
+    <string name="proximity_wizard_intro_hint">Folgen Sie den Schritten hier auf dem Panel. Halten Sie den Bereich vor dem Sensor frei, bis Sie aufgefordert werden, Ihre Hand zu bewegen.</string>
+    <string name="proximity_wizard_clear">Hand entfernen</string>
+    <string name="proximity_wizard_clear_hint">Halten Sie den Bereich vor dem Panel frei. Bleiben Sie ruhig, während der Sensor geprüft wird.</string>
+    <string name="proximity_wizard_near">Hand zum Sensor führen</string>
+    <string name="proximity_wizard_near_hint">Halten Sie Ihre Hand ruhig in der Nähe des Sensors, bis der nächste Schritt angezeigt wird.</string>
+    <string name="proximity_wizard_return_clear">Hand wieder entfernen</string>
+    <string name="proximity_wizard_return_clear_hint">Halten Sie den Bereich frei, bis das Panel für eine Handbewegung bereit ist.</string>
+    <string name="proximity_wizard_waves">Hand heranführen und wieder entfernen</string>
+    <string name="proximity_wizard_waves_hint">Führen Sie Ihre Hand zum Sensor und entfernen Sie sie wieder. Warten Sie auf die Aufforderung des Panels, bevor Sie dies wiederholen.</string>
+    <string name="proximity_wizard_review">Ihre Handbewegung wurde erkannt</string>
+    <string name="proximity_wizard_review_hint">Speichern Sie, um diese Einstellungen zu verwenden. Abbrechen behält Ihre bisherigen Einstellungen bei.</string>
+    <string name="proximity_wizard_saved">Näherungseinstellungen gespeichert</string>
+    <string name="proximity_wizard_saving">Kalibrierung wird gespeichert…</string>
+    <string name="proximity_wizard_saving_hint">Bitte warten Sie, während Ihre Einstellungen gespeichert werden.</string>
+    <string name="proximity_wizard_saved_hint">Das Aufwecken per Handbewegung verwendet diese Einstellungen, wenn es aktiviert ist. Aufwecken durch Berührung bleibt verfügbar.</string>
+    <string name="proximity_wizard_cancelled">Einrichtung abgebrochen</string>
+    <string name="proximity_wizard_unchanged">Ihre bisherigen Näherungseinstellungen wurden beibehalten.</string>
+    <string name="proximity_wizard_timed_out">Zeit für die Einrichtung abgelaufen</string>
+    <string name="proximity_wizard_failed">Der Sensor konnte nicht überprüft werden</string>
+    <string name="proximity_wizard_unavailable">Einrichtung ist nicht mehr aktiv</string>
+    <string name="proximity_wizard_unavailable_hint">Ihre bisherigen Einstellungen wurden beibehalten. Sie können die Einrichtung auf der Konfigurationsseite erneut starten.</string>
+    <string name="proximity_wizard_binary">Dieser Sensor erkennt nur „nah“ oder „frei“. Sein Erkennungsabstand lässt sich nicht einstellen.</string>
+    <string name="proximity_wizard_progress">Akzeptierte Handbewegungen: %1$d von %2$d</string>
+    <string name="proximity_wizard_time">Noch %1$d Sekunden</string>
+    <string name="proximity_wizard_start">Starten</string>
+    <string name="proximity_wizard_retry">Erneut versuchen</string>
+    <string name="proximity_wizard_save">Speichern</string>
+    <string name="proximity_wizard_cancel">Abbrechen</string>
+    <string name="proximity_wizard_done">Fertig</string>
+    <string name="proximity_wizard_action_failed">Dieser Schritt konnte nicht abgeschlossen werden. Ihre bisherigen Einstellungen sind sicher.</string>
+</resources>

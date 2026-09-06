@@ -1424,6 +1424,7 @@ class PaneldServer internal constructor(
     // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
     // to an HA command while preserving whether durable desired state is still waiting for actuation.
     private val applySetting: (String, String) -> LiveSettingRequestOutcome,
+    private val onProximityCalibration: (String, String) -> Boolean = { _, _ -> false },
     private val pendingLiveSettings: () -> Map<String, String> = { emptyMap() },
     // Fresh non-transient controller authorities for config export/diff/concurrency (touch sound,
     // network ADB and Zigbee intent). ManagementProjection owns the broader render/capability view.
@@ -3414,54 +3415,39 @@ class PaneldServer internal constructor(
                     get("/openapi.json") {
                         call.respondText(asset("openapi.json"), ContentType.Application.Json)
                     }
-                    post("/proximity/teach") {
-                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasProximity()) {
-                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                    post("/proximity/calibration") {
+                        if (!proximityUiRequestAllowed(
+                                call.request.headers["Origin"], call.request.headers["Referer"],
+                                call.request.headers["Host"], call.request.headers["Sec-Fetch-Site"],
+                                call.request.headers["X-Proximity-UI"],
+                            )) {
+                            call.respondText("Start proximity setup from this panel's HTML UI.\n", status = HttpStatusCode.Forbidden)
                             return@post
                         }
-                        val accepted = when (action) {
-                            "start" -> sensors.startProximityTeach()
-                            "cancel" -> sensors.cancelProximitySession()
-                            else -> false
-                        }
-                        call.respondText(
-                            sensors.proximityJson(), ContentType.Application.Json,
-                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
-                        )
-                    }
-                    post("/proximity/test") {
-                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasProximity()) {
-                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                        val parameters = receiveBoundedFormParameters(call) ?: return@post
+                        val action = parameters["action"].orEmpty()
+                        if (action !in setOf("start", "cancel", "reset", "heartbeat")) {
+                            call.respondText("Unsupported calibration action.\n", status = HttpStatusCode.BadRequest)
                             return@post
                         }
-                        val accepted = when (action) {
-                            "start" -> sensors.startProximityTest()
-                            "cancel" -> sensors.cancelProximitySession()
-                            else -> false
-                        }
-                        call.respondText(
-                            sensors.proximityJson(), ContentType.Application.Json,
-                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
-                        )
-                    }
-                    post("/proximity/relearn") {
                         if (!sensors.hasProximity()) {
                             call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
                             return@post
                         }
-                        val confirm = (receiveBoundedFormParameters(call) ?: return@post)["confirm"] == "true"
-                        if (!confirm) {
-                            call.respondText("confirmation-required\n", status = HttpStatusCode.Conflict)
-                        } else {
-                            val cleared = sensors.relearnProximity()
-                            call.respondText(
-                                sensors.proximityJson(),
-                                ContentType.Application.Json,
-                                if (cleared) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
-                            )
-                        }
+                        val id = parameters["sessionId"].orEmpty()
+                        val accepted = withContext(Dispatchers.IO) { onProximityCalibration(action, id) }
+                        call.response.headers.append("Cache-Control", "no-store")
+                        call.respondText(sensors.proximityJson(), ContentType.Application.Json,
+                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict)
+                    }
+                    post("/proximity/teach") {
+                        call.respondText("Use on-panel proximity setup from the HTML UI.\n", status = HttpStatusCode.Gone)
+                    }
+                    post("/proximity/test") {
+                        call.respondText("Use on-panel proximity setup from the HTML UI.\n", status = HttpStatusCode.Gone)
+                    }
+                    post("/proximity/relearn") {
+                        call.respondText("Use Reset to profile from the HTML UI.\n", status = HttpStatusCode.Gone)
                     }
                     post("/proximity/capture") {
                         call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)

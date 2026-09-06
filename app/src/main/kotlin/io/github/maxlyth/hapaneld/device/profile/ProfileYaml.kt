@@ -201,7 +201,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             root["sensors"],
             "sensors",
             setOf(
-                "proximity_technology", "proximity_gpio", "light_technology", "cht8305", "vi530x", "room_temp_offset_c",
+                "proximity_technology", "proximity_gpio", "light_technology", "cht8305", "vi530x", "room_temp_offset_c", "proximity_calibration",
             ) + LEGACY_PROXIMITY_CLASSIFIER_KEYS,
         ).orEmpty()
         val identity = map(root["identity"], "identity", setOf("manufacturer", "model", "model_label_strategy")).orEmpty()
@@ -304,6 +304,7 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
             ),
             sensors = ProfileSensors(
                 proximityTechnology = string(sensors, "proximity_technology", "sensors"),
+                proximityCalibration = proximityCalibration(sensors["proximity_calibration"]),
                 proximityGpio = integer(sensors, "proximity_gpio", "sensors"),
                 lightTechnology = string(sensors, "light_technology", "sensors"),
                 cht8305 = boolean(sensors, "cht8305", "sensors") ?: false,
@@ -530,6 +531,28 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         }
     }
 
+    private fun proximityCalibration(value: Any?): ProfileProximityCalibration? {
+        val path = "sensors.proximity_calibration"
+        val fields = map(value, path, setOf(
+            "revision", "mode", "clear_raw", "near_raw", "verification", "near_enter", "clear_exit",
+            "debounce_ms", "clear_arm_ms", "minimum_near_ms", "maximum_near_ms", "cooldown_ms",
+        )) ?: return null
+        return ProfileProximityCalibration(
+            revision = integer(fields, "revision", path, required = true) ?: 0,
+            mode = string(fields, "mode", path, required = true).orEmpty(),
+            clearRaw = float(fields, "clear_raw", path, required = true) ?: 0f,
+            nearRaw = float(fields, "near_raw", path, required = true) ?: 0f,
+            verification = string(fields, "verification", path, required = true).orEmpty(),
+            nearEnter = float(fields, "near_enter", path) ?: 0.65f,
+            clearExit = float(fields, "clear_exit", path) ?: 0.30f,
+            debounceMs = integer(fields, "debounce_ms", path) ?: 150,
+            clearArmMs = integer(fields, "clear_arm_ms", path) ?: 700,
+            minimumNearMs = integer(fields, "minimum_near_ms", path) ?: 200,
+            maximumNearMs = integer(fields, "maximum_near_ms", path) ?: 4000,
+            cooldownMs = integer(fields, "cooldown_ms", path) ?: 1000,
+        )
+    }
+
     private fun integer(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Int? {
         val fullPath = if (path == "$") key else "$path.$key"
         if (!map.containsKey(key) || map[key] == null) {
@@ -544,9 +567,12 @@ private class SchemaReader(private val issues: MutableList<ProfileIssue>) {
         return number.toInt()
     }
 
-    private fun float(map: Map<String, Any?>, key: String, path: String): Float? {
+    private fun float(map: Map<String, Any?>, key: String, path: String, required: Boolean = false): Float? {
         val fullPath = "$path.$key"
-        if (!map.containsKey(key) || map[key] == null) return null
+        if (!map.containsKey(key) || map[key] == null) {
+            if (required) issues += error(fullPath, "Required finite number is missing.")
+            return null
+        }
         val number = map[key] as? Number
         val converted = number?.toFloat()
         if (number == null || !number.toDouble().isFinite() || converted == null || !converted.isFinite()) {
@@ -649,6 +675,17 @@ internal fun ProfileDocument.toYamlMap(): Map<String, Any?> = linkedMapOf(
     "sensors" to linkedMapOf(
         "proximity_technology" to sensors.proximityTechnology,
         "proximity_gpio" to sensors.proximityGpio,
+        "proximity_calibration" to sensors.proximityCalibration?.let {
+            linkedMapOf(
+                "revision" to it.revision, "mode" to it.mode,
+                "clear_raw" to it.clearRaw, "near_raw" to it.nearRaw,
+                "verification" to it.verification,
+                "near_enter" to it.nearEnter, "clear_exit" to it.clearExit,
+                "debounce_ms" to it.debounceMs, "clear_arm_ms" to it.clearArmMs,
+                "minimum_near_ms" to it.minimumNearMs, "maximum_near_ms" to it.maximumNearMs,
+                "cooldown_ms" to it.cooldownMs,
+            )
+        },
         "light_technology" to sensors.lightTechnology,
         "cht8305" to sensors.cht8305,
         "vi530x" to sensors.vi530x,

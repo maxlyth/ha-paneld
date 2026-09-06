@@ -266,7 +266,7 @@ object SettingsRegistry {
             key = "wake_on_wave", type = SettingType.BOOL, group = "Behaviour",
             label = "Wake on wave", default = "false", tier = Tier.BASIC, scope = Scope.PORTABLE,
             liveApply = true,
-            help = "Wake locally after a learned deliberate far-to-near-to-far wave. Touch-to-wake remains available while the panel learns.",
+            help = "Wake after a calibrated clear-to-near-to-clear wave. Set up proximity on the panel; touch-to-wake remains available.",
             availableWhen = { it.hasProximity },
             ha = HaEntity(
                 "switch", "wake_on_wave", "Wake on wave",
