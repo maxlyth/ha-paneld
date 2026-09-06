@@ -31,10 +31,6 @@ jobs:
     # is a change to those tests, not to runs-on.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      # The runner has 16 cores and 32 GiB; the repository default is sized for a
-      # 2-core hosted image and would leave most of the machine idle.
-      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -Dfile.encoding=UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -223,7 +219,10 @@ jobs:
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
           sudo -E env "PROVISION_TEST_SCOPE=$PROVISION_TEST_SCOPE" bash -c '
             set -e
-            scripts/tests/provision_test.sh
+            # The serial provisioning suite was 23.2 of this job's 24.6 minutes.
+            # The repository ships a sharded runner over the same script, which
+            # verification policy names as the canonical command.
+            scripts/tests/provision_gate_parallel.sh -j 4
             scripts/tests/root_helper_authority_test.sh
             scripts/tests/install_legacy_database_gate_test.sh
             scripts/tests/hardware_collector_test.sh
