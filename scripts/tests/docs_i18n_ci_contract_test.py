@@ -247,6 +247,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
         self.assertIn('is_checkout_free_source "$source"', shell)
         self.assertIn('checkout_free_docs+=("$output")', shell)
         self.assertIn("SUPPORTED_LOCALES", shell)
+        self.assertIn("validateLanguagePickerPolicy", shell)
         self.assertNotIn("EXPECTED_LOCALES", shell)
         self.assertNotIn(repr(LOCALES), shell)
 

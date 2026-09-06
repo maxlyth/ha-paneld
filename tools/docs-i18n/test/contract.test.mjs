@@ -254,6 +254,7 @@ test("documentation picker policy exactly and uniquely covers the supported loca
 
   const names = { ...LANGUAGE_NAMES };
   const order = [...PICKER_ORDER];
+  const notices = { ...AUTHORITY_NOTICE_TEMPLATES };
   const mutations = [
     ["missing name", { languageNames: Object.fromEntries(Object.entries(names).slice(0, -1)) }],
     ["extra name", { languageNames: { ...names, nl: "Nederlands" } }],
@@ -262,21 +263,106 @@ test("documentation picker policy exactly and uniquely covers the supported loca
     ["missing picker locale", { pickerOrder: order.slice(0, -1) }],
     ["extra picker locale", { pickerOrder: [...order, "nl"] }],
     ["duplicate picker locale", { pickerOrder: [...order.slice(0, -1), order[1]] }],
+    ["duplicate supported locale", { supportedLocales: [...SUPPORTED_LOCALES, SUPPORTED_LOCALES[0]] }],
+    ["missing notice", { authorityNoticeTemplates: Object.fromEntries(Object.entries(notices).slice(0, -1)) }],
+    ["extra notice", { authorityNoticeTemplates: { ...notices, nl: "Nederlands {SOURCE_LINK}" } }],
+    ["replaced notice key", { authorityNoticeTemplates: {
+      ...Object.fromEntries(Object.entries(notices).slice(1)),
+      nl: "Nederlands {SOURCE_LINK}",
+    } }],
+    ["blank notice", { authorityNoticeTemplates: { ...notices, de: "  " } }],
+    ["duplicate notice", { authorityNoticeTemplates: { ...notices, es: notices.de } }],
+    ["missing source link", { authorityNoticeTemplates: { ...notices, de: notices.de.replace("{SOURCE_LINK}", "") } }],
+    ["duplicate source link", { authorityNoticeTemplates: { ...notices, de: `${notices.de}{SOURCE_LINK}` } }],
   ];
   for (const [name, mutation] of mutations) {
-    assert.notDeepEqual(mutation.languageNames ?? mutation.pickerOrder, mutation.languageNames ? names : order, name);
+    const baseline = mutation.supportedLocales ? SUPPORTED_LOCALES
+      : mutation.languageNames ? names
+        : mutation.pickerOrder ? order : notices;
+    assert.notDeepEqual(
+      mutation.supportedLocales ?? mutation.languageNames ?? mutation.pickerOrder ?? mutation.authorityNoticeTemplates,
+      baseline,
+      name,
+    );
     assert.throws(() => validateLanguagePickerPolicy(mutation), undefined, name);
   }
 
-  const nextSupported = [...SUPPORTED_LOCALES, "nl"];
-  const nextNames = { ...names, nl: "Nederlands" };
-  const nextOrder = [...order, "nl"];
+  assert.throws(
+    () => validateLanguagePickerPolicy({ authorityNoticeTemplates: { ...notices, de: "  " } }),
+    /nonblank strings/,
+  );
+  assert.throws(
+    () => validateLanguagePickerPolicy({ authorityNoticeTemplates: { ...notices, es: notices.de } }),
+    /must be unique/,
+  );
+  assert.throws(
+    () => validateLanguagePickerPolicy({
+      authorityNoticeTemplates: { ...notices, de: notices.de.replace("{SOURCE_LINK}", "") },
+    }),
+    /exactly one \{SOURCE_LINK\}/,
+  );
+  assert.throws(
+    () => validateLanguagePickerPolicy({ authorityNoticeTemplates: { ...notices, de: `${notices.de}{SOURCE_LINK}` } }),
+    /exactly one \{SOURCE_LINK\}/,
+  );
+
+  const tierB = Object.freeze({
+    nl: "Nederlands",
+    pl: "Polski",
+    cs: "Čeština",
+    "pt-BR": "Português (BR)",
+    uk: "Українська",
+  });
+  const nextSupported = [...SUPPORTED_LOCALES, ...Object.keys(tierB)];
+  const nextNames = { ...names, ...tierB };
+  const nextOrder = [...order, ...Object.keys(tierB)];
+  const nextNotices = {
+    ...notices,
+    ...Object.fromEntries(Object.keys(tierB).map((locale) => [
+      locale,
+      `Future authority notice for ${locale}: {SOURCE_LINK}`,
+    ])),
+  };
   assert.equal(validateLanguagePickerPolicy({
     supportedLocales: nextSupported,
     languageNames: nextNames,
     pickerOrder: nextOrder,
+    authorityNoticeTemplates: nextNotices,
   }), true);
+  assert.deepEqual(SUPPORTED_LOCALES, ["de", "es", "fr", "it", "zh-Hans"]);
+  assert.deepEqual(LANGUAGE_NAMES, names);
+  assert.deepEqual(PICKER_ORDER, order);
+  assert.deepEqual(AUTHORITY_NOTICE_TEMPLATES, notices);
   assert.throws(() => validateLanguagePickerPolicy({ supportedLocales: nextSupported }), /exactly cover/);
+});
+
+test("documentation locale authority rejects noncanonical and malformed region or script tags", () => {
+  const cases = [
+    ["noncanonical region", "pt-br"],
+    ["noncanonical script", "zh-hans"],
+    ["malformed region", "pt-BRZ"],
+    ["malformed script", "zh-Han"],
+  ];
+  for (const [name, locale] of cases) {
+    const supportedLocales = [...SUPPORTED_LOCALES, locale];
+    const languageNames = { ...LANGUAGE_NAMES, [locale]: `Fixture ${name}` };
+    const pickerOrder = [...PICKER_ORDER, locale];
+    const authorityNoticeTemplates = {
+      ...AUTHORITY_NOTICE_TEMPLATES,
+      [locale]: `Fixture notice for ${name}: {SOURCE_LINK}`,
+    };
+    assert.notDeepEqual(supportedLocales, SUPPORTED_LOCALES, name);
+    assert.throws(
+      () => validateLanguagePickerPolicy({
+        supportedLocales,
+        languageNames,
+        pickerOrder,
+        authorityNoticeTemplates,
+      }),
+      /canonical.*BCP 47/,
+      name,
+    );
+  }
 });
 
 test("source README picker is the exact canonical ordered locale map", () => {

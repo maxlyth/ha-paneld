@@ -27,6 +27,8 @@ docs_i18n_manifest="docs/i18n/manifest.json"
 if [[ -f "$docs_i18n_manifest" ]]; then
   if ! docs_i18n_locales="$(node --input-type=module -e '
     import { SUPPORTED_LOCALES } from "./tools/docs-i18n/lib/paths.mjs";
+    import { validateLanguagePickerPolicy } from "./tools/docs-i18n/lib/contract.mjs";
+    validateLanguagePickerPolicy();
     process.stdout.write(JSON.stringify(SUPPORTED_LOCALES));
   ')"; then
     echo "unable to load the supported documentation locale set" >&2

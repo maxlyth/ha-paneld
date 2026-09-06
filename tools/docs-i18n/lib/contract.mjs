@@ -111,16 +111,27 @@ export function validateLanguagePickerPolicy({
   supportedLocales = SUPPORTED_LOCALES,
   languageNames = LANGUAGE_NAMES,
   pickerOrder = PICKER_ORDER,
+  authorityNoticeTemplates = AUTHORITY_NOTICE_TEMPLATES,
 } = {}) {
-  const expected = ["en", ...supportedLocales];
   if (
     !Array.isArray(supportedLocales) ||
     supportedLocales.length === 0 ||
-    supportedLocales.some((locale) => typeof locale !== "string" || !locale || locale === "en") ||
+    supportedLocales.some((locale) => {
+      if (typeof locale !== "string" || !locale || locale === "en") return true;
+      try {
+        const canonical = Intl.getCanonicalLocales(locale);
+        return canonical.length !== 1 || canonical[0] !== locale;
+      } catch {
+        return true;
+      }
+    }) ||
     new Set(supportedLocales).size !== supportedLocales.length
   ) {
-    throw new Error("supported documentation locales must be non-empty, unique, and exclude en");
+    throw new Error(
+      "supported documentation locales must be canonical, non-empty, unique BCP 47 tags and exclude en",
+    );
   }
+  const expected = ["en", ...supportedLocales];
   if (
     !languageNames ||
     typeof languageNames !== "object" ||
@@ -139,6 +150,24 @@ export function validateLanguagePickerPolicy({
     JSON.stringify([...pickerOrder].sort()) !== JSON.stringify([...expected].sort())
   ) {
     throw new Error("picker order must uniquely and exactly cover en plus supported locales, with en first");
+  }
+  if (
+    !authorityNoticeTemplates ||
+    typeof authorityNoticeTemplates !== "object" ||
+    Array.isArray(authorityNoticeTemplates) ||
+    JSON.stringify(Object.keys(authorityNoticeTemplates).sort()) !== JSON.stringify([...supportedLocales].sort())
+  ) {
+    throw new Error("authority notice keys must exactly cover supported locales");
+  }
+  const authorityNotices = Object.values(authorityNoticeTemplates);
+  if (authorityNotices.some((notice) => typeof notice !== "string" || !notice.trim())) {
+    throw new Error("authority notices must be nonblank strings");
+  }
+  if (new Set(authorityNotices).size !== authorityNotices.length) {
+    throw new Error("authority notices must be unique");
+  }
+  if (authorityNotices.some((notice) => notice.split("{SOURCE_LINK}").length !== 2)) {
+    throw new Error("authority notices must contain exactly one {SOURCE_LINK}");
   }
   return true;
 }
