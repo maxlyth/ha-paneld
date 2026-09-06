@@ -94,6 +94,7 @@ function consequentialFixture(policyMutation) {
   const provisioningSafety = "# Provisioning safety\n\nResetting the panel irreversibly erases its data.\n\nContinue normally.\n";
   const adaptiveBrightness = "# Adaptive brightness\n\nAutomatic brightness follows the room.\n\nContinue normally.\n";
   const adaptiveProximity = "# Adaptive proximity\n\nReset learning erases sensor evidence.\n\nContinue normally.\n";
+  const tts = "# TTS\n\nSending a remote URL starts playback.\n\nContinue normally.\n";
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n\nContinue normally.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n\nContinue normally.\n"],
@@ -107,6 +108,7 @@ function consequentialFixture(policyMutation) {
   write(current.repository, "docs/provisioning-safety.md", provisioningSafety);
   write(current.repository, "docs/adaptive-brightness.md", adaptiveBrightness);
   write(current.repository, "docs/adaptive-proximity.md", adaptiveProximity);
+  write(current.repository, "docs/tts.md", tts);
   for (const [document, source] of hardware) write(current.repository, document, source);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
@@ -124,6 +126,7 @@ function consequentialFixture(policyMutation) {
     "docs/adaptive-proximity.md",
     adaptiveProximity,
   );
+  const ttsInventory = inventoryMarkdown("docs/tts.md", tts);
   const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
   const rendererConsequential = rendererInventory.segments.find(
     (segment) => segment.maskedSource.includes("failed login"),
@@ -142,6 +145,9 @@ function consequentialFixture(policyMutation) {
   );
   const adaptiveProximityConsequential = adaptiveProximityInventory.segments.find(
     (segment) => segment.maskedSource.includes("erases sensor evidence"),
+  );
+  const ttsConsequential = ttsInventory.segments.find(
+    (segment) => segment.maskedSource.includes("starts playback"),
   );
   const policy = {
     schema: 2,
@@ -196,6 +202,12 @@ function consequentialFixture(policyMutation) {
         sourceSha256: sha256(Buffer.from(adaptiveProximity, "utf8")),
         segmentCount: adaptiveProximityInventory.segments.length,
         consequentialSegments: [adaptiveProximityConsequential.segmentId],
+      },
+      {
+        document: "docs/tts.md",
+        sourceSha256: sha256(Buffer.from(tts, "utf8")),
+        segmentCount: ttsInventory.segments.length,
+        consequentialSegments: [ttsConsequential.segmentId],
       },
     ],
   };
@@ -513,6 +525,7 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
     "docs/provisioning-safety.md",
     "docs/adaptive-brightness.md",
     "docs/adaptive-proximity.md",
+    "docs/tts.md",
   ]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
