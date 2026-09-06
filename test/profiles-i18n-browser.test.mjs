@@ -7,6 +7,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 const asset = fileURLToPath(new URL('../app/src/main/assets/profiles.js', import.meta.url));
+const editorBundle = fileURLToPath(new URL('../app/src/main/assets/vendor/profile-editor/codemirror.js', import.meta.url));
 const contracts = fileURLToPath(new URL('../app/src/main/kotlin/io/github/maxlyth/hapaneld/device/profile/ProfileContracts.kt', import.meta.url));
 const englishCatalogue = fileURLToPath(new URL('../app/src/main/assets/i18n/en.json', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
@@ -62,23 +63,25 @@ function profile(overrides = {}) {
   };
 }
 
-function html(translations, withHelper = true, editorProbe = false) {
-  const helper = withHelper ? `<script>window.__calls=[];window.HaI18n={locale:'zh-Hans',t:(key,fallback,values)=>{window.__calls.push(key);const c=${JSON.stringify(translations)};if(c.__throw===key)throw new Error('missing review projection');const value=Object.prototype.hasOwnProperty.call(c,key)?c[key]:fallback;return String(value==null?'':value).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(p,n)=>values&&Object.prototype.hasOwnProperty.call(values,n)?String(values[n]):p);}};</script>` : '';
+function html(translations, withHelper = true, editorProbe = false, locale = 'zh-Hans', realEditor = false) {
+  const helper = withHelper ? `<script>window.__calls=[];window.HaI18n={locale:${JSON.stringify(locale)},t:(key,fallback,values)=>{window.__calls.push(key);const c=${JSON.stringify(translations)};if(c.__throw===key)throw new Error('missing review projection');const value=Object.prototype.hasOwnProperty.call(c,key)?c[key]:fallback;return String(value==null?'':value).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g,(p,n)=>values&&Object.prototype.hasOwnProperty.call(values,n)?String(values[n]):p);}};</script>` : '';
   const editor = editorProbe ? `<script>window.__editorValue='';window.ProfileCodeEditor={create:()=>({getValue:()=>window.__editorValue,setValue:(value)=>{window.__editorValue=value;},setReadOnly:()=>{},setSchema:(fields)=>{window.__schema=fields;},setDiagnostics:()=>{},focus:()=>{}})};</script>` : '';
   const ids = ['profile-select','profile-use-draft','profile-status','profile-shizuku-guidance','profile-new','profile-edit','profile-fork','profile-import','profile-export','profile-validate','profile-compare','savebtn','profile-activate','profile-auto','profile-rollback','profile-delete','profile-draft','profile-modal-cancel','profile-modal-confirm'];
   const controls = ids.map((id) => id === 'profile-select' ? `<select id="${id}"></select>` : id === 'profile-import' ? `<input id="${id}" type="file">` : `<button id="${id}">${id}</button>`).join('');
-  return `<!doctype html><html lang="zh-Hans"><head><meta charset="utf-8"></head><body><div class="wrap"><div class="profile-toolbar">${controls}</div><div class="profile-workspace"><section id="profile-editor"><div class="profile-editor-head"></div></section><section class="profile-inspector"><div class="profile-inspector-head"></div><div class="profile-inspector-body"><div id="profile-editor-meta"></div><div id="profile-badges"></div><div id="profile-links"></div><div id="profile-catalog-issues"></div><div id="profile-issues"></div><div id="profile-diff"></div><div id="profile-report"></div></div></section></div></div><div id="profile-modal" hidden><h2 id="profile-modal-title"></h2><pre id="profile-modal-detail"></pre></div>${helper}${editor}<script src="/profiles.js"></script></body></html>`;
+  return `<!doctype html><html lang="${locale}"><head><meta charset="utf-8"></head><body><div class="wrap"><div class="profile-toolbar">${controls}</div><div class="profile-workspace"><section id="profile-editor"><div class="profile-editor-head"></div></section><section class="profile-inspector"><div class="profile-inspector-head"></div><div class="profile-inspector-body"><div id="profile-editor-meta"></div><div id="profile-badges"></div><div id="profile-links"></div><div id="profile-catalog-issues"></div><div id="profile-issues"></div><div id="profile-diff"></div><div id="profile-report"></div></div></section></div></div><div id="profile-modal" hidden><h2 id="profile-modal-title"></h2><pre id="profile-modal-detail"></pre></div>${helper}${editor}${realEditor ? '<script src="/codemirror.js"></script>' : ''}<script src="/profiles.js"></script></body></html>`;
 }
 
-async function rig(t, { translations = {}, withHelper = true, editorProbe = false, profiles = [profile()], status = {}, report, schema, yaml = 'schema: 1\n', route } = {}) {
+async function rig(t, { translations = {}, withHelper = true, editorProbe = false, locale = 'zh-Hans', realEditor = false, profiles = [profile()], status = {}, report, schema, yaml = 'schema: 1\n', route } = {}) {
   const source = await readFile(asset, 'utf8');
+  const bundle = realEditor ? await readFile(editorBundle, 'utf8') : '';
   const requests = [];
   const server = createServer(async (request, response) => {
     const url = new URL(request.url, 'http://panel.test');
     requests.push({ method: request.method, path: url.pathname, headers: { ...request.headers } });
     let result;
-    if (url.pathname === '/') result = { type: 'text/html', body: html(translations, withHelper, editorProbe) };
+    if (url.pathname === '/') result = { type: 'text/html', body: html(translations, withHelper, editorProbe, locale, realEditor) };
     else if (url.pathname === '/profiles.js') result = { type: 'application/javascript', body: source };
+    else if (url.pathname === '/codemirror.js') result = { type: 'application/javascript', body: bundle };
     else if (url.pathname === '/api/v1/profiles/schema') result = json(schema || { max_bytes: 131072, fields: [] });
     else if (url.pathname === '/api/v1/profiles/report') result = json(report || { items: [] });
     else if (url.pathname === '/api/v1/profiles') result = json({ catalog_revision: 7, profiles, status });
@@ -105,6 +108,68 @@ async function rig(t, { translations = {}, withHelper = true, editorProbe = fals
   await page.waitForFunction(() => document.querySelector('#profile-editor-meta')?.textContent.length > 0);
   return { page, requests };
 }
+
+test('Profiles maps the complete pinned CodeMirror phrase vocabulary to finite catalogue keys', async () => {
+  const [source, bundle, catalogue] = await Promise.all([
+    readFile(asset, 'utf8'),
+    readFile(editorBundle, 'utf8'),
+    readFile(englishCatalogue, 'utf8').then(JSON.parse),
+  ]);
+  const expected = [
+    'Find', 'Replace', 'next', 'previous', 'all', 'match case', 'regexp', 'by word', 'replace',
+    'replace all', 'replaced match on line $', 'replaced $ matches', 'close', 'Go to line', 'go',
+    'Control character', 'folded code', 'Fold line', 'Unfold line', 'unfold',
+    'Diagnostics', 'No diagnostics', 'Selection deleted', 'Completions', 'current match', 'on line',
+  ];
+  const body = source.substring(source.indexOf('function editorPhrases()'), source.indexOf('\n  }', source.indexOf('function editorPhrases()')) + 4);
+  const bindings = [...body.matchAll(/"([^"]+)": t\("(profiles\.editor\.codemirror\.[a-z_]+)", "([^"]+)"\)/g)]
+    .map((match) => ({ phrase: match[1], key: match[2], fallback: match[3] }));
+  assert.deepEqual(bindings.map(({ phrase }) => phrase), expected);
+  assert.equal(new Set(bindings.map(({ key }) => key)).size, expected.length, 'each phrase owns one catalogue key');
+  for (const { phrase, key, fallback } of bindings) {
+    assert.equal(fallback, phrase, `${key} must retain CodeMirror's English lookup identity as its fallback`);
+    assert.equal(catalogue.strings[key].text, phrase, `${key} must be authoritative for the phrase identity`);
+    assert.ok(bundle.includes(JSON.stringify(phrase)), `${phrase} is not emitted by the pinned bundle`);
+  }
+});
+
+browserTest('The real bundled editor renders localized search and go-to-line chrome', async (t) => {
+  const expected = {
+    en: ['Find', 'Replace', 'next', 'previous', 'all', 'match case', 'regexp', 'by word', 'replace', 'replace all', 'close', 'Go to line', 'go'],
+    de: ['Suchen', 'Ersetzen', 'Weiter', 'Zurück', 'Alle', 'Groß-/Kleinschreibung beachten', 'Regulärer Ausdruck', 'Ganze Wörter', 'Ersetzen', 'Alle ersetzen', 'Schließen', 'Zu Zeile springen', 'Springen'],
+    'zh-Hans': ['查找', '替换', '下一个', '上一个', '全选', '区分大小写', '正则表达式', '全字匹配', '替换', '全部替换', '关闭', '转到行', '转到'],
+  };
+  const catalogues = Object.fromEntries(await Promise.all(Object.keys(expected).map(async (locale) => {
+    const document = JSON.parse(await readFile(new URL(`../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8'));
+    return [locale, Object.fromEntries(Object.entries(document.strings).map(([key, record]) => [key, record.text]))];
+  })));
+
+  for (const [locale, labels] of Object.entries(expected)) {
+    await t.test(locale, async (subtest) => {
+      const { page } = await rig(subtest, {
+        locale,
+        realEditor: true,
+        translations: catalogues[locale],
+        profiles: [profile({ origin: 'imported' })],
+      });
+      await page.locator('#profile-edit').click();
+      await page.locator('.cm-content').click();
+      await page.keyboard.press('Control+f');
+      const search = page.locator('.cm-search');
+      await search.waitFor();
+      assert.equal(await search.locator('input[name="search"]').getAttribute('placeholder'), labels[0]);
+      assert.equal(await search.locator('input[name="replace"]').getAttribute('placeholder'), labels[1]);
+      assert.deepEqual(await search.locator('button:not([name="close"]), label').allTextContents(), labels.slice(2, 10));
+      assert.equal(await search.locator('button[name="close"]').getAttribute('aria-label'), labels[10]);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Control+Alt+g');
+      const dialog = page.locator('.cm-dialog');
+      await dialog.waitFor();
+      assert.equal((await dialog.locator('label').textContent()).trim(), `${labels[11]}:`);
+      assert.equal(await dialog.locator('button.cm-button').textContent(), labels[12]);
+    });
+  }
+});
 
 test('Profiles presentation vocabulary, parameter shapes and English catalogue stay exactly aligned', async () => {
   const [source, kotlin, catalogueDocument] = await Promise.all([

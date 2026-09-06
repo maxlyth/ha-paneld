@@ -36,6 +36,9 @@ export function create(parent, options = {}) {
   const readOnly = new Compartment();
   const theme = new Compartment();
   let schemaFields = Array.isArray(options.schemaFields) ? options.schemaFields : [];
+  const phrases = options.phrases && typeof options.phrases === "object" && !Array.isArray(options.phrases)
+    ? Object.fromEntries(Object.entries(options.phrases).filter(([, value]) => typeof value === "string"))
+    : {};
   const darkTheme = EditorView.theme({
     "&": { backgroundColor: "#1f2329", color: "#e6edf3" },
     ".cm-content": { caretColor: "#e6edf3" },
@@ -99,6 +102,7 @@ export function create(parent, options = {}) {
       autocompletion({
         override: [(context) => completeProfileSchemaValue(context, schemaFields)],
       }),
+      EditorState.phrases.of(phrases),
       theme.of(currentTheme()),
       lintGutter(),
       readOnly.of([
@@ -137,7 +141,7 @@ export function create(parent, options = {}) {
         from: Math.max(0, Math.min(view.state.doc.length, Number(item.from) || 0)),
         to: Math.max(0, Math.min(view.state.doc.length, Number(item.to) || Number(item.from) || 0)),
         severity: item.severity === "warning" || item.severity === "info" ? item.severity : "error",
-        message: String(item.message || "Invalid profile"),
+        message: String(item.message || options.invalidDiagnostic || "Invalid profile"),
       }));
       view.dispatch(applyDiagnostics(view.state, normalized));
     },

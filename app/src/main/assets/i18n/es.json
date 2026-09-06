@@ -7118,6 +7118,136 @@
       "state": "machine-cross-checked",
       "text": "¿Quieres descartar los cambios sin guardar de este perfil?"
     },
+    "profiles.editor.codemirror.all": {
+      "text": "Todas",
+      "sourceHash": "5ef5ef0364b6939c4ca61f34b393f7b368d1be8619647aaf83d5b395919ab629",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.by_word": {
+      "text": "Palabras completas",
+      "sourceHash": "f2a09985e60505f2548ed456c48912cc4f1834bc4099ea0cbd6b0be9c2c737b8",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.close": {
+      "text": "Cerrar",
+      "sourceHash": "310ff200149b44a32f124023d7caba19a1a890763a980606813d3a3d4a085d36",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.completions": {
+      "text": "Sugerencias",
+      "sourceHash": "ab1451c522d1dc408eafa6b235bd61bf9dbdf547c5c813b2bc1194d500043e08",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.control_character": {
+      "text": "Carácter de control",
+      "sourceHash": "5989afeca1fe5678a8037c4e17d8d47503d2a073efdbfb077b2897286c0f8ecb",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.current_match": {
+      "text": "Coincidencia actual",
+      "sourceHash": "d9154ac0ba622162b6eea3b6ea6d27eafd43308f23eff1c33191c3fc142caa48",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.diagnostics": {
+      "text": "Diagnósticos",
+      "sourceHash": "268f14bbfe119c1e92150583af960a086d7db9619a097f8aa72ff6779842f610",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.find": {
+      "text": "Buscar",
+      "sourceHash": "822b2ae4542bc74b8fccf9ec3e08408d33d35b919101760dc27e1ea7822f1818",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.fold_line": {
+      "text": "Plegar línea",
+      "sourceHash": "dfd1267efebc6d9144f24f92f77a9b0a4454173ea0f05dc50e837157bfb825a8",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.folded_code": {
+      "text": "Código plegado",
+      "sourceHash": "d6fb5088f4fc4cef5f0fa441947d2a661fc4b4540ffbe322abf17c29685241d0",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.go": {
+      "text": "Ir",
+      "sourceHash": "4cd0e21a9a0795a14ec9aa5f0e7d1abff0492565770e43eafdf1e3e8afed1f33",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.go_to_line": {
+      "text": "Ir a la línea",
+      "sourceHash": "77922da4feba6c02299018bda921624efda883244a67226f22c9ab954b1f21ae",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.match_case": {
+      "text": "Coincidir mayúsculas y minúsculas",
+      "sourceHash": "52545f00d2381d735f2d0af8d19dc388557230252fe09daa36b9e7f742a1ff78",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.next": {
+      "text": "Siguiente",
+      "sourceHash": "c6c1c9a9c8543f1e4cd980064cf1625eeb61a90703b2464fff039f21682508b3",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.no_diagnostics": {
+      "text": "Sin diagnósticos",
+      "sourceHash": "a11096c4bf86d8ac44076a905d60c8d462280a6ba4e33d1b3f9e844c49b83467",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.on_line": {
+      "text": "en la línea",
+      "sourceHash": "82bcfabe29e0c12bfa880e92f68122b7d07f818a5d65381ecd41e87af75bc984",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.previous": {
+      "text": "Anterior",
+      "sourceHash": "6da0633528deaa0144e7b058315f0b753ec0b945163a72bf96a0d18180f9de0d",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.regexp": {
+      "text": "Expresión regular",
+      "sourceHash": "0af6c667532fcbb3f611e0ef3557f41f62266baaee9b1b7a57ad22c5eb6eab12",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.replace": {
+      "text": "Reemplazar",
+      "sourceHash": "95e154398a4bc0091aa4d6b607472ac5a89e41fbc84a3a49f823314d6de9eebc",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.replace_action": {
+      "text": "Reemplazar",
+      "sourceHash": "7ab3778776cde4fa728a162a53ad3abcc967d1bd7361039e0942888240c4ce86",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.replace_all": {
+      "text": "Reemplazar todo",
+      "sourceHash": "ced9cb1bc7e38dc467887be9441787d7352ea8a0b6b92f7b5691296e80616f3f",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.replaced_match_on_line": {
+      "text": "Coincidencia reemplazada en la línea $",
+      "sourceHash": "f8f2f0816347619d7870cba59f9639e49abcdbee4a6a3b4a223a496aa3912be7",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.replaced_matches": {
+      "text": "$ coincidencias reemplazadas",
+      "sourceHash": "57b10e76187e58a8967db3e5ad452364875eaa158949bdc2ce269cda01b38d5d",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.selection_deleted": {
+      "text": "Selección eliminada",
+      "sourceHash": "e7a4f99063897f01bed8286381a36bceb10da2ae2d75aaf5945bd9aeaaa611a5",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.unfold": {
+      "text": "Desplegar",
+      "sourceHash": "37214dd6d7b6e2bd8caa3cd20e20e1a8bb9a48e79d0d9c5878dd6054a24f09d5",
+      "state": "machine-cross-checked"
+    },
+    "profiles.editor.codemirror.unfold_line": {
+      "text": "Desplegar línea",
+      "sourceHash": "5356a627c136dd38f53a6978df90476f829513bd460570d7e1bddbeda7b350ad",
+      "state": "machine-cross-checked"
+    },
     "profiles.editor.none_selected": {
       "sourceHash": "d87214dc92810b75837786634d2d69ffb7e0b6b12981dace2c5823839dbedf66",
       "state": "machine-cross-checked",

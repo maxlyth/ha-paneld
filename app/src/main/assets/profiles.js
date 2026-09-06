@@ -43,6 +43,38 @@
     return window.HaI18n && typeof window.HaI18n.locale === "string"
       ? window.HaI18n.locale : (document.documentElement.lang || "en");
   }
+  // CodeMirror uses these exact, case-sensitive English phrases as stable lookup identities.
+  // Keep the finite map here so request-local catalogue projection supplies all bundled editor chrome.
+  function editorPhrases() {
+    return {
+      "Find": t("profiles.editor.codemirror.find", "Find"),
+      "Replace": t("profiles.editor.codemirror.replace", "Replace"),
+      "next": t("profiles.editor.codemirror.next", "next"),
+      "previous": t("profiles.editor.codemirror.previous", "previous"),
+      "all": t("profiles.editor.codemirror.all", "all"),
+      "match case": t("profiles.editor.codemirror.match_case", "match case"),
+      "regexp": t("profiles.editor.codemirror.regexp", "regexp"),
+      "by word": t("profiles.editor.codemirror.by_word", "by word"),
+      "replace": t("profiles.editor.codemirror.replace_action", "replace"),
+      "replace all": t("profiles.editor.codemirror.replace_all", "replace all"),
+      "replaced match on line $": t("profiles.editor.codemirror.replaced_match_on_line", "replaced match on line $"),
+      "replaced $ matches": t("profiles.editor.codemirror.replaced_matches", "replaced $ matches"),
+      "close": t("profiles.editor.codemirror.close", "close"),
+      "Go to line": t("profiles.editor.codemirror.go_to_line", "Go to line"),
+      "go": t("profiles.editor.codemirror.go", "go"),
+      "Control character": t("profiles.editor.codemirror.control_character", "Control character"),
+      "folded code": t("profiles.editor.codemirror.folded_code", "folded code"),
+      "Fold line": t("profiles.editor.codemirror.fold_line", "Fold line"),
+      "Unfold line": t("profiles.editor.codemirror.unfold_line", "Unfold line"),
+      "unfold": t("profiles.editor.codemirror.unfold", "unfold"),
+      "Diagnostics": t("profiles.editor.codemirror.diagnostics", "Diagnostics"),
+      "No diagnostics": t("profiles.editor.codemirror.no_diagnostics", "No diagnostics"),
+      "Selection deleted": t("profiles.editor.codemirror.selection_deleted", "Selection deleted"),
+      "Completions": t("profiles.editor.codemirror.completions", "Completions"),
+      "current match": t("profiles.editor.codemirror.current_match", "current match"),
+      "on line": t("profiles.editor.codemirror.on_line", "on line"),
+    };
+  }
   function closedText(value, translations) {
     var raw = string(value);
     var lookup = raw.toLowerCase();
@@ -446,6 +478,8 @@
         model.editor = window.ProfileCodeEditor.create(host, {
           value: "",
           readOnly: true,
+          phrases: editorPhrases(),
+          invalidDiagnostic: t("profiles.validation.invalid_profile", "Invalid profile"),
           onChange: editorChanged,
         });
         return;
