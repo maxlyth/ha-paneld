@@ -628,6 +628,7 @@ jobs:
           #include <stddef.h>
           #include <stdio.h>
           #include <stdlib.h>
+          #include <string.h>
           #include <sys/prctl.h>
           #include <sys/syscall.h>
           #include <unistd.h>
@@ -672,15 +673,32 @@ jobs:
               };
               int ruleset_fd = syscall(SYS_landlock_create_ruleset, &ruleset,
                                        sizeof(ruleset), 0);
-              if (ruleset_fd < 0 || add_path_rule(ruleset_fd, "/", read_access) < 0 ||
-                  add_path_rule(ruleset_fd, "/dev", read_access) < 0 ||
-                  add_path_rule(ruleset_fd, "/proc", read_access) < 0 ||
-                  add_path_rule(ruleset_fd, "/sys", read_access) < 0 ||
-                  add_path_rule(ruleset_fd, argv[1], read_access | write_access) < 0 ||
-                  prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 ||
-                  syscall(SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
-                  perror("install descriptor sandbox");
+              // Report which step refused. A single message for the whole chain cannot say
+              // whether the ruleset, a path rule or the restriction itself failed, and the
+              // difference decides the fix.
+              if (ruleset_fd < 0) { perror("install descriptor sandbox create_ruleset"); return 70; }
+              if (add_path_rule(ruleset_fd, "/", read_access) < 0) {
+                  perror("install descriptor sandbox rule /"); return 70;
+              }
+              if (add_path_rule(ruleset_fd, "/dev", read_access) < 0) {
+                  perror("install descriptor sandbox rule /dev"); return 70;
+              }
+              if (add_path_rule(ruleset_fd, "/proc", read_access) < 0) {
+                  perror("install descriptor sandbox rule /proc"); return 70;
+              }
+              if (add_path_rule(ruleset_fd, "/sys", read_access) < 0) {
+                  perror("install descriptor sandbox rule /sys"); return 70;
+              }
+              if (add_path_rule(ruleset_fd, argv[1], read_access | write_access) < 0) {
+                  fprintf(stderr, "install descriptor sandbox rule %s: %s\n",
+                          argv[1], strerror(errno));
                   return 70;
+              }
+              if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
+                  perror("install descriptor sandbox no_new_privs"); return 70;
+              }
+              if (syscall(SYS_landlock_restrict_self, ruleset_fd, 0) < 0) {
+                  perror("install descriptor sandbox restrict_self"); return 70;
               }
               close(ruleset_fd);
               execv(argv[2], &argv[2]);
@@ -692,6 +710,15 @@ jobs:
           /usr/bin/chmod 0755 "$sandbox_binary"
           "${root_command[@]}" /usr/bin/chown 65534:65534 "$descriptor_stage"
           "${root_command[@]}" /usr/bin/chmod 0700 "$descriptor_stage"
+          # The generator runs as an unprivileged identity and has to open the stage to place
+          # its own Landlock rule on it. Owning the directory is not enough: every directory
+          # on the way to it has to be traversable, or that open is refused before the sandbox
+          # is ever applied. Grant traversal alone, so the path can be walked but not listed.
+          descriptor_ancestor=$descriptor_stage
+          while descriptor_ancestor=$(/usr/bin/dirname "$descriptor_ancestor"); do
+            "${root_command[@]}" /usr/bin/chmod o+x "$descriptor_ancestor"
+            [ "$descriptor_ancestor" != / ] || break
+          done
 
           "${root_command[@]}" /usr/bin/setpriv \
             --reuid=65534 \
