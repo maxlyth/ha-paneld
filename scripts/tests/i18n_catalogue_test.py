@@ -231,12 +231,47 @@ class CatalogueTest(unittest.TestCase):
             "Системні settings",
             "Системы",
             "Налады ўжо",
+            "Росія",
         )
         with (
             mock.patch.object(i18n, "LOCALES", future_locales),
             mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", future_policies),
         ):
             for target_text in invalid_targets:
+                with (
+                    self.subTest(target_text=target_text),
+                    self.assertRaises(i18n.CatalogueError),
+                ):
+                    i18n.validate_target_language(
+                        "settings.example.label", target_text, "uk", source_record
+                    )
+
+    def test_ukrainian_policy_checks_additions_to_token_only_sources(self):
+        future_locales = {*i18n.LOCALES, "uk"}
+        future_policies = {**i18n.TARGET_SCRIPT_POLICIES, "uk": "ukrainian-cyrillic"}
+        frozen_source = {"text": "MQTT", "placeholders": [], "frozen": ["MQTT"]}
+        placeholder_source = {
+            "text": "{detail} · {health}",
+            "placeholders": ["{detail}", "{health}"],
+            "frozen": [],
+        }
+        with (
+            mock.patch.object(i18n, "LOCALES", future_locales),
+            mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", future_policies),
+        ):
+            i18n.validate_target_language(
+                "settings.protocol.label", "MQTT", "uk", frozen_source
+            )
+            i18n.validate_target_language(
+                "settings.status.label",
+                "{detail} · {health}",
+                "uk",
+                placeholder_source,
+            )
+            for source_record, target_text in (
+                (frozen_source, "Русский MQTT"),
+                (placeholder_source, "System {detail} · {health}"),
+            ):
                 with (
                     self.subTest(target_text=target_text),
                     self.assertRaises(i18n.CatalogueError),

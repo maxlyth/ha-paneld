@@ -40,6 +40,10 @@ PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[a-zA-Z]|\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 UKRAINIAN_CYRILLIC_RE = re.compile(r"[\u0410-\u044f\u0490\u0491\u0404\u0454\u0406\u0456\u0407\u0457]")
+RUSSIA_OR_RUSSIAN_CYRILLIC_RE = re.compile(
+    r"(?<!\w)(?:росси|росі|русск)[\u0400-\u04ff]*(?!\w)",
+    re.IGNORECASE,
+)
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 TARGET_SCRIPT_POLICIES = {
     "de": "latin",
@@ -256,9 +260,12 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
     if policy is None:
         raise CatalogueError(f"{locale}: target locale is unsupported")
     source_visible = unprotected_text(source_record["text"], source_record)
-    if not LATIN_RE.search(source_visible):
-        return
     target_visible = unprotected_text(text, source_record)
+    if not LATIN_RE.search(source_visible):
+        if policy != "ukrainian-cyrillic" or not any(
+            character.isalpha() for character in target_visible
+        ):
+            return
     for literal in TARGET_LITERAL_EXCEPTIONS.get((locale, key), ()):
         target_visible = remove_literal(target_visible, literal)
     if policy == "han":
@@ -283,6 +290,8 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
     elif policy == "ukrainian-cyrillic":
         if not UKRAINIAN_CYRILLIC_RE.search(target_visible):
             raise CatalogueError(f"{key}: {locale} target has no Ukrainian Cyrillic text")
+        if RUSSIA_OR_RUSSIAN_CYRILLIC_RE.search(target_visible):
+            raise CatalogueError(f"{key}: {locale} target contains prohibited Cyrillic locale term")
         unexpected = sorted({
             character
             for character in target_visible
