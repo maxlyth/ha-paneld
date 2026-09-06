@@ -162,13 +162,12 @@
   function admittedBrowserLanguage(value) {
     if (!validLanguageTag(value)) return false;
     var lower = value.replace(/_/g, "-").toLowerCase();
-    return lower === "en" || lower.indexOf("en-") === 0 ||
-      lower === "de" || lower.indexOf("de-") === 0 ||
-      lower === "fr" || lower.indexOf("fr-") === 0 ||
-      lower === "it" || lower.indexOf("it-") === 0 ||
-      lower === "es" || lower.indexOf("es-") === 0 ||
-      lower === "zh" || lower === "zh-hans" || lower.indexOf("zh-hans-") === 0 ||
-      lower === "zh-cn" || lower.indexOf("zh-cn-") === 0 ||
+    var admitted = Object.keys(UI_LANGUAGE_LABELS).filter(function (locale) { return locale !== "auto"; });
+    if (admitted.some(function (locale) {
+      var candidate = locale.toLowerCase();
+      return lower === candidate || lower.indexOf(candidate + "-") === 0;
+    })) return true;
+    return lower === "zh" || lower === "zh-cn" || lower.indexOf("zh-cn-") === 0 ||
       lower === "zh-sg" || lower.indexOf("zh-sg-") === 0;
   }
 

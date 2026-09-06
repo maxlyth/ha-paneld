@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -11,7 +11,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const ASSETS = resolve(ROOT, 'app/src/main/assets');
 const FIXTURE = resolve(ROOT, 'test/fixtures/install-localization-layout.html');
 const CHROME = process.env.CHROME || '/usr/bin/chromium';
-const LOCALES = ['en', 'de', 'es', 'fr', 'it', 'zh-Hans'];
+const LOCALES = await catalogueLocales();
 const THEMES = ['light', 'dark'];
 const VIEWPORTS = [
   { name: 'square-panel', width: 480, height: 480 },
@@ -22,6 +22,18 @@ const VIEWPORTS = [
 ];
 const MIME = { '.css': 'text/css', '.js': 'application/javascript', '.svg': 'image/svg+xml' };
 const hostile = '<img src=x onerror="window.__hostileOwned=1">'.repeat(3);
+
+async function catalogueLocales() {
+  const files = (await readdir(resolve(ASSETS, 'i18n'))).filter((name) => name.endsWith('.json')).sort();
+  const locales = await Promise.all(files.map(async (name) => {
+    const locale = JSON.parse(await readFile(resolve(ASSETS, 'i18n', name), 'utf8')).locale;
+    assert.equal(name, `${locale}.json`, `catalogue filename must match its declared locale: ${name}`);
+    return locale;
+  }));
+  assert.equal(new Set(locales).size, locales.length, 'catalogue locales must be unique');
+  assert.ok(locales.includes('en'), 'layout locale matrix must include the English source catalogue');
+  return locales;
+}
 
 function payload(url, method) {
   const path = url.pathname;

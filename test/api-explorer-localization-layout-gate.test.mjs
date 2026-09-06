@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { extname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -12,7 +12,7 @@ const ASSETS = resolve(ROOT, 'app/src/main/assets');
 const API_HTML = resolve(ASSETS, 'api.html');
 const API_SPEC = resolve(ASSETS, 'openapi.json');
 const CHROME = process.env.CHROME || '/usr/bin/chromium';
-const LOCALES = ['en', 'de', 'es', 'fr', 'it', 'zh-Hans'];
+const LOCALES = await catalogueLocales();
 const THEMES = ['light', 'dark'];
 const VIEWPORTS = [
   { name: 'narrow-panel', width: 320, height: 568 },
@@ -27,6 +27,18 @@ const MIME = {
   '.json': 'application/json',
   '.svg': 'image/svg+xml',
 };
+
+async function catalogueLocales() {
+  const files = (await readdir(resolve(ASSETS, 'i18n'))).filter((name) => name.endsWith('.json')).sort();
+  const locales = await Promise.all(files.map(async (name) => {
+    const locale = JSON.parse(await readFile(resolve(ASSETS, 'i18n', name), 'utf8')).locale;
+    assert.equal(name, `${locale}.json`, `catalogue filename must match its declared locale: ${name}`);
+    return locale;
+  }));
+  assert.equal(new Set(locales).size, locales.length, 'catalogue locales must be unique');
+  assert.ok(locales.includes('en'), 'layout locale matrix must include the English source catalogue');
+  return locales;
+}
 
 function pagePayload(catalogue, locale) {
   return JSON.stringify({ locale, strings: catalogue.strings }).replaceAll('<', '\\u003c');

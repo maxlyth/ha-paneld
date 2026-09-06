@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.audio.MicrophoneGain
+import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
 import io.github.maxlyth.hapaneld.util.DashboardPath
@@ -43,7 +44,7 @@ object SettingsRegistry {
     const val DEFAULT_SILENCE_BOOT_CHIME = true
     const val DEFAULT_MQTT_ADDRESS_FAMILY = "Automatic"
     const val DEFAULT_UI_LANGUAGE = "auto"
-    val UI_LANGUAGES: List<String> = listOf(DEFAULT_UI_LANGUAGE, "en", "de", "fr", "it", "es", "zh-Hans")
+    val UI_LANGUAGES: List<String> = listOf(DEFAULT_UI_LANGUAGE) + AppLocale.RELEASE_LOCALES
 
     /**
      * Lowest automatic screen percentage the actuator can actually distinguish, and therefore the floor

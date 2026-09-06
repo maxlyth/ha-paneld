@@ -1,9 +1,25 @@
 package io.github.maxlyth.hapaneld.i18n
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppLocaleTest {
+    @Test fun `every release locale is uniquely canonical and accepts a more specific tag`() {
+        assertEquals(AppLocale.RELEASE_LOCALES.size, AppLocale.RELEASE_LOCALES.toSet().size)
+        AppLocale.RELEASE_LOCALES.forEach { locale ->
+            assertEquals(locale, AppLocale.canonical(locale))
+            assertEquals(locale, AppLocale.canonical("$locale-Test"))
+        }
+        assertTrue(
+            AppLocale.RELEASE_LOCALES.all {
+                it.matches(Regex("[a-z]{2,3}(?:-(?:[A-Z][a-z]{3}|[A-Z]{2}|[0-9]{3}))*"))
+            },
+        )
+        assertNull("a different Chinese script must fail closed", AppLocale.canonical("zh-Hant"))
+    }
+
     @Test fun `explicit locale wins and regional tags use RFC lookup`() {
         assertEquals(
             "fr",

@@ -1,12 +1,34 @@
 package io.github.maxlyth.hapaneld.i18n
 
 import io.github.maxlyth.hapaneld.testsupport.TestSources
+import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlatformLocaleContractTest {
+    @Test fun `native resource directories exactly cover release locales and every translatable key`() {
+        val resourceRoot = TestSources.appDir("src/main/res")
+        val expectedDirectories = AppLocale.RELEASE_LOCALES.associateWith { locale ->
+            androidValuesDirectory(androidResourceQualifier(locale))
+        }
+        assertEquals(expectedDirectories.size, expectedDirectories.values.toSet().size)
+
+        val actualDirectories = resourceRoot.listFiles { file ->
+            file.isDirectory && file.name.startsWith("values") && File(file, "strings.xml").isFile
+        }.orEmpty().mapTo(sortedSetOf()) { it.name }
+        assertEquals(expectedDirectories.values.map { it.substringAfterLast('/') }.toSortedSet(), actualDirectories)
+
+        val base = stringKeys("src/main/res/values/strings.xml")
+        val translatable = base.filterValues { it }.keys
+        expectedDirectories.filterKeys { it != AppLocale.ENGLISH }.forEach { (locale, directory) ->
+            val target = stringKeys("$directory/strings.xml")
+            assertEquals("$locale must translate every and only translatable base key", translatable, target.keys)
+            assertTrue("$locale must not contain translatable=false declarations", target.values.all { it })
+        }
+    }
+
     @Test fun `platform locale declaration matches the JSON resolver boundary`() {
         val config = document("src/main/res/xml/locales_config.xml")
         val declared = config.getElementsByTagName("locale").let { locales ->
@@ -73,9 +95,25 @@ class PlatformLocaleContractTest {
         isNamespaceAware = true
     }.newDocumentBuilder().parse(TestSources.appFile(path))
 
-    private fun androidResourceQualifier(locale: String): String = when (locale) {
-        "zh-Hans" -> "zh-rCN"
-        else -> locale
+    private fun stringKeys(path: String): Map<String, Boolean> {
+        val nodes = document(path).getElementsByTagName("string")
+        val entries = (0 until nodes.length).map { index ->
+            val attributes = nodes.item(index).attributes
+            attributes.getNamedItem("name").nodeValue to
+                (attributes.getNamedItem("translatable")?.nodeValue != "false")
+        }
+        assertEquals("$path contains duplicate string names", entries.size, entries.map { it.first }.toSet().size)
+        return entries.toMap()
+    }
+
+    private fun androidResourceQualifier(locale: String): String {
+        if (locale == "zh-Hans") return "zh-rCN"
+        val parts = locale.split('-')
+        if (parts.size == 1) return locale
+        if (parts.size == 2 && (parts[1].length == 2 || parts[1].all(Char::isDigit))) {
+            return "${parts[0]}-r${parts[1]}"
+        }
+        return "b+${parts.joinToString("+")}"
     }
 
     private fun androidValuesDirectory(qualifier: String): String =

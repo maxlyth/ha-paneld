@@ -133,7 +133,7 @@
     appendEnglishEvidence(node, String(diagnostic == null || diagnostic === '' ? 'request failed' : diagnostic), ' ');
   }
   function installCardHref(fragment) {
-    var params = new URLSearchParams(location.search), supported = ['en', 'de', 'es', 'fr', 'it', 'zh-Hans', 'en-XA'];
+    var params = new URLSearchParams(location.search), supported = ['en', 'de', 'fr', 'it', 'es', 'zh-Hans', 'en-XA'];
     var explicit = params.get('lang');
     if (supported.indexOf(explicit) < 0) return '/install' + fragment;
     return '/install?lang=' + encodeURIComponent(explicit) + fragment;

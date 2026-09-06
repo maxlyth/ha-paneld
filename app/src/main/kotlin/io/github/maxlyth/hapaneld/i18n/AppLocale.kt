@@ -8,7 +8,7 @@ object AppLocale {
     const val PSEUDO = "en-XA"
 
     /** Release locales admitted for the Tier-A bootstrap. English is always the final fallback. */
-    val RELEASE_LOCALES: Set<String> = linkedSetOf(ENGLISH, "de", "fr", "it", "es", "zh-Hans")
+    val RELEASE_LOCALES: List<String> = listOf(ENGLISH, "de", "fr", "it", "es", "zh-Hans")
 
     /**
      * Resolve every admitted signal in the configured precedence order. Query/browser choice wins,
@@ -42,14 +42,14 @@ object AppLocale {
         if (tag.length > 63 || !tag.matches(Regex("[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*"))) return null
         if (allowPseudo && tag.equals(PSEUDO, ignoreCase = true)) return PSEUDO
         val lower = tag.lowercase(Locale.ROOT)
+        RELEASE_LOCALES.forEach { releaseLocale ->
+            val candidate = releaseLocale.lowercase(Locale.ROOT)
+            // Language-only releases accept regional variants. Script-specific releases accept
+            // variants of that script, but do not consume a different script with the same root.
+            if (lower == candidate || lower.startsWith("$candidate-")) return releaseLocale
+        }
         return when {
-            lower == "en" || lower.startsWith("en-") -> ENGLISH
-            lower == "de" || lower.startsWith("de-") -> "de"
-            lower == "fr" || lower.startsWith("fr-") -> "fr"
-            lower == "it" || lower.startsWith("it-") -> "it"
-            lower == "es" || lower.startsWith("es-") -> "es"
-            lower == "zh" || lower == "zh-hans" || lower.startsWith("zh-hans-") ||
-                lower == "zh-cn" || lower.startsWith("zh-cn-") ||
+            lower == "zh" || lower == "zh-cn" || lower.startsWith("zh-cn-") ||
                 lower == "zh-sg" || lower.startsWith("zh-sg-") -> "zh-Hans"
             else -> null
         }
