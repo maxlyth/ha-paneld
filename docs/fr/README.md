@@ -137,7 +137,7 @@ Home Assistant découvre ces commandes via MQTT sans YAML. Les principales famil
 
 ### Mode de sécurité renforcée
 
-Le mode assoupli est activé par défaut et destiné à un réseau domestique de confiance. Utilisez le [mode de sécurité renforcée](../security-mode.md) lorsque des appareils moins fiables partagent le réseau. Le mode de sécurité renforcée nécessite un accès physique au panneau. Une personne doit approuver les actions à distance à fort impact sur l’écran du panneau ; elles ne peuvent pas être approuvées à distance. Les captures d’écran restent consultables, mais les appuis à distance sont désactivés. Ce réglage doit être activé séparément sur chaque panneau et n’est pas copié lors d’une sauvegarde, d’une restauration ou d’un provisionnement de parc.
+Le mode assoupli est activé par défaut et destiné à un réseau domestique de confiance. Utilisez le [mode de sécurité renforcée](security-mode.md) lorsque des appareils moins fiables partagent le réseau. Le mode de sécurité renforcée nécessite un accès physique au panneau. Une personne doit approuver les actions à distance à fort impact sur l’écran du panneau ; elles ne peuvent pas être approuvées à distance. Les captures d’écran restent consultables, mais les appuis à distance sont désactivés. Ce réglage doit être activé séparément sur chaque panneau et n’est pas copié lors d’une sauvegarde, d’une restauration ou d’un provisionnement de parc.
 
 ### Fonctionnalités nécessitant un accès root
 
@@ -162,7 +162,7 @@ Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-s
 - [Performances](performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
 - [Luminosité adaptative](../adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.
 - [Proximité adaptative et réveil d’un geste de la main](../adaptive-proximity.md) : configurez la détection de proximité et apprenez au panneau le geste de réveil.
-- [Modes de sécurité](../security-mode.md) : comprenez le mode assoupli et le mode renforcé, notamment les actions qui nécessitent la présence d’une personne devant le panneau.
+- [Modes de sécurité](security-mode.md) : comprenez le mode assoupli et le mode renforcé, notamment les actions qui nécessitent la présence d’une personne devant le panneau.
 - [TTS](../tts.md) : générez un message vocal avec un moteur TTS de Home Assistant et envoyez-le à un panneau.
 
 ### Développement et extension de ha-paneld

@@ -11,8 +11,13 @@ const toolRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repository = path.dirname(path.dirname(toolRoot));
 
 test("parser provenance matches the exact installed parse5 dependency", () => {
+  const specification = JSON.parse(fs.readFileSync(path.join(toolRoot, "package.json"), "utf8"));
   const lock = JSON.parse(fs.readFileSync(path.join(toolRoot, "package-lock.json"), "utf8"));
+  const runtimeEntry = fileURLToPath(import.meta.resolve("parse5"));
+  const runtime = JSON.parse(fs.readFileSync(path.join(path.dirname(runtimeEntry), "../package.json"), "utf8"));
+  assert.equal(specification.dependencies.parse5, "8.0.1");
   assert.equal(lock.packages["node_modules/parse5"].version, "8.0.1");
+  assert.equal(runtime.version, "8.0.1");
   assert.equal(PARSER_VERSIONS.parse5, lock.packages["node_modules/parse5"].version);
 });
 

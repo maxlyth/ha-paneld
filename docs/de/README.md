@@ -137,7 +137,7 @@ Home Assistant erkennt diese Bedienelemente über MQTT ohne YAML. Die wichtigste
 
 ### Hardened-Modus
 
-Der Relaxed-Modus ist die Standardeinstellung und für ein vertrauenswürdiges Heimnetzwerk vorgesehen. Verwende den [Hardened-Modus](../security-mode.md), wenn weniger vertrauenswürdige Geräte dasselbe Netzwerk nutzen. Der Hardened-Modus erfordert physischen Zugriff auf das Panel. Entfernte Aktionen mit weitreichenden Auswirkungen muss jemand direkt am Bildschirm des Panels genehmigen; eine Genehmigung aus der Ferne ist nicht möglich. Screenshots bleiben sichtbar, aber entferntes Tippen ist deaktiviert. Die Einstellung muss auf jedem Panel separat aktiviert werden und wird weder durch Sicherung und Wiederherstellung noch durch die Flottenbereitstellung kopiert.
+Der Relaxed-Modus ist die Standardeinstellung und für ein vertrauenswürdiges Heimnetzwerk vorgesehen. Verwende den [Hardened-Modus](security-mode.md), wenn weniger vertrauenswürdige Geräte dasselbe Netzwerk nutzen. Der Hardened-Modus erfordert physischen Zugriff auf das Panel. Entfernte Aktionen mit weitreichenden Auswirkungen muss jemand direkt am Bildschirm des Panels genehmigen; eine Genehmigung aus der Ferne ist nicht möglich. Screenshots bleiben sichtbar, aber entferntes Tippen ist deaktiviert. Die Einstellung muss auf jedem Panel separat aktiviert werden und wird weder durch Sicherung und Wiederherstellung noch durch die Flottenbereitstellung kopiert.
 
 ### Funktionen, die Root-Zugriff benötigen
 
@@ -162,7 +162,7 @@ Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweitert
 - [Leistung](performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
 - [Adaptive Helligkeit](../adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
 - [Adaptive Näherungserkennung und Aktivierung durch Winken](../adaptive-proximity.md): die Näherungserkennung konfigurieren und die Aktivierungsgeste anlernen.
-- [Sicherheitsmodi](../security-mode.md): den Relaxed-Modus und den Hardened-Modus verstehen, einschließlich der Aktionen, für die jemand am Panel anwesend sein muss.
+- [Sicherheitsmodi](security-mode.md): den Relaxed-Modus und den Hardened-Modus verstehen, einschließlich der Aktionen, für die jemand am Panel anwesend sein muss.
 - [TTS](../tts.md): Sprache mit einer Home Assistant TTS-Engine erzeugen und an ein Panel senden.
 
 ### ha-paneld entwickeln und erweitern

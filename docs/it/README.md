@@ -137,7 +137,7 @@ Home Assistant rileva questi controlli tramite MQTT senza YAML. Le principali fa
 
 ### Modalità protetta
 
-La modalità permissiva è quella predefinita ed è destinata a una rete domestica attendibile. Usa la [modalità protetta](../security-mode.md) quando la rete è condivisa con dispositivi meno attendibili. La modalità protetta richiede l'accesso fisico al pannello. Qualcuno deve approvare sullo schermo del pannello le azioni remote ad alto impatto; non è possibile approvarle da remoto. Gli screenshot rimangono visualizzabili, ma i tocchi remoti sono disabilitati. L'impostazione deve essere abilitata separatamente su ogni pannello e non viene copiata tramite backup, ripristino o provisioning del parco dispositivi.
+La modalità permissiva è quella predefinita ed è destinata a una rete domestica attendibile. Usa la [modalità protetta](security-mode.md) quando la rete è condivisa con dispositivi meno attendibili. La modalità protetta richiede l'accesso fisico al pannello. Qualcuno deve approvare sullo schermo del pannello le azioni remote ad alto impatto; non è possibile approvarle da remoto. Gli screenshot rimangono visualizzabili, ma i tocchi remoti sono disabilitati. L'impostazione deve essere abilitata separatamente su ogni pannello e non viene copiata tramite backup, ripristino o provisioning del parco dispositivi.
 
 ### Funzionalità che richiedono root
 
@@ -162,7 +162,7 @@ Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](p
 - [Prestazioni](performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
 - [Luminosità adattiva](../adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.
 - [Prossimità adattiva e riattivazione con un gesto della mano](../adaptive-proximity.md): configura il rilevamento di prossimità e insegna il gesto di riattivazione.
-- [Modalità di sicurezza](../security-mode.md): comprendi la modalità permissiva e la modalità protetta, incluse le azioni che richiedono la presenza di una persona davanti al pannello.
+- [Modalità di sicurezza](security-mode.md): comprendi la modalità permissiva e la modalità protetta, incluse le azioni che richiedono la presenza di una persona davanti al pannello.
 - [TTS](../tts.md): genera l'audio vocale con un motore TTS di Home Assistant e invialo a un pannello.
 
 ### Sviluppo ed estensione di ha-paneld

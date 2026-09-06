@@ -137,7 +137,7 @@ Home Assistant detecta estos controles mediante MQTT sin YAML. Las principales f
 
 ### Modo reforzado
 
-El modo relajado es el predeterminado y está destinado a redes domésticas de confianza. Usa el [modo reforzado](../security-mode.md) cuando haya dispositivos menos fiables en la misma red. El modo reforzado requiere acceso físico al panel. Alguien debe aprobar en la pantalla del panel las acciones remotas de gran impacto; no se pueden aprobar de forma remota. Las capturas de pantalla siguen siendo visibles, pero los toques remotos están desactivados. El ajuste debe activarse por separado en cada panel y no se copia mediante copias de seguridad, restauraciones ni aprovisionamiento de flotas.
+El modo relajado es el predeterminado y está destinado a redes domésticas de confianza. Usa el [modo reforzado](security-mode.md) cuando haya dispositivos menos fiables en la misma red. El modo reforzado requiere acceso físico al panel. Alguien debe aprobar en la pantalla del panel las acciones remotas de gran impacto; no se pueden aprobar de forma remota. Las capturas de pantalla siguen siendo visibles, pero los toques remotos están desactivados. El ajuste debe activarse por separado en cada panel y no se copia mediante copias de seguridad, restauraciones ni aprovisionamiento de flotas.
 
 ### Funciones que necesitan root
 
@@ -162,7 +162,7 @@ Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-p
 - [Rendimiento](performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
 - [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
 - [Proximidad adaptativa y activación con un gesto de la mano](../adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.
-- [Modos de seguridad](../security-mode.md): comprende el modo relajado y el modo reforzado, incluidas las acciones que requieren la presencia de alguien junto al panel.
+- [Modos de seguridad](security-mode.md): comprende el modo relajado y el modo reforzado, incluidas las acciones que requieren la presencia de alguien junto al panel.
 - [TTS](../tts.md): genera voz con un motor TTS de Home Assistant y envíala a un panel.
 
 ### Desarrollo y ampliación de ha-paneld

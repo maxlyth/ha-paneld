@@ -237,8 +237,13 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
 
 test("appending a document preserves every prior document commitment and packet object", () => {
   const current = fixture();
+  write(
+    current.repository,
+    "README.md",
+    `${fs.readFileSync(path.join(current.repository, "README.md"), "utf8")}Read the [third guide](docs/third.md).\n`,
+  );
   write(current.repository, "docs/third.md", "# Third\n\nAn appended document.\n");
-  command(current.repository, ["git", "add", "docs/third.md"]);
+  command(current.repository, ["git", "add", "README.md", "docs/third.md"]);
   command(current.repository, ["git", "commit", "-qm", "append third document"]);
   const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
   const prefix = buildSourceManifest({
@@ -254,22 +259,33 @@ test("appending a document preserves every prior document commitment and packet 
   const prefixPlan = buildTranslationPlan(prefix, { repository: current.repository });
   const extendedPlan = buildTranslationPlan(extended, { repository: current.repository });
   assert.deepEqual(extended.documents.slice(0, prefix.documents.length), prefix.documents);
-  const prefixReceipt = buildLocaleReceipt(
+  const prefixBuilt = buildLocaleReceipt(
     prefix,
     "de",
     localeResults(prefix, "de", current.repository),
     { repository: current.repository },
-  ).receipt;
-  const extendedReceipt = buildLocaleReceipt(
+  );
+  const extendedBuilt = buildLocaleReceipt(
     extended,
     "de",
     localeResults(extended, "de", current.repository),
     { repository: current.repository },
-  ).receipt;
-  assert.deepEqual(
-    extendedReceipt.documents.slice(0, prefixReceipt.documents.length),
-    prefixReceipt.documents,
   );
+  const prefixReceipt = prefixBuilt.receipt;
+  const extendedReceipt = extendedBuilt.receipt;
+  const [prefixReadme, prefixGuide] = prefixReceipt.documents;
+  const [extendedReadme, extendedGuide] = extendedReceipt.documents;
+  assert.deepEqual(extendedReadme.segments, prefixReadme.segments);
+  assert.notEqual(extendedReadme.targetSha256, prefixReadme.targetSha256);
+  assert.notEqual(extendedReadme.structureSha256, prefixReadme.structureSha256);
+  assert.deepEqual(
+    { ...extendedReadme, targetSha256: null, structureSha256: null },
+    { ...prefixReadme, targetSha256: null, structureSha256: null },
+  );
+  assert.deepEqual(extendedGuide, prefixGuide);
+  const prefixReadmeBody = prefixBuilt.outputs.find((output) => output.path === "docs/de/README.md").content;
+  const extendedReadmeBody = extendedBuilt.outputs.find((output) => output.path === "docs/de/README.md").content;
+  assert.equal(extendedReadmeBody.replace("(third.md)", "(../third.md)"), prefixReadmeBody);
   for (const locale of SUPPORTED_LOCALES) {
     const priorPackets = prefix.packets.filter((packet) => packet.locale === locale);
     const extendedPackets = extended.packets.filter((packet) => packet.locale === locale);
