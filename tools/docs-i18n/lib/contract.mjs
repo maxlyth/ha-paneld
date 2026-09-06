@@ -51,6 +51,7 @@ export const PRODUCTION_DOCUMENTS = Object.freeze([
   "docs/hardware/wf1589t.md",
   "docs/provisioning-safety.md",
   "docs/adaptive-brightness.md",
+  "docs/adaptive-proximity.md",
 ]);
 export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";

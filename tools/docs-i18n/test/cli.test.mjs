@@ -53,6 +53,10 @@ Resetting the panel irreversibly erases its data.
 
 Automatic brightness follows the room.
 `;
+  const adaptiveProximity = `# Adaptive proximity
+
+Reset learning erases sensor evidence.
+`;
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n"],
@@ -65,6 +69,7 @@ Automatic brightness follows the room.
   fs.writeFileSync(path.join(repository, "docs/security-mode.md"), security);
   fs.writeFileSync(path.join(repository, "docs/provisioning-safety.md"), provisioningSafety);
   fs.writeFileSync(path.join(repository, "docs/adaptive-brightness.md"), adaptiveBrightness);
+  fs.writeFileSync(path.join(repository, "docs/adaptive-proximity.md"), adaptiveProximity);
   for (const [document, source] of hardware) {
     fs.mkdirSync(path.dirname(path.join(repository, document)), { recursive: true });
     fs.writeFileSync(path.join(repository, document), source);
@@ -87,6 +92,11 @@ Automatic brightness follows the room.
     adaptiveBrightness,
   );
   const adaptiveBrightnessConsequential = adaptiveBrightnessInventory.segments[1];
+  const adaptiveProximityInventory = inventoryMarkdown(
+    "docs/adaptive-proximity.md",
+    adaptiveProximity,
+  );
+  const adaptiveProximityConsequential = adaptiveProximityInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -135,6 +145,12 @@ Automatic brightness follows the room.
         segmentCount: adaptiveBrightnessInventory.segments.length,
         consequentialSegments: [adaptiveBrightnessConsequential.segmentId],
       },
+      {
+        document: "docs/adaptive-proximity.md",
+        sourceSha256: sha256(Buffer.from(adaptiveProximity, "utf8")),
+        segmentCount: adaptiveProximityInventory.segments.length,
+        consequentialSegments: [adaptiveProximityConsequential.segmentId],
+      },
     ],
   }));
   command(repository, ["git", "add", "."]);
@@ -168,6 +184,7 @@ test("CLI plan selects the exact production document prefix", () => {
     "docs/hardware/wf1589t.md",
     "docs/provisioning-safety.md",
     "docs/adaptive-brightness.md",
+    "docs/adaptive-proximity.md",
   ]);
   assert.throws(() => main([
     "plan",
