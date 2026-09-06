@@ -1977,6 +1977,15 @@ MOCK_STOPPED_STATE=1 MOCK_LAUNCHER_START=block MOCK_LAUNCHER_PID_FILE="$LAUNCHER
 assert_success "blocked launcher reaches its host deadline and recovers through direct start"
 assert_log_contains '^adb .* shell am start -n io\.github\.maxlyth\.hapaneld/\.MainActivity$' "launcher deadline advances to the direct route"
 blocked_launcher_pid="$(cat "$LAUNCHER_PID_FILE" 2>/dev/null || true)"
+# The deadline fires and the reap follows, but the two are not the same instant: on a loaded
+# host the process can still be present for a moment after provisioning has moved on. Give it
+# a bounded interval to disappear rather than reading the pid table once.
+launcher_reap_attempt=0
+while [ -n "$blocked_launcher_pid" ] && kill -0 "$blocked_launcher_pid" 2>/dev/null; do
+  launcher_reap_attempt=$((launcher_reap_attempt + 1))
+  [ "$launcher_reap_attempt" -lt 300 ] || break
+  sleep 0.1
+done
 if [ -n "$blocked_launcher_pid" ] && ! kill -0 "$blocked_launcher_pid" 2>/dev/null; then
   pass "launcher deadline reaps the blocked host ADB process"
 else
@@ -6553,19 +6562,34 @@ else
   fail_test "a destination without headroom refuses on capacity and reports what it measured"
 fi
 
-# /sys/firmware is read-only on every Linux host and small enough to stand in for a constrained
-# partition. This is the branch that the old zero-byte probe at the wrong directory could not reach.
+# A read-only directory small enough to stand in for a constrained partition. /sys/firmware is
+# one on most hosts, but not on every builder, so mount a private one when it is absent and the
+# caller can. This is the branch that the old zero-byte probe at the wrong directory could not
+# reach, and it should not go untested wherever /sys/firmware happens not to be its own mount.
+READONLY_TARGET=""
+READONLY_TARGET_MOUNTED=0
 if [ -d /sys/firmware ] && grep -Eq ' /sys/firmware [a-z0-9]+ ro[, ]' /proc/mounts; then
-  preflight_out="$(run_preflight "preflight_target install_system /sys/firmware 64")"
+  READONLY_TARGET=/sys/firmware
+elif [ "$(id -u)" = 0 ]; then
+  READONLY_TARGET="$TMP/readonly-target"
+  mkdir -p "$READONLY_TARGET"
+  if mount -t tmpfs -o ro,size=4k,nr_inodes=1 tmpfs "$READONLY_TARGET" 2>/dev/null; then
+    READONLY_TARGET_MOUNTED=1
+  else
+    READONLY_TARGET=""
+  fi
+fi
+if [ -n "$READONLY_TARGET" ]; then
+  preflight_out="$(run_preflight "preflight_target install_system $READONLY_TARGET 64")"
   if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_UNCHANGED install_system target_read_only' &&
-     printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system target dir=/sys/firmware .* state=ro '; then
+     printf '%s' "$preflight_out" | grep -Eq "^INSTALL_DIAG install_system target dir=$READONLY_TARGET .* state=ro "; then
     pass "a read-only destination refuses as read-only rather than as a failed write"
   else
     fail_test "a read-only destination refuses as read-only rather than as a failed write"
   fi
 
   # And the same directory through the copy path: cp's own errno must survive to the caller.
-  preflight_out="$(run_preflight "copy_staged install_system cp_hapaneld-helper_new '$PREFLIGHT_DIR/staged' /sys/firmware/hapaneld-helper.new $PREFLIGHT_SHA")"
+  preflight_out="$(run_preflight "copy_staged install_system cp_hapaneld-helper_new '$PREFLIGHT_DIR/staged' $READONLY_TARGET/hapaneld-helper.new $PREFLIGHT_SHA")"
   if printf '%s' "$preflight_out" | grep -Fqx 'INSTALL_STEP_FAILED install_system cp_hapaneld-helper_new' &&
      printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system cp_hapaneld-helper_new errno=.+' &&
      printf '%s' "$preflight_out" | grep -Eq '^INSTALL_DIAG install_system cp_hapaneld-helper_new source=.* state=verified '; then
@@ -6573,6 +6597,7 @@ if [ -d /sys/firmware ] && grep -Eq ' /sys/firmware [a-z0-9]+ ro[, ]' /proc/moun
   else
     fail_test "a refused copy reports the errno, the staged file's authenticity and the destination"
   fi
+  [ "$READONLY_TARGET_MOUNTED" -eq 0 ] || umount "$READONLY_TARGET" 2>/dev/null || true
 else
   fail_test "the read-only mount this fixture needs is present"
 fi
