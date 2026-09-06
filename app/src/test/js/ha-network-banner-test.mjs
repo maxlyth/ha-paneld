@@ -144,6 +144,19 @@ assert.ok(/very slow/.test(ids.hanetbar.textContent), ids.hanetbar.textContent);
 assert.equal(ids.hanetbar.className, 'setup crit');
 assert.equal(ids.hanetcell.textContent, 'very slow');
 
+await poll(base + ' ha_net=warning ha_net_cause=latency ha_resp=warning ha_net_p95=9 ha_net_n=30 ha_net_miss=0');
+assert.equal(ids.hanetcell.textContent, 'slow; Home Assistant answering slowly');
+await poll(base + ' ha_net=severe ha_net_cause=latency ha_resp=severe ha_net_p95=9 ha_net_n=30 ha_net_miss=0');
+assert.equal(ids.hanetcell.textContent, 'very slow; Home Assistant answering very slowly');
+
+// An unknown future cause cannot be misreported as packet loss or retain stale text.
+for (const cause of ['future_value', 'constructor', '__proto__']) {
+  await poll(base + ' ha_net=warning ha_net_cause=loss ha_resp=healthy ha_net_p95=30 ha_net_n=30 ha_net_miss=2');
+  await poll(base + ' ha_net=warning ha_net_cause=' + cause + ' ha_resp=healthy ha_net_p95=30 ha_net_n=30 ha_net_miss=2');
+  assert.equal(ids.hanetbar.style.display, 'none');
+  assert.equal(ids.hanetcell.textContent, '');
+}
+
 // A loss cause keeps the loss wording and its own evidence.
 await poll(base + ' ha_net=warning ha_net_cause=loss ha_resp=healthy ha_net_p95=30 ha_net_n=30 ha_net_miss=2');
 assert.ok(/going missing/.test(ids.hanetbar.textContent), ids.hanetbar.textContent);

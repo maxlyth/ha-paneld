@@ -118,18 +118,28 @@
   // Latency-raised copy. The path itself is slow, which sends a person somewhere different to look
   // than lost packets do, so the two are never worded the same.
   var HA_NET_TEXT_SLOW = {
-    warning: "⚠ The network path to Home Assistant is slow",
-    severe: "⚠ The network path to Home Assistant is very slow"
+    warning: ["shell.runtime.ha_network.banner_latency_warning", "The network path to Home Assistant is slow. Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them."],
+    severe: ["shell.runtime.ha_network.banner_latency_severe", "The network path to Home Assistant is very slow. Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them."]
   };
-  var HA_NET_SLOW_ADVICE = "Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them.";
   var HA_NET_ADVICE = "Packets are not getting through. Check the Wi-Fi path between this panel and Home Assistant before blaming the panel.";
   var HA_NET_ROW = { healthy: "healthy", warning: "losing probes", severe: "failing", settling: "settling after startup; no verdict yet" };
-  var HA_NET_ROW_SLOW = { warning: "slow", severe: "very slow" };
   // The other half of the same measurement: how fast Home Assistant answers on a path that is intact.
   // It becomes a CLAUSE in the same row and can NEVER raise the banner — latency alone is a performance
   // observation, not a reason to interrupt anyone, and treating it as one told a wired panel its
   // network was slow. Mirrors HaNetworkPathPresentation.responsivenessClause.
   var HA_RESP_CLAUSE = { healthy: "", warning: "Home Assistant answering slowly; ", severe: "Home Assistant answering very slowly; " };
+  var HA_NET_ROW_SLOW = {
+    warning: {
+      healthy: ["dashboard.runtime.ha_network_latency_warning", "slow"],
+      warning: ["dashboard.runtime.ha_network_latency_warning_response_slow", "slow; Home Assistant answering slowly"],
+      severe: ["dashboard.runtime.ha_network_latency_warning_response_very_slow", "slow; Home Assistant answering very slowly"]
+    },
+    severe: {
+      healthy: ["dashboard.runtime.ha_network_latency_severe", "very slow"],
+      warning: ["dashboard.runtime.ha_network_latency_severe_response_slow", "very slow; Home Assistant answering slowly"],
+      severe: ["dashboard.runtime.ha_network_latency_severe_response_very_slow", "very slow; Home Assistant answering very slowly"]
+    }
+  };
   // An empty window is two facts: a socket that has only just connected, and a stream that parked
   // and stopped probing. Only the age of the last reply tells them apart (same wording as Kotlin).
   function haNetAge(ms) {
@@ -174,15 +184,13 @@
     // "very slow; p95 9 ms". They are omitted rather than borrowed. An absent cause keeps the
     // legacy loss wording, so an older panel answering this poll is unaffected.
     var slow = cause === "latency";
+    var knownLossCause = cause === "" || cause === "loss";
     var b = document.getElementById("hanetbar");
     if (b) {
-      var text = ownValue(slow ? HA_NET_TEXT_SLOW : HA_NET_TEXT, state);
+      var text = slow ? ownValue(HA_NET_TEXT_SLOW, state) : (knownLossCause ? ownValue(HA_NET_TEXT, state) : null);
       if (!text) { b.style.display = "none"; } else {
         if (slow) {
-          // Not routed through i18nText: new copy needs a catalogue key, and that catalogue is a
-          // reviewed translation contract owned by another lane. Recorded for adoption rather than
-          // faked, so this reads English everywhere until that lane takes it.
-          b.textContent = text + ". " + HA_NET_SLOW_ADVICE;
+          b.textContent = "⚠ " + i18nText(text[0], text[1]);
         } else {
           var bannerEvidence = haNetEvidence(p95, n, miss, age);
           var bannerKey = state === "severe"
@@ -202,7 +210,9 @@
       row.textContent = i18nText("dashboard.runtime.ha_network_settling", HA_NET_ROW.settling);
       return;
     }
-    if ((slow && !Object.prototype.hasOwnProperty.call(HA_NET_ROW_SLOW, state)) ||
+    if ((!slow && !knownLossCause) ||
+        (slow && (!Object.prototype.hasOwnProperty.call(HA_NET_ROW_SLOW, state) ||
+          !Object.prototype.hasOwnProperty.call(HA_NET_ROW_SLOW[state], resp))) ||
         !Object.prototype.hasOwnProperty.call(HA_NET_ROW, state) ||
         !Object.prototype.hasOwnProperty.call(HA_RESP_CLAUSE, resp)) {
       row.textContent = "";
@@ -212,7 +222,8 @@
     if (slow) {
       // Same rule as the banner: the verdict is the probe's, so the socket's numbers stay off it.
       // The responsiveness clause is kept because it names its own instrument out loud.
-      row.textContent = (ownValue(HA_NET_ROW_SLOW, state) || state) + (clause ? "; " + clause : "");
+      var slowRow = HA_NET_ROW_SLOW[state][resp];
+      row.textContent = i18nText(slowRow[0], slowRow[1]);
       return;
     }
     var evidence = haNetEvidence(p95, n, miss, age);

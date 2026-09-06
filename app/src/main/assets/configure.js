@@ -70,6 +70,60 @@
     "auto": "Automatic", "en": "English", "de": "Deutsch", "fr": "Français",
     "it": "Italiano", "es": "Español", "zh-Hans": "简体中文"
   };
+  // Setting values are API/storage vocabulary. Keep them in option.value and translate only the
+  // visible label through this closed map; an option added server-side before its catalogue entry
+  // ships remains readable as its safe wire value instead of becoming an unbounded lookup key.
+  var ENUM_OPTION_LABELS = {
+    mqtt_address_family: {
+      "Automatic": ["configure.enum.mqtt_address_family.automatic", "Automatic"],
+      "Prefer IPv4": ["configure.enum.mqtt_address_family.prefer_ipv4", "Prefer IPv4"],
+      "Force IPv4": ["configure.enum.mqtt_address_family.force_ipv4", "Force IPv4"]
+    },
+    navbar_mode: {
+      "Off": ["configure.enum.navbar_mode.off", "Off"],
+      "Always on": ["configure.enum.navbar_mode.always_on", "Always on"],
+      "Swipe reveal": ["configure.enum.navbar_mode.swipe_reveal", "Swipe reveal"],
+      "Native": ["configure.enum.navbar_mode.native", "Native"]
+    },
+    cpu_governor: {
+      "Performance": ["configure.enum.cpu_governor.performance", "Performance"],
+      "Efficiency": ["configure.enum.cpu_governor.efficiency", "Efficiency"],
+      "Auto": ["configure.enum.cpu_governor.auto", "Auto"]
+    },
+    camera_resolution: {
+      "480p": ["configure.enum.camera_resolution.480p", "480p (SD)"],
+      "720p": ["configure.enum.camera_resolution.720p", "720p (HD)"],
+      "1080p": ["configure.enum.camera_resolution.1080p", "1080p (Full HD)"]
+    },
+    dashboard_theme: {
+      "Follow Home Assistant": ["configure.enum.dashboard_theme.follow_home_assistant", "Follow Home Assistant"],
+      "Dark": ["configure.enum.dashboard_theme.dark", "Dark"],
+      "Light": ["configure.enum.dashboard_theme.light", "Light"]
+    },
+    update_channel: {
+      "stable": ["configure.enum.update_channel.stable", "Stable"],
+      "prerelease": ["configure.enum.update_channel.prerelease", "Prerelease"]
+    },
+    companion_update_channel: {
+      "stable": ["configure.enum.update_channel.stable", "Stable"],
+      "prerelease": ["configure.enum.update_channel.prerelease", "Prerelease"]
+    },
+    voice_audio_source: {
+      "voice_recognition": ["configure.enum.voice_audio_source.voice_recognition", "Voice recognition"],
+      "mic": ["configure.enum.voice_audio_source.mic", "Microphone"],
+      "voice_communication": ["configure.enum.voice_audio_source.voice_communication", "Voice communication"]
+    },
+    voice_sensitivity: {
+      "low": ["configure.enum.voice_sensitivity.low", "Low"],
+      "normal": ["configure.enum.voice_sensitivity.normal", "Normal"],
+      "high": ["configure.enum.voice_sensitivity.high", "High"]
+    },
+    log_ship_protocol: {
+      "syslog-udp": ["configure.enum.log_ship_protocol.syslog_udp", "Syslog over UDP"],
+      "syslog-tcp": ["configure.enum.log_ship_protocol.syslog_tcp", "Syslog over TCP"],
+      "http": ["configure.enum.log_ship_protocol.http", "HTTP protocol"]
+    }
+  };
 
   function i18nText(key, fallback, vars) {
     return window.HaI18n && typeof window.HaI18n.t === "function"
@@ -83,6 +137,18 @@
     if (value === "auto") return i18nText("configure.option.auto", "auto");
     if (value === "Auto-detect") return i18nText("configure.package.auto_detect", "Auto-detect");
     return value;
+  }
+  function localizedEnumOption(fieldKey, wireValue) {
+    if (fieldKey === "ui_language" && Object.prototype.hasOwnProperty.call(UI_LANGUAGE_LABELS, wireValue)) {
+      return wireValue === "auto"
+        ? i18nText("configure.language.automatic", "Automatic")
+        : UI_LANGUAGE_LABELS[wireValue];
+    }
+    var fieldLabels = Object.prototype.hasOwnProperty.call(ENUM_OPTION_LABELS, fieldKey)
+      ? ENUM_OPTION_LABELS[fieldKey] : null;
+    var binding = fieldLabels && Object.prototype.hasOwnProperty.call(fieldLabels, wireValue)
+      ? fieldLabels[wireValue] : null;
+    return binding ? i18nText(binding[0], binding[1]) : String(wireValue);
   }
 
   function validLanguageTag(value) {
@@ -572,8 +638,7 @@
     if (f.type === "ENUM") {
       var s = el("select");
       f.options.forEach(function (o) {
-        var label = f.key === "ui_language" && Object.prototype.hasOwnProperty.call(UI_LANGUAGE_LABELS, o)
-          ? (o === "auto" ? i18nText("configure.language.automatic", "Automatic") : UI_LANGUAGE_LABELS[o]) : o;
+        var label = localizedEnumOption(f.key, o);
         var op = el("option", { value: o, text: label }); if (o === v) op.selected = true; s.appendChild(op);
       });
       s.addEventListener("change", function () {

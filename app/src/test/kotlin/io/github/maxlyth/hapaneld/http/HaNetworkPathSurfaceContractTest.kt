@@ -82,7 +82,7 @@ class HaNetworkPathSurfaceContractTest {
     @Test fun theBannerReusesTheSevereWarningPresentationAndNeverInjectsMarkup() {
         val banner = buildwatch.substringAfter("function haNetBanner").substringBefore("function vc()")
         assertTrue("severe uses the existing crit tone", banner.contains("state === \"severe\" ? \"setup crit\" : \"setup\""))
-        assertTrue(banner.contains("b.textContent = text"))
+        assertTrue(banner.contains("b.textContent = \"⚠ \" + i18nText(text[0], text[1])"))
         assertFalse("the banner must not use innerHTML", banner.contains("innerHTML"))
         // Absent token: banner hidden, row emptied; no default verdict is invented.
         assertTrue(banner.contains("if (!text) { b.style.display = \"none\"; }"))
@@ -91,6 +91,7 @@ class HaNetworkPathSurfaceContractTest {
         // table is keyed on the PATH state alone and has no responsiveness entry.
         assertTrue(banner.contains("var clause = HA_RESP_CLAUSE[resp]"))
         assertFalse("latency must not reach the banner", banner.contains("HA_NET_TEXT[resp]"))
+        assertTrue(banner.contains("cause === \"\" || cause === \"loss\""))
     }
 
     @Test fun localizedRowsRemainAClosedProjectionOfKnownHealthTokens() {
@@ -121,12 +122,26 @@ class HaNetworkPathSurfaceContractTest {
             "raw responsiveness must never be appended to a catalogue namespace",
             banner.contains("dashboard.runtime.ha_network_\" + resp"),
         )
+        assertTrue("latency rows must use the closed state/response table", banner.contains("HA_NET_ROW_SLOW[state][resp]"))
+        assertFalse("latency rows must not append raw state text", banner.contains("|| state"))
     }
 
     @Test fun theScriptAndTheKotlinPresentationShareOneCopy() {
         assertTrue(buildwatch.contains("warning: \"${HaNetworkPathPresentation.BANNER_WARNING_PREFIX}\""))
         assertTrue(buildwatch.contains("severe: \"${HaNetworkPathPresentation.BANNER_SEVERE_PREFIX}\""))
         assertTrue(buildwatch.contains("\"${HaNetworkPathPresentation.BANNER_ADVICE}\""))
+        assertTrue(
+            buildwatch.contains(
+                "\"${HaNetworkPathPresentation.BANNER_WARNING_SLOW_PREFIX.removePrefix("⚠ ")}. " +
+                    "${HaNetworkPathPresentation.BANNER_SLOW_ADVICE}\"",
+            ),
+        )
+        assertTrue(
+            buildwatch.contains(
+                "\"${HaNetworkPathPresentation.BANNER_SEVERE_SLOW_PREFIX.removePrefix("⚠ ")}. " +
+                    "${HaNetworkPathPresentation.BANNER_SLOW_ADVICE}\"",
+            ),
+        )
         HaNetworkPathSeverity.entries.forEach {
             assertTrue("the row must word ${it.wireValue}", buildwatch.contains("${it.wireValue}: \""))
         }

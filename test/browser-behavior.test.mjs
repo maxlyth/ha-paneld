@@ -118,6 +118,114 @@ browserTest('Configure bypasses caches and lets a supported HA language supersed
   for (const read of reads) assert.equal(read.cacheControl, 'no-cache');
 });
 
+browserTest('Configure localizes finite enum labels while preserving submitted wire values', async (t) => {
+  const posts = [];
+  const schema = [
+    { key: 'navbar_mode', label: '导航栏模式', help: '选择导航栏的显示方式。', group: 'Behaviour', tier: 'BASIC', type: 'ENUM', options: ['Off', 'Always on', 'Swipe reveal', 'Native', 'Future wire'], available: true },
+    { key: 'mqtt_address_family', label: '地址族', help: '选择连接地址族。', group: 'MQTT', tier: 'ADVANCED', type: 'ENUM', options: ['Automatic', 'Prefer IPv4', 'Force IPv4'], available: true },
+  ];
+  const translations = {
+    'configure.enum.navbar_mode.off': '关闭',
+    'configure.enum.navbar_mode.always_on': '始终显示导航栏（本地化长标签）',
+    'configure.enum.navbar_mode.swipe_reveal': '滑动显示',
+    'configure.enum.navbar_mode.native': '原生',
+    'configure.enum.mqtt_address_family.automatic': '自动',
+    'configure.enum.mqtt_address_family.prefer_ipv4': '优先 IPv4',
+    'configure.enum.mqtt_address_family.force_ipv4': '强制 IPv4',
+  };
+  const harness = await startHarness(async (path, request) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') {
+      if (request.method === 'POST') {
+        posts.push(await requestBody(request));
+        return json({ status: 'saved' });
+      }
+      return json({ settings: { navbar_mode: 'Off', mqtt_address_family: 'Automatic' }, ha_expose: {}, ha_auth: {} });
+    }
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio') return json({ present: false });
+    if (path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/config/discovery') return json({});
+    if (path === '/health') return { body: 'ok cfg=test' };
+    return null;
+  }, () => fixture(translations, 'zh-Hans'));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage({ viewport: { width: 480, height: 800 } });
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  const navbar = page.locator('#cfg-navbar_mode select');
+  await navbar.waitFor();
+  assert.deepEqual(await navbar.locator('option').allTextContents(), ['关闭', '始终显示导航栏（本地化长标签）', '滑动显示', '原生', 'Future wire']);
+  assert.deepEqual(await navbar.locator('option').evaluateAll((options) => options.map((option) => option.value)), ['Off', 'Always on', 'Swipe reveal', 'Native', 'Future wire']);
+  assert.deepEqual(await page.locator('#cfg-mqtt_address_family option').allTextContents(), ['自动', '优先 IPv4', '强制 IPv4']);
+
+  await navbar.selectOption('Swipe reveal');
+  await page.locator('#savebtn').click();
+  await page.waitForFunction(() => document.getElementById('savebtn').disabled);
+  assert.equal(posts.length, 1);
+  assert.equal(new URLSearchParams(posts[0]).get('navbar_mode'), 'Swipe reveal');
+  assert.ok(!posts[0].includes(encodeURIComponent('滑动显示')));
+
+});
+
+browserTest('Configure enum labels fit Hall width at large text in every release locale', async (t) => {
+  const enumSpecs = [
+    ['mqtt_address_family', 'MQTT', ['Automatic', 'Prefer IPv4', 'Force IPv4']],
+    ['navbar_mode', 'Behaviour', ['Off', 'Always on', 'Swipe reveal', 'Native']],
+    ['cpu_governor', 'System', ['Performance', 'Efficiency', 'Auto']],
+    ['camera_resolution', 'Camera', ['480p', '720p', '1080p']],
+    ['dashboard_theme', 'Dashboard', ['Follow Home Assistant', 'Dark', 'Light']],
+    ['update_channel', 'System', ['stable', 'prerelease']],
+    ['companion_update_channel', 'System', ['stable', 'prerelease']],
+    ['voice_audio_source', 'Voice', ['voice_recognition', 'mic', 'voice_communication']],
+    ['voice_sensitivity', 'Voice', ['low', 'normal', 'high']],
+    ['log_ship_protocol', 'Logging', ['syslog-udp', 'syslog-tcp', 'http']],
+  ];
+  const schema = enumSpecs.map(([key, group, options]) => ({
+    key, group, options, label: key, help: `${key} help`, tier: 'BASIC', type: 'ENUM', available: true,
+  }));
+  const settings = Object.fromEntries(enumSpecs.map(([key, , options]) => [key, options[0]]));
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  t.after(async () => browser.close());
+
+  for (const locale of ['de', 'es', 'fr', 'it', 'zh-Hans']) {
+    const target = JSON.parse(await readFile(new URL(`../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8')).strings;
+    const translations = Object.fromEntries(Object.entries(target)
+      .filter(([key]) => key.startsWith('configure.enum.')).map(([key, record]) => [key, record.text]));
+    const harness = await startHarness((path) => {
+      if (path === '/api/v1/config/schema') return json(schema);
+      if (path === '/api/v1/config') return json({ settings, ha_expose: {}, ha_auth: {} });
+      if (path === '/api/v1/apps') return json({ apps: [] });
+      if (path === '/api/v1/radio') return json({ present: false });
+      if (path === '/api/v1/proximity') return json({ present: false });
+      if (path === '/api/v1/config/discovery') return json({});
+      return null;
+    }, () => fixture(translations, locale));
+    const page = await browser.newPage({ viewport: { width: 480, height: 900 } });
+    try {
+      await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+      await page.locator('#cfg-log_ship_protocol select').waitFor();
+      await page.evaluate(() => { document.documentElement.style.fontSize = '24px'; });
+      const geometries = await page.locator('.frow select').evaluateAll((selects) => selects.map((select) => {
+        const row = select.closest('.frow');
+        return {
+          id: row.id, rowClient: row.clientWidth, rowScroll: row.scrollWidth,
+          selectClient: select.clientWidth, selectScroll: select.scrollWidth,
+        };
+      }));
+      assert.equal(geometries.length, enumSpecs.length, `${locale} must render every synthetic enum`);
+      for (const geometry of geometries) {
+        assert.ok(geometry.selectClient > 0, `${locale} ${geometry.id} select is usable: ${JSON.stringify(geometry)}`);
+        assert.ok(geometry.rowScroll <= geometry.rowClient + 1, `${locale} ${geometry.id} row overflow: ${JSON.stringify(geometry)}`);
+        assert.ok(geometry.selectScroll <= geometry.selectClient + 1, `${locale} ${geometry.id} select overflow: ${JSON.stringify(geometry)}`);
+      }
+    } finally {
+      await page.close();
+      await new Promise((resolve) => harness.server.close(resolve));
+    }
+  }
+});
+
 browserTest('Configure consumes a locale reload message exactly once when initial loading fails', async (t) => {
   const storageKey = 'ha-paneld-config-locale-reload-message';
   const harness = await startHarness((path) => {

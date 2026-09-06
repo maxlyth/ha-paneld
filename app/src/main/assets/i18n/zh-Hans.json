@@ -4718,32 +4718,32 @@
       "state": "machine-cross-checked",
       "text": "要在此配置中遗漏所有潜在实体的情况下继续吗？这不会向订阅添加任何实体。依赖这些实体的卡片可能显示为不可用，直到您手动固定这些实体、缩小仪表盘范围或重新启用安全检查。"
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.reason": {
+    "entities.issue.kiosk-mode-dynamic-javascript.reason": {
       "sourceHash": "848d2c9cb3f62b9ce9bafee07f503cb464e1f9e902cebb6e7bfe064cc443f3a6",
       "state": "machine-cross-checked",
       "text": "这些客户端表达式可能依赖于静态发现的订阅集合中不存在的实体。"
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation": {
+    "entities.issue.kiosk-mode-dynamic-javascript.recommendation": {
       "sourceHash": "16bfc9f542e706bd0fb6dffd6cbda316c8c1e2de53fbca3309e06eb4a72c0070",
       "state": "machine-cross-checked",
       "text": "若要使用自动实体筛选，请移除客户端 JavaScript 或固定每个依赖项；这不会影响 HACS 的呈现或 Home Assistant 的原生 Kiosk 命令。"
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.summary": {
+    "entities.issue.kiosk-mode-dynamic-javascript.summary": {
       "sourceHash": "4738246d419bdcdb6d251cb23cc2c9edd4d568d9a4c64d1089c963c6d9eb34c8",
       "state": "machine-cross-checked",
       "text": "HACS Kiosk Mode 使用了实体依赖项未知的客户端 JavaScript"
     },
-    "entities.issue.kio\u0073k-mode-limited-support.reason": {
+    "entities.issue.kiosk-mode-limited-support.reason": {
       "sourceHash": "45fc404517466e160d28ad59823726bfb75d79d467999f978ee60ffff324abcb",
       "state": "machine-cross-checked",
       "text": "会扫描客户端模板中的字面实体 ID，但无法安全地评估计算得出的引用以及对实体、域或注册表的枚举。"
     },
-    "entities.issue.kio\u0073k-mode-limited-support.recommendation": {
+    "entities.issue.kiosk-mode-limited-support.recommendation": {
       "sourceHash": "6722add1f9e7bd22036c91f7c5cdb90df36db9da4f5c444dd3db697dc862c2a7",
       "state": "machine-cross-checked",
       "text": "若要使用自动实体筛选，请在 HACS Kiosk Mode JavaScript 中使用字面实体 ID 并避免枚举；服务器渲染的 Jinja 设置不需要主订阅流中的依赖项。"
     },
-    "entities.issue.kio\u0073k-mode-limited-support.summary": {
+    "entities.issue.kiosk-mode-limited-support.summary": {
       "sourceHash": "c9e5190b8c38b4b229b6d2daab82903f342aa822d7e708f4d835fc5e17172c32",
       "state": "machine-cross-checked",
       "text": "HACS Kiosk Mode JavaScript 的实体发现支持有限"
@@ -11717,6 +11717,181 @@
       "sourceHash": "71d8ebe0fdc7922d4dc02071672fdd8aee2e27c8af3694a32166ff337dbd52eb",
       "state": "machine-cross-checked",
       "text": "立即更新 WebView"
+    },
+    "configure.enum.camera_resolution.1080p": {
+      "text": "1080p（Full HD）分辨率",
+      "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.480p": {
+      "text": "480p（SD）分辨率",
+      "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.720p": {
+      "text": "720p（HD）分辨率",
+      "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.auto": {
+      "text": "自动",
+      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.efficiency": {
+      "text": "节能",
+      "sourceHash": "87b180c8f2042d97ae03bb27b19b110a05c3bdff94ad48133633e73a5c82cc1e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.performance": {
+      "text": "性能",
+      "sourceHash": "442aded87a55aa8c8f7d5ff0c30228150d4b1cb8756e4be138d615ca4708fc26",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.dark": {
+      "text": "深色",
+      "sourceHash": "60acc53f13a5d1bf115878c4a785e9a43e8286c4139a8402a6ac7d23966f9153",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.follow_home_assistant": {
+      "text": "跟随 Home Assistant",
+      "sourceHash": "354c65fd389c33e3365c65df36b59f5d05509a6f1a8305920453ccf0cc3cd2e4",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.light": {
+      "text": "浅色",
+      "sourceHash": "dbcd5e7bb7a0f538810de44c3efbd813037ee3fa358747bb71fa58e157af45f7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.http": {
+      "text": "HTTP 协议",
+      "sourceHash": "cfaf50c20af6e519ca09653e2cb00d5453a3068c4d973d456b959a53b72e7718",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_tcp": {
+      "text": "通过 TCP 的 Syslog",
+      "sourceHash": "91de40e260ce02c13911216393666f52c0a32e6d3b3dd7cfc5dd02711f58f2b5",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_udp": {
+      "text": "通过 UDP 的 Syslog",
+      "sourceHash": "cdd9bce57411aec9a0af3472b278942d976f8f616cb462feebc82082714b7df7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.automatic": {
+      "text": "自动",
+      "sourceHash": "d461a493a3753877c9486cffa3444265a33370af8a7fff242fb119b71750839c",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.force_ipv4": {
+      "text": "强制 IPv4",
+      "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.prefer_ipv4": {
+      "text": "优先 IPv4",
+      "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.always_on": {
+      "text": "始终显示",
+      "sourceHash": "044ba8a9ae43b296f0908d5f94c2ec616c7703ef71e1e3218393fad6c91a83b2",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.native": {
+      "text": "原生",
+      "sourceHash": "d509e493885298a23c55f83c133e5d725f24dd6cc67cf734baa2c11b220ab809",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.off": {
+      "text": "关闭",
+      "sourceHash": "ca7981b46ecf2c1787b6d76d81d9fd7fa0ca95842e2fcc2a452869891a9334d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.swipe_reveal": {
+      "text": "滑动显示",
+      "sourceHash": "09d51331b616bdd52b2e76eaec3d72b1f5906627266dd577ca0bcd49c29222d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.prerelease": {
+      "text": "预发布版",
+      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.stable": {
+      "text": "稳定版",
+      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.mic": {
+      "text": "麦克风",
+      "sourceHash": "186352a881d0550e2da1f74e5c317770702bc2a0f9c3da69a10e27c14a217bac",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_communication": {
+      "text": "语音通信",
+      "sourceHash": "a0a89f70b4ad263bbb3c0c875bb0420a011ecfdf0d1eda50cc8f7bef7c5b664f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_recognition": {
+      "text": "语音识别",
+      "sourceHash": "619742a53cee9ccd92bd7087ade07b7582fdfac6193a8c971491fe8a2a0e3e7e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.high": {
+      "text": "高",
+      "sourceHash": "c4ebc6d4a5832cd9415f906ad03661110c705a72381c8b8b145761d02e2dd23a",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.low": {
+      "text": "低",
+      "sourceHash": "f793de205ead5ac302c4a1627829dea41f176b1068b993a32373fc869918374b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.normal": {
+      "text": "正常",
+      "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe": {
+      "text": "非常缓慢",
+      "sourceHash": "82ce6837aa3b68844b31aa7c645d74dbecc376c957c349610ccb8a680856ca4b",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_slow": {
+      "text": "非常缓慢；Home Assistant 响应缓慢",
+      "sourceHash": "a5d9c7c7c5aaf6b8ce698004cd0b9f0b4b87d3e329712d572039aa2730520c25",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_very_slow": {
+      "text": "非常缓慢；Home Assistant 响应非常缓慢",
+      "sourceHash": "611b01e6500fcdd6c176dfe3b6ef44c9221b1d0ced97fcd99dfad2cbc9eb5cca",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning": {
+      "text": "缓慢",
+      "sourceHash": "5e0cf7bd1dfa3831788b0cf6dedcdd228fba6f34dc238d371e746567e80bc7b6",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_slow": {
+      "text": "缓慢；Home Assistant 响应缓慢",
+      "sourceHash": "056de773c4208b770839fdd87e4055ff7d09d8cb61df76abe340c9d6c5f8e164",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_very_slow": {
+      "text": "缓慢；Home Assistant 响应非常缓慢",
+      "sourceHash": "f2b75a04d3d45878a4e623d21335863f509a6e7c279abfa60d96ebeeecd89072",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_latency_severe": {
+      "text": "通往 Home Assistant 的网络路径非常慢。所有操作都要等待此路径。此结果在网络层测量，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
+      "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_latency_warning": {
+      "text": "通往 Home Assistant 的网络路径较慢。所有操作都要等待此路径。此结果在网络层测量，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
+      "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
+      "state": "machine-cross-checked"
     }
   }
 }

@@ -4718,32 +4718,32 @@
       "state": "machine-cross-checked",
       "text": "Continuare omettendo tutte le potenziali entità di questa configurazione? Nessuna entità verrà aggiunta alla sottoscrizione. Le schede che dipendono da tali entità potrebbero risultare non disponibili finché non le fisserai manualmente, non restringerai la dashboard o non riabiliterai la verifica di sicurezza."
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.reason": {
+    "entities.issue.kiosk-mode-dynamic-javascript.reason": {
       "sourceHash": "848d2c9cb3f62b9ce9bafee07f503cb464e1f9e902cebb6e7bfe064cc443f3a6",
       "state": "machine-cross-checked",
       "text": "Queste espressioni lato client possono dipendere da entità assenti dall'insieme di sottoscrizione individuato staticamente."
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation": {
+    "entities.issue.kiosk-mode-dynamic-javascript.recommendation": {
       "sourceHash": "16bfc9f542e706bd0fb6dffd6cbda316c8c1e2de53fbca3309e06eb4a72c0070",
       "state": "machine-cross-checked",
       "text": "Per il filtro automatico delle entità, rimuovi il JavaScript lato client oppure fissa ogni dipendenza; ciò non influisce sulla presentazione HACS né sul comando chiosco nativo di Home Assistant."
     },
-    "entities.issue.kio\u0073k-mode-dynamic-javascript.summary": {
+    "entities.issue.kiosk-mode-dynamic-javascript.summary": {
       "sourceHash": "4738246d419bdcdb6d251cb23cc2c9edd4d568d9a4c64d1089c963c6d9eb34c8",
       "state": "machine-cross-checked",
       "text": "HACS Kiosk Mode usa JavaScript lato client con dipendenze da entità sconosciute"
     },
-    "entities.issue.kio\u0073k-mode-limited-support.reason": {
+    "entities.issue.kiosk-mode-limited-support.reason": {
       "sourceHash": "45fc404517466e160d28ad59823726bfb75d79d467999f978ee60ffff324abcb",
       "state": "machine-cross-checked",
       "text": "Gli ID entità letterali nei modelli lato client vengono analizzati, ma i riferimenti calcolati e l'enumerazione di entità, domini o registri non possono essere valutati in modo sicuro."
     },
-    "entities.issue.kio\u0073k-mode-limited-support.recommendation": {
+    "entities.issue.kiosk-mode-limited-support.recommendation": {
       "sourceHash": "6722add1f9e7bd22036c91f7c5cdb90df36db9da4f5c444dd3db697dc862c2a7",
       "state": "machine-cross-checked",
       "text": "Per il filtro automatico delle entità, usa ID entità letterali nel JavaScript di HACS Kiosk Mode ed evita l'enumerazione; le impostazioni Jinja elaborate sul server non richiedono dipendenze nel flusso principale."
     },
-    "entities.issue.kio\u0073k-mode-limited-support.summary": {
+    "entities.issue.kiosk-mode-limited-support.summary": {
       "sourceHash": "c9e5190b8c38b4b229b6d2daab82903f342aa822d7e708f4d835fc5e17172c32",
       "state": "machine-cross-checked",
       "text": "Il JavaScript di HACS Kiosk Mode dispone di un supporto limitato per l'individuazione delle entità"
@@ -11717,6 +11717,181 @@
       "sourceHash": "71d8ebe0fdc7922d4dc02071672fdd8aee2e27c8af3694a32166ff337dbd52eb",
       "state": "machine-cross-checked",
       "text": "Aggiorna WebView ora"
+    },
+    "configure.enum.camera_resolution.1080p": {
+      "text": "Risoluzione 1080p (Full HD)",
+      "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.480p": {
+      "text": "Risoluzione 480p (SD)",
+      "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.720p": {
+      "text": "Risoluzione 720p (HD)",
+      "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.auto": {
+      "text": "Automatico",
+      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.efficiency": {
+      "text": "Efficienza",
+      "sourceHash": "87b180c8f2042d97ae03bb27b19b110a05c3bdff94ad48133633e73a5c82cc1e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.performance": {
+      "text": "Prestazioni",
+      "sourceHash": "442aded87a55aa8c8f7d5ff0c30228150d4b1cb8756e4be138d615ca4708fc26",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.dark": {
+      "text": "Scuro",
+      "sourceHash": "60acc53f13a5d1bf115878c4a785e9a43e8286c4139a8402a6ac7d23966f9153",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.follow_home_assistant": {
+      "text": "Segui Home Assistant",
+      "sourceHash": "354c65fd389c33e3365c65df36b59f5d05509a6f1a8305920453ccf0cc3cd2e4",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.light": {
+      "text": "Chiaro",
+      "sourceHash": "dbcd5e7bb7a0f538810de44c3efbd813037ee3fa358747bb71fa58e157af45f7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.http": {
+      "text": "Protocollo HTTP",
+      "sourceHash": "cfaf50c20af6e519ca09653e2cb00d5453a3068c4d973d456b959a53b72e7718",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_tcp": {
+      "text": "Syslog tramite TCP",
+      "sourceHash": "91de40e260ce02c13911216393666f52c0a32e6d3b3dd7cfc5dd02711f58f2b5",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_udp": {
+      "text": "Syslog tramite UDP",
+      "sourceHash": "cdd9bce57411aec9a0af3472b278942d976f8f616cb462feebc82082714b7df7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.automatic": {
+      "text": "Automatico",
+      "sourceHash": "d461a493a3753877c9486cffa3444265a33370af8a7fff242fb119b71750839c",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.force_ipv4": {
+      "text": "Forza IPv4",
+      "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.prefer_ipv4": {
+      "text": "Preferisci IPv4",
+      "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.always_on": {
+      "text": "Sempre attiva",
+      "sourceHash": "044ba8a9ae43b296f0908d5f94c2ec616c7703ef71e1e3218393fad6c91a83b2",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.native": {
+      "text": "Nativa",
+      "sourceHash": "d509e493885298a23c55f83c133e5d725f24dd6cc67cf734baa2c11b220ab809",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.off": {
+      "text": "Disattivata",
+      "sourceHash": "ca7981b46ecf2c1787b6d76d81d9fd7fa0ca95842e2fcc2a452869891a9334d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.swipe_reveal": {
+      "text": "Mostra con scorrimento",
+      "sourceHash": "09d51331b616bdd52b2e76eaec3d72b1f5906627266dd577ca0bcd49c29222d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.prerelease": {
+      "text": "Versione preliminare",
+      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.stable": {
+      "text": "Stabile",
+      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.mic": {
+      "text": "Microfono integrato",
+      "sourceHash": "186352a881d0550e2da1f74e5c317770702bc2a0f9c3da69a10e27c14a217bac",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_communication": {
+      "text": "Comunicazione vocale",
+      "sourceHash": "a0a89f70b4ad263bbb3c0c875bb0420a011ecfdf0d1eda50cc8f7bef7c5b664f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_recognition": {
+      "text": "Riconoscimento vocale",
+      "sourceHash": "619742a53cee9ccd92bd7087ade07b7582fdfac6193a8c971491fe8a2a0e3e7e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.high": {
+      "text": "Alta",
+      "sourceHash": "c4ebc6d4a5832cd9415f906ad03661110c705a72381c8b8b145761d02e2dd23a",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.low": {
+      "text": "Bassa",
+      "sourceHash": "f793de205ead5ac302c4a1627829dea41f176b1068b993a32373fc869918374b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.normal": {
+      "text": "Normale",
+      "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe": {
+      "text": "molto lenta",
+      "sourceHash": "82ce6837aa3b68844b31aa7c645d74dbecc376c957c349610ccb8a680856ca4b",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_slow": {
+      "text": "molto lenta; Home Assistant risponde lentamente",
+      "sourceHash": "a5d9c7c7c5aaf6b8ce698004cd0b9f0b4b87d3e329712d572039aa2730520c25",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_very_slow": {
+      "text": "molto lenta; Home Assistant risponde molto lentamente",
+      "sourceHash": "611b01e6500fcdd6c176dfe3b6ef44c9221b1d0ced97fcd99dfad2cbc9eb5cca",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning": {
+      "text": "lenta",
+      "sourceHash": "5e0cf7bd1dfa3831788b0cf6dedcdd228fba6f34dc238d371e746567e80bc7b6",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_slow": {
+      "text": "lenta; Home Assistant risponde lentamente",
+      "sourceHash": "056de773c4208b770839fdd87e4055ff7d09d8cb61df76abe340c9d6c5f8e164",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_very_slow": {
+      "text": "lenta; Home Assistant risponde molto lentamente",
+      "sourceHash": "f2b75a04d3d45878a4e623d21335863f509a6e7c279abfa60d96ebeeecd89072",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_latency_severe": {
+      "text": "Il percorso di rete verso Home Assistant è molto lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non è il pannello né Home Assistant a essere lento — controlla il Wi-Fi o il collegamento tra i due.",
+      "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_latency_warning": {
+      "text": "Il percorso di rete verso Home Assistant è lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non è il pannello né Home Assistant a essere lento — controlla il Wi-Fi o il collegamento tra i due.",
+      "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
+      "state": "machine-cross-checked"
     }
   }
 }

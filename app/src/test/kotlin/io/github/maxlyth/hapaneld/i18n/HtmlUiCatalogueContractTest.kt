@@ -62,13 +62,13 @@ class HtmlUiCatalogueContractTest {
             catalogue.getJSONObject(key).getString("surface") in promotedSurfaces
         }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 2343, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1929, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 2378, source.strings.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 1964, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
                 "$locale must contain the complete release catalogue",
-                2343,
+                2378,
                 target.strings.size,
             )
             assertEquals(
@@ -337,7 +337,7 @@ class HtmlUiCatalogueContractTest {
         }
     }
 
-    @Test fun `shared runtime chrome owns exactly its finite 25-key catalogue addition`() {
+    @Test fun `shared runtime chrome owns exactly its finite 33-key catalogue addition`() {
         val addedKeys = setOf(
             "shell.settings_changed.externally",
             "shell.runtime.ha_lifecycle.offline",
@@ -346,6 +346,8 @@ class HtmlUiCatalogueContractTest {
             "shell.runtime.ha_lifecycle.shutting_down",
             "shell.runtime.ha_network.banner_warning",
             "shell.runtime.ha_network.banner_severe",
+            "shell.runtime.ha_network.banner_latency_warning",
+            "shell.runtime.ha_network.banner_latency_severe",
             "shell.runtime.duration_seconds",
             "shell.runtime.duration_minutes",
             "shell.runtime.ha_network_evidence_no_probes",
@@ -364,10 +366,16 @@ class HtmlUiCatalogueContractTest {
             "dashboard.runtime.ha_network_failing_slow",
             "dashboard.runtime.ha_network_failing_very_slow",
             "dashboard.runtime.ha_network_settling",
+            "dashboard.runtime.ha_network_latency_warning",
+            "dashboard.runtime.ha_network_latency_warning_response_slow",
+            "dashboard.runtime.ha_network_latency_warning_response_very_slow",
+            "dashboard.runtime.ha_network_latency_severe",
+            "dashboard.runtime.ha_network_latency_severe_response_slow",
+            "dashboard.runtime.ha_network_latency_severe_response_very_slow",
         )
-        assertEquals("the reviewed shared-runtime addition changed", 25, addedKeys.size)
-        assertEquals("shared copy needed outside Dashboard must project through the shell", 16, addedKeys.count { it.startsWith("shell.") })
-        assertEquals("only diagnostics-row templates belong to Dashboard", 9, addedKeys.count { it.startsWith("dashboard.") })
+        assertEquals("the reviewed shared-runtime addition changed", 33, addedKeys.size)
+        assertEquals("shared copy needed outside Dashboard must project through the shell", 18, addedKeys.count { it.startsWith("shell.") })
+        assertEquals("only diagnostics-row templates belong to Dashboard", 15, addedKeys.count { it.startsWith("dashboard.") })
         addedKeys.forEach { key ->
             assertTrue("English is missing shared-runtime key $key", catalogue.has(key))
             assertEquals(
@@ -376,6 +384,25 @@ class HtmlUiCatalogueContractTest {
                 catalogue.getJSONObject(key).getString("surface"),
             )
         }
+
+        val latencyFallbacks = linkedMapOf(
+            "shell.runtime.ha_network.banner_latency_warning" to
+                "The network path to Home Assistant is slow. Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them.",
+            "shell.runtime.ha_network.banner_latency_severe" to
+                "The network path to Home Assistant is very slow. Every action waits on this path. It is measured at the network level, so this is not the panel or Home Assistant being slow — check the Wi-Fi or the link between them.",
+            "dashboard.runtime.ha_network_latency_warning" to "slow",
+            "dashboard.runtime.ha_network_latency_warning_response_slow" to "slow; Home Assistant answering slowly",
+            "dashboard.runtime.ha_network_latency_warning_response_very_slow" to "slow; Home Assistant answering very slowly",
+            "dashboard.runtime.ha_network_latency_severe" to "very slow",
+            "dashboard.runtime.ha_network_latency_severe_response_slow" to "very slow; Home Assistant answering slowly",
+            "dashboard.runtime.ha_network_latency_severe_response_very_slow" to "very slow; Home Assistant answering very slowly",
+        )
+        val buildwatch = File(assets, "buildwatch.js").readText()
+        latencyFallbacks.forEach { (key, fallback) ->
+            assertTrue("buildwatch must bind $key through a finite literal pair", buildwatch.contains("[\"$key\", \"$fallback\"]"))
+            assertEquals("$key fallback drifted from the English catalogue", fallback, catalogue.getJSONObject(key).getString("text"))
+        }
+        assertFalse("latency copy must not borrow WebSocket evidence", latencyFallbacks.values.any { "{evidence}" in it })
     }
 
     private fun literalKeys(source: String, function: String): Set<String> =

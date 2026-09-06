@@ -218,6 +218,50 @@ test('network evidence uses shell projection keys and locale-formatted bounded n
   assert.ok(rig.calls.some((call) => call.key === 'shell.runtime.ha_network.banner_warning'));
 });
 
+test('layer-3 latency uses the closed localized matrix without borrowing WebSocket evidence', async () => {
+  const translations = {
+    'shell.runtime.ha_network.banner_latency_warning': '路径较慢；请检查网络。',
+    'shell.runtime.ha_network.banner_latency_severe': '路径非常慢；请检查网络。',
+    'dashboard.runtime.ha_network_latency_warning': '较慢',
+    'dashboard.runtime.ha_network_latency_warning_response_slow': '较慢；Home Assistant 响应较慢',
+    'dashboard.runtime.ha_network_latency_warning_response_very_slow': '较慢；Home Assistant 响应非常慢',
+    'dashboard.runtime.ha_network_latency_severe': '非常慢',
+    'dashboard.runtime.ha_network_latency_severe_response_slow': '非常慢；Home Assistant 响应较慢',
+    'dashboard.runtime.ha_network_latency_severe_response_very_slow': '非常慢；Home Assistant 响应非常慢',
+  };
+  const rig = await loadBuildwatch({ translations, locale: 'zh-Hans' });
+  const expected = {
+    warning: {
+      healthy: ['shell.runtime.ha_network.banner_latency_warning', 'dashboard.runtime.ha_network_latency_warning', '较慢'],
+      warning: ['shell.runtime.ha_network.banner_latency_warning', 'dashboard.runtime.ha_network_latency_warning_response_slow', '较慢；Home Assistant 响应较慢'],
+      severe: ['shell.runtime.ha_network.banner_latency_warning', 'dashboard.runtime.ha_network_latency_warning_response_very_slow', '较慢；Home Assistant 响应非常慢'],
+    },
+    severe: {
+      healthy: ['shell.runtime.ha_network.banner_latency_severe', 'dashboard.runtime.ha_network_latency_severe', '非常慢'],
+      warning: ['shell.runtime.ha_network.banner_latency_severe', 'dashboard.runtime.ha_network_latency_severe_response_slow', '非常慢；Home Assistant 响应较慢'],
+      severe: ['shell.runtime.ha_network.banner_latency_severe', 'dashboard.runtime.ha_network_latency_severe_response_very_slow', '非常慢；Home Assistant 响应非常慢'],
+    },
+  };
+  for (const state of ['warning', 'severe']) {
+    for (const response of ['healthy', 'warning', 'severe']) {
+      rig.calls.splice(0);
+      await rig.poll(`ha_net=${state} ha_net_cause=latency ha_resp=${response} ha_net_p95=9876 ha_net_n=4321 ha_net_miss=1234 ha_net_age=7654321`);
+      const [bannerKey, rowKey, row] = expected[state][response];
+      assert.equal(rig.ids.hanetbar.textContent, `⚠ ${translations[bannerKey]}`);
+      assert.equal(rig.ids.hanetcell.textContent, row);
+      assert.ok(rig.calls.some((call) => call.key === bannerKey));
+      assert.ok(rig.calls.some((call) => call.key === rowKey));
+      assert.doesNotMatch(rig.ids.hanetbar.textContent + rig.ids.hanetcell.textContent, /9876|9,876|4321|4,321|1234|1,234|7654321|7,654,321|p95|miss/i);
+    }
+  }
+
+  for (const cause of ['future_value', 'constructor', '__proto__']) {
+    await rig.poll(`ha_net=warning ha_net_cause=${cause} ha_resp=healthy ha_net_p95=1 ha_net_n=1 ha_net_miss=1`);
+    assert.equal(rig.ids.hanetbar.style.display, 'none');
+    assert.equal(rig.ids.hanetcell.textContent, '');
+  }
+});
+
 test('version and settings banners create a safe localized reload link and preserve English without helper', async () => {
   const translations = {
     'shell.new_version.installed': '已安装新版本',
@@ -255,6 +299,8 @@ test('untrusted catalogue strings stay inert text in lifecycle, network, and rel
   const translations = {
     'shell.runtime.ha_lifecycle.starting': payload,
     'shell.runtime.ha_network.banner_warning': payload + ' {evidence}',
+    'shell.runtime.ha_network.banner_latency_warning': payload,
+    'dashboard.runtime.ha_network_latency_warning': payload,
     'shell.runtime.ha_network_evidence_p95_no_misses': payload,
     'shell.new_version.installed': payload,
     'shell.action.reload': payload,
@@ -267,6 +313,10 @@ test('untrusted catalogue strings stay inert text in lifecycle, network, and rel
   assert.equal(rig.ids.halifecell.textContent, payload);
   assert.equal(rig.ids.hanetbar.textContent, `⚠ ${payload} ${payload}`);
   assert.equal(rig.ids.hanetcell.textContent, `losing probes; ${payload}`);
+
+  await rig.poll('ha_net=warning ha_net_cause=latency ha_resp=healthy ha_net_p95=25 ha_net_n=30 ha_net_miss=0');
+  assert.equal(rig.ids.hanetbar.textContent, `⚠ ${payload}`);
+  assert.equal(rig.ids.hanetcell.textContent, payload);
 
   await rig.poll('build=build-b cfg=cfg-a');
   assert.equal(rig.ids.verbar.textContent, `⟳ ${payload} — ${payload} ${payload}`);
@@ -351,6 +401,25 @@ test('missing and non-callable helpers reproduce every English network row and b
         english(key, { evidence: representativeEvidence }),
         `${helperLabel}: ${state} × ${response} row must match its English catalogue record`
       );
+    }
+
+    const latencyRows = [
+      ['warning', 'healthy', 'dashboard.runtime.ha_network_latency_warning'],
+      ['warning', 'warning', 'dashboard.runtime.ha_network_latency_warning_response_slow'],
+      ['warning', 'severe', 'dashboard.runtime.ha_network_latency_warning_response_very_slow'],
+      ['severe', 'healthy', 'dashboard.runtime.ha_network_latency_severe'],
+      ['severe', 'warning', 'dashboard.runtime.ha_network_latency_severe_response_slow'],
+      ['severe', 'severe', 'dashboard.runtime.ha_network_latency_severe_response_very_slow'],
+    ];
+    for (const [state, response, key] of latencyRows) {
+      await rig.poll(`ha_net=${state} ha_net_cause=latency ha_resp=${response} ha_net_p95=9876 ha_net_n=4321 ha_net_miss=1234`);
+      assert.equal(rig.ids.hanetcell.textContent, english(key), `${helperLabel}: latency ${state} × ${response}`);
+      assert.equal(
+        rig.ids.hanetbar.textContent,
+        `⚠ ${english(`shell.runtime.ha_network.banner_latency_${state}`)}`,
+        `${helperLabel}: latency ${state} banner`,
+      );
+      assert.doesNotMatch(rig.ids.hanetbar.textContent + rig.ids.hanetcell.textContent, /9876|4321|1234|p95|miss/i);
     }
 
     for (const evidenceCase of evidenceCases) {
