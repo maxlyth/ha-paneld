@@ -17200,6 +17200,21 @@
       "softMaxChars": 25,
       "hardMaxChars": 45
     },
+    "install.card.vendor_packages": {
+      "text": "Vendor packages",
+      "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
+      "surface": "install",
+      "context": "Install > Vendor packages: standalone card heading.",
+      "risk": "ordinary",
+      "siblings": [
+        "settings.tame_vendor_packages.help",
+        "settings.tame_vendor_packages.label"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 32,
+      "hardMaxChars": 48
+    },
     "install.companion.error.helper_busy": {
       "text": "Companion helper is busy",
       "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
@@ -29450,8 +29465,8 @@
       "hardMaxChars": 32
     },
     "settings.ui_language.help": {
-      "text": "Language used by ha-paneld's own interface. Automatic follows the Home Assistant user language when available, then the browser or device language. Unsupported languages use English.",
-      "sourceHash": "eeb3854f6160505c1d0700e61d2c886f6f710b309b56a77dcfc0c5cf6184e32b",
+      "text": "Language used by ha-paneld's own interface. Automatic uses an explicit page override first. Configure setting labels and help can then follow the connected Home Assistant user's language; browser, device and English are the remaining fallbacks.",
+      "sourceHash": "6b6157ee7e853009150f5dfc3839a2bc7dbb8f06285ad87d580c87e16daa2550",
       "surface": "settings",
       "context": "Configure > System > Interface language: supporting help for the ui_language setting.",
       "risk": "ordinary",

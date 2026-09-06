@@ -5833,6 +5833,11 @@
       "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
       "state": "machine-cross-checked"
     },
+    "install.card.vendor_packages": {
+      "text": "Herstellerpakete",
+      "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
+      "state": "machine-cross-checked"
+    },
     "install.companion.error.helper_busy": {
       "text": "Companion-Hilfsdienst ist ausgelastet",
       "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
@@ -9195,8 +9200,8 @@
     },
     "settings.launcher_package.help": {
       "sourceHash": "524f589af2ebe612083fd20f1b6f487d59e929aae5a24cf9cd6bd4792e448395",
-      "state": "machine-draft",
-      "text": "App, die über die Launcher-Schaltfläche in den Vordergrund gebracht wird. Leer wählt automatisch eine App. Bei Auswahl von „Panelverwaltung (ha-paneld)“ wird und bleibt ha-paneld außerdem die Android-Start-App."
+      "state": "machine-cross-checked",
+      "text": "App, die die Launcher-Schaltfläche in den Vordergrund holt. Bei leerer Auswahl wird automatisch eine App ausgewählt. Durch Auswahl von „Panel admin (ha-paneld)“ wird ha-paneld außerdem dauerhaft als Android-Start-App festgelegt."
     },
     "settings.launcher_package.label": {
       "sourceHash": "f97faee7e687e14fb4356160757e11ca90cc6c89b0e2ce2d40e14a3a62ef1bbd",
@@ -9420,8 +9425,8 @@
     },
     "settings.tame_vendor_packages.help": {
       "sourceHash": "9e5114f2319b4a394da900d05306035a7d83aba15ac1d66dcd705004814ced95",
-      "state": "machine-draft",
-      "text": "Nur für Sicherungen verwendeter Speicher für die über die Karte „Herstellerpakete“ verwaltete Paketauswahl."
+      "state": "machine-cross-checked",
+      "text": "Nur für Sicherungen gespeicherte Paketauswahl, die über die Karte „Herstellerpakete“ verwaltet wird."
     },
     "settings.tame_vendor_packages.label": {
       "sourceHash": "456cfdbba7347a8ee69662a573af218198e6a6d7cf3362bee5c6b4c8043b60cb",
@@ -9449,9 +9454,9 @@
       "text": "Berührungston"
     },
     "settings.ui_language.help": {
-      "sourceHash": "eeb3854f6160505c1d0700e61d2c886f6f710b309b56a77dcfc0c5cf6184e32b",
+      "sourceHash": "6b6157ee7e853009150f5dfc3839a2bc7dbb8f06285ad87d580c87e16daa2550",
       "state": "machine-cross-checked",
-      "text": "Sprache der eigenen Benutzeroberfläche von ha-paneld. „Automatisch“ folgt, sofern verfügbar, der Benutzersprache von Home Assistant und danach der Browser- oder Gerätesprache. Für nicht unterstützte Sprachen wird Englisch verwendet."
+      "text": "Sprache der ha-paneld-Oberfläche. „Automatisch“ verwendet zuerst eine ausdrückliche Sprachvorgabe der Seite. Beschriftungen und Hilfetexte der Einstellungen unter „Konfiguration“ können danach der Sprache des verbundenen Home Assistant-Benutzers folgen; die weiteren Ausweichsprachen sind Browser- und Gerätesprache sowie Englisch."
     },
     "settings.ui_language.label": {
       "sourceHash": "8027f432a7fb7c273a1a0fde87de4212b6738673e1d06213c02b5a191eaf8ab4",

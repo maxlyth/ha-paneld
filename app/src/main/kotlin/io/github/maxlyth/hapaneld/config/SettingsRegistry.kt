@@ -606,8 +606,9 @@ object SettingsRegistry {
             label = "Interface language", default = DEFAULT_UI_LANGUAGE, tier = Tier.BASIC,
             scope = Scope.DEVICE,
             options = UI_LANGUAGES,
-            help = "Language used by ha-paneld's own interface. Automatic follows the Home Assistant " +
-                "user language when available, then the browser or device language. Unsupported languages use English.",
+            help = "Language used by ha-paneld's own interface. Automatic uses an explicit page override first. " +
+                "Configure setting labels and help can then follow the connected Home Assistant user's language; " +
+                "browser, device and English are the remaining fallbacks.",
         ),
         SettingSpec(
             key = "self_update", type = SettingType.BOOL, group = "System",

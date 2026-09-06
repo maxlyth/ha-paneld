@@ -5833,6 +5833,11 @@
       "state": "machine-cross-checked",
       "text": "{package} ({count} archivos)"
     },
+    "install.card.vendor_packages": {
+      "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
+      "state": "machine-cross-checked",
+      "text": "Paquetes del fabricante"
+    },
     "install.companion.error.helper_busy": {
       "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
       "state": "machine-cross-checked",
@@ -9449,9 +9454,9 @@
       "text": "Sonido táctil"
     },
     "settings.ui_language.help": {
-      "sourceHash": "eeb3854f6160505c1d0700e61d2c886f6f710b309b56a77dcfc0c5cf6184e32b",
+      "sourceHash": "6b6157ee7e853009150f5dfc3839a2bc7dbb8f06285ad87d580c87e16daa2550",
       "state": "machine-cross-checked",
-      "text": "Idioma usado por la interfaz propia de ha-paneld. Automático utiliza el idioma del usuario de Home Assistant cuando está disponible y, después, el del navegador o dispositivo. Los idiomas no compatibles usan inglés."
+      "text": "Idioma usado por la interfaz propia de ha-paneld. Automático usa primero una anulación explícita de la página. Después, las etiquetas y la ayuda de Configurar pueden seguir el idioma del usuario conectado a Home Assistant; las alternativas restantes son los idiomas del navegador y del dispositivo, y el inglés."
     },
     "settings.ui_language.label": {
       "sourceHash": "8027f432a7fb7c273a1a0fde87de4212b6738673e1d06213c02b5a191eaf8ab4",

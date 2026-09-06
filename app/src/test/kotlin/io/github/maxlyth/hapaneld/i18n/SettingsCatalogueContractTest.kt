@@ -9,6 +9,7 @@ import java.io.File
 class SettingsCatalogueContractTest {
     private val catalogueFile = File("src/main/assets/i18n/en.json")
     private val configureFile = File("src/main/assets/configure.js")
+    private val releaseTargetLocales = AppLocale.RELEASE_LOCALES.filterNot { it == AppLocale.ENGLISH }
 
     @Test fun `authoritative English catalogue exactly covers visible Settings copy`() {
         val catalogue = SourceCatalogue.parse(catalogueFile.readText())
@@ -35,6 +36,29 @@ class SettingsCatalogueContractTest {
         }
         assertEquals(keys.size, keys.toSet().size)
         assertTrue(keys.all { it.matches(Regex("settings\\.[a-z0-9_]+\\.(label|help)")) })
+    }
+
+    @Test fun `every release target has a current reviewed Settings translation`() {
+        val source = SourceCatalogue.parse(catalogueFile.readText())
+        val settings = source.strings.filterKeys { it.startsWith("settings.") }
+
+        releaseTargetLocales.forEach { locale ->
+            val target = TargetCatalogue.parse(File("src/main/assets/i18n/$locale.json").readText(), source)
+            assertEquals(
+                "$locale Settings key set must exactly match English",
+                settings.keys,
+                target.strings.keys.filterTo(sortedSetOf()) { it.startsWith("settings.") },
+            )
+            settings.forEach { (key, english) ->
+                val translated = checkNotNull(target.strings[key]) { "$locale is missing $key" }
+                assertEquals("$locale has stale source text for $key", english.sourceHash, translated.sourceHash)
+                assertTrue(
+                    "$locale $key must be reviewed before it can replace the English fallback",
+                    translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
+                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                )
+            }
+        }
     }
 
     @Test fun `catalogued help and delayed locale refresh preserve the live form contract`() {

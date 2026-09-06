@@ -8060,7 +8060,7 @@
     },
     "settings.tame_vendor_packages.help": {
       "sourceHash": "9e5114f2319b4a394da900d05306035a7d83aba15ac1d66dcd705004814ced95",
-      "state": "machine-draft",
+      "state": "machine-cross-checked",
       "text": "Archiviazione destinata solo ai backup per le selezioni dei pacchetti gestite dalla scheda Pacchetti del produttore."
     },
     "settings.tame_vendor_packages.label": {
@@ -8089,9 +8089,9 @@
       "text": "Suono al tocco"
     },
     "settings.ui_language.help": {
-      "sourceHash": "eeb3854f6160505c1d0700e61d2c886f6f710b309b56a77dcfc0c5cf6184e32b",
+      "sourceHash": "6b6157ee7e853009150f5dfc3839a2bc7dbb8f06285ad87d580c87e16daa2550",
       "state": "machine-cross-checked",
-      "text": "Lingua usata dall'interfaccia stessa di ha-paneld. Automatico segue, se disponibile, la lingua dell'utente di Home Assistant, quindi quella del browser o del dispositivo. Per le lingue non supportate viene usato l'inglese."
+      "text": "Lingua usata dall'interfaccia di ha-paneld. Automatica usa prima la lingua impostata esplicitamente per la pagina. Le etichette e i testi di aiuto delle impostazioni in Configura possono poi seguire la lingua dell'utente connesso a Home Assistant; seguono, nell'ordine, la lingua del browser, quella del dispositivo e l'inglese."
     },
     "settings.ui_language.label": {
       "sourceHash": "8027f432a7fb7c273a1a0fde87de4212b6738673e1d06213c02b5a191eaf8ab4",
@@ -9777,6 +9777,11 @@
       "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
       "state": "machine-cross-checked",
       "text": "{package} (file: {count})"
+    },
+    "install.card.vendor_packages": {
+      "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
+      "state": "machine-cross-checked",
+      "text": "Pacchetti del produttore"
     },
     "install.companion.error.helper_busy": {
       "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",

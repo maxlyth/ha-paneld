@@ -6538,8 +6538,9 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         }
         val dis = if (locked) " disabled" else ""
         val lock = if (locked) rootLockBanner("With root, ha-paneld can hide vendor clutter (test tools, the vendor launcher) so only your dashboard shows.") else ""
-        val title = if (!locked) hardenedApprovalCardTitle("Vendor packages", conditional = true, strings = strings)
-            else "<h2>Vendor packages</h2>"
+        val titleText = esc(strings.get("install.card.vendor_packages"))
+        val title = if (!locked) hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)
+            else "<h2>$titleText</h2>"
         return """<div class="card" id="cfg-tame" data-layout-key="vendor-packages">$title
 $lock<p class="note"><b>Tame</b> force-stops an app, stops it relaunching on boot, and blocks it drawing over the dashboard — applied immediately and on every boot. <b>Re-enable</b> undoes it. Critical system apps are never offered; nothing changes until you press a button.</p>
 $body

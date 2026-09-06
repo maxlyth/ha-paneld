@@ -219,7 +219,7 @@ class HardenedApprovalAssetContractTest {
         listOf(
             "hardenedApprovalCardTitle(\"Managed components\", conditional = true, strings = strings)",
             "hardenedApprovalCardTitle(\"Uninstall an app\", strings = strings)",
-            "hardenedApprovalCardTitle(\"Vendor packages\", conditional = true, strings = strings)",
+            "hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)",
             "hardenedApprovalCardTitle(\"Display sizing\"",
             "hardenedApprovalCardTitle(\"Backup &amp; restore\", conditional = true, strings = strings)",
         ).forEach { assertTrue("missing shielded Install card title $it", source.contains(it)) }
@@ -248,7 +248,9 @@ class HardenedApprovalAssetContractTest {
         assertTrue(source.contains("hardened-approval-section-conditional-description"))
         assertTrue(source.contains("if (installer || (wv.tooOld && rec != null && root))"))
         assertTrue(source.contains("if (root) hardenedApprovalCardTitle(\"Uninstall an app\", strings = strings)"))
-        assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(\"Vendor packages\", conditional = true, strings = strings)"))
+        assertTrue(source.contains("val titleText = esc(strings.get(\"install.card.vendor_packages\"))"))
+        assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(titleText, conditional = true, strings = strings)"))
+        assertTrue(source.contains("else \"<h2>\$titleText</h2>\""))
         assertTrue(source.contains("if (!locked) hardenedApprovalCardTitle(\"Display sizing\", badge, strings = strings)"))
         listOf("self_update", "update_channel", "companion_auto_update", "companion_update_channel", "webview_auto_update")
             .forEach { assertTrue(configure.contains("$it: true")) }

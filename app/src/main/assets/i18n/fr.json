@@ -5833,6 +5833,11 @@
       "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
       "state": "machine-cross-checked"
     },
+    "install.card.vendor_packages": {
+      "text": "Paquets du fabricant",
+      "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
+      "state": "machine-cross-checked"
+    },
     "install.companion.error.helper_busy": {
       "text": "L’auxiliaire Companion est occupé",
       "sourceHash": "bd72fd8b3124959c616cb91ed361f86344f27fdf37bc90faf023768f701dac29",
@@ -9145,8 +9150,8 @@
     },
     "settings.home_dashboard.help": {
       "sourceHash": "a7ce869a298f35b4b61c1d1c2a6bde203ec6348fcfa91bf838ae882065bfd150",
-      "state": "machine-draft",
-      "text": "Tableau de bord utilisé lors du rechargement et du retour après inactivité. Automatique laisse Home Assistant choisir. Personnalisé accepte une vue précise, par exemple /dashboard-name/tab-name."
+      "state": "machine-cross-checked",
+      "text": "Tableau de bord utilisé lors du rechargement et du retour après une période d’inactivité. Auto laisse Home Assistant choisir. Personnalisé accepte une vue précise, par exemple /dashboard-name/tab-name."
     },
     "settings.home_dashboard.label": {
       "sourceHash": "17cb7ca6c1fc811e633c9e1fbb1fab6a5d6cc097c937405d8cb49c8cab77c1d4",
@@ -9195,8 +9200,8 @@
     },
     "settings.launcher_package.help": {
       "sourceHash": "524f589af2ebe612083fd20f1b6f487d59e929aae5a24cf9cd6bd4792e448395",
-      "state": "machine-draft",
-      "text": "Application affichée par le bouton Lanceur. Un champ vide sélectionne automatiquement une application. Choisir Administration du panneau (ha-paneld) définit et maintient également ha-paneld comme application d’accueil Android."
+      "state": "machine-cross-checked",
+      "text": "Application que le bouton Lanceur place au premier plan. Un champ vide sélectionne automatiquement une application. Choisir Panel admin (ha-paneld) définit également ha-paneld comme application d’accueil Android et maintient ce choix."
     },
     "settings.launcher_package.label": {
       "sourceHash": "f97faee7e687e14fb4356160757e11ca90cc6c89b0e2ce2d40e14a3a62ef1bbd",
@@ -9449,9 +9454,9 @@
       "text": "Son des appuis"
     },
     "settings.ui_language.help": {
-      "sourceHash": "eeb3854f6160505c1d0700e61d2c886f6f710b309b56a77dcfc0c5cf6184e32b",
+      "sourceHash": "6b6157ee7e853009150f5dfc3839a2bc7dbb8f06285ad87d580c87e16daa2550",
       "state": "machine-cross-checked",
-      "text": "Langue utilisée par l’interface propre à ha-paneld. L’option Automatique suit la langue de l’utilisateur Home Assistant lorsqu’elle est disponible, puis celle du navigateur ou de l’appareil. Les langues non prises en charge utilisent l’anglais."
+      "text": "Langue de l’interface de ha-paneld. Automatique utilise d’abord la langue explicitement définie pour la page. Les libellés et l’aide des réglages de l’onglet Configurer peuvent alors suivre la langue de l’utilisateur Home Assistant connecté ; à défaut viennent la langue du navigateur, celle de l’appareil, puis l’anglais."
     },
     "settings.ui_language.label": {
       "sourceHash": "8027f432a7fb7c273a1a0fde87de4212b6738673e1d06213c02b5a191eaf8ab4",
@@ -9510,7 +9515,7 @@
     },
     "settings.voice_sensitivity.help": {
       "sourceHash": "cc3e95fea8fe5a298bf5ce799bbc15d7b44576010646691059f0c19df31aeec3",
-      "state": "machine-draft",
+      "state": "machine-cross-checked",
       "text": "Seuil du détecteur de mot d’activation, appliqué comme décalage au score limite du modèle. Faible exige une correspondance plus nette : moins de faux réveils, mais davantage de risques de manquer un appel faible ou distant. Élevée détecte plus facilement : réveil plus rapide, mais plus de faux déclenchements. Normale n’applique aucun décalage."
     },
     "settings.voice_sensitivity.label": {
@@ -9520,8 +9525,8 @@
     },
     "settings.voice_state.help": {
       "sourceHash": "2a671d81e77de2a726125f798e643ca84897af8699a27bb850c10bbd4f803c45",
-      "state": "machine-draft",
-      "text": "Phase actuelle de l’assistant vocal : désactivé, inactif, écoute, traitement, réponse ou erreur."
+      "state": "machine-cross-checked",
+      "text": "État actuel de l’assistant vocal : désactivé, inactif, à l’écoute, en cours de traitement, en train de répondre ou en erreur."
     },
     "settings.voice_state.label": {
       "sourceHash": "51616ec4032c3dd7c2a589b3338db98e776642afbe237f6d1c4099abe132bb74",

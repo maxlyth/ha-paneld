@@ -23,8 +23,9 @@ class SettingsRegistryPresentationTest {
         }
         assertTrue(SettingValue.validate(spec, "pt-BR") is Validation.Bad)
         assertEquals(
-            "Language used by ha-paneld's own interface. Automatic follows the Home Assistant " +
-                "user language when available, then the browser or device language. Unsupported languages use English.",
+            "Language used by ha-paneld's own interface. Automatic uses an explicit page override first. " +
+                "Configure setting labels and help can then follow the connected Home Assistant user's language; " +
+                "browser, device and English are the remaining fallbacks.",
             spec.help,
         )
     }
