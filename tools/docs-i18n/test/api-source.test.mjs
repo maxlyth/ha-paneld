@@ -19,16 +19,16 @@ test("API guide freezes the reviewed 62-fallback and 39-translation boundary", (
     "utf8",
   ));
   const entry = policy.documents.find((candidate) => candidate.document === document);
-  const overlay = JSON.parse(fs.readFileSync(
-    "/workspaces/ha-paneld-sidecar/docs/multilingual-review/api-risk-2026-09-06/overlay.json",
-    "utf8",
-  ));
-  const translatedIds = overlay.segments
-    .filter((segment) => segment.requiredState === "machine-cross-checked")
+  const translatedOrdinals = new Set([
+    1, 3, 4, 5, 6, 8, 9, 11, 13, 15, 18, 20, 21, 22, 23, 24, 25, 32, 33, 34,
+    35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 54, 56, 57, 59, 70, 84, 93, 96, 99,
+  ]);
+  const translatedIds = inventory.segments
+    .filter((_segment, index) => translatedOrdinals.has(index + 1))
     .map((segment) => segment.segmentId)
     .sort();
-  const fallbackIds = overlay.segments
-    .filter((segment) => segment.requiredState === "english-fallback")
+  const fallbackIds = inventory.segments
+    .filter((_segment, index) => !translatedOrdinals.has(index + 1))
     .map((segment) => segment.segmentId)
     .sort();
 
