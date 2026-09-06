@@ -41,15 +41,22 @@ Stop after a rejected login.
 
 Changing the filter can hide required entities.
 `;
+  const security = `# Security mode
+
+Changing a protected setting requires physical approval.
+`;
   fs.writeFileSync(path.join(repository, "docs/provisioning.md"), provisioning);
   fs.writeFileSync(path.join(repository, "docs/built-in-renderer.md"), renderer);
   fs.writeFileSync(path.join(repository, "docs/performance.md"), performance);
+  fs.writeFileSync(path.join(repository, "docs/security-mode.md"), security);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
   const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
+  const securityInventory = inventoryMarkdown("docs/security-mode.md", security);
   const consequential = provisioningInventory.segments[1];
   const rendererConsequential = rendererInventory.segments[1];
   const performanceConsequential = performanceInventory.segments[1];
+  const securityConsequential = securityInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -71,9 +78,15 @@ Changing the filter can hide required entities.
         segmentCount: performanceInventory.segments.length,
         consequentialSegments: [performanceConsequential.segmentId],
       },
+      {
+        document: "docs/security-mode.md",
+        sourceSha256: sha256(Buffer.from(security, "utf8")),
+        segmentCount: securityInventory.segments.length,
+        consequentialSegments: [securityConsequential.segmentId],
+      },
     ],
   }));
-  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/i18n/consequential-segments.json"]);
+  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md", "docs/i18n/consequential-segments.json"]);
   command(repository, ["git", "commit", "-qm", "fixture"]);
   const sourceRevision = command(repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({ repository, sourceRevision, documents: PRODUCTION_DOCUMENTS });
@@ -97,6 +110,7 @@ test("CLI plan selects the exact Tier-1 document prefix", () => {
     "docs/provisioning.md",
     "docs/built-in-renderer.md",
     "docs/performance.md",
+    "docs/security-mode.md",
   ]);
   assert.throws(() => main([
     "plan",

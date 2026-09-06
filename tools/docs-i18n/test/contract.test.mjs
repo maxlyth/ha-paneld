@@ -83,18 +83,24 @@ function consequentialFixture(policyMutation) {
   const provisioning = "# Provisioning\n\nReset erases panel data.\n\nContinue normally.\n";
   const renderer = "# Built-in renderer\n\nA failed login stops retries.\n\nContinue normally.\n";
   const performance = "# Performance\n\nChanging the filter can hide required entities.\n\nContinue normally.\n";
+  const security = "# Security mode\n\nChanging a protected setting requires physical approval.\n\nContinue normally.\n";
   write(current.repository, "docs/provisioning.md", provisioning);
   write(current.repository, "docs/built-in-renderer.md", renderer);
   write(current.repository, "docs/performance.md", performance);
+  write(current.repository, "docs/security-mode.md", security);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
   const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
+  const securityInventory = inventoryMarkdown("docs/security-mode.md", security);
   const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
   const rendererConsequential = rendererInventory.segments.find(
     (segment) => segment.maskedSource.includes("failed login"),
   );
   const performanceConsequential = performanceInventory.segments.find(
     (segment) => segment.maskedSource.includes("hide required entities"),
+  );
+  const securityConsequential = securityInventory.segments.find(
+    (segment) => segment.maskedSource.includes("requires physical approval"),
   );
   const policy = {
     schema: 2,
@@ -117,11 +123,17 @@ function consequentialFixture(policyMutation) {
         segmentCount: performanceInventory.segments.length,
         consequentialSegments: [performanceConsequential.segmentId],
       },
+      {
+        document: "docs/security-mode.md",
+        sourceSha256: sha256(Buffer.from(security, "utf8")),
+        segmentCount: securityInventory.segments.length,
+        consequentialSegments: [securityConsequential.segmentId],
+      },
     ],
   };
   policyMutation?.(policy);
   write(current.repository, "docs/i18n/consequential-segments.json", canonicalJson(policy));
-  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/i18n/consequential-segments.json"]);
+  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md", "docs/i18n/consequential-segments.json"]);
   command(current.repository, ["git", "commit", "-qm", "add consequential policy"]);
   const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({
@@ -129,7 +141,7 @@ function consequentialFixture(policyMutation) {
     sourceRevision,
     documents: PRODUCTION_DOCUMENTS,
   });
-  return { repository: current.repository, sourceRevision, manifest, consequential, rendererConsequential, performanceConsequential };
+  return { repository: current.repository, sourceRevision, manifest, consequential, rendererConsequential, performanceConsequential, securityConsequential };
 }
 
 function localeResults(manifest, locale, repository) {
@@ -191,8 +203,8 @@ function rebindReceiptResults(receipt, manifest) {
 
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();
-  assert.equal(manifest.schema, 4);
-  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md"]);
+  assert.equal(manifest.schema, 5);
+  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md"]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
   assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());
@@ -242,6 +254,22 @@ test("appending a document preserves every prior document commitment and packet 
   const prefixPlan = buildTranslationPlan(prefix, { repository: current.repository });
   const extendedPlan = buildTranslationPlan(extended, { repository: current.repository });
   assert.deepEqual(extended.documents.slice(0, prefix.documents.length), prefix.documents);
+  const prefixReceipt = buildLocaleReceipt(
+    prefix,
+    "de",
+    localeResults(prefix, "de", current.repository),
+    { repository: current.repository },
+  ).receipt;
+  const extendedReceipt = buildLocaleReceipt(
+    extended,
+    "de",
+    localeResults(extended, "de", current.repository),
+    { repository: current.repository },
+  ).receipt;
+  assert.deepEqual(
+    extendedReceipt.documents.slice(0, prefixReceipt.documents.length),
+    prefixReceipt.documents,
+  );
   for (const locale of SUPPORTED_LOCALES) {
     const priorPackets = prefix.packets.filter((packet) => packet.locale === locale);
     const extendedPackets = extended.packets.filter((packet) => packet.locale === locale);
@@ -310,6 +338,15 @@ test("consequential policy binds every selected production inventory and grandfa
   assert.equal(
     renderer.segments.find(
       (segment) => segment.id === current.rendererConsequential.segmentId,
+    ).requiredState,
+    ENGLISH_FALLBACK_STATE,
+  );
+  const security = current.manifest.documents.find(
+    (document) => document.sourcePath === "docs/security-mode.md",
+  );
+  assert.equal(
+    security.segments.find(
+      (segment) => segment.id === current.securityConsequential.segmentId,
     ).requiredState,
     ENGLISH_FALLBACK_STATE,
   );

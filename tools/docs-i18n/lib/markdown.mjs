@@ -11,7 +11,7 @@ export const PARSER_VERSIONS = Object.freeze({
   unified: "11.0.5",
   remarkParse: "11.0.0",
   remarkGfm: "4.0.1",
-  parse5: "7.3.0",
+  parse5: "8.0.1",
 });
 
 const parser = unified().use(remarkParse).use(remarkGfm);

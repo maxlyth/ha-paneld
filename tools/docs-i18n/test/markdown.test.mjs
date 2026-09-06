@@ -36,7 +36,7 @@ test("uses the exact production parser pins and identity-preflights losslessly",
     unified: "11.0.5",
     remarkParse: "11.0.0",
     remarkGfm: "4.0.1",
-    parse5: "7.3.0",
+    parse5: "8.0.1",
   });
   const source = "# Heading\n\nParagraph with `code` and **weight**.\n";
   const inventory = inventoryMarkdown("docs/example.md", source);

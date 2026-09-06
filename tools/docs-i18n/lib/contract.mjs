@@ -30,7 +30,7 @@ import {
   readTreeSource,
 } from "./paths.mjs";
 
-export const SOURCE_MANIFEST_SCHEMA = 4;
+export const SOURCE_MANIFEST_SCHEMA = 5;
 export const LOCALE_RESULT_SCHEMA = 1;
 export const LOCALE_RECEIPT_SCHEMA = 1;
 export const TRANSLATION_PLAN_SCHEMA = 1;
@@ -44,6 +44,7 @@ export const PRODUCTION_DOCUMENTS = Object.freeze([
   "docs/provisioning.md",
   "docs/built-in-renderer.md",
   "docs/performance.md",
+  "docs/security-mode.md",
 ]);
 export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";
