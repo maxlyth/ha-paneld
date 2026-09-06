@@ -13,8 +13,8 @@ import {
   MAX_TARGET_CHARACTERS_PER_SEGMENT,
   PROMOTABLE_STATE,
   PRODUCTION_DOCUMENTS,
-  UNCHANGED_TARGET_EXCEPTION_DOCUMENTS,
-  UNCHANGED_TARGET_EXCEPTIONS_PATH,
+  REVIEW_DISPOSITION_DOCUMENTS,
+  REVIEW_DISPOSITIONS_PATH,
   applyLocaleReceipt,
   buildLocaleReceipt,
   buildSourceManifest,
@@ -27,7 +27,7 @@ import {
   validateRepository,
   validateSourceManifest,
   validateTranslationPlan,
-  validateUnchangedTargetExceptions,
+  validateReviewDispositions,
 } from "../lib/contract.mjs";
 import {
   SUPPORTED_LOCALES,
@@ -180,8 +180,8 @@ function translatedLocaleResults(manifest, locale, repository) {
   return results;
 }
 
-function writeUnchangedTargetExceptions(repository, exceptions) {
-  write(repository, UNCHANGED_TARGET_EXCEPTIONS_PATH, canonicalJson({ schema: 1, exceptions }));
+function writeReviewDispositions(repository, { reviewFallbacks = [], unchangedTargets = [] } = {}) {
+  write(repository, REVIEW_DISPOSITIONS_PATH, canonicalJson({ schema: 1, reviewFallbacks, unchangedTargets }));
 }
 
 function clone(value) {
@@ -656,9 +656,9 @@ test("english-fallback accepts only the exact masked English source", () => {
   );
 });
 
-test("unchanged-target exceptions are exact, source-bound, unique, sorted, and hardware-only", () => {
+test("review dispositions are exact, source-bound, unique, sorted, disjoint, and hardware-only", () => {
   const current = consequentialFixture();
-  assert.deepEqual(UNCHANGED_TARGET_EXCEPTION_DOCUMENTS, [
+  assert.deepEqual(REVIEW_DISPOSITION_DOCUMENTS, [
     "docs/hardware/README.md",
     "docs/hardware/nspanel-pro.md",
     "docs/hardware/tpa10.md",
@@ -668,71 +668,147 @@ test("unchanged-target exceptions are exact, source-bound, unique, sorted, and h
     (candidate) => candidate.sourcePath === "docs/hardware/README.md",
   );
   const segment = document.segments.find((candidate) => candidate.requiredState === PROMOTABLE_STATE);
-  const exception = {
+  const entry = {
     locale: "de",
     document: document.sourcePath,
     segmentId: segment.id,
     sourceSha256: segment.sourceSha256,
   };
-  const allowlist = { schema: 1, exceptions: [exception] };
+  const dispositions = { schema: 1, reviewFallbacks: [], unchangedTargets: [entry] };
   assert.deepEqual(
-    validateUnchangedTargetExceptions(current.manifest, allowlist, [exception]),
-    allowlist,
+    validateReviewDispositions(current.manifest, dispositions, { unchangedTargets: [entry] }),
+    dispositions,
   );
 
   assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, { schema: 1, exceptions: [] }, [exception]),
-    /missing unchanged-target exception/,
-  );
-  assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, allowlist, []),
-    /listed unchanged-target exception is not byte-identical to English/,
-  );
-  assert.throws(
-    () => validateUnchangedTargetExceptions(
+    () => validateReviewDispositions(
       current.manifest,
-      { schema: 1, exceptions: [exception, exception] },
-      [exception],
+      { schema: 1, reviewFallbacks: [], unchangedTargets: [] },
+      { unchangedTargets: [entry] },
     ),
-    /duplicate unchanged-target exception/,
+    /missing unchanged target disposition/,
   );
   assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, {
+    () => validateReviewDispositions(current.manifest, dispositions, { unchangedTargets: [] }),
+    /listed unchanged target disposition was not used/,
+  );
+  assert.throws(
+    () => validateReviewDispositions(
+      current.manifest,
+      { schema: 1, reviewFallbacks: [], unchangedTargets: [entry, entry] },
+    ),
+    /duplicate unchangedTargets entry/,
+  );
+  assert.throws(
+    () => validateReviewDispositions(current.manifest, {
       schema: 1,
-      exceptions: [{ ...exception, sourceSha256: "0".repeat(64) }],
-    }, [exception]),
+      reviewFallbacks: [],
+      unchangedTargets: [{ ...entry, sourceSha256: "0".repeat(64) }],
+    }),
     /binding mismatch/,
   );
   assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, {
+    () => validateReviewDispositions(current.manifest, {
       schema: 1,
-      exceptions: [{ ...exception, document: "README.md" }],
-    }, [exception]),
+      reviewFallbacks: [],
+      unchangedTargets: [{ ...entry, document: "README.md" }],
+    }),
     /outside the four hardware documents/,
   );
-  assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, { schema: 1, exceptions: [] }, [{
-      ...exception,
-      document: "README.md",
-    }]),
-    /target equals English outside the four hardware documents/,
+  assert.deepEqual(
+    validateReviewDispositions(
+      current.manifest,
+      { schema: 1, reviewFallbacks: [], unchangedTargets: [] },
+      { unchangedTargets: [{ ...entry, document: "README.md" }] },
+    ),
+    { schema: 1, reviewFallbacks: [], unchangedTargets: [] },
   );
   assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, {
+    () => validateReviewDispositions(current.manifest, {
       schema: 1,
-      exceptions: [{ ...exception, locale: "xx" }],
-    }, [exception]),
+      reviewFallbacks: [],
+      unchangedTargets: [{ ...entry, locale: "xx" }],
+    }),
     /unsupported locale/,
   );
   assert.throws(
-    () => validateUnchangedTargetExceptions(current.manifest, {
+    () => validateReviewDispositions(current.manifest, {
       schema: 1,
-      exceptions: [
-        { ...exception, locale: "fr" },
-        exception,
+      reviewFallbacks: [],
+      unchangedTargets: [
+        { ...entry, locale: "fr" },
+        entry,
       ],
-    }, [{ ...exception, locale: "fr" }, exception]),
+    }),
     /must be sorted/,
+  );
+  assert.throws(
+    () => validateReviewDispositions(current.manifest, {
+      schema: 1,
+      reviewFallbacks: [entry],
+      unchangedTargets: [entry],
+    }),
+    /cannot be both fallback and unchanged/,
+  );
+});
+
+test("locale apply accepts only exact listed review fallbacks with unchanged masked English", () => {
+  const current = consequentialFixture();
+  const results = localeResults(current.manifest, "de", current.repository);
+  const record = results.flatMap((result) => result.records).find(
+    (candidate) =>
+      candidate.document === "docs/hardware/README.md" &&
+      candidate.state === PROMOTABLE_STATE,
+  );
+  const entry = {
+    locale: "de",
+    document: record.document,
+    segmentId: record.segmentId,
+    sourceSha256: record.sourceSha256,
+  };
+  record.state = ENGLISH_FALLBACK_STATE;
+  writeReviewDispositions(current.repository, { reviewFallbacks: [entry] });
+  const receipt = applyLocaleReceipt({
+    repository: current.repository,
+    manifest: current.manifest,
+    locale: "de",
+    results,
+  });
+  assert.equal(
+    receipt.documents.flatMap((document) => document.segments)
+      .find((segment) => segment.segmentId === record.segmentId).state,
+    ENGLISH_FALLBACK_STATE,
+  );
+
+  writeReviewDispositions(current.repository);
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /result state must be machine-cross-checked/,
+  );
+  writeReviewDispositions(current.repository, { reviewFallbacks: [entry] });
+  record.state = PROMOTABLE_STATE;
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /listed de review fallback disposition was not used/,
+  );
+  record.state = ENGLISH_FALLBACK_STATE;
+  record.translation += " changed";
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /english-fallback must exactly preserve the masked English source/,
+  );
+  record.translation = record.translation.replace(" changed", "");
+  writeReviewDispositions(current.repository, { reviewFallbacks: [{ ...entry, locale: "fr" }] });
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /result state must be machine-cross-checked/,
+  );
+  writeReviewDispositions(current.repository, {
+    reviewFallbacks: [{ ...entry, sourceSha256: "0".repeat(64) }],
+  });
+  assert.throws(
+    () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
+    /reviewFallbacks binding mismatch/,
   );
 });
 
@@ -1245,9 +1321,9 @@ test("repository validation requires the exact manifest, receipt set, and output
   }
   assert.throws(
     () => validateRepository({ repository: current.repository }),
-    /unchanged-target-exceptions\.json/,
+    /review-dispositions\.json/,
   );
-  writeUnchangedTargetExceptions(current.repository, []);
+  writeReviewDispositions(current.repository);
   assert.deepEqual(validateRepository({
     repository: current.repository,
     manifestPath: path.join(current.repository, "docs/i18n/manifest.json"),
@@ -1259,29 +1335,54 @@ test("repository validation requires the exact manifest, receipt set, and output
   );
 });
 
-test("repository validation permits only exactly listed byte-identical machine-cross-checked hardware targets", () => {
+test("repository validation requires exact hardware fallback and unchanged-target dispositions", () => {
   const current = consequentialFixture();
   const manifest = current.manifest;
   write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
-  let exception;
+  const hardwareDocument = manifest.documents.find(
+    (document) => document.sourcePath === "docs/hardware/README.md",
+  );
+  const unchangedSegment = hardwareDocument.segments.find(
+    (segment) => segment.requiredState === PROMOTABLE_STATE,
+  );
+  const fallbackDocument = manifest.documents.find(
+    (document) => document.sourcePath === "docs/hardware/nspanel-pro.md",
+  );
+  const fallbackSegment = fallbackDocument.segments.find(
+    (segment) => segment.requiredState === PROMOTABLE_STATE,
+  );
+  const exception = {
+    locale: "de",
+    document: hardwareDocument.sourcePath,
+    segmentId: unchangedSegment.id,
+    sourceSha256: unchangedSegment.sourceSha256,
+  };
+  const fallbackEntry = {
+    locale: "de",
+    document: fallbackDocument.sourcePath,
+    segmentId: fallbackSegment.id,
+    sourceSha256: fallbackSegment.sourceSha256,
+  };
+  writeReviewDispositions(current.repository, {
+    reviewFallbacks: [fallbackEntry],
+    unchangedTargets: [exception],
+  });
   for (const locale of SUPPORTED_LOCALES) {
     const results = translatedLocaleResults(manifest, locale, current.repository);
     if (locale === "de") {
       const record = results.flatMap((result) => result.records).find(
-        (candidate) =>
-          candidate.document === "docs/hardware/README.md" &&
-          candidate.state === PROMOTABLE_STATE,
+        (candidate) => candidate.segmentId === exception.segmentId,
       );
-      const sourceSegment = manifest.documents
-        .find((document) => document.sourcePath === record.document)
-        .segments.find((segment) => segment.id === record.segmentId);
       record.translation = record.translation.replace(" translated-de", "");
-      exception = {
-        locale,
-        document: record.document,
-        segmentId: record.segmentId,
-        sourceSha256: sourceSegment.sourceSha256,
-      };
+      const fallbackRecord = results.flatMap((result) => result.records).find(
+        (candidate) => candidate.segmentId === fallbackEntry.segmentId,
+      );
+      fallbackRecord.translation = fallbackRecord.translation.replace(" translated-de", "");
+      fallbackRecord.state = ENGLISH_FALLBACK_STATE;
+      const grandfatheredRecord = results.flatMap((result) => result.records).find(
+        (candidate) => candidate.document === "README.md" && candidate.state === PROMOTABLE_STATE,
+      );
+      grandfatheredRecord.translation = grandfatheredRecord.translation.replace(" translated-de", "");
     }
     applyLocaleReceipt({ repository: current.repository, manifest, locale, results });
   }
@@ -1290,7 +1391,6 @@ test("repository validation permits only exactly listed byte-identical machine-c
     const receiptFile = path.join(current.repository, `docs/i18n/locales/${locale}.json`);
     return [locale, readCanonicalJson(receiptFile).documents.map((document) => document.segments)];
   }));
-  writeUnchangedTargetExceptions(current.repository, [exception]);
   assert.deepEqual(validateRepository({ repository: current.repository }), manifest);
   assert.ok(fs.readFileSync(path.join(current.repository, "docs/i18n/manifest.json")).equals(manifestBytes));
   for (const locale of SUPPORTED_LOCALES) {
@@ -1298,27 +1398,24 @@ test("repository validation permits only exactly listed byte-identical machine-c
     assert.deepEqual(readCanonicalJson(receiptFile).documents.map((document) => document.segments), receiptSegments[locale]);
   }
 
-  writeUnchangedTargetExceptions(current.repository, []);
+  writeReviewDispositions(current.repository, { reviewFallbacks: [fallbackEntry] });
   assert.throws(
     () => validateRepository({ repository: current.repository }),
-    /missing unchanged-target exception/,
+    /missing unchanged target disposition/,
   );
-  writeUnchangedTargetExceptions(current.repository, [{
+  writeReviewDispositions(current.repository, { reviewFallbacks: [fallbackEntry], unchangedTargets: [{
     ...exception,
+    document: "docs/hardware/tpa10.md",
     segmentId: manifest.documents
-      .find((document) => document.sourcePath === exception.document)
-      .segments.find((segment) =>
-        segment.requiredState === PROMOTABLE_STATE && segment.id !== exception.segmentId)
-      .id,
+      .find((document) => document.sourcePath === "docs/hardware/tpa10.md")
+      .segments.find((segment) => segment.requiredState === PROMOTABLE_STATE).id,
     sourceSha256: manifest.documents
-      .find((document) => document.sourcePath === exception.document)
-      .segments.find((segment) =>
-        segment.requiredState === PROMOTABLE_STATE && segment.id !== exception.segmentId)
-      .sourceSha256,
-  }]);
+      .find((document) => document.sourcePath === "docs/hardware/tpa10.md")
+      .segments.find((segment) => segment.requiredState === PROMOTABLE_STATE).sourceSha256,
+  }] });
   assert.throws(
     () => validateRepository({ repository: current.repository }),
-    /missing unchanged-target exception|listed unchanged-target exception is not byte-identical/,
+    /missing unchanged target disposition|listed unchanged target disposition was not used/,
   );
 });
 

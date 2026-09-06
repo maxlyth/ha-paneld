@@ -48,9 +48,9 @@ export const PRODUCTION_DOCUMENTS = Object.freeze([
 ]);
 export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";
-export const UNCHANGED_TARGET_EXCEPTIONS_SCHEMA = 1;
-export const UNCHANGED_TARGET_EXCEPTIONS_PATH = "docs/i18n/unchanged-target-exceptions.json";
-export const UNCHANGED_TARGET_EXCEPTION_DOCUMENTS = Object.freeze([
+export const REVIEW_DISPOSITIONS_SCHEMA = 1;
+export const REVIEW_DISPOSITIONS_PATH = "docs/i18n/review-dispositions.json";
+export const REVIEW_DISPOSITION_DOCUMENTS = Object.freeze([
   "docs/hardware/README.md",
   "docs/hardware/nspanel-pro.md",
   "docs/hardware/tpa10.md",
@@ -192,8 +192,8 @@ const RECEIPT_SEGMENT_KEYS = [
   "targetSha256",
   "state",
 ];
-const UNCHANGED_TARGET_EXCEPTIONS_ROOT_KEYS = ["schema", "exceptions"];
-const UNCHANGED_TARGET_EXCEPTION_KEYS = ["locale", "document", "segmentId", "sourceSha256"];
+const REVIEW_DISPOSITIONS_ROOT_KEYS = ["schema", "reviewFallbacks", "unchangedTargets"];
+const REVIEW_DISPOSITION_KEYS = ["locale", "document", "segmentId", "sourceSha256"];
 
 function exactKeys(value, expected, owner) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -994,6 +994,11 @@ function committedResult(result) {
 function validateLocaleResults(manifest, locale, results, { repository }) {
   normalizeLocale(locale);
   if (!Array.isArray(results)) throw new Error("locale results must be an array");
+  const dispositions = readReviewDispositions(manifest, repository);
+  const expectedReviewFallbacks = new Map(dispositions.reviewFallbacks
+    .filter((entry) => entry.locale === locale)
+    .map((entry) => [reviewDispositionKey(entry), entry]));
+  const actualReviewFallbacks = [];
   const expectedPackets = manifest.packets.filter((packet) => packet.locale === locale);
   if (results.length !== expectedPackets.length) throw new Error(`${locale}: packet result coverage mismatch`);
   const manifestHash = sourceManifestSha256(manifest);
@@ -1031,7 +1036,17 @@ function validateLocaleResults(manifest, locale, results, { repository }) {
       ) {
         throw new Error(`${expected.id}: result owner/source mismatch at record ${recordIndex}`);
       }
-      if (record.state !== segment.requiredState) {
+      const reviewFallback = {
+        locale,
+        document: record.document,
+        segmentId: record.segmentId,
+        sourceSha256: record.sourceSha256,
+      };
+      const isReviewFallback =
+        segment.requiredState === PROMOTABLE_STATE &&
+        record.state === ENGLISH_FALLBACK_STATE &&
+        expectedReviewFallbacks.has(reviewDispositionKey(reviewFallback));
+      if (record.state !== segment.requiredState && !isReviewFallback) {
         throw new Error(`${record.segmentId}: result state must be ${segment.requiredState}`);
       }
       if (typeof record.translation !== "string" || !record.translation.trim()) {
@@ -1046,9 +1061,15 @@ function validateLocaleResults(manifest, locale, results, { repository }) {
       ) {
         throw new Error(`${record.segmentId}: english-fallback must exactly preserve the masked English source`);
       }
+      if (isReviewFallback) actualReviewFallbacks.push(reviewFallback);
       flat.push(record);
     }
   }
+  assertExactReviewDispositionSet(
+    `${locale} review fallback`,
+    [...expectedReviewFallbacks.values()],
+    actualReviewFallbacks,
+  );
   return flat;
 }
 
@@ -1141,7 +1162,7 @@ export function buildLocaleReceipt(manifest, locale, results, { repository }) {
   };
 }
 
-function validateReceiptShape(receipt, manifest, locale) {
+function validateReceiptShape(receipt, manifest, locale, dispositions) {
   exactKeys(receipt, RECEIPT_KEYS, `${locale} receipt`);
   if (
     receipt.schema !== LOCALE_RECEIPT_SCHEMA ||
@@ -1155,6 +1176,10 @@ function validateReceiptShape(receipt, manifest, locale) {
     throw new Error(`${locale}: locale receipt document coverage mismatch`);
   }
   const expectedPackets = manifest.packets.filter((packet) => packet.locale === locale);
+  const expectedReviewFallbacks = new Map(dispositions.reviewFallbacks
+    .filter((entry) => entry.locale === locale)
+    .map((entry) => [reviewDispositionKey(entry), entry]));
+  const actualReviewFallbacks = [];
   if (!Array.isArray(receipt.results) || receipt.results.length !== expectedPackets.length) {
     throw new Error(`${locale}: locale receipt result coverage mismatch`);
   }
@@ -1188,16 +1213,32 @@ function validateReceiptShape(receipt, manifest, locale) {
       const expected = source.segments[segmentIndex];
       const actual = target.segments[segmentIndex];
       exactKeys(actual, RECEIPT_SEGMENT_KEYS, `${locale}.${source.sourcePath}.segments[${segmentIndex}]`);
+      const reviewFallback = {
+        locale,
+        document: source.sourcePath,
+        segmentId: actual.segmentId,
+        sourceSha256: actual.sourceSha256,
+      };
+      const isReviewFallback =
+        expected.requiredState === PROMOTABLE_STATE &&
+        actual.state === ENGLISH_FALLBACK_STATE &&
+        expectedReviewFallbacks.has(reviewDispositionKey(reviewFallback));
       if (
         actual.segmentId !== expected.id ||
         actual.sourceSha256 !== expected.sourceSha256 ||
-        actual.state !== expected.requiredState
+        (actual.state !== expected.requiredState && !isReviewFallback)
       ) {
         throw new Error(`${locale}: receipt segment binding mismatch at ${actual.segmentId}`);
       }
+      if (isReviewFallback) actualReviewFallbacks.push(reviewFallback);
       assertSha(actual.targetSha256, `${locale}.${actual.segmentId}.targetSha256`);
     }
   }
+  assertExactReviewDispositionSet(
+    `${locale} receipt review fallback`,
+    [...expectedReviewFallbacks.values()],
+    actualReviewFallbacks,
+  );
   const receiptSegments = new Map(receipt.documents.flatMap((document) =>
     document.segments.map((segment) => [`${document.sourcePath}\0${segment.segmentId}`, segment])));
   const manifestHash = sourceManifestSha256(manifest);
@@ -1228,12 +1269,22 @@ function validateReceiptShape(receipt, manifest, locale) {
   }
 }
 
-export function validateLocaleReceipt(manifest, locale, receipt, { repository, unchangedTargets } = {}) {
+export function validateLocaleReceipt(
+  manifest,
+  locale,
+  receipt,
+  { repository, reviewFallbacks, unchangedTargets, reviewDispositions } = {},
+) {
+  if (reviewFallbacks !== undefined && !Array.isArray(reviewFallbacks)) {
+    throw new Error("reviewFallbacks collector must be an array");
+  }
   if (unchangedTargets !== undefined && !Array.isArray(unchangedTargets)) {
     throw new Error("unchangedTargets collector must be an array");
   }
   validateSourceManifest(manifest, { repository });
-  validateReceiptShape(receipt, manifest, locale);
+  const dispositions = reviewDispositions ?? readReviewDispositions(manifest, repository);
+  validateReviewDispositions(manifest, dispositions);
+  validateReceiptShape(receipt, manifest, locale, dispositions);
   const items = receipt.documents.map((document, index) => {
     const sourceDocument = manifest.documents[index];
     const tree = readTreeSource(repository, manifest.sourceRevision, sourceDocument.sourcePath);
@@ -1271,7 +1322,20 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository, u
         throw new Error(`${locale}: english-fallback target differs from masked English source: ${receiptSegment.segmentId}`);
       }
       if (
+        reviewFallbacks &&
+        sourceDocument.segments[segmentIndex].requiredState === PROMOTABLE_STATE &&
+        receiptSegment.state === ENGLISH_FALLBACK_STATE
+      ) {
+        reviewFallbacks.push({
+          locale,
+          document: sourceDocument.sourcePath,
+          segmentId: receiptSegment.segmentId,
+          sourceSha256: receiptSegment.sourceSha256,
+        });
+      }
+      if (
         unchangedTargets &&
+        REVIEW_DISPOSITION_DOCUMENTS.includes(sourceDocument.sourcePath) &&
         receiptSegment.state === PROMOTABLE_STATE &&
         Buffer.from(targetSegment.maskedSource, "utf8").equals(
           Buffer.from(inventory.segments[segmentIndex].maskedSource, "utf8"),
@@ -1351,72 +1415,120 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository, u
   return receipt;
 }
 
-function unchangedTargetKey(exception) {
-  return `${exception.locale}\0${exception.document}\0${exception.segmentId}\0${exception.sourceSha256}`;
+function reviewDispositionKey(entry) {
+  return `${entry.locale}\0${entry.document}\0${entry.segmentId}\0${entry.sourceSha256}`;
 }
 
-function unchangedTargetLabel(exception) {
-  return `${exception.locale}:${exception.document}:${exception.segmentId}:${exception.sourceSha256}`;
+function reviewDispositionLabel(entry) {
+  return `${entry.locale}:${entry.document}:${entry.segmentId}:${entry.sourceSha256}`;
 }
 
-export function validateUnchangedTargetExceptions(manifest, allowlist, unchangedTargets) {
-  exactKeys(allowlist, UNCHANGED_TARGET_EXCEPTIONS_ROOT_KEYS, "unchanged-target exceptions");
-  if (allowlist.schema !== UNCHANGED_TARGET_EXCEPTIONS_SCHEMA || !Array.isArray(allowlist.exceptions)) {
-    throw new Error("unsupported unchanged-target exceptions schema");
-  }
-  if (!Array.isArray(unchangedTargets)) throw new Error("unchanged targets must be an array");
-
-  const allowedDocuments = new Set(UNCHANGED_TARGET_EXCEPTION_DOCUMENTS);
+function bindReviewDispositionEntries(manifest, entries, owner) {
+  if (!Array.isArray(entries)) throw new Error(`${owner} must be an array`);
+  const allowedDocuments = new Set(REVIEW_DISPOSITION_DOCUMENTS);
   const manifestDocuments = new Map(manifest.documents.map((document) => [document.sourcePath, document]));
-  const listed = new Map();
+  const bound = new Map();
   let previousKey = null;
-  for (const [index, exception] of allowlist.exceptions.entries()) {
-    exactKeys(exception, UNCHANGED_TARGET_EXCEPTION_KEYS, `unchanged-target exceptions[${index}]`);
-    normalizeLocale(exception.locale);
-    if (!allowedDocuments.has(exception.document)) {
-      throw new Error(`unchanged-target exception is outside the four hardware documents: ${exception.document}`);
+  for (const [index, entry] of entries.entries()) {
+    exactKeys(entry, REVIEW_DISPOSITION_KEYS, `${owner}[${index}]`);
+    normalizeLocale(entry.locale);
+    if (!allowedDocuments.has(entry.document)) {
+      throw new Error(`${owner} entry is outside the four hardware documents: ${entry.document}`);
     }
-    assertSha(exception.sourceSha256, `unchanged-target exceptions[${index}].sourceSha256`);
-    const document = manifestDocuments.get(exception.document);
-    const segment = document?.segments.find((candidate) => candidate.id === exception.segmentId);
+    assertSha(entry.sourceSha256, `${owner}[${index}].sourceSha256`);
+    const document = manifestDocuments.get(entry.document);
+    const segment = document?.segments.find((candidate) => candidate.id === entry.segmentId);
     if (
       !segment ||
-      segment.sourceSha256 !== exception.sourceSha256 ||
+      segment.sourceSha256 !== entry.sourceSha256 ||
       segment.requiredState !== PROMOTABLE_STATE
     ) {
-      throw new Error(`unchanged-target exception binding mismatch: ${unchangedTargetLabel(exception)}`);
+      throw new Error(`${owner} binding mismatch: ${reviewDispositionLabel(entry)}`);
     }
-    const key = unchangedTargetKey(exception);
-    if (listed.has(key)) throw new Error(`duplicate unchanged-target exception: ${unchangedTargetLabel(exception)}`);
+    const key = reviewDispositionKey(entry);
+    if (bound.has(key)) throw new Error(`duplicate ${owner} entry: ${reviewDispositionLabel(entry)}`);
     if (previousKey !== null && key < previousKey) {
-      throw new Error("unchanged-target exceptions must be sorted by locale, document, and segmentId");
+      throw new Error(`${owner} must be sorted by locale, document, segmentId, and sourceSha256`);
     }
     previousKey = key;
-    listed.set(key, exception);
+    bound.set(key, entry);
   }
+  return bound;
+}
 
+function assertExactReviewDispositionSet(owner, expectedEntries, actualEntries) {
+  const expected = new Map(expectedEntries.map((entry) => [reviewDispositionKey(entry), entry]));
   const actual = new Map();
-  for (const target of unchangedTargets) {
-    const key = unchangedTargetKey(target);
-    if (!allowedDocuments.has(target.document)) {
-      throw new Error(
-        `machine-cross-checked target equals English outside the four hardware documents: ${unchangedTargetLabel(target)}`,
-      );
+  for (const entry of actualEntries) {
+    const key = reviewDispositionKey(entry);
+    if (actual.has(key)) throw new Error(`duplicate detected ${owner}: ${reviewDispositionLabel(entry)}`);
+    actual.set(key, entry);
+  }
+  for (const [key, entry] of actual) {
+    if (!expected.has(key)) throw new Error(`missing ${owner} disposition: ${reviewDispositionLabel(entry)}`);
+  }
+  for (const [key, entry] of expected) {
+    if (!actual.has(key)) throw new Error(`listed ${owner} disposition was not used: ${reviewDispositionLabel(entry)}`);
+  }
+}
+
+function emptyReviewDispositions() {
+  return { schema: REVIEW_DISPOSITIONS_SCHEMA, reviewFallbacks: [], unchangedTargets: [] };
+}
+
+function readReviewDispositions(manifest, repository, { required = false } = {}) {
+  const file = confinedWorkingPath(repository, REVIEW_DISPOSITIONS_PATH);
+  if (!fs.existsSync(file)) {
+    if (required) throw new Error(`repository path does not exist: ${REVIEW_DISPOSITIONS_PATH}`);
+    return emptyReviewDispositions();
+  }
+  const dispositions = readCanonicalJson(confinedWorkingPath(repository, REVIEW_DISPOSITIONS_PATH, {
+    mustExist: true,
+    allowFile: true,
+  }));
+  validateReviewDispositions(manifest, dispositions);
+  return dispositions;
+}
+
+export function validateReviewDispositions(
+  manifest,
+  dispositions,
+  { reviewFallbacks, unchangedTargets } = {},
+) {
+  exactKeys(dispositions, REVIEW_DISPOSITIONS_ROOT_KEYS, "review dispositions");
+  if (dispositions.schema !== REVIEW_DISPOSITIONS_SCHEMA) {
+    throw new Error("unsupported review dispositions schema");
+  }
+  const fallbackEntries = bindReviewDispositionEntries(
+    manifest,
+    dispositions.reviewFallbacks,
+    "reviewFallbacks",
+  );
+  const unchangedEntries = bindReviewDispositionEntries(
+    manifest,
+    dispositions.unchangedTargets,
+    "unchangedTargets",
+  );
+  for (const [key, entry] of fallbackEntries) {
+    if (unchangedEntries.has(key)) {
+      throw new Error(`review disposition cannot be both fallback and unchanged: ${reviewDispositionLabel(entry)}`);
     }
-    if (actual.has(key)) throw new Error(`duplicate detected unchanged target: ${unchangedTargetLabel(target)}`);
-    actual.set(key, target);
   }
-  for (const [key, target] of actual) {
-    if (!listed.has(key)) throw new Error(`missing unchanged-target exception: ${unchangedTargetLabel(target)}`);
+  if (reviewFallbacks !== undefined) {
+    if (!Array.isArray(reviewFallbacks)) throw new Error("reviewFallbacks actual set must be an array");
+    assertExactReviewDispositionSet("review fallback", [...fallbackEntries.values()], reviewFallbacks);
   }
-  for (const [key, exception] of listed) {
-    if (!actual.has(key)) {
-      throw new Error(
-        `listed unchanged-target exception is not byte-identical to English: ${unchangedTargetLabel(exception)}`,
-      );
-    }
+  if (unchangedTargets !== undefined) {
+    if (!Array.isArray(unchangedTargets)) throw new Error("unchangedTargets actual set must be an array");
+    const hardwareUnchangedTargets = unchangedTargets.filter((entry) =>
+      REVIEW_DISPOSITION_DOCUMENTS.includes(entry.document));
+    assertExactReviewDispositionSet(
+      "unchanged target",
+      [...unchangedEntries.values()],
+      hardwareUnchangedTargets,
+    );
   }
-  return allowlist;
+  return dispositions;
 }
 
 function atomicNoClobber(repository, files, validate) {
@@ -1487,6 +1599,8 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
   ) {
     throw new Error(`the current localization proof must select exactly ${PRODUCTION_DOCUMENTS.join(", ")}`);
   }
+  const dispositions = readReviewDispositions(manifest, root, { required: true });
+  const reviewFallbacks = [];
   const unchangedTargets = [];
   for (const locale of SUPPORTED_LOCALES) {
     const receiptFile = confinedWorkingPath(root, localeReceiptPath(locale), {
@@ -1494,7 +1608,12 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
       allowFile: true,
     });
     const receipt = readCanonicalJson(receiptFile);
-    validateLocaleReceipt(manifest, locale, receipt, { repository: root, unchangedTargets });
+    validateLocaleReceipt(manifest, locale, receipt, {
+      repository: root,
+      reviewDispositions: dispositions,
+      reviewFallbacks,
+      unchangedTargets,
+    });
     const expectedOutputs = new Set(manifest.documents.map((document) => document.outputs[locale]));
     const localeRoot = confinedWorkingPath(root, `docs/${locale}`, { mustExist: true });
     const actualOutputs = [];
@@ -1525,11 +1644,6 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
   if (JSON.stringify(receiptFiles) !== JSON.stringify(expectedReceipts)) {
     throw new Error("locale receipt directory differs from the exact release locale set");
   }
-  const exceptionFile = confinedWorkingPath(root, UNCHANGED_TARGET_EXCEPTIONS_PATH, {
-    mustExist: true,
-    allowFile: true,
-  });
-  const allowlist = readCanonicalJson(exceptionFile);
-  validateUnchangedTargetExceptions(manifest, allowlist, unchangedTargets);
+  validateReviewDispositions(manifest, dispositions, { reviewFallbacks, unchangedTargets });
   return manifest;
 }
