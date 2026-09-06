@@ -20,10 +20,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runner:
+    name: Select runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      label: ${{ steps.pick.outputs.label }}
+    steps:
+      # ha-paneld is public. Code from a fork must never execute on the homelab
+      # runner, so a fork PR is pinned to a hosted image regardless of the job.
+      # Everything else — push to main, workflow_dispatch, and PRs from branches
+      # in this repository — uses the self-hosted machine.
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] \
+             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "label=ubuntu-24.04" >> "$GITHUB_OUTPUT"
+            echo "fork pull request -> hosted"
+          else
+            echo "label=self-hosted" >> "$GITHUB_OUTPUT"
+            echo "trusted ref -> self-hosted"
+          fi
+
   build:
     name: Android build
-    runs-on: ubuntu-24.04
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.label }}
     timeout-minutes: 30
+    env:
+      # The runner has 16 cores and 32 GiB; the repository default is sized for a
+      # 2-core hosted image and would leave most of the machine idle.
+      GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -Dfile.encoding=UTF-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,18 +113,26 @@ jobs:
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: basic
+          # Warm ~/.gradle already persists on the self-hosted runner; re-caching it
+          # would add a save/restore cycle for no gain. Hosted images still cache.
+          cache-disabled: ${{ needs.runner.outputs.label == 'self-hosted' }}
 
       # The bundled-helper installer tests drive the real staging script, which requires
       # its transaction record to be owned by root exactly as it is on a panel, so the
       # whole invocation runs as root and hands the tree back afterwards. Splitting it
       # into a root half and an unprivileged half costs a second Gradle startup and
       # configuration pass, which is far more expensive than the work it isolates.
+      # The helper's guard fixtures live under /tmp, which is fresh on a hosted
+      # image and persistent on this machine. State left by an earlier run makes
+      # guard_maintenance_init refuse to start, the native socket server exits 5,
+      # and HelperSocketCompositionTest fails. Clear it rather than run privileged.
+      - name: Clear helper guard fixtures
+        run: rm -rf /tmp/.hapaneld-guard-app-test /tmp/.hapaneld-guard-db-test /tmp/.hapaneld-guard-installed
+
       - name: Test, lint, and build APKs
         run: |
-          sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
-            "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
-            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease --stacktrace
-          sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}"
+          ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
+            --parallel --max-workers=8 --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |
@@ -210,7 +245,8 @@ jobs:
 
   dependency-integrity:
     name: Dependency integrity
-    runs-on: ubuntu-24.04
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.label }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -230,6 +266,9 @@ jobs:
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: basic
+          # Warm ~/.gradle already persists on the self-hosted runner; re-caching it
+          # would add a save/restore cycle for no gain. Hosted images still cache.
+          cache-disabled: ${{ needs.runner.outputs.label == 'self-hosted' }}
 
       - name: Resolve dependency artifacts from a fresh cache
         shell: bash
@@ -269,9 +308,14 @@ jobs:
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
     name: Privileged helper
-    runs-on: ubuntu-24.04
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.label }}
     timeout-minutes: 15
     steps:
+      - name: Make the workspace writable
+        if: needs.runner.outputs.label == 'self-hosted'
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
