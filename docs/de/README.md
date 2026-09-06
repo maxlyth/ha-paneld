@@ -159,7 +159,7 @@ Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweitert
 
 - [Bereitstellung und Flottenaktualisierungen](provisioning.md): unbeaufsichtigte Installation, Einrichtung von ADB über USB und Netzwerk, Sicherungen und Aktualisierungen der gesamten Flotte.
 - [Integrierter Renderer](built-in-renderer.md): Anforderungen, Remote-Anmeldung, Dashboard-Auswahl, Wiederherstellung und bewusste Einschränkungen.
-- [Leistung](../performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
+- [Leistung](performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
 - [Adaptive Helligkeit](../adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
 - [Adaptive Näherungserkennung und Aktivierung durch Winken](../adaptive-proximity.md): die Näherungserkennung konfigurieren und die Aktivierungsgeste anlernen.
 - [Sicherheitsmodi](../security-mode.md): den Relaxed-Modus und den Hardened-Modus verstehen, einschließlich der Aktionen, für die jemand am Panel anwesend sein muss.

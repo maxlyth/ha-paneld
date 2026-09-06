@@ -159,7 +159,7 @@ Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](p
 
 - [Provisioning e aggiornamenti del parco dispositivi](provisioning.md): installazione automatica, configurazione di ADB tramite USB e rete, backup e aggiornamenti dell'intero parco dispositivi.
 - [Renderer integrato](built-in-renderer.md): requisiti, login remoto, selezione della dashboard, ripristino e limitazioni intenzionali.
-- [Prestazioni](../performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
+- [Prestazioni](performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
 - [Luminosità adattiva](../adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.
 - [Prossimità adattiva e riattivazione con un gesto della mano](../adaptive-proximity.md): configura il rilevamento di prossimità e insegna il gesto di riattivazione.
 - [Modalità di sicurezza](../security-mode.md): comprendi la modalità permissiva e la modalità protetta, incluse le azioni che richiedono la presenza di una persona davanti al pannello.

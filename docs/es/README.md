@@ -159,7 +159,7 @@ Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-p
 
 - [Aprovisionamiento y actualizaciones de flotas](provisioning.md): instalación desatendida, configuración de ADB mediante USB y red, copias de seguridad y actualizaciones de toda la flota.
 - [Renderizador integrado](built-in-renderer.md): requisitos, inicio de sesión remoto, selección del panel de control, recuperación y limitaciones deliberadas.
-- [Rendimiento](../performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
+- [Rendimiento](performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
 - [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
 - [Proximidad adaptativa y activación con un gesto de la mano](../adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.
 - [Modos de seguridad](../security-mode.md): comprende el modo relajado y el modo reforzado, incluidas las acciones que requieren la presencia de alguien junto al panel.

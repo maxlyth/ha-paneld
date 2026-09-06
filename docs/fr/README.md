@@ -159,7 +159,7 @@ Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-s
 
 - [Provisionnement et mises à jour du parc](provisioning.md) : installation sans intervention, configuration d’ADB par USB et réseau, sauvegardes et mises à jour de l’ensemble du parc.
 - [Moteur de rendu intégré](built-in-renderer.md) : prérequis, connexion à distance, sélection du tableau de bord, récupération et limitations intentionnelles.
-- [Performances](../performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
+- [Performances](performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
 - [Luminosité adaptative](../adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.
 - [Proximité adaptative et réveil d’un geste de la main](../adaptive-proximity.md) : configurez la détection de proximité et apprenez au panneau le geste de réveil.
 - [Modes de sécurité](../security-mode.md) : comprenez le mode assoupli et le mode renforcé, notamment les actions qui nécessitent la présence d’une personne devant le panneau.
