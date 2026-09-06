@@ -11769,12 +11769,12 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.log_ship_protocol.syslog_tcp": {
-      "text": "通过 TCP 的 Syslog",
+      "text": "基于 TCP 的 Syslog",
       "sourceHash": "91de40e260ce02c13911216393666f52c0a32e6d3b3dd7cfc5dd02711f58f2b5",
       "state": "machine-cross-checked"
     },
     "configure.enum.log_ship_protocol.syslog_udp": {
-      "text": "通过 UDP 的 Syslog",
+      "text": "基于 UDP 的 Syslog",
       "sourceHash": "cdd9bce57411aec9a0af3472b278942d976f8f616cb462feebc82082714b7df7",
       "state": "machine-cross-checked"
     },
@@ -11884,12 +11884,12 @@
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_severe": {
-      "text": "通往 Home Assistant 的网络路径非常慢。所有操作都要等待此路径。此结果在网络层测量，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
+      "text": "通往 Home Assistant 的网络路径非常慢。每项操作都必须等待数据通过该路径。此结果是在网络层测得的，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
       "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_warning": {
-      "text": "通往 Home Assistant 的网络路径较慢。所有操作都要等待此路径。此结果在网络层测量，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
+      "text": "通往 Home Assistant 的网络路径较慢。每项操作都必须等待数据通过该路径。此结果是在网络层测得的，因此并非面板或 Home Assistant 本身运行缓慢——请检查 Wi-Fi 或二者之间的链路。",
       "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
       "state": "machine-cross-checked"
     }

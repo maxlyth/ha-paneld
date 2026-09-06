@@ -11809,7 +11809,7 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.navbar_mode.swipe_reveal": {
-      "text": "Mostra con scorrimento",
+      "text": "Scorri per mostrarla",
       "sourceHash": "09d51331b616bdd52b2e76eaec3d72b1f5906627266dd577ca0bcd49c29222d1",
       "state": "machine-cross-checked"
     },

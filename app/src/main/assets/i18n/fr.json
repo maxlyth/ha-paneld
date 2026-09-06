@@ -11754,7 +11754,7 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.dashboard_theme.follow_home_assistant": {
-      "text": "Suivre Home Assistant",
+      "text": "Comme dans Home Assistant",
       "sourceHash": "354c65fd389c33e3365c65df36b59f5d05509a6f1a8305920453ccf0cc3cd2e4",
       "state": "machine-cross-checked"
     },
