@@ -18,9 +18,13 @@ import org.junit.Test
 class LiveSettingStallTest {
     private class FakeJournal : LiveSettingAuthority.Journal {
         val values = linkedMapOf<String, LiveSettingAuthority.Pending>()
+        /** Durable writes. Every one is a `commit()` on the panel, so a replay that learns nothing new
+         *  must not perform one. */
+        var puts = 0
         override fun load(): Map<String, LiveSettingAuthority.Pending> = values.toMap()
         override fun put(key: String, value: LiveSettingAuthority.Pending): Boolean {
             values[key] = value
+            puts++
             return true
         }
         override fun remove(key: String): Boolean {
@@ -61,6 +65,7 @@ class LiveSettingStallTest {
         val journal = FakeJournal()
         val authority = authority(journal, "boot-a")
         authority.applyOrQueueOutcome(KEY, "true", "false") { _, _, _ -> LiveSettingApplyResult.UNAVAILABLE }
+        val afterFirstObservation = journal.puts
         repeat(10) { authority.replayWith(LiveSettingApplyResult.UNAVAILABLE) }
 
         assertEquals(
@@ -69,6 +74,13 @@ class LiveSettingStallTest {
             authority.pendingStalledSnapshot(),
         )
         assertEquals(1, journal.values.getValue(KEY).unavailableBoots.size)
+        // Recording is idempotent by the set, but it must also be silent: each of those ten replays
+        // would otherwise commit an identical journal entry to storage for nothing.
+        assertEquals(
+            "a replay that learns nothing must not write",
+            afterFirstObservation,
+            journal.puts,
+        )
     }
 
     @Test fun `a second distinct boot stalls the entry without discarding it`() {
@@ -208,6 +220,27 @@ class LiveSettingStallTest {
             authority.pendingStalledSnapshot(),
         )
         assertEquals(mapOf(KEY to "true"), authority.pendingSnapshot())
+        // Nothing was recorded at all. Standing in a placeholder would look harmless while the panel
+        // never reads its boot id — every boot would share one identity — but it is not: see below.
+        assertEquals(emptySet<String>(), journal.values.getValue(KEY).unavailableBoots)
+    }
+
+    @Test fun `a boot with no identity cannot combine with a real one to stall an entry`() {
+        // The harm of inventing an identity for an unreadable boot: one placeholder plus one genuine
+        // boot reaches the threshold, so a value stalls on a single real observation.
+        val journal = FakeJournal()
+        authority(journal, null)
+            .applyOrQueueOutcome(KEY, "true", "false") { _, _, _ -> LiveSettingApplyResult.UNAVAILABLE }
+
+        val readable = authority(journal, "boot-b")
+        readable.replayWith(LiveSettingApplyResult.UNAVAILABLE)
+
+        assertEquals(
+            "one real boot is one observation whatever the unreadable boot did",
+            emptySet<String>(),
+            readable.pendingStalledSnapshot(),
+        )
+        assertEquals(setOf("boot-b"), journal.values.getValue(KEY).unavailableBoots)
     }
 
     @Test fun `an unavailable apply is pending exactly like any other unapplied value`() {
