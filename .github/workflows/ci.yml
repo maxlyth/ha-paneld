@@ -148,10 +148,14 @@ jobs:
     name: Host contracts
     # Env-sensitive shell contracts (sqlite3/adb/coreutils) are calibrated to the hosted image; keep on hosted.
     runs-on: ubuntu-24.04
-    # The host-side shell contracts have crept from ten minutes to nearly fourteen and
-    # crossed the old fifteen-minute ceiling. Give the job real headroom while the
-    # provisioning suite, which dominates the step, is split up.
-    timeout-minutes: 30
+    # The host-side shell contracts used to finish in fourteen minutes only because they
+    # refused early: unprivileged, every transaction stopped at a lock-busy status before
+    # doing any work. Running them with the ownership the installer expects means they now
+    # carry those transactions out, syncs included, which is the point of the suite and
+    # takes considerably longer on a shared builder than on a workstation. Splitting the
+    # provisioning suite, which is the large majority of the step, is the way to bring this
+    # back down; until then the ceiling has to fit the work.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
