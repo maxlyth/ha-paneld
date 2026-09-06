@@ -155,7 +155,7 @@ jobs:
           sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
             ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
-              --parallel --max-workers=8 --stacktrace
+              --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |
