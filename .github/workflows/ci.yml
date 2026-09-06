@@ -134,7 +134,11 @@ jobs:
       # guard_maintenance_init refuse to start, the native socket server exits 5,
       # and HelperSocketCompositionTest fails. Clear it rather than run privileged.
       - name: Clear helper guard fixtures
-        run: rm -rf /tmp/.hapaneld-guard-app-test /tmp/.hapaneld-guard-db-test /tmp/.hapaneld-guard-installed
+        # sudo only to delete, never to build. Fixtures left by the era when this
+        # job ran as root are owned by root, so the runner account cannot remove
+        # them; without this the first unprivileged run cannot clean up after the
+        # last privileged one. Failing to remove them is not fatal on its own.
+        run: sudo rm -rf /tmp/.hapaneld-guard-app-test /tmp/.hapaneld-guard-db-test /tmp/.hapaneld-guard-installed || true
 
       - name: Test, lint, and build APKs
         run: |
