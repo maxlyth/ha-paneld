@@ -40,6 +40,13 @@ PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[a-zA-Z]|\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
+TARGET_SCRIPT_POLICIES = {
+    "de": "latin",
+    "es": "latin",
+    "fr": "latin",
+    "it": "latin",
+    "zh-Hans": "han",
+}
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
 MAX_TARGET_TEXT_CHARS = 16_384
@@ -211,22 +218,38 @@ def remove_literal(text: str, literal: str) -> str:
     )
 
 
+def validate_target_script_policies() -> None:
+    """Require an explicit, supported script policy for every target locale."""
+    if set(TARGET_SCRIPT_POLICIES) != LOCALES:
+        raise CatalogueError("target script policies must exactly cover supported locales")
+    invalid = sorted(
+        locale for locale, policy in TARGET_SCRIPT_POLICIES.items()
+        if policy not in {"latin", "han"}
+    )
+    if invalid:
+        raise CatalogueError(f"target script policy is invalid for: {', '.join(invalid)}")
+
+
 def validate_target_language(key: str, text: str, locale: str, source_record: dict[str, Any]) -> None:
+    validate_target_script_policies()
+    policy = TARGET_SCRIPT_POLICIES.get(locale)
+    if policy is None:
+        raise CatalogueError(f"{locale}: target locale is unsupported")
     source_visible = unprotected_text(source_record["text"], source_record)
     if not LATIN_RE.search(source_visible):
         return
     target_visible = unprotected_text(text, source_record)
     for literal in TARGET_LITERAL_EXCEPTIONS.get((locale, key), ()):
         target_visible = remove_literal(target_visible, literal)
-    if locale == "zh-Hans":
+    if policy == "han":
         if not HAN_RE.search(target_visible):
-            raise CatalogueError(f"{key}: zh-Hans target has no Han text")
+            raise CatalogueError(f"{key}: {locale} target has no Han text")
         residual = sorted({word.casefold() for word in ENGLISH_WORD_RE.findall(target_visible)})
         if residual:
             raise CatalogueError(f"{key}: residual English words: {', '.join(residual)}")
         if any(character.isalpha() and not HAN_RE.fullmatch(character) for character in target_visible):
-            raise CatalogueError(f"{key}: zh-Hans target has unexpected script")
-    else:
+            raise CatalogueError(f"{key}: {locale} target has unexpected script")
+    elif policy == "latin":
         if not LATIN_RE.search(target_visible) or any(
             character.isalpha() and not LATIN_RE.fullmatch(character)
             for character in target_visible
@@ -326,6 +349,7 @@ def validate_target(
     *,
     expected_locale: str | None = None,
 ) -> dict[str, Any]:
+    validate_target_script_policies()
     root = read_json(path)
     exact_keys(root, TARGET_ROOT_KEYS, "target root")
     if root["schema"] != SCHEMA or root["locale"] not in LOCALES:
@@ -849,8 +873,7 @@ def context_report(path: Path) -> dict[str, Any]:
             or not isinstance(term["sourceKey"], str)
             or not term["sourceKey"].strip()
             or not isinstance(translations, dict)
-            or not translations
-            or any(locale not in LOCALES for locale in translations)
+            or set(translations) != LOCALES
             or any(not isinstance(text, str) or not text.strip() for text in translations.values())
         ):
             raise CatalogueError("malformed terminology context term value")

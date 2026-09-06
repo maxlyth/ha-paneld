@@ -75,6 +75,8 @@ jobs:
           import re
           import subprocess
 
+          from scripts.i18n_catalogue import LOCALES
+
           def fail(message):
               raise SystemExit(f"::error::{message}")
 
@@ -98,7 +100,7 @@ jobs:
               if not re.fullmatch(r"[0-9a-f]{40}", source_commit) or source_commit != git("rev-parse", "HEAD"):
                   fail("Release catalogue source binding is invalid.")
               directory = Path("app/src/main/assets/i18n")
-              expected = ["de.json", "en.json", "es.json", "fr.json", "it.json", "zh-Hans.json"]
+              expected = sorted(f"{locale}.json" for locale in {"en", *LOCALES})
               paths = sorted(directory.glob("*.json"))
               if [path.name for path in paths] != expected:
                   fail("Release catalogue files do not match the supported locales.")

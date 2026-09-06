@@ -55,6 +55,12 @@ class DeepLError(ValueError):
     """A sanitized, user-facing adapter failure."""
 
 
+def validate_locale_configuration() -> None:
+    """Fail closed when provider routing and catalogue locale policy diverge."""
+    if set(TARGETS) != catalogue.LOCALES:
+        raise DeepLError("DeepL targets must exactly cover supported locales")
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """Reject redirects so an authenticated header can never reach another URL."""
 
@@ -80,6 +86,7 @@ def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _load_context(path: Path) -> tuple[dict[str, Any], str, int]:
+    validate_locale_configuration()
     raw = path.read_bytes()
     try:
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_json_object)
@@ -147,8 +154,7 @@ def _load_context(path: Path) -> tuple[dict[str, Any], str, int]:
             or not isinstance(term["sourceKey"], str)
             or not term["sourceKey"].strip()
             or not isinstance(translations, dict)
-            or not translations
-            or any(locale not in TARGETS for locale in translations)
+            or set(translations) != catalogue.LOCALES
             or any(not isinstance(text, str) or not text.strip() for text in translations.values())
         ):
             raise DeepLError("malformed terminology context term value")
@@ -1076,6 +1082,7 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = parser().parse_args()
     try:
+        validate_locale_configuration()
         if args.command == "plan":
             plan = build_plan(
                 args.source, args.target_dir, args.context, args.locale, args.base_revision,

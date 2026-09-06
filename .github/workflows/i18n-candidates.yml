@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       locales:
-        description: Comma-separated locales (de, fr, it, es, zh-Hans)
+        description: Comma-separated target locale codes
         required: true
         default: de,fr,it,es,zh-Hans
   push:

@@ -206,6 +206,21 @@ class TranslationCorrectionFormTest(unittest.TestCase):
 
 
 class TranslationCandidateWorkflowTest(unittest.TestCase):
+    def test_human_description_does_not_duplicate_locale_enumeration(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        input_match = re.search(
+            r"^      locales:\n(?P<body>(?:^        .*\n)+)", workflow, re.MULTILINE
+        )
+        self.assertIsNotNone(input_match)
+        descriptions = re.findall(
+            r"^        description: (.+)$", input_match.group("body"), re.MULTILINE
+        )
+        self.assertEqual(descriptions, ["Comma-separated target locale codes"])
+        description_tokens = set(
+            re.findall(r"[A-Za-z]+(?:-[A-Za-z]+)?", descriptions[0])
+        )
+        self.assertFalse(i18n.LOCALES & description_tokens)
+
     def test_operational_locale_surfaces_match_catalogue_policy(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
         assert_candidate_workflow_locale_parity(workflow)

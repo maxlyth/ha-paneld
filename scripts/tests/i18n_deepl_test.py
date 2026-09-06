@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 import json
 from pathlib import Path
@@ -104,6 +105,55 @@ class DeepLAdapterTest(unittest.TestCase):
             "sourceRevision": source_revision,
             "strings": records,
         })
+
+    def test_provider_targets_are_unique_complete_and_mutation_sensitive(self):
+        script = ROOT / "scripts/i18n_deepl.py"
+        tree = ast.parse(script.read_text(encoding="utf-8"))
+        assignment = next(
+            node for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "TARGETS"
+                for target in node.targets
+            )
+        )
+        self.assertIsInstance(assignment.value, ast.Dict)
+        literal_keys = [ast.literal_eval(key) for key in assignment.value.keys]
+        self.assertEqual(
+            len(literal_keys), len(set(literal_keys)), "DeepL targets have duplicate locale keys"
+        )
+        self.assertSetEqual(set(literal_keys), DEEPL.catalogue.LOCALES)
+        DEEPL.validate_locale_configuration()
+
+        selected = sorted(DEEPL.catalogue.LOCALES)[0]
+        for mutation in (
+            {key: value for key, value in DEEPL.TARGETS.items() if key != selected},
+            {**DEEPL.TARGETS, "extra-locale": ("XX", "default")},
+        ):
+            with (
+                self.subTest(mutation=mutation),
+                mock.patch.object(DEEPL, "TARGETS", mutation),
+                self.assertRaisesRegex(DEEPL.DeepLError, "must exactly cover"),
+            ):
+                DEEPL.validate_locale_configuration()
+
+    def test_provider_context_terms_exactly_cover_supported_locales(self):
+        DEEPL._load_context(self.context_path)
+        context = json.loads(self.context_path.read_text(encoding="utf-8"))
+        selected = sorted(DEEPL.catalogue.LOCALES)[0]
+        missing = json.loads(json.dumps(context))
+        missing["terms"][0]["translations"].pop(selected)
+        extra = json.loads(json.dumps(context))
+        extra["terms"][0]["translations"]["extra-locale"] = "Extra"
+        for mutation in (missing, extra):
+            write_json(self.context_path, mutation)
+            with (
+                self.subTest(locales=mutation["terms"][0]["translations"]),
+                self.assertRaisesRegex(
+                    DEEPL.DeepLError, "malformed terminology context term value"
+                ),
+            ):
+                DEEPL._load_context(self.context_path)
 
     def test_plan_selects_only_missing_stale_and_fallback_records(self):
         self.target("de", {

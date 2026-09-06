@@ -322,13 +322,23 @@ provenance_git update-ref refs/heads/main "$provenance_source"
 provenance_git tag -a catalogue-source "$provenance_ancestor" -m 'Annotated catalogue source'
 provenance_tag=$(provenance_git rev-parse refs/tags/catalogue-source)
 provenance_real_git=$(command -v git)
+mapfile -t provenance_locales < <(
+  PYTHONPATH="$ROOT" python3 -c \
+    'from scripts.i18n_catalogue import LOCALES; print("en"); print(*sorted(LOCALES), sep="\n")'
+)
+provenance_target_locale=$(
+  PYTHONPATH="$ROOT" python3 -c \
+    'from scripts.i18n_catalogue import LOCALES; print(sorted(LOCALES)[0])'
+)
 
 make_provenance_case() {
   provenance_case="$TMP/provenance-$1"
   cp -a "$provenance_seed" "$provenance_case"
   provenance_catalogues="$provenance_case/app/src/main/assets/i18n"
   mkdir -p "$provenance_catalogues"
-  for locale in de en es fr it zh-Hans; do
+  mkdir -p "$provenance_case/scripts"
+  cp "$ROOT/scripts/i18n_catalogue.py" "$provenance_case/scripts/i18n_catalogue.py"
+  for locale in "${provenance_locales[@]}"; do
     printf '{"sourceRevision":"%s"}\n' "$2" > "$provenance_catalogues/$locale.json"
   done
 }
@@ -355,34 +365,57 @@ check_provenance_case() {
 
 make_provenance_case valid "$provenance_ancestor"
 check_provenance_case 'accepts a valid ancestor' ''
+make_provenance_case next-locale "$provenance_ancestor"
+python3 - "$provenance_case/scripts/i18n_catalogue.py" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+source, replacements = re.subn(
+    r'^LOCALES = \{(?P<values>.+)\}$',
+    lambda match: f'LOCALES = {{{match.group("values")}, "nl"}}',
+    source,
+    count=1,
+    flags=re.MULTILINE,
+)
+assert replacements == 1
+path.write_text(source, encoding="utf-8")
+PY
+cp "$provenance_catalogues/$provenance_target_locale.json" "$provenance_catalogues/nl.json"
+check_provenance_case 'derives a newly registered catalogue from locale policy' ''
+rm "$provenance_catalogues/nl.json"
+check_provenance_case 'rejects an omitted newly registered catalogue' 'Release catalogue files do not match the supported locales.'
 make_provenance_case differing "$provenance_ancestor"
-printf '{"sourceRevision":"%s"}\n' "$provenance_second" > "$provenance_catalogues/de.json"
+printf '{"sourceRevision":"%s"}\n' "$provenance_second" > "$provenance_catalogues/$provenance_target_locale.json"
 check_provenance_case 'rejects differing valid ancestors' 'Release catalogues do not share one source revision.'
 
 for revision_case in missing abbreviated symbolic nonstring invalid duplicate; do
   make_provenance_case "$revision_case" "$provenance_ancestor"
   expected_error='Release catalogue source revision is not one full commit SHA.'
   case "$revision_case" in
-    missing) printf '{}\n' > "$provenance_catalogues/de.json"; label='rejects missing revision' ;;
-    abbreviated) printf '{"sourceRevision":"%.12s"}\n' "$provenance_ancestor" > "$provenance_catalogues/de.json"; label='rejects abbreviated revision' ;;
-    symbolic) printf '{"sourceRevision":"HEAD~1"}\n' > "$provenance_catalogues/de.json"; label='rejects symbolic revision' ;;
-    nonstring) printf '{"sourceRevision":123}\n' > "$provenance_catalogues/de.json"; label='rejects nonstring revision' ;;
-    invalid) printf '{invalid\n' > "$provenance_catalogues/de.json"; label='rejects invalid JSON'; expected_error='Unable to inspect release catalogue provenance.' ;;
-    duplicate) printf '{"sourceRevision":"%s","sourceRevision":"%s"}\n' "$provenance_ancestor" "$provenance_ancestor" > "$provenance_catalogues/de.json"; label='rejects duplicate JSON key'; expected_error='Release catalogue contains a duplicate JSON key.' ;;
+    missing) printf '{}\n' > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects missing revision' ;;
+    abbreviated) printf '{"sourceRevision":"%.12s"}\n' "$provenance_ancestor" > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects abbreviated revision' ;;
+    symbolic) printf '{"sourceRevision":"HEAD~1"}\n' > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects symbolic revision' ;;
+    nonstring) printf '{"sourceRevision":123}\n' > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects nonstring revision' ;;
+    invalid) printf '{invalid\n' > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects invalid JSON'; expected_error='Unable to inspect release catalogue provenance.' ;;
+    duplicate) printf '{"sourceRevision":"%s","sourceRevision":"%s"}\n' "$provenance_ancestor" "$provenance_ancestor" > "$provenance_catalogues/$provenance_target_locale.json"; label='rejects duplicate JSON key'; expected_error='Release catalogue contains a duplicate JSON key.' ;;
   esac
   if [ "$revision_case" = abbreviated ] || [ "$revision_case" = symbolic ]; then
-    for locale in en es fr it zh-Hans; do
-      cp "$provenance_catalogues/de.json" "$provenance_catalogues/$locale.json"
+    for locale in "${provenance_locales[@]}"; do
+      [ "$locale" = "$provenance_target_locale" ] || \
+        cp "$provenance_catalogues/$provenance_target_locale.json" "$provenance_catalogues/$locale.json"
     done
   fi
   check_provenance_case "$label" "$expected_error"
 done
 
 make_provenance_case missing-catalogue "$provenance_ancestor"
-mv "$provenance_catalogues/de.json" "$provenance_case/de.json"
+mv "$provenance_catalogues/$provenance_target_locale.json" "$provenance_case/$provenance_target_locale.json"
 check_provenance_case 'rejects missing catalogue' 'Release catalogue files do not match the supported locales.'
 make_provenance_case extra-catalogue "$provenance_ancestor"
-cp "$provenance_catalogues/de.json" "$provenance_catalogues/nl.json"
+cp "$provenance_catalogues/$provenance_target_locale.json" "$provenance_catalogues/extra-locale.json"
 check_provenance_case 'rejects extra catalogue' 'Release catalogue files do not match the supported locales.'
 
 for object_case in missing blob tree tag unrelated descendant; do
