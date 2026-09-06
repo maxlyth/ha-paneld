@@ -75,6 +75,12 @@ class InstallProgressTest {
         assertEquals("Restore", status.getString("component"))
         assertEquals("Working…", status.getString("message"))
         assertEquals("operation-working", status.getJSONObject("presentation").getString("code"))
+        val workingSnapshot = InstallProgress.presentationSnapshot()
+        assertTrue(workingSnapshot.generation > 0L)
+        assertTrue(workingSnapshot.running)
+        assertEquals("Restore", workingSnapshot.component)
+        assertEquals("Working…", workingSnapshot.message)
+        assertEquals(working, workingSnapshot.presentation)
 
         val terminal = InstallPresentation("restore-completed-with-state", mapOf("count" to "2"))
         val nested = InstallPresentation("companion-urls-repaired", mapOf("count" to "1"))
@@ -95,6 +101,12 @@ class InstallProgressTest {
         status = JSONObject(InstallProgress.json())
         assertEquals("Restore completed (2 panel-state values restored)", status.getString("message"))
         assertEquals("restore-completed-with-state", status.getJSONObject("presentation").getString("code"))
+        val terminalSnapshot = InstallProgress.presentationSnapshot()
+        assertEquals(workingSnapshot.generation, terminalSnapshot.generation)
+        assertFalse(terminalSnapshot.running)
+        assertEquals("Restore", terminalSnapshot.component)
+        assertEquals("Restore completed (2 panel-state values restored)", terminalSnapshot.message)
+        assertEquals(terminal, terminalSnapshot.presentation)
         assertEquals(
             "companion-urls-repaired",
             status.getJSONObject("result").getJSONObject("companion")
@@ -104,6 +116,7 @@ class InstallProgressTest {
         val next = InstallProgress.start("next")!!
         status = JSONObject(InstallProgress.json())
         assertFalse(status.has("presentation"))
+        assertNull(InstallProgress.presentationSnapshot().presentation)
         assertFalse(status.has("result"))
         InstallProgress.finish(next, "done")
         assertFalse(JSONObject(InstallProgress.json()).has("presentation"))

@@ -40,8 +40,8 @@
     <string name="pending_approvals">待批准请求</string>
     <string name="no_pending_requests">没有待处理的请求。</string>
     <string name="approve_one_request">批准一个请求</string>
-    <string name="approval_list_item">%1$s\n%2$s\n来自 %3$s</string>
-    <string name="approval_request_detail">%1$s\n\n请求来自 %2$s。批准将过期且只能使用一次。</string>
+    <string name="approval_list_item">%1$s\n请求信息（英语）：%2$s\n来自 %3$s</string>
+    <string name="approval_request_detail">批准前，请检查此操作和确切的请求信息。\n\n请求信息（英语）：\n%1$s\n\n请求来自 %2$s。批准将过期且只能使用一次。</string>
     <string name="approval_op_apk_install">安装已上传的 APK</string>
     <string name="approval_op_apk_fetch">从链接下载 APK</string>
     <string name="approval_op_backup_export">导出面板备份</string>
@@ -128,6 +128,17 @@
     <string name="web_view_repair_needs_privilege">此面板已有已知正常的版本，但无权安装，因此必须手动完成。更新后点按“重试”。</string>
     <string name="web_view_repair_no_build">没有为此面板捆绑已知正常的版本，因此必须手动更新。重新安装同一版本可修复损坏的版本。之后点按“重试”。</string>
     <string name="web_view_repair_managed_elsewhere">此面板从商店获取 Android System WebView，由商店替换比在此处操作更安全。请在那里更新，然后点按“重试”。</string>
+    <string name="web_view_repair_no_change">安装程序未进行任何更改。请打开“安装”检查可用的 System WebView 版本，然后重试。</string>
+    <string name="web_view_repair_no_install_route">此面板目前没有安装 System WebView 的权限。请打开“安装”设置允许的安装方式。</string>
+    <string name="web_view_repair_download_failed">System WebView 下载未完成。请检查网络连接，然后重试。</string>
+    <string name="web_view_repair_download_too_large">System WebView 下载内容超出面板的安全限制。请打开“安装”查看可用的软件包。</string>
+    <string name="web_view_repair_retryable">临时问题在更改面板前中止了 System WebView 更新。请重试。</string>
+    <string name="web_view_repair_storage_failed">没有足够的可用存储空间来暂存 System WebView。请释放一些空间，然后重试。</string>
+    <string name="web_view_repair_staging_failed">无法安全地准备 System WebView 软件包。再次尝试前，请打开“安装”查看故障。</string>
+    <string name="web_view_repair_deferred">更新正在等待面板数据库进入可安全执行此操作的状态。请在维护完成后重试。</string>
+    <string name="web_view_repair_rejected">Android 拒绝安装 System WebView。请打开“安装”查看故障；重复相同的操作可能无效。</string>
+    <string name="web_view_repair_cancelled">System WebView 更新在更改面板前已取消。请在面板准备就绪后重试。</string>
+    <string name="web_view_repair_failure_detail">%1$s\n\n诊断详情（英语）：\n%2$s</string>
     <string name="update_web_viewer">更新网页查看器</string>
     <string name="installing">正在安装…</string>
     <string name="downloading_installing">正在下载并安装。在较慢的网络上需要几分钟。</string>
@@ -149,7 +160,17 @@
     <string name="ha_sign_in_needed_qr">面板必须有 Home Assistant 登录信息才能加载内容。扫描此二维码可通过手机登录：</string>
     <string name="ha_sign_in_rejected_qr">已保存的登录信息不再有效。扫描此二维码可通过手机重新登录：</string>
     <string name="cannot_reach_ha">面板无法访问 Home Assistant</string>
-    <string name="cannot_reach_ha_detail">面板无法读取 Home Assistant 版本，因此尚未打开仪表盘。请检查 Home Assistant 是否正在运行，以及此面板是否已连接网络。面板会继续尝试。%1$s</string>
+    <string name="cannot_reach_ha_detail">面板无法读取 Home Assistant 版本，因此尚未打开仪表盘。请检查 Home Assistant 是否正在运行，以及此面板是否已连接网络。面板会继续尝试。\n\n原因：%1$s\n\n未翻译的诊断详情：\n%2$s</string>
+    <string name="ha_transport_not_ready">Home Assistant 连接尚未准备就绪。</string>
+    <string name="ha_transport_tls_trust">无法信任服务器证书。请检查证书链和面板时钟。</string>
+    <string name="ha_transport_tls_other">安全连接失败。请检查服务器的 TLS 配置。</string>
+    <string name="ha_transport_dns">无法解析 Home Assistant 主机名。请检查 DNS 和配置的地址。</string>
+    <string name="ha_transport_timeout">连接超时。请检查路由、Wi-Fi 以及 Home Assistant 是否响应。</string>
+    <string name="ha_transport_refused">主机拒绝连接。请检查 Home Assistant 是否正在配置的端口上运行。</string>
+    <string name="ha_transport_unreachable">网络没有通往 Home Assistant 的路由。请检查面板网络和地址族设置。</string>
+    <string name="ha_transport_http_status">Home Assistant 或代理返回了 HTTP 错误，而不是配置信息。</string>
+    <string name="ha_transport_protocol">响应不是有效的 Home Assistant 配置数据。请检查代理或强制门户。</string>
+    <string name="ha_transport_unknown">连接因面板无法分类的原因而失败。</string>
     <string name="ha_sign_in_page_failed">Home Assistant 登录页面无法加载</string>
     <string name="ha_sign_in_page_failed_detail">“设置”会打开此面板的设置。请在其中检查 Home Assistant 地址，或在同一页面上使用“浏览器登录”。</string>
     <string name="no_dashboard_title">此账户没有可打开的仪表盘</string>
@@ -220,7 +241,7 @@
     <string name="guard_db_unsupported">已安装的辅助程序无法执行此恢复。恢复已暂停。</string>
     <string name="no_pending_physical_approval">没有待处理的面板现场批准。</string>
     <string name="pending_physical_approval">待处理的面板现场批准</string>
-    <string name="approval_exact_detail">%1$s\n\n来自 %2$s 的确切请求。批准仅可使用一次且会过期。</string>
+    <string name="approval_exact_detail">批准前，请检查此操作和确切的请求信息。\n\n请求信息（英语）：\n%1$s\n\n来自 %2$s 的确切请求。批准仅可使用一次且会过期。</string>
 
     <string name="shizuku_enable">启用</string>
     <string name="shizuku_request_permission">请求权限</string>

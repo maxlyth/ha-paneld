@@ -40,8 +40,8 @@
     <string name="pending_approvals">Ausstehende Bestätigungen</string>
     <string name="no_pending_requests">Es gibt keine ausstehenden Anfragen.</string>
     <string name="approve_one_request">Eine Anfrage bestätigen</string>
-    <string name="approval_list_item">%1$s\n%2$s\nVon %3$s</string>
-    <string name="approval_request_detail">%1$s\n\nAnfrage von %2$s. Die Bestätigung läuft ab und kann einmal verwendet werden.</string>
+    <string name="approval_list_item">%1$s\nAnfrageinformationen (Englisch): %2$s\nVon %3$s</string>
+    <string name="approval_request_detail">Prüfe die Aktion und die genauen Anfrageinformationen, bevor du sie bestätigst.\n\nAnfrageinformationen (Englisch):\n%1$s\n\nAnfrage von %2$s. Die Bestätigung läuft ab und kann einmal verwendet werden.</string>
     <string name="approval_op_apk_install">Hochgeladene APK installieren</string>
     <string name="approval_op_apk_fetch">APK über einen Link herunterladen</string>
     <string name="approval_op_backup_export">Panel-Sicherung exportieren</string>
@@ -128,6 +128,17 @@
     <string name="web_view_repair_needs_privilege">Für dieses Panel ist eine nachweislich funktionierende Version verfügbar, die jedoch nicht installiert werden darf. Daher muss dies manuell erfolgen. Aktualisiere sie und tippe dann auf „Erneut versuchen“.</string>
     <string name="web_view_repair_no_build">Für dieses Panel ist keine nachweislich funktionierende Version enthalten. Daher muss sie manuell aktualisiert werden. Die Neuinstallation derselben Version repariert eine beschädigte Version. Tippe danach auf „Erneut versuchen“.</string>
     <string name="web_view_repair_managed_elsewhere">Dieses Panel bezieht Android System WebView aus einem Store, der es sicherer ersetzen kann. Aktualisiere es dort und tippe dann auf „Erneut versuchen“.</string>
+    <string name="web_view_repair_no_change">Das Installationsprogramm hat nichts geändert. Prüfe unter „Installation“ die verfügbare System-WebView-Version und versuche es erneut.</string>
+    <string name="web_view_repair_no_install_route">Dieses Panel ist derzeit nicht berechtigt, System WebView zu installieren. Richte unter „Installation“ eine zulässige Installationsmethode ein.</string>
+    <string name="web_view_repair_download_failed">Der Download von System WebView wurde nicht abgeschlossen. Prüfe die Netzwerkverbindung und versuche es erneut.</string>
+    <string name="web_view_repair_download_too_large">Der System-WebView-Download überschreitet die Sicherheitsgrenze des Panels. Prüfe das verfügbare Paket unter „Installation“.</string>
+    <string name="web_view_repair_retryable">Ein vorübergehendes Problem hat die System-WebView-Aktualisierung beendet, bevor das Panel geändert wurde. Versuche es erneut.</string>
+    <string name="web_view_repair_storage_failed">Zum Vorbereiten von System WebView ist nicht genügend nutzbarer Speicher vorhanden. Gib Speicherplatz frei und versuche es erneut.</string>
+    <string name="web_view_repair_staging_failed">Das System-WebView-Paket konnte nicht sicher vorbereitet werden. Prüfe den Fehler unter „Installation“, bevor du es erneut versuchst.</string>
+    <string name="web_view_repair_deferred">Die Aktualisierung wartet, bis die Panel-Datenbank für diesen Vorgang sicher ist. Versuche es nach Abschluss der Wartung erneut.</string>
+    <string name="web_view_repair_rejected">Android hat die Installation von System WebView abgelehnt. Prüfe den Fehler unter „Installation“; derselbe Versuch wird möglicherweise erneut fehlschlagen.</string>
+    <string name="web_view_repair_cancelled">Die System-WebView-Aktualisierung wurde abgebrochen, bevor das Panel geändert wurde. Versuche es erneut, wenn das Panel bereit ist.</string>
+    <string name="web_view_repair_failure_detail">%1$s\n\nDiagnosedetails (Englisch):\n%2$s</string>
     <string name="update_web_viewer">Webansicht aktualisieren</string>
     <string name="installing">Installation läuft…</string>
     <string name="downloading_installing">Download und Installation laufen. In einem langsamen Netzwerk dauert dies einige Minuten.</string>
@@ -149,7 +160,17 @@
     <string name="ha_sign_in_needed_qr">Ohne Home Assistant-Anmeldung kann nichts geladen werden. Scanne diesen Code, um dich über ein Smartphone anzumelden:</string>
     <string name="ha_sign_in_rejected_qr">Die gespeicherte Anmeldung funktioniert nicht mehr. Scanne diesen Code, um dich über ein Smartphone erneut anzumelden:</string>
     <string name="cannot_reach_ha">Das Panel kann Home Assistant nicht erreichen</string>
-    <string name="cannot_reach_ha_detail">Das Panel konnte die Home Assistant-Version nicht lesen und hat deshalb kein Dashboard geöffnet. Prüfe, ob Home Assistant läuft und dieses Panel mit dem Netzwerk verbunden ist. Das Panel versucht es weiter. %1$s</string>
+    <string name="cannot_reach_ha_detail">Das Panel konnte die Home Assistant-Version nicht lesen und hat deshalb kein Dashboard geöffnet. Prüfe, ob Home Assistant läuft und dieses Panel mit dem Netzwerk verbunden ist. Das Panel versucht es weiter.\n\nGrund: %1$s\n\nNicht übersetzte Diagnosedetails:\n%2$s</string>
+    <string name="ha_transport_not_ready">Die Home Assistant-Verbindung ist noch nicht bereit.</string>
+    <string name="ha_transport_tls_trust">Dem Serverzertifikat konnte nicht vertraut werden. Prüfe die Zertifikatskette und die Uhrzeit des Panels.</string>
+    <string name="ha_transport_tls_other">Die sichere Verbindung ist fehlgeschlagen. Prüfe die TLS-Konfiguration des Servers.</string>
+    <string name="ha_transport_dns">Der Home Assistant-Hostname konnte nicht aufgelöst werden. Prüfe DNS und die konfigurierte Adresse.</string>
+    <string name="ha_transport_timeout">Zeitüberschreitung bei der Verbindung. Prüfe Routing, WLAN und ob Home Assistant antwortet.</string>
+    <string name="ha_transport_refused">Der Host hat die Verbindung abgelehnt. Prüfe, ob Home Assistant am konfigurierten Port läuft.</string>
+    <string name="ha_transport_unreachable">Es gibt keine Netzwerkroute zu Home Assistant. Prüfe das Netzwerk des Panels und die Adressfamilien-Einstellungen.</string>
+    <string name="ha_transport_http_status">Home Assistant oder ein Proxy hat statt seiner Konfiguration einen HTTP-Fehler zurückgegeben.</string>
+    <string name="ha_transport_protocol">Die Antwort enthielt keine gültigen Home Assistant-Konfigurationsdaten. Prüfe, ob ein Proxy oder Captive Portal vorgeschaltet ist.</string>
+    <string name="ha_transport_unknown">Die Verbindung ist aus einem Grund fehlgeschlagen, den das Panel nicht klassifizieren konnte.</string>
     <string name="ha_sign_in_page_failed">Die Home Assistant-Anmeldeseite konnte nicht geladen werden</string>
     <string name="ha_sign_in_page_failed_detail">„Konfigurieren“ öffnet die Einstellungen dieses Panels. Prüfe dort die Home Assistant-Adresse oder verwende auf derselben Seite die Browseranmeldung.</string>
     <string name="no_dashboard_title">Dieses Konto hat kein Dashboard, das geöffnet werden kann</string>
@@ -220,7 +241,7 @@
     <string name="guard_db_unsupported">Der installierte Helfer kann diese Wiederherstellung nicht ausführen. Die Wiederherstellung wird angehalten.</string>
     <string name="no_pending_physical_approval">Keine ausstehende physische Bestätigung.</string>
     <string name="pending_physical_approval">Ausstehende physische Bestätigung</string>
-    <string name="approval_exact_detail">%1$s\n\nExakte Anfrage von %2$s. Die Bestätigung gilt einmalig und läuft ab.</string>
+    <string name="approval_exact_detail">Prüfe die Aktion und die genauen Anfrageinformationen, bevor du sie bestätigst.\n\nAnfrageinformationen (Englisch):\n%1$s\n\nExakte Anfrage von %2$s. Die Bestätigung gilt einmalig und läuft ab.</string>
 
     <string name="shizuku_enable">Aktivieren</string>
     <string name="shizuku_request_permission">Berechtigung anfordern</string>

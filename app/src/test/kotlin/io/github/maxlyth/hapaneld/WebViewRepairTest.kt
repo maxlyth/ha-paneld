@@ -123,11 +123,11 @@ class WebViewRepairTest {
     private class Lane {
         var running = false
         var starts = 0
-        fun start(): Boolean {
-            if (running) return false
+        fun start(): Long? {
+            if (running) return null
             running = true
             starts++
-            return true
+            return starts.toLong()
         }
     }
 
@@ -136,7 +136,14 @@ class WebViewRepairTest {
         WebViewRepairRuntime.attach(
             capability = { capable },
             start = lane::start,
-            progress = { WebViewRepairProgress(running = lane.running, message = "") },
+            progress = {
+                WebViewRepairProgress(
+                    running = lane.running,
+                    message = "",
+                    generation = lane.starts.toLong(),
+                    component = if (lane.starts > 0) "System WebView" else "",
+                )
+            },
         )
         assertEquals(WebViewRepairRequest.STARTED, WebViewRepairRuntime.request())
         // Every later tap while it runs — an impatient second press, or a screen redrawn mid-install
@@ -160,7 +167,14 @@ class WebViewRepairTest {
         WebViewRepairRuntime.attach(
             capability = { capable },
             start = lane::start,
-            progress = { WebViewRepairProgress(running = lane.running, message = "") },
+            progress = {
+                WebViewRepairProgress(
+                    running = lane.running,
+                    message = "",
+                    generation = lane.starts.toLong(),
+                    component = if (lane.starts > 0) "System WebView" else "",
+                )
+            },
         )
         assertEquals(capable, WebViewRepairRuntime.capability())
         WebViewRepairRuntime.detach()
@@ -177,20 +191,62 @@ class WebViewRepairTest {
         WebViewRepairRuntime.attach(
             capability = { capable },
             start = lane::start,
-            progress = { WebViewRepairProgress(running = lane.running, message = message) },
+            progress = {
+                WebViewRepairProgress(
+                    running = lane.running,
+                    message = message,
+                    generation = lane.starts.toLong(),
+                    component = if (lane.starts > 0) "System WebView" else "",
+                )
+            },
         )
         assertEquals(WebViewRepairProgress(false, ""), WebViewRepairRuntime.progress())
         WebViewRepairRuntime.request()
         message = "downloading"
-        assertEquals(WebViewRepairProgress(true, "downloading"), WebViewRepairRuntime.progress())
+        assertEquals(
+            WebViewRepairProgress(true, "downloading", generation = 1L, component = "System WebView"),
+            WebViewRepairRuntime.progress(),
+        )
         lane.running = false
         message = "error: no permitted installer"
         // The end of an install that changed nothing. A success never arrives here, because installing an
         // engine restarts the process that would have read it.
         assertEquals(
-            WebViewRepairProgress(false, "error: no permitted installer"),
+            WebViewRepairProgress(
+                false,
+                "error: no permitted installer",
+                generation = 1L,
+                component = "System WebView",
+            ),
             WebViewRepairRuntime.progress(),
         )
+    }
+
+    @Test fun `progress from a successor install cannot become this repair result`() {
+        var progress = WebViewRepairProgress(
+            running = true,
+            message = "Working…",
+            generation = 41L,
+            component = "System WebView",
+        )
+        WebViewRepairRuntime.attach(
+            capability = { capable },
+            start = {
+                // A fast terminal result has already released the lane and a foreign operation has
+                // claimed it before control returns. The admitted generation, not this new snapshot,
+                // is the only identity request() may retain.
+                progress = WebViewRepairProgress(
+                    running = false,
+                    message = "foreign terminal detail",
+                    generation = 42L,
+                    component = "HA Companion",
+                )
+                41L
+            },
+            progress = { progress },
+        )
+        assertEquals(WebViewRepairRequest.STARTED, WebViewRepairRuntime.request())
+        assertEquals(WebViewRepairProgress(false, ""), WebViewRepairRuntime.progress())
     }
 
     @Test fun `a capability that changes while the panel waits is seen on the next read`() {
@@ -200,7 +256,7 @@ class WebViewRepairTest {
         var current: WebViewRepairCapability? = null
         WebViewRepairRuntime.attach(
             capability = { current },
-            start = { false },
+            start = { null },
             progress = { WebViewRepairProgress(false, "") },
         )
         assertEquals(

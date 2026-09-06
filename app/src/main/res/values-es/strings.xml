@@ -40,8 +40,8 @@
     <string name="pending_approvals">Aprobaciones pendientes</string>
     <string name="no_pending_requests">No hay solicitudes pendientes.</string>
     <string name="approve_one_request">Aprobar una solicitud</string>
-    <string name="approval_list_item">%1$s\n%2$s\nDe %3$s</string>
-    <string name="approval_request_detail">%1$s\n\nSolicitud de %2$s. La aprobación caduca y solo puede usarse una vez.</string>
+    <string name="approval_list_item">%1$s\nDatos de la solicitud (en inglés): %2$s\nDe %3$s</string>
+    <string name="approval_request_detail">Revisa la acción y los datos exactos de la solicitud antes de aprobarla.\n\nDatos de la solicitud (en inglés):\n%1$s\n\nSolicitud de %2$s. La aprobación caduca y solo puede usarse una vez.</string>
     <string name="approval_op_apk_install">Instalar el APK cargado</string>
     <string name="approval_op_apk_fetch">Descargar un APK desde un enlace</string>
     <string name="approval_op_backup_export">Exportar la copia de seguridad del panel</string>
@@ -128,6 +128,17 @@
     <string name="web_view_repair_needs_privilege">Este panel tiene una versión verificada, pero no tiene permiso para instalarla, por lo que tendrás que hacerlo manualmente. Actualízala y toca Reintentar.</string>
     <string name="web_view_repair_no_build">No se incluye ninguna versión verificada para este panel, por lo que tendrás que actualizar el visor web manualmente. Reinstalar la misma versión repara una instalación dañada. Después, toca Reintentar.</string>
     <string name="web_view_repair_managed_elsewhere">Este panel obtiene Android System WebView de una tienda, que lo sustituirá de forma más segura. Actualízalo allí y toca Reintentar.</string>
+    <string name="web_view_repair_no_change">El instalador no realizó ningún cambio. Abre Instalar para revisar la versión disponible de System WebView y vuelve a intentarlo.</string>
+    <string name="web_view_repair_no_install_route">Este panel no tiene permiso para instalar System WebView en este momento. Abre Instalar y configura un método de instalación permitido.</string>
+    <string name="web_view_repair_download_failed">La descarga de System WebView no se completó. Comprueba la conexión de red y vuelve a intentarlo.</string>
+    <string name="web_view_repair_download_too_large">La descarga de System WebView supera el límite de seguridad del panel. Abre Instalar para revisar el paquete disponible.</string>
+    <string name="web_view_repair_retryable">Un problema temporal detuvo la actualización de System WebView antes de cambiar el panel. Vuelve a intentarlo.</string>
+    <string name="web_view_repair_storage_failed">No hay suficiente almacenamiento utilizable para preparar System WebView. Libera espacio y vuelve a intentarlo.</string>
+    <string name="web_view_repair_staging_failed">No se pudo preparar el paquete de System WebView de forma segura. Abre Instalar para revisar el fallo antes de volver a intentarlo.</string>
+    <string name="web_view_repair_deferred">La actualización está esperando a que la base de datos del panel sea segura para esta operación. Vuelve a intentarlo cuando termine el mantenimiento.</string>
+    <string name="web_view_repair_rejected">Android rechazó la instalación de System WebView. Abre Instalar para revisar el fallo; repetir el mismo intento podría no servir.</string>
+    <string name="web_view_repair_cancelled">La actualización de System WebView se canceló antes de cambiar el panel. Vuelve a intentarlo cuando el panel esté listo.</string>
+    <string name="web_view_repair_failure_detail">%1$s\n\nDatos de diagnóstico (en inglés):\n%2$s</string>
     <string name="update_web_viewer">Actualizar el visor web</string>
     <string name="installing">Instalando…</string>
     <string name="downloading_installing">Descargando e instalando. En una red lenta, esto tarda unos minutos.</string>
@@ -149,7 +160,17 @@
     <string name="ha_sign_in_needed_qr">No se puede cargar nada hasta que el panel tenga un inicio de sesión de Home Assistant. Escanea esto para iniciar sesión desde un teléfono:</string>
     <string name="ha_sign_in_rejected_qr">El inicio de sesión guardado dejó de funcionar. Escanea esto para volver a iniciar sesión desde un teléfono:</string>
     <string name="cannot_reach_ha">El panel no puede acceder a Home Assistant</string>
-    <string name="cannot_reach_ha_detail">El panel no pudo leer la versión de Home Assistant, por lo que no ha abierto un panel de control. Comprueba que Home Assistant esté en ejecución y que este panel esté conectado a la red. El panel sigue intentándolo. %1$s</string>
+    <string name="cannot_reach_ha_detail">El panel no pudo leer la versión de Home Assistant, por lo que no ha abierto un panel de control. Comprueba que Home Assistant esté en ejecución y que este panel esté conectado a la red. El panel sigue intentándolo.\n\nMotivo: %1$s\n\nDatos de diagnóstico sin traducir:\n%2$s</string>
+    <string name="ha_transport_not_ready">La conexión con Home Assistant todavía no está lista.</string>
+    <string name="ha_transport_tls_trust">No se pudo confiar en el certificado del servidor. Comprueba su cadena de certificados y el reloj del panel.</string>
+    <string name="ha_transport_tls_other">Falló la conexión segura. Comprueba la configuración TLS del servidor.</string>
+    <string name="ha_transport_dns">No se pudo resolver el nombre de host de Home Assistant. Comprueba el DNS y la dirección configurada.</string>
+    <string name="ha_transport_timeout">La conexión agotó el tiempo de espera. Comprueba el enrutamiento, la red Wi-Fi y si Home Assistant responde.</string>
+    <string name="ha_transport_refused">El host rechazó la conexión. Comprueba que Home Assistant esté funcionando en el puerto configurado.</string>
+    <string name="ha_transport_unreachable">La red no tiene una ruta hacia Home Assistant. Comprueba la red del panel y la configuración de la familia de direcciones.</string>
+    <string name="ha_transport_http_status">Home Assistant o un proxy devolvió un error HTTP en lugar de su configuración.</string>
+    <string name="ha_transport_protocol">La respuesta no contenía datos de configuración válidos de Home Assistant. Comprueba si hay un proxy o un portal cautivo.</string>
+    <string name="ha_transport_unknown">La conexión falló por un motivo que el panel no pudo clasificar.</string>
     <string name="ha_sign_in_page_failed">La página de inicio de sesión de Home Assistant no se pudo cargar</string>
     <string name="ha_sign_in_page_failed_detail">Configurar abre la configuración de este panel. Comprueba allí la dirección de Home Assistant o usa Inicio de sesión en el navegador en la misma página.</string>
     <string name="no_dashboard_title">Esta cuenta no tiene ningún panel de control que abrir</string>
@@ -220,7 +241,7 @@
     <string name="guard_db_unsupported">El asistente instalado no puede ejecutar esta recuperación. La recuperación está detenida.</string>
     <string name="no_pending_physical_approval">No hay ninguna aprobación física pendiente.</string>
     <string name="pending_physical_approval">Aprobación física pendiente</string>
-    <string name="approval_exact_detail">%1$s\n\nSolicitud exacta de %2$s. La aprobación solo puede usarse una vez y caduca.</string>
+    <string name="approval_exact_detail">Revisa la acción y los datos exactos de la solicitud antes de aprobarla.\n\nDatos de la solicitud (en inglés):\n%1$s\n\nSolicitud exacta de %2$s. La aprobación solo puede usarse una vez y caduca.</string>
 
     <string name="shizuku_enable">Habilitar</string>
     <string name="shizuku_request_permission">Solicitar permiso</string>

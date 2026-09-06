@@ -145,7 +145,12 @@ class GuardDbMaintenanceActivity : AppCompatActivity() {
             approvals.addView(Button(this).apply {
                 isAllCaps = false
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                text = getString(R.string.approval_list_item, localizedLabel(approval.operation), approval.summary, approval.peer)
+                text = getString(
+                    R.string.approval_list_item,
+                    localizedLabel(approval.operation),
+                    approval.summary,
+                    approval.peer,
+                )
                 setOnClickListener { confirm(approval) }
             })
         }

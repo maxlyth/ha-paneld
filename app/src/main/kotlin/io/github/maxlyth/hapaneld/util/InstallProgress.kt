@@ -38,6 +38,14 @@ object InstallProgress {
         val rollback: ComponentResult? = null,
     )
 
+    data class PresentationSnapshot(
+        val generation: Long,
+        val running: Boolean,
+        val component: String,
+        val message: String,
+        val presentation: InstallPresentation?,
+    )
+
     @Volatile var running: Boolean = false; private set
     @Volatile var component: String = ""; private set
     @Volatile var message: String = ""; private set
@@ -105,6 +113,11 @@ object InstallProgress {
     /** Verify an explicitly threaded operation ticket without exposing the current owner. */
     @Synchronized
     fun owns(ticket: Ticket): Boolean = running && active == ticket
+
+    /** One coherent progress read so native consumers cannot pair one operation's prose with another's metadata. */
+    @Synchronized
+    fun presentationSnapshot(): PresentationSnapshot =
+        PresentationSnapshot(generation, running, component, message, presentation)
 
     /** Record [result] only if [ticket] still owns the single progress slot. */
     @Synchronized

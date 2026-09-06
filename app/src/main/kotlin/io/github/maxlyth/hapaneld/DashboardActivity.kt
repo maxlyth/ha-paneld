@@ -2454,6 +2454,34 @@ class DashboardActivity : AppCompatActivity() {
         note?.text = reason
     }
 
+    private fun localizedHaUnavailableDetail(blocked: DashboardV2ProbeResult.Unavailable): String =
+        getString(
+            R.string.cannot_reach_ha_detail,
+            localizedHaTransportFault(blocked.evidence.fault),
+            blocked.detail,
+        )
+
+    private fun localizedWebViewRepairFailure(progress: WebViewRepairProgress): String {
+        val explanation = when (webViewRepairFailureKind(progress)) {
+            WebViewRepairFailureKind.NO_RECOMMENDATION -> getString(R.string.web_view_repair_no_build)
+            WebViewRepairFailureKind.NO_CHANGE -> getString(R.string.web_view_repair_no_change)
+            WebViewRepairFailureKind.NO_INSTALL_ROUTE -> getString(R.string.web_view_repair_no_install_route)
+            WebViewRepairFailureKind.DOWNLOAD -> getString(R.string.web_view_repair_download_failed)
+            WebViewRepairFailureKind.DOWNLOAD_TOO_LARGE -> getString(R.string.web_view_repair_download_too_large)
+            WebViewRepairFailureKind.RETRYABLE -> getString(R.string.web_view_repair_retryable)
+            WebViewRepairFailureKind.STORAGE -> getString(R.string.web_view_repair_storage_failed)
+            WebViewRepairFailureKind.STAGING -> getString(R.string.web_view_repair_staging_failed)
+            WebViewRepairFailureKind.DEFERRED -> getString(R.string.web_view_repair_deferred)
+            WebViewRepairFailureKind.REJECTED -> getString(R.string.web_view_repair_rejected)
+            WebViewRepairFailureKind.CANCELLED -> getString(R.string.web_view_repair_cancelled)
+            null -> return progress.message.takeIf { it.isNotBlank() }
+                ?: getString(R.string.update_stopped_unknown)
+        }
+        return progress.message.takeIf { it.isNotBlank() }
+            ?.let { getString(R.string.web_view_repair_failure_detail, explanation, it) }
+            ?: explanation
+    }
+
     /**
      * Follow the running install and retitle the note as it goes.
      *
@@ -2483,8 +2511,7 @@ class DashboardActivity : AppCompatActivity() {
             releaseWebViewRepair(
                 button,
                 note,
-                progress.message.takeIf { it.isNotBlank() }
-                    ?: getString(R.string.update_stopped_unknown),
+                localizedWebViewRepairFailure(progress),
             )
         }, WEB_VIEW_REPAIR_POLL_MS)
     }
@@ -2639,7 +2666,7 @@ class DashboardActivity : AppCompatActivity() {
                     }
                     is DashboardV2ProbeResult.Unavailable -> showBlockedAdmissionScreen(
                         getString(R.string.cannot_reach_ha),
-                        getString(R.string.cannot_reach_ha_detail, blocked.detail),
+                        localizedHaUnavailableDetail(blocked),
                         AdmissionOutcome.TRANSPORT_FAILED,
                         blocked.evidence,
                     )

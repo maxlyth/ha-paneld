@@ -264,7 +264,9 @@ class ConfigActivity : AppCompatActivity() {
                 .setPositiveButton(R.string.ok, null).show()
             return
         }
-        val labels = pending.map { getString(R.string.approval_list_item, localizedLabel(it.operation), it.summary, it.peer) }.toTypedArray()
+        val labels = pending.map {
+            getString(R.string.approval_list_item, localizedLabel(it.operation), it.summary, it.peer)
+        }.toTypedArray()
         AlertDialog.Builder(this)
             .setTitle(R.string.approve_one_request)
             .setItems(labels) { _, which -> confirmApproval(pending[which]) }

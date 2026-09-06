@@ -42,8 +42,8 @@
     <string name="pending_approvals">Pending approvals</string>
     <string name="no_pending_requests">There are no pending requests.</string>
     <string name="approve_one_request">Approve one request</string>
-    <string name="approval_list_item">%1$s\n%2$s\nFrom %3$s</string>
-    <string name="approval_request_detail">%1$s\n\nRequest from %2$s. Approval expires and can be used once.</string>
+    <string name="approval_list_item">%1$s\nRequest details (English): %2$s\nFrom %3$s</string>
+    <string name="approval_request_detail">Review the action and the exact request evidence before approving it.\n\nRequest details (English):\n%1$s\n\nRequest from %2$s. Approval expires and can be used once.</string>
     <string name="approval_op_apk_install">Install uploaded APK</string>
     <string name="approval_op_apk_fetch">Download an APK from a link</string>
     <string name="approval_op_backup_export">Export panel backup</string>
@@ -130,6 +130,17 @@
     <string name="web_view_repair_needs_privilege">This panel has a known-good version but is not allowed to install it, so this one has to be done by hand. Update it, then tap Retry.</string>
     <string name="web_view_repair_no_build">No known-good version is bundled for this panel, so this one has to be updated by hand. Reinstalling the same version repairs a damaged one. Tap Retry afterwards.</string>
     <string name="web_view_repair_managed_elsewhere">This panel gets its Android System WebView from a store, which will replace it more safely than this would. Update it there, then tap Retry.</string>
+    <string name="web_view_repair_no_change">The installer made no change. Open Install to review the available System WebView version, then try again.</string>
+    <string name="web_view_repair_no_install_route">This panel does not currently have permission to install System WebView. Open Install to set up a permitted installation method.</string>
+    <string name="web_view_repair_download_failed">The System WebView download did not complete. Check the network connection, then try again.</string>
+    <string name="web_view_repair_download_too_large">The System WebView download is larger than the panel’s safety limit. Open Install to review the available package.</string>
+    <string name="web_view_repair_retryable">A temporary problem stopped the System WebView update before it changed the panel. Try again.</string>
+    <string name="web_view_repair_storage_failed">There is not enough usable storage to stage System WebView. Free some space, then try again.</string>
+    <string name="web_view_repair_staging_failed">The System WebView package could not be prepared safely. Open Install to review the failure before trying again.</string>
+    <string name="web_view_repair_deferred">The update is waiting for the panel database to become safe for this operation. Try again after maintenance finishes.</string>
+    <string name="web_view_repair_rejected">Android rejected the System WebView installation. Open Install to review the failure; repeating the same attempt may not help.</string>
+    <string name="web_view_repair_cancelled">The System WebView update was cancelled before it changed the panel. Try again when the panel is ready.</string>
+    <string name="web_view_repair_failure_detail">%1$s\n\nDiagnostic details (English):\n%2$s</string>
     <string name="update_web_viewer">Update the web viewer</string>
     <string name="installing">Installing…</string>
     <string name="downloading_installing">Downloading and installing. On a slow network this takes a few minutes.</string>
@@ -151,7 +162,17 @@
     <string name="ha_sign_in_needed_qr">Nothing can load until the panel has a Home Assistant login. Scan this to sign in from a phone:</string>
     <string name="ha_sign_in_rejected_qr">The saved sign-in stopped working. Scan this to sign in again from a phone:</string>
     <string name="cannot_reach_ha">The panel cannot reach Home Assistant</string>
-    <string name="cannot_reach_ha_detail">The panel could not read the Home Assistant version, so it has not opened a dashboard. Check that Home Assistant is running and that this panel is on the network. The panel keeps trying. %1$s</string>
+    <string name="cannot_reach_ha_detail">The panel could not read the Home Assistant version, so it has not opened a dashboard. Check that Home Assistant is running and that this panel is on the network. The panel keeps trying.\n\nReason: %1$s\n\nUntranslated diagnostic details:\n%2$s</string>
+    <string name="ha_transport_not_ready">The Home Assistant connection is not ready yet.</string>
+    <string name="ha_transport_tls_trust">The server certificate could not be trusted. Check its certificate chain and the panel clock.</string>
+    <string name="ha_transport_tls_other">The secure connection failed. Check the server’s TLS configuration.</string>
+    <string name="ha_transport_dns">The Home Assistant host name could not be resolved. Check DNS and the configured address.</string>
+    <string name="ha_transport_timeout">The connection timed out. Check routing, Wi-Fi, and whether Home Assistant responds.</string>
+    <string name="ha_transport_refused">The host refused the connection. Check that Home Assistant is running on the configured port.</string>
+    <string name="ha_transport_unreachable">The network has no route to Home Assistant. Check the panel’s network and address-family settings.</string>
+    <string name="ha_transport_http_status">Home Assistant or a proxy returned an HTTP error instead of its configuration.</string>
+    <string name="ha_transport_protocol">The response was not valid Home Assistant configuration data. Check for a proxy or captive portal.</string>
+    <string name="ha_transport_unknown">The connection failed for a reason the panel could not classify.</string>
     <string name="ha_sign_in_page_failed">The Home Assistant sign-in page would not load</string>
     <string name="ha_sign_in_page_failed_detail">Configure opens this panel’s settings. Check the Home Assistant address there, or use Browser sign-in on the same page.</string>
     <string name="no_dashboard_title">This account has no dashboard to open</string>
@@ -223,7 +244,7 @@
     <string name="guard_db_unsupported">Installed helper cannot run this recovery. Recovery is held.</string>
     <string name="no_pending_physical_approval">No pending physical approval.</string>
     <string name="pending_physical_approval">Pending physical approval</string>
-    <string name="approval_exact_detail">%1$s\n\nExact request from %2$s. Approval is one-shot and expires.</string>
+    <string name="approval_exact_detail">Review the action and the exact request evidence before approving it.\n\nRequest details (English):\n%1$s\n\nExact request from %2$s. Approval is one-shot and expires.</string>
 
     <string name="shizuku_enable">Enable</string>
     <string name="shizuku_request_permission">Request permission</string>

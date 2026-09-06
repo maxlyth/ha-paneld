@@ -2758,11 +2758,13 @@ class PaneldService : Service() {
         logLabel: String,
         operation: suspend () -> InstallOperationResult,
         after: suspend (String) -> Unit = {},
+        onStarted: (InstallProgress.Ticket) -> Unit = {},
     ): Boolean {
         val progress = InstallProgress.start(
             component,
             InstallPresentation("operation-working", mapOf("owner" to owner)),
         ) ?: return false
+        onStarted(progress)
         val job = scope.launch { completeOperation(progress, logLabel, operation, after) }
         // A cancelled job can complete before its body starts, so the body's finally is not sufficient.
         InstallProgress.finishOnFailure(progress, job)
@@ -3043,7 +3045,12 @@ class PaneldService : Service() {
     /** Install/update a managed component from the Install tab (POST /api/v1/install/component). Runs
      *  off-thread; progress is reported via InstallProgress so the web UI can poll. action="reinstall"
      *  forces even when the installed build is already current. Single-slot (InstallProgress.start gates). */
-    private fun installComponent(name: String, action: String, version: String): Boolean {
+    private fun installComponent(
+        name: String,
+        action: String,
+        version: String,
+        onStarted: (InstallProgress.Ticket) -> Unit = {},
+    ): Boolean {
         val label = when (name) {
             "paneld" -> "ha-paneld"; "companion" -> "HA Companion"; "webview" -> "System WebView"; else -> name
         }
@@ -3095,6 +3102,7 @@ class PaneldService : Service() {
                     )
                 }
             },
+            onStarted = onStarted,
         )
     }
 
@@ -4593,13 +4601,22 @@ class PaneldService : Service() {
             capability = { webViewRepairCapability },
             // Once activation has requested the process boundary, no new destructive work may enter
             // the process that is being torn down, even if the progress slot has just gone terminal.
-            start = {
-                !teardownBoundary.isStopping && installComponent("webview", "reinstall", "")
+            start = start@{
+                if (teardownBoundary.isStopping) return@start null
+                var generation: Long? = null
+                val accepted = installComponent("webview", "reinstall", "") { ticket ->
+                    generation = ticket.id
+                }
+                if (accepted) generation else null
             },
             progress = {
+                val snapshot = InstallProgress.presentationSnapshot()
                 WebViewRepairProgress(
-                    running = InstallProgress.running,
-                    message = InstallProgress.message,
+                    generation = snapshot.generation,
+                    running = snapshot.running,
+                    component = snapshot.component,
+                    message = snapshot.message,
+                    presentation = snapshot.presentation,
                 )
             },
         )

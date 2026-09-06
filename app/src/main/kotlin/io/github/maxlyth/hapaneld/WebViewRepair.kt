@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.util.InstallPresentation
+
 /**
  * Whether the panel can repair its own Android System WebView, and what to say when it cannot.
  *
@@ -112,7 +114,49 @@ internal data class WebViewRepairProgress(
     val running: Boolean,
     /** The installer's own last word. Empty until it says something. */
     val message: String,
+    /** Closed presentation metadata selected by the same producer as [message]. */
+    val presentation: InstallPresentation? = null,
+    /** Shared-lane identity captured atomically with the presentation. */
+    val generation: Long = 0L,
+    val component: String = "",
 )
+
+internal enum class WebViewRepairFailureKind {
+    NO_RECOMMENDATION,
+    NO_CHANGE,
+    NO_INSTALL_ROUTE,
+    DOWNLOAD,
+    DOWNLOAD_TOO_LARGE,
+    RETRYABLE,
+    STORAGE,
+    STAGING,
+    DEFERRED,
+    REJECTED,
+    CANCELLED,
+}
+
+/** Translate only finite producer-owned outcomes. Unknown metadata deliberately preserves legacy prose. */
+internal fun webViewRepairFailureKind(progress: WebViewRepairProgress): WebViewRepairFailureKind? {
+    if (progress.component != WEB_VIEW_INSTALL_COMPONENT) return null
+    val presentation = progress.presentation ?: return null
+    if (presentation.params["component"]?.let { it != "webview" } == true) return null
+    return when (presentation.code) {
+        "managed-no-recommendation" -> WebViewRepairFailureKind.NO_RECOMMENDATION
+        "managed-up-to-date", "managed-no-newer" -> WebViewRepairFailureKind.NO_CHANGE
+        "install-no-permitted-route" -> WebViewRepairFailureKind.NO_INSTALL_ROUTE
+        "install-download-failed" -> WebViewRepairFailureKind.DOWNLOAD
+        "install-download-too-large" -> WebViewRepairFailureKind.DOWNLOAD_TOO_LARGE
+        "install-retryable-failure" -> WebViewRepairFailureKind.RETRYABLE
+        "install-insufficient-storage" -> WebViewRepairFailureKind.STORAGE
+        "install-staging-failed" -> WebViewRepairFailureKind.STAGING
+        "install-deferred-saving-state", "install-guard-db-owned" -> WebViewRepairFailureKind.DEFERRED
+        "install-durable-rejection" -> WebViewRepairFailureKind.REJECTED
+        "operation-cancelled" -> WebViewRepairFailureKind.CANCELLED
+        else -> null
+    }
+}
+
+private const val WEB_VIEW_INSTALL_COMPONENT = "System WebView"
 
 /**
  * How a blocked screen reaches the repair.
@@ -126,35 +170,44 @@ internal object WebViewRepairRuntime {
     /** Supplies the capability answer; null when nothing is attached. */
     @Volatile private var capabilitySource: (() -> WebViewRepairCapability?)? = null
 
-    /** Starts the repair, answering whether it took the lane. */
-    @Volatile private var starter: (() -> Boolean)? = null
+    /** Starts the repair, returning the exact admitted shared-lane generation. */
+    @Volatile private var starter: (() -> Long?)? = null
 
     /** Reports the running install; the installer's single slot is the authority, not a copy of it. */
     @Volatile private var progressSource: (() -> WebViewRepairProgress)? = null
+    @Volatile private var requestedGeneration: Long? = null
 
     @Synchronized fun attach(
         capability: () -> WebViewRepairCapability?,
-        start: () -> Boolean,
+        start: () -> Long?,
         progress: () -> WebViewRepairProgress,
     ) {
         capabilitySource = capability
         starter = start
         progressSource = progress
+        requestedGeneration = null
     }
 
     @Synchronized fun detach() {
         capabilitySource = null
         starter = null
         progressSource = null
+        requestedGeneration = null
     }
 
     fun capability(): WebViewRepairCapability? = capabilitySource?.invoke()
 
     fun request(): WebViewRepairRequest {
         val start = starter ?: return WebViewRepairRequest.UNAVAILABLE
-        return if (start()) WebViewRepairRequest.STARTED else WebViewRepairRequest.BUSY
+        val generation = start() ?: return WebViewRepairRequest.BUSY
+        requestedGeneration = generation
+        return WebViewRepairRequest.STARTED
     }
 
-    fun progress(): WebViewRepairProgress =
-        progressSource?.invoke() ?: WebViewRepairProgress(running = false, message = "")
+    fun progress(): WebViewRepairProgress {
+        val current = progressSource?.invoke() ?: return WebViewRepairProgress(running = false, message = "")
+        val expected = requestedGeneration
+        return if (expected == null || current.generation == expected) current
+        else WebViewRepairProgress(running = false, message = "")
+    }
 }

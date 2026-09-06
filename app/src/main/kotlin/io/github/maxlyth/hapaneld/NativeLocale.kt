@@ -8,6 +8,7 @@ import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
+import io.github.maxlyth.hapaneld.util.HaTransportFault
 import java.util.Locale
 
 /** Keep native Android resources on the same explicit language selected for ha-paneld's web UI. */
@@ -80,3 +81,22 @@ internal fun Context.localizedLabel(operation: SensitiveOperation): String = get
         SensitiveOperation.CAMERA_ENABLE -> R.string.approval_op_camera_enable
     },
 )
+
+/** A closed transport classification becomes user guidance; opaque platform text remains evidence. */
+internal fun Context.localizedHaTransportFault(fault: HaTransportFault): String =
+    getString(haTransportFaultResource(fault))
+
+@StringRes
+internal fun haTransportFaultResource(fault: HaTransportFault): Int =
+    when (fault) {
+        HaTransportFault.NONE -> R.string.ha_transport_not_ready
+        HaTransportFault.TLS_TRUST -> R.string.ha_transport_tls_trust
+        HaTransportFault.TLS_OTHER -> R.string.ha_transport_tls_other
+        HaTransportFault.DNS -> R.string.ha_transport_dns
+        HaTransportFault.TIMEOUT -> R.string.ha_transport_timeout
+        HaTransportFault.REFUSED -> R.string.ha_transport_refused
+        HaTransportFault.UNREACHABLE -> R.string.ha_transport_unreachable
+        HaTransportFault.HTTP_STATUS -> R.string.ha_transport_http_status
+        HaTransportFault.PROTOCOL -> R.string.ha_transport_protocol
+        HaTransportFault.UNKNOWN -> R.string.ha_transport_unknown
+    }
