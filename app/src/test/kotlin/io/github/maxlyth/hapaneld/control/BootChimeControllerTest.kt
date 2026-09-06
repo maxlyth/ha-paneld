@@ -229,6 +229,35 @@ class BootChimeControllerTest {
         assertEquals(prior, store.state)
     }
 
+    @Test fun `an unappliable OFF keeps the divergence visible instead of resolving it`() {
+        // Retiring a pending OFF was rejected because it strands divergent hardware, config and MQTT
+        // state with nothing left to say so. The controller reports the absence and changes nothing:
+        // the snapshot is retained for retry, config stays enabled, and isEnabled() — which is what the
+        // MQTT switch state publishes — still reads ON while the user's saved desired value is OFF.
+        var configured = true
+        val events = mutableListOf<String>()
+        val store = FakeBootStore(events).apply { state = prior }
+        val hardware = FakeBootHardware(prior, events, restoreOutcome = ControlApplyOutcome.UNAVAILABLE)
+        val controller = BootChimeController({ configured }, { configured = it }, store, hardware)
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, controller.apply(false))
+
+        assertTrue("config must not record a transition that did not happen", configured)
+        assertTrue("MQTT keeps publishing the panel's actual state", controller.isEnabled())
+        assertEquals("the snapshot is retained so a repaired panel can still restore", prior, store.state)
+    }
+
+    @Test fun `an unappliable ON reports the absence to a caller that can use it`() {
+        var configured = false
+        val events = mutableListOf<String>()
+        val store = FakeBootStore(events)
+        val hardware = FakeBootHardware(prior, events, silenceOutcome = ControlApplyOutcome.UNAVAILABLE)
+        val controller = BootChimeController({ configured }, { configured = it }, store, hardware)
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, controller.apply(true))
+        assertFalse("set() still reports a plain failure to its existing callers", controller.set(true))
+    }
+
     private class FakeBootStore(
         private val events: MutableList<String>,
         private val saveSucceeds: Boolean = true,
@@ -251,6 +280,9 @@ class BootChimeControllerTest {
         private val captured: BootChimeState,
         private val events: MutableList<String>,
         private val restoreSucceeds: Boolean = true,
+        /** What the hardware reported, so a test can tell "no path at all" from "failed this time". */
+        private val silenceOutcome: ControlApplyOutcome = ControlApplyOutcome.APPLIED,
+        private val restoreOutcome: ControlApplyOutcome? = null,
     ) : BootChimeHardware {
         var silenced = false
         var restored: BootChimeState? = null
@@ -260,13 +292,14 @@ class BootChimeControllerTest {
         }
         override fun silence(): ControlApplyOutcome {
             events += "silence"
-            silenced = true
-            return ControlApplyOutcome.APPLIED
+            silenced = silenceOutcome == ControlApplyOutcome.APPLIED
+            return silenceOutcome
         }
         override fun restore(state: BootChimeState): ControlApplyOutcome {
             events += "restore:$state"
             restored = state
-            return if (restoreSucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
+            return restoreOutcome
+                ?: if (restoreSucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
         }
     }
 

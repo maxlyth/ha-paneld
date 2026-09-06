@@ -8,6 +8,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootRunOutcome
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.HelperClient
 
@@ -245,14 +246,14 @@ internal class AndroidBootChimeHardware(
             .getOrNull()
         if (helperReply == "OK") return ControlApplyOutcome.APPLIED
 
-        val rootRan = runCatching { root.run(rootCommand) }
+        val rootOutcome = runCatching { root.runClassified(rootCommand) }
             .onFailure { Log.w(TAG, "root boot-chime transition failed: ${it.message}") }
-            .getOrDefault(false)
-        if (rootRan) return ControlApplyOutcome.APPLIED
+            .getOrDefault(RootRunOutcome.RAN_FAILED)
+        if (rootOutcome == RootRunOutcome.RAN_OK) return ControlApplyOutcome.APPLIED
 
-        // Root counts as structurally absent only when an exec proved there is no su binary. A root
-        // manager that exists and denied this command is a transient failure, not a missing capability.
-        val rootMissing = runCatching { root.executableMissing() }.getOrDefault(false)
+        // Root counts as structurally absent only when no root process was ever created. A root manager
+        // that ran this command and refused it is a transient failure, not a missing capability.
+        val rootMissing = rootOutcome == RootRunOutcome.NO_LAUNCH
         return if (direct == ControlApplyOutcome.UNAVAILABLE && helperReply == null && rootMissing) {
             ControlApplyOutcome.UNAVAILABLE
         } else {

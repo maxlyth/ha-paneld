@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
 import android.util.Log
+import io.github.maxlyth.hapaneld.platform.RootRunOutcome
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.BoundedStreams
 import io.github.maxlyth.hapaneld.util.Cached
@@ -85,6 +86,9 @@ object Su : RootShell {
 
     private var shell: ShellHandle? = null
     private val execFailureCache = SuExecFailureCache()
+    /** Set by any launch in the current [runClassified] call that started no child process. Reset per
+     *  call and never latched, so a refusal this boot cannot disable root for the process lifetime. */
+    @Volatile private var launchCreatedNoProcess = false
     private val oneShotLaunchGate = BoundedLaunchGate()
 
     private class ShellHandle(
@@ -144,9 +148,24 @@ object Su : RootShell {
         return oneShotOutput(cmd)
     }
 
-    /** The cache is written only by a launch that actually raised ENOENT, so this reports the one root
-     *  failure that is a property of the device rather than of the moment. */
-    override fun executableMissing(): Boolean = execFailureCache.shouldSkipExec()
+    /**
+     * Run [cmd] and report whether a root process was ever created.
+     *
+     * Deliberately NOT derived from [SuExecFailureCache]: that cache latches only the definitive
+     * missing-binary case and suppresses every later exec for the process lifetime, which is exactly
+     * why it must not learn about EACCES — a launch refused once must still be retried. This records
+     * only what this call's own launches did, and never latches.
+     */
+    @Synchronized
+    override fun runClassified(cmd: String): RootRunOutcome {
+        launchCreatedNoProcess = false
+        if (run(cmd)) return RootRunOutcome.RAN_OK
+        return if (launchCreatedNoProcess || execFailureCache.shouldSkipExec()) {
+            RootRunOutcome.NO_LAUNCH
+        } else {
+            RootRunOutcome.RAN_FAILED
+        }
+    }
 
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a
      *  one-shot — never sent into the shared persistent shell (it would take the shell down with it). */
@@ -343,8 +362,11 @@ object Su : RootShell {
     }
 
     /** Log unexpected launch failures with their stack. Returns true when `su` is definitively absent. */
-    private fun logExecFailure(operation: String, error: Exception): Boolean =
-        when (execFailureCache.record(error)) {
+    private fun logExecFailure(operation: String, error: Exception): Boolean {
+        // Runtime.exec throws only when no child was started, so reaching here at all means this launch
+        // produced no process — whether the binary is missing or this app may not execute it.
+        launchCreatedNoProcess = true
+        return when (execFailureCache.record(error)) {
             SuExecFailure.FIRST_MISSING -> {
                 Log.d(TAG, "su binary not found; root-only operations are unavailable")
                 true
@@ -355,6 +377,7 @@ object Su : RootShell {
                 false
             }
         }
+    }
 
     private fun oneShotRun(cmd: String): Boolean =
         overForms { f -> runBounded("run", argvOneShot(f, cmd)) { it.waitFor() }?.takeIf { it == 0 } } != null

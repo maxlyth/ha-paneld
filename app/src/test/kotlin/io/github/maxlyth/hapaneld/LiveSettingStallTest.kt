@@ -279,6 +279,75 @@ class LiveSettingStallTest {
         assertTrue(reloaded.copy(unavailableBoots = setOf("boot-a", "boot-b")).stalled)
     }
 
+    @Test fun `observations survive the stored form a reboot actually reads`() {
+        // The set living in memory is not what crosses a reboot; this encoding is. An entry that
+        // serialises without its boots can never accumulate the second one, and the whole mechanism
+        // would be inert on hardware while every in-memory test still passed.
+        val stored = LiveSettingAuthority.Pending(
+            value = "true",
+            previousValue = "false",
+            fence = 42L,
+            unavailableBoots = setOf("boot-a", "boot-b"),
+        )
+
+        val restored = decodeJournalEntry(encodeJournalEntry(stored))
+
+        assertEquals(stored.value, restored.value)
+        assertEquals(stored.previousValue, restored.previousValue)
+        assertEquals(stored.fence, restored.fence)
+        assertEquals(stored.generation, restored.generation)
+        assertEquals(setOf("boot-a", "boot-b"), restored.unavailableBoots)
+        assertTrue("two stored boots are still a stall after a reboot", restored.stalled)
+    }
+
+    @Test fun `a permanently unappliable value does not grow its stored entry every boot`() {
+        // Replay never stops, so without a bound the entry would gain one boot identity per reboot for
+        // the life of the panel — a journal that grows forever because the hardware never came back.
+        val journal = FakeJournal()
+        var authority = authority(journal, "boot-0")
+        authority.applyOrQueueOutcome(KEY, "true", "false") { _, _, _ -> LiveSettingApplyResult.UNAVAILABLE }
+
+        repeat(40) { boot ->
+            authority = authority(journal, "boot-$boot")
+            authority.replayWith(LiveSettingApplyResult.UNAVAILABLE)
+        }
+
+        assertEquals(
+            "evidence stops accumulating once it has answered the question",
+            LiveSettingAuthority.STALL_OBSERVATION_BOOTS,
+            journal.values.getValue(KEY).unavailableBoots.size,
+        )
+        assertEquals(setOf(KEY), authority.pendingStalledSnapshot())
+        assertEquals(mapOf(KEY to "true"), authority.pendingSnapshot())
+    }
+
+    @Test fun `an entry stored before this change decodes with no observations`() {
+        val legacy = decodeJournalEntry("""{"value":"true","generation":"g1"}""")
+        assertEquals(emptySet<String>(), legacy.unavailableBoots)
+        assertFalse(legacy.stalled)
+
+        // Older still: the journal once held the bare desired value with no JSON around it.
+        val ancient = decodeJournalEntry("true")
+        assertEquals("true", ancient.value)
+        assertEquals(emptySet<String>(), ancient.unavailableBoots)
+    }
+
+    @Test fun `boot identity is read once at construction and never under a lock`() {
+        // Rejected finding 5 against the second design was a root probe running under the authority
+        // lock. Reading the identity once, at construction, is what keeps every apply path free of I/O.
+        var reads = 0
+        val journal = FakeJournal()
+        val authority = LiveSettingAuthority(setOf(KEY), journal) { reads++; "boot-a" }
+        assertEquals("construction reads it exactly once", 1, reads)
+
+        authority.applyOrQueueOutcome(KEY, "true", "false") { _, _, _ -> LiveSettingApplyResult.UNAVAILABLE }
+        authority.replayWith(LiveSettingApplyResult.UNAVAILABLE)
+        authority.replayWith(LiveSettingApplyResult.APPLIED)
+        authority.discard(KEY)
+
+        assertEquals("no apply, replay or discard path may read it again", 1, reads)
+    }
+
     private companion object {
         const val KEY = "silence_boot_chime"
     }

@@ -20,11 +20,46 @@ internal fun kernelBootIdentity(): String? =
 private val BOOT_ID =
     Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
+/**
+ * The stored form of one journal entry. This is the only thing that carries an observation across a
+ * real reboot — an entry that encodes without its boots can never accumulate the second one — so both
+ * directions are tested rather than trusted to the storage layer.
+ */
+internal fun encodeJournalEntry(value: LiveSettingAuthority.Pending): String =
+    JSONObject().put("value", value.value).apply {
+        value.previousValue?.let { put("previous", it) }
+        value.fence?.let { put("fence", it) }
+        put("generation", value.generation)
+        if (value.unavailableBoots.isNotEmpty()) {
+            put("unavailable_boots", JSONArray(value.unavailableBoots.toList()))
+        }
+    }.toString()
+
+internal fun decodeJournalEntry(encoded: String): LiveSettingAuthority.Pending {
+    val decoded = runCatching { JSONObject(encoded) }.getOrNull()
+    // A journal written before desired/previous were separated holds the bare desired value.
+    if (decoded?.has("value") != true) return LiveSettingAuthority.Pending(encoded, null)
+    return LiveSettingAuthority.Pending(
+        decoded.getString("value"),
+        decoded.optString("previous").takeIf { decoded.has("previous") },
+        decoded.optLong("fence").takeIf { decoded.has("fence") },
+        decoded.optString("generation").takeIf(String::isNotBlank) ?: UUID.randomUUID().toString(),
+        decodeUnavailableBoots(decoded),
+    )
+}
+
+/**
+ * Boot identities are validated where they are produced, so this keeps whatever was stored rather than
+ * re-imposing a format — an entry recorded under one identity scheme must never be silently emptied by
+ * a reader that expects another, which would quietly reset a stall on every reboot. The cap only stops
+ * a corrupt file from being unbounded; nothing beyond the threshold is ever recorded in the first place.
+ */
 private fun decodeUnavailableBoots(decoded: JSONObject): Set<String> {
     val encoded = decoded.optJSONArray("unavailable_boots") ?: return emptySet()
-    return (0 until encoded.length()).mapNotNullTo(linkedSetOf()) { index ->
-        encoded.optString(index).takeIf { BOOT_ID.matches(it) }
-    }
+    return (0 until encoded.length())
+        .mapNotNull { index -> encoded.optString(index).takeIf(String::isNotBlank) }
+        .take(LiveSettingAuthority.STALL_OBSERVATION_BOOTS)
+        .toCollection(linkedSetOf())
 }
 
 internal enum class LiveSettingApplyResult {
@@ -261,6 +296,9 @@ internal class LiveSettingAuthority(
         synchronized(this) {
             val current = pending[key] ?: return
             if (current.generation != queued.generation) return
+            // Already stalled: there is nothing further to learn, and recording every later boot would
+            // grow the stored entry without bound on a panel that can never apply the value.
+            if (current.stalled) return
             if (boot in current.unavailableBoots) return
             val observed = current.copy(unavailableBoots = current.unavailableBoots + boot)
             if (journal.put(key, observed)) pending[key] = observed
@@ -362,34 +400,11 @@ internal class LiveSettingAuthority(
             val preferences = AppState.preferences(context, "live-setting-journal", JOURNAL)
             val store = object : Journal {
                 override fun load(): Map<String, Pending> = preferences.all.mapNotNull { (key, raw) ->
-                    (raw as? String)?.let { encoded ->
-                        val decoded = runCatching { JSONObject(encoded) }.getOrNull()
-                        val pending = if (decoded?.has("value") == true) {
-                            Pending(
-                                decoded.getString("value"),
-                                decoded.optString("previous").takeIf { decoded.has("previous") },
-                                decoded.optLong("fence").takeIf { decoded.has("fence") },
-                                decoded.optString("generation").takeIf(String::isNotBlank)
-                                    ?: UUID.randomUUID().toString(),
-                                decodeUnavailableBoots(decoded),
-                            )
-                        } else Pending(encoded, null) // legacy desired-only journal
-                        key to pending
-                    }
+                    (raw as? String)?.let { encoded -> key to decodeJournalEntry(encoded) }
                 }.toMap()
 
                 override fun put(key: String, value: Pending): Boolean =
-                    preferences.edit().putString(
-                        key,
-                        JSONObject().put("value", value.value).apply {
-                            value.previousValue?.let { put("previous", it) }
-                            value.fence?.let { put("fence", it) }
-                            put("generation", value.generation)
-                            if (value.unavailableBoots.isNotEmpty()) {
-                                put("unavailable_boots", JSONArray(value.unavailableBoots.toList()))
-                            }
-                        }.toString(),
-                    ).commit()
+                    preferences.edit().putString(key, encodeJournalEntry(value)).commit()
 
                 override fun remove(key: String): Boolean = preferences.edit().remove(key).commit()
             }

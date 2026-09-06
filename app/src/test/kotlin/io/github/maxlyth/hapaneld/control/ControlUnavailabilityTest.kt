@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.control
 
+import io.github.maxlyth.hapaneld.platform.RootRunOutcome
+import io.github.maxlyth.hapaneld.platform.RootShell
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -14,32 +16,50 @@ import org.junit.Test
 class ControlUnavailabilityTest {
     private val prior = BootChimeState(2, null, 7, 3, 6)
 
-    @Test fun `boot chime is unavailable only when app helper and root all report absence`() {
-        val hardware = AndroidBootChimeHardware(
-            direct = PermissionlessDirect(prior),
-            root = FakeRootShell(runResult = false, executableMissing = true),
-            daemon = FakeDaemon(),
-        )
-
-        assertEquals(ControlApplyOutcome.UNAVAILABLE, hardware.silence())
-    }
-
     @Test fun `a root manager that denied the command keeps the transition retryable`() {
-        // su exists and said no. That can succeed on the next boot, so it must never read as a panel
-        // that cannot apply the value.
+        // su ran and said no. That can succeed on the next boot, so it must never read as a panel that
+        // cannot apply the value.
         val hardware = AndroidBootChimeHardware(
             direct = PermissionlessDirect(prior),
-            root = FakeRootShell(runResult = false, executableMissing = false),
+            root = FakeRootShell(runResult = false, suLaunchable = true),
             daemon = FakeDaemon(),
         )
 
         assertEquals(ControlApplyOutcome.FAILED, hardware.silence())
     }
 
+    @Test fun `an su binary this app may not execute is an absent root path`() {
+        // The reported panel's actual state, and the case a missing-binary test would miss entirely:
+        // /system/xbin/su is present and mode 4750 root:shell, so the app's exec is refused EACCES
+        // rather than ENOENT. No root process is ever created either way, which is what NO_LAUNCH
+        // means and why the classification is not "is the file there".
+        val hardware = AndroidBootChimeHardware(
+            direct = PermissionlessDirect(prior),
+            root = FakeRootShell(runResult = false, suLaunchable = false),
+            daemon = FakeDaemon(),
+        )
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, hardware.silence())
+    }
+
+    @Test fun `the default root shell never claims a capability is absent`() {
+        // Any RootShell that has not been taught the distinction must fail safe: a fake or an older
+        // implementation reporting NO_LAUNCH by accident would stall values on no evidence at all.
+        val defaultOnly = object : RootShell {
+            override fun available() = true
+            override fun run(cmd: String) = false
+            override fun runOutput(cmd: String): String? = null
+            override fun runBytes(cmd: String): ByteArray? = null
+            override fun fireAndForget(cmd: String) = false
+        }
+
+        assertEquals(RootRunOutcome.RAN_FAILED, defaultOnly.runClassified("true"))
+    }
+
     @Test fun `a reachable helper that refused keeps the transition retryable`() {
         val hardware = AndroidBootChimeHardware(
             direct = PermissionlessDirect(prior),
-            root = FakeRootShell(runResult = false, executableMissing = true),
+            root = FakeRootShell(runResult = false, suLaunchable = false),
             daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "PARTIAL")),
         )
 
@@ -51,7 +71,7 @@ class ControlUnavailabilityTest {
         // the panel rather than of this attempt.
         val hardware = AndroidBootChimeHardware(
             direct = FailingDirect(prior),
-            root = FakeRootShell(runResult = false, executableMissing = true),
+            root = FakeRootShell(runResult = false, suLaunchable = false),
             daemon = FakeDaemon(),
         )
 
@@ -61,7 +81,7 @@ class ControlUnavailabilityTest {
     @Test fun `any working path still applies`() {
         val viaHelper = AndroidBootChimeHardware(
             direct = PermissionlessDirect(prior),
-            root = FakeRootShell(runResult = false, executableMissing = true),
+            root = FakeRootShell(runResult = false, suLaunchable = false),
             daemon = FakeDaemon(mapOf("BOOTCHIME SILENCE" to "OK")),
         )
         assertEquals(ControlApplyOutcome.APPLIED, viaHelper.silence())
