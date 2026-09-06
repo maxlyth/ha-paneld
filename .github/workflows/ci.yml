@@ -338,10 +338,13 @@ jobs:
       - name: Verify complete provisioning aggregate
         run: bash scripts/tests/provision_gate_parallel.sh --aggregate "$RUNNER_TEMP/provisioning-results"
 
-      - name: Require host shell contracts
+      - name: Require host and provisioning jobs
         env:
           HOST_RESULT: ${{ needs.host-contracts.result }}
-        run: test "$HOST_RESULT" = success
+          PROVISIONING_RESULT: ${{ needs.provisioning.result }}
+        run: |
+          test "$HOST_RESULT" = success
+          test "$PROVISIONING_RESULT" = success
 
   dependency-integrity:
     name: Dependency integrity

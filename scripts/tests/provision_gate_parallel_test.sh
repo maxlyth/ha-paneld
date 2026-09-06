@@ -250,6 +250,9 @@ if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$r
    grep -Fq 'merge-multiple: true' <<<"$aggregate_job" &&
    grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --aggregate "$RUNNER_TEMP/provisioning-results"' <<<"$aggregate_job" &&
    grep -Fq 'HOST_RESULT: ${{ needs.host-contracts.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'PROVISIONING_RESULT: ${{ needs.provisioning.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'test "$HOST_RESULT" = success' <<<"$aggregate_job" &&
+   grep -Fq 'test "$PROVISIONING_RESULT" = success' <<<"$aggregate_job" &&
    grep -Fqx '    name: Host shell contracts' <<<"$host_job"; then
   pass "CI retains every runner-level shard and preserves the Host contracts release gate"
 else
