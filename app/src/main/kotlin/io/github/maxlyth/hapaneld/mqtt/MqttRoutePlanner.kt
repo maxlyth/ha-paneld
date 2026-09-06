@@ -56,8 +56,10 @@ internal data class MqttDialRoute(
 }
 
 /**
- * Per-Hive-client route owner. Every reconnect asks DNS again. Before the first CONNACK, one network
- * failure may suppress the failed family and try its sibling. After a connection succeeds, reconnects
+ * Per-Hive-client route owner. Every reconnect asks DNS again. Under `Automatic`, each pre-CONNACK
+ * network failure suppresses the failed family and tries its sibling until one connects, so a
+ * black-holed family cannot outlive one socket-connect bound. An explicit policy keeps its single
+ * excursion and then returns to the family the user asked for. After a connection succeeds, reconnects
  * first refresh the established family; one failed pre-CONNACK retry may then suppress that family.
  * HiveMQ's existing backoff remains authoritative, and a force-IPv4 plan never emits IPv6.
  */
@@ -77,8 +79,8 @@ class MqttRoutePlanner internal constructor(
     } else {
         policy.initialPreferIpv4
     }
-    private var rapidFallbackSpent = false
     private var connectedEver = false
+    private var explicitPolicyAlternateSpent = false
     private var alternateSpentSinceConnect = false
     private var resolutionGeneration = 0L
 
@@ -103,7 +105,18 @@ class MqttRoutePlanner internal constructor(
     ): CompletableFuture<MqttDialRoute?> {
         val request = synchronized(this) {
             val current = currentRoute
-            val initialAlternate = rapidInitialFallbackAllowed && !rapidFallbackSpent && !connectedEver &&
+            // A client that has NEVER reached CONNACK alternates on every pre-CONNACK network
+            // failure. One black-holed family costs exactly one socket-connect bound per attempt, and
+            // HiveMQ's own growing backoff still paces the retries, so alternating is strictly cheaper
+            // than pinning: a single-shot budget spent on a transient failure used to leave the panel
+            // dialling a dead address family with nothing able to select its live sibling.
+            // An EXPLICIT policy keeps its existing one-excursion shape: Prefer IPv4 looks at the
+            // sibling once and then returns to the family the user asked for. Only Automatic, which
+            // has no user-stated preference to return to, alternates until something connects.
+            val explicitPolicyAllowsAlternate = policy == MqttAddressFamilyPolicy.AUTOMATIC ||
+                !explicitPolicyAlternateSpent
+            val initialAlternate = rapidInitialFallbackAllowed && !connectedEver &&
+                explicitPolicyAllowsAlternate &&
                 preConnackFailure && networkFailure && !policy.ipv4Only && current?.family != null
             val steadyAlternate = connectedEver && !alternateSpentSinceConnect && preConnackFailure &&
                 networkFailure && !policy.ipv4Only && current?.family != null
@@ -151,7 +164,12 @@ class MqttRoutePlanner internal constructor(
                     currentRoute = resolved
                     if (resolved?.family != null && resolved.family != request.fallback?.family) {
                         when (request.alternateBudget) {
-                            AlternateBudget.INITIAL -> rapidFallbackSpent = true
+                            // Unbounded under Automatic; one excursion under an explicit policy,
+                            // which then pins back to its stated family.
+                            AlternateBudget.INITIAL ->
+                                if (policy != MqttAddressFamilyPolicy.AUTOMATIC) {
+                                    explicitPolicyAlternateSpent = true
+                                }
                             AlternateBudget.STEADY -> alternateSpentSinceConnect = true
                             null -> Unit
                         }

@@ -255,8 +255,52 @@ class ConnectionSupervisorTest {
         val s = supervisor()
         assertEquals(ConnectionSupervisor.Action.None, s.tick("connecting", 0L, 0L, 60_000L, false))
         assertTrue(s.tick("connecting", 0L, 0L, 120_000L, false) is ConnectionSupervisor.Action.Rebuild)
-        assertTrue(s.tick("connecting", 0L, 0L, 420_000L, false) is ConnectionSupervisor.Action.SkipRebuild)
-        assertTrue(s.tick("unreachable", 0L, 0L, 3_720_000L, false) is ConnectionSupervisor.Action.SkipRebuild)
+        assertTrue(s.tick("connecting", 0L, 0L, 419_999L, false) is ConnectionSupervisor.Action.SkipRebuild)
+        // A never-live runtime never crosses the process boundary. It DOES keep replacing its client at
+        // the abandon cadence: this test previously asserted permanent silence here, which is exactly
+        // how a panel stayed on a black-holed address family for hours with no mechanism able to try
+        // the live sibling. Every action below must therefore be a Rebuild, never a ProcessRecovery.
+        var now = 420_000L
+        repeat(20) {
+            val action = s.tick("unreachable", 0L, 0L, now, false)
+            assertEquals(ConnectionSupervisor.Action.Rebuild("state", flipFamily = true), action)
+            s.rebuildAdmitted()
+            assertTrue(
+                "$now",
+                s.tick("unreachable", 0L, 0L, now + 60_000L, false) is
+                    ConnectionSupervisor.Action.SkipRebuild,
+            )
+            now += 300_000L
+        }
+    }
+
+    @Test fun `never-connected runtime keeps alternating even while a rebuild is still in flight`() {
+        val s = supervisor()
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("unreachable", 0L, 0L, 60_000L, false))
+        assertTrue(s.tick("unreachable", 0L, 0L, 120_000L, false) is ConnectionSupervisor.Action.Rebuild)
+        // A wedged owner worker must not consume the alternation; the epoch stays open until it clears.
+        assertTrue(
+            s.tick("unreachable", 0L, 0L, 420_000L, true) is ConnectionSupervisor.Action.SkipRebuild,
+        )
+        assertEquals(
+            ConnectionSupervisor.Action.Rebuild("state", flipFamily = true),
+            s.tick("unreachable", 0L, 0L, 480_000L, false),
+        )
+    }
+
+    @Test fun `a proved address family is never flipped by the never-live alternation`() {
+        val s = supervisor()
+        assertEquals(ConnectionSupervisor.Action.None, s.tick("announcing", 0L, 0L, 60_000L, false))
+        assertTrue(s.tick("announcing", 0L, 0L, 120_000L, false) is ConnectionSupervisor.Action.Rebuild)
+        s.rebuildAdmitted()
+        // CONNACK already proved this family. With no announcement boundary available the wedge waits;
+        // it must never be turned into an address-family flip, which would abandon a working route.
+        repeat(5) { tick ->
+            assertTrue(
+                s.tick("announcing", 0L, 0L, 420_000L + tick * 300_000L, false) is
+                    ConnectionSupervisor.Action.SkipRebuild,
+            )
+        }
     }
 
     @Test fun `restored family gets full grace before one bounded alternate attempt`() {
@@ -279,10 +323,16 @@ class ConnectionSupervisorTest {
             holdSelectedFamily = true,
         ))
         s.rebuildAdmitted()
+        // The restored route has now had its grace window and one alternate. A still-unreachable
+        // never-live runtime keeps alternating at the abandon cadence rather than going silent.
         assertTrue(s.tick(
-            "unreachable", 0L, 0L, 3_720_000L, false,
+            "unreachable", 0L, 0L, 480_000L, false,
             holdSelectedFamily = false,
         ) is ConnectionSupervisor.Action.SkipRebuild)
+        assertEquals(ConnectionSupervisor.Action.Rebuild("state", flipFamily = true), s.tick(
+            "unreachable", 0L, 0L, 720_000L, false,
+            holdSelectedFamily = false,
+        ))
     }
 
     @Test fun autoDiscoveryWaitIsRetriedByTheWatchdog() {
@@ -356,8 +406,20 @@ class ConnectionSupervisorTest {
         ))
         afterRestart.rebuildAdmitted()
         assertTrue(afterRestart.tick(
-            "unreachable", 0L, 0L, 3_720_000L, false,
+            "unreachable", 0L, 0L, 480_000L, false,
         ) is ConnectionSupervisor.Action.SkipRebuild)
+        // The recreated process has still never been application-ready, so it never crosses another
+        // process boundary. It does keep alternating its unproven address family at the abandon
+        // cadence: permanent silence here is what left a panel dialling a black-holed family for hours.
+        var now = 720_000L
+        repeat(10) {
+            assertEquals(
+                ConnectionSupervisor.Action.Rebuild("state", flipFamily = true),
+                afterRestart.tick("unreachable", 0L, 0L, now, false),
+            )
+            afterRestart.rebuildAdmitted()
+            now += 300_000L
+        }
     }
 
     @Test fun `fresh announcing wedge spends one durable process boundary despite transport ACKs`() {

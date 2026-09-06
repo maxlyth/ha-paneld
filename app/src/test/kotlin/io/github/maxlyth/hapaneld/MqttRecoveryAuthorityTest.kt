@@ -101,6 +101,41 @@ class MqttRecoveryAuthorityTest {
         )
     }
 
+    @Test fun `dead-family reconnect churn cannot cancel the staged alternate-family recovery`() {
+        var storedIpv4: Boolean? = null
+        val family = MqttFamilyPreference(
+            load = { null },
+            persist = { _, ipv4 -> storedIpv4 = ipv4; true },
+            clear = { true },
+        )
+        val authority = MqttRecoveryAuthority(
+            initialState = "connecting",
+            initialProgress = MqttBrokerProgress(0L, null),
+        )
+        val attempt = authority.beginConnectAttempt("connecting", null)
+        assertTrue(authority.updateAddressFamily(attempt, MqttAddressFamily.IPV6))
+        assertFalse(family.selectForConnect("tcp://broker:1883", attempt))
+
+        // The watchdog observes, then stages the alternate family for this exact attempt.
+        val observed = authority.ticket(authority.snapshot(), "tcp://broker:1883")
+        assertTrue(family.stageAlternate("tcp://broker:1883", attempt).durable)
+        assertTrue(family.preferIpv4)
+
+        // A black-holed family disconnects roughly every socket-connect bound, and each disconnect
+        // republishes lifecycle state while the owner's recovery worker is still queued. That churn is
+        // NOT recovery: it must not consume the ticket, or the staged IPv4 route is rolled back and the
+        // panel dials the same dead AAAA forever.
+        repeat(30) {
+            authority.updateLifecycle("unreachable", null, applicationReadyEver = false)
+            authority.updateLifecycle("connecting", null, applicationReadyEver = false)
+        }
+
+        assertTrue(authority.isCurrent(observed))
+        assertEquals(MqttRecoveryAuthority.Claim.CLAIMED, authority.claim(observed))
+        assertTrue(family.preferIpv4)
+        assertEquals(true, storedIpv4)
+    }
+
     @Test fun `late same-session PubAck wins against queued detach`() {
         val authority = authority("connected", 41L, readyEver = true)
         val observed = authority.ticket(authority.snapshot())

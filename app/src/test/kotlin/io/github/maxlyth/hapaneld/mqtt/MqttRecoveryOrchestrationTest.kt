@@ -113,10 +113,17 @@ class MqttRecoveryOrchestrationTest {
             assertFalse(restored.value.family.awaitingProgress)
             assertEquals(false, store.ipv4For(BROKER))
 
-            // Baseline zero retains that one alternate indefinitely instead of creating a restart/flip
-            // loop. Eventual broker progress on it proves the admitted fallback normally.
-            assertTrue(tick(afterBoundary, restored, 3_720_000L, 0L)
+            // Baseline zero never turns this into a process restart loop. The alternate is held for a
+            // full progress window, and while the family stays unproven the next window alternates
+            // again rather than going silent on a dead route. Broker progress ends the epoch normally.
+            assertTrue(tick(afterBoundary, restored, 480_000L, 0L)
                 is ConnectionSupervisor.Action.SkipRebuild)
+            val secondAlternate = tick(afterBoundary, restored, 720_000L, 0L)
+            assertEquals(ConnectionSupervisor.Action.Rebuild("state", flipFamily = true), secondAlternate)
+            restored.value.stage(secondAlternate as ConnectionSupervisor.Action.Rebuild)
+            assertTrue(restored.value.family.preferIpv4)
+            assertEquals(true, store.ipv4For(BROKER))
+            afterBoundary.rebuildAdmitted()
             restored.value.connected(lastOkMs = 3_720_001L, connectionGeneration = 81L)
             assertEquals(ConnectionSupervisor.Action.None, tick(afterBoundary, restored, 3_720_002L, 1L))
         } finally {
