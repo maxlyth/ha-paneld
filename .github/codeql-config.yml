@@ -1,0 +1,12 @@
+name: ha-paneld CodeQL configuration
+
+# The browser and layout suites under test/ build hostile documents on purpose: they inject
+# payloads such as `<img src=x onerror=...>` and a closing `</script>` and then assert that the
+# product escapes them. Scanning that fixture code reports the attack as though it were the
+# vulnerability, which is the assertion inverted. Their fixture servers likewise read only
+# allow-listed `lang` and `theme` values from a loopback URL and reach no untrusted input.
+#
+# Excluding them keeps the alert list meaningful. Everything the product actually ships, in
+# app/, helper/, scripts/ and tools/, stays in scope.
+paths-ignore:
+  - test
