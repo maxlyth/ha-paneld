@@ -11719,17 +11719,17 @@
       "text": "Actualizar WebView ahora"
     },
     "configure.enum.camera_resolution.1080p": {
-      "text": "Resolución 1080p (Full HD)",
+      "text": "1080p (Full HD)",
       "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.480p": {
-      "text": "Resolución 480p (SD)",
+      "text": "480p (SD)",
       "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.720p": {
-      "text": "Resolución 720p (HD)",
+      "text": "720p (HD)",
       "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
       "state": "machine-cross-checked"
     },
@@ -11849,7 +11849,7 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.voice_sensitivity.normal": {
-      "text": "Media",
+      "text": "Normal",
       "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
       "state": "machine-cross-checked"
     },
@@ -11884,12 +11884,12 @@
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_severe": {
-      "text": "La ruta de red a Home Assistant es muy lenta. Cada acción tiene que esperar a que responda esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
+      "text": "La ruta de red a Home Assistant es muy lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
       "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_warning": {
-      "text": "La ruta de red a Home Assistant es lenta. Cada acción tiene que esperar a que responda esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
+      "text": "La ruta de red a Home Assistant es lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
       "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
       "state": "machine-cross-checked"
     }

@@ -11719,17 +11719,17 @@
       "text": "WebView jetzt aktualisieren"
     },
     "configure.enum.camera_resolution.1080p": {
-      "text": "Auflösung 1080p (Full HD)",
+      "text": "1080p (Full HD)",
       "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.480p": {
-      "text": "Auflösung 480p (SD)",
+      "text": "480p (SD)",
       "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.720p": {
-      "text": "Auflösung 720p (HD)",
+      "text": "720p (HD)",
       "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
       "state": "machine-cross-checked"
     },
@@ -11849,7 +11849,7 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.voice_sensitivity.normal": {
-      "text": "Normalstufe",
+      "text": "Normal",
       "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
       "state": "machine-cross-checked"
     },

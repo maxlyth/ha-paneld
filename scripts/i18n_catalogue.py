@@ -52,6 +52,7 @@ TARGET_NEWLINE_RUNS = {
     "profiles.modal.delete_detail": (1, 2),
 }
 UNCHANGED_TARGET_EXCEPTIONS = {
+    ("de", "configure.enum.voice_sensitivity.normal"): "Normal",
     ("de", "configure.group.dashboard"): "Dashboard",
     ("de", "configure.group.system"): "System",
     ("de", "dashboard.camera.label.bitrate"): "Bitrate",
@@ -77,6 +78,7 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("de", "setup.progress.name"): "Name",
     ("de", "setup.progress.server"): "Server",
     ("de", "shell.nav.dashboard"): "Dashboard",
+    ("es", "configure.enum.voice_sensitivity.normal"): "Normal",
     ("es", "configure.proximity.experimental"): "experimental",
     ("es", "logs.level.error"): "Error+",
     ("es", "logs.level.info"): "Info+",

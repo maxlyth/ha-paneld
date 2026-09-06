@@ -11719,17 +11719,17 @@
       "text": "Aggiorna WebView ora"
     },
     "configure.enum.camera_resolution.1080p": {
-      "text": "Risoluzione 1080p (Full HD)",
+      "text": "1080p (Full HD)",
       "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.480p": {
-      "text": "Risoluzione 480p (SD)",
+      "text": "480p (SD)",
       "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
       "state": "machine-cross-checked"
     },
     "configure.enum.camera_resolution.720p": {
-      "text": "Risoluzione 720p (HD)",
+      "text": "720p (HD)",
       "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
       "state": "machine-cross-checked"
     },
@@ -11824,7 +11824,7 @@
       "state": "machine-cross-checked"
     },
     "configure.enum.voice_audio_source.mic": {
-      "text": "Microfono integrato",
+      "text": "Microfono",
       "sourceHash": "186352a881d0550e2da1f74e5c317770702bc2a0f9c3da69a10e27c14a217bac",
       "state": "machine-cross-checked"
     },
@@ -11884,12 +11884,12 @@
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_severe": {
-      "text": "Il percorso di rete verso Home Assistant è molto lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non è il pannello né Home Assistant a essere lento — controlla il Wi-Fi o il collegamento tra i due.",
+      "text": "Il percorso di rete verso Home Assistant è molto lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non indica che il pannello o Home Assistant siano lenti — controlla il Wi-Fi o il collegamento tra i due.",
       "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
       "state": "machine-cross-checked"
     },
     "shell.runtime.ha_network.banner_latency_warning": {
-      "text": "Il percorso di rete verso Home Assistant è lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non è il pannello né Home Assistant a essere lento — controlla il Wi-Fi o il collegamento tra i due.",
+      "text": "Il percorso di rete verso Home Assistant è lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non indica che il pannello o Home Assistant siano lenti — controlla il Wi-Fi o il collegamento tra i due.",
       "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
       "state": "machine-cross-checked"
     }
