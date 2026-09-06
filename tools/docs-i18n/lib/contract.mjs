@@ -48,6 +48,14 @@ export const PRODUCTION_DOCUMENTS = Object.freeze([
 ]);
 export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";
+export const UNCHANGED_TARGET_EXCEPTIONS_SCHEMA = 1;
+export const UNCHANGED_TARGET_EXCEPTIONS_PATH = "docs/i18n/unchanged-target-exceptions.json";
+export const UNCHANGED_TARGET_EXCEPTION_DOCUMENTS = Object.freeze([
+  "docs/hardware/README.md",
+  "docs/hardware/nspanel-pro.md",
+  "docs/hardware/tpa10.md",
+  "docs/hardware/wf1589t.md",
+]);
 export const AUTHORITY_NOTICE_VERSION = 2;
 export const AUTHORITY_NOTICE_TEMPLATES = Object.freeze({
   de:
@@ -184,6 +192,8 @@ const RECEIPT_SEGMENT_KEYS = [
   "targetSha256",
   "state",
 ];
+const UNCHANGED_TARGET_EXCEPTIONS_ROOT_KEYS = ["schema", "exceptions"];
+const UNCHANGED_TARGET_EXCEPTION_KEYS = ["locale", "document", "segmentId", "sourceSha256"];
 
 function exactKeys(value, expected, owner) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -1218,7 +1228,10 @@ function validateReceiptShape(receipt, manifest, locale) {
   }
 }
 
-export function validateLocaleReceipt(manifest, locale, receipt, { repository }) {
+export function validateLocaleReceipt(manifest, locale, receipt, { repository, unchangedTargets } = {}) {
+  if (unchangedTargets !== undefined && !Array.isArray(unchangedTargets)) {
+    throw new Error("unchangedTargets collector must be an array");
+  }
   validateSourceManifest(manifest, { repository });
   validateReceiptShape(receipt, manifest, locale);
   const items = receipt.documents.map((document, index) => {
@@ -1256,6 +1269,20 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository })
         targetSegment.maskedSource !== inventory.segments[segmentIndex].maskedSource
       ) {
         throw new Error(`${locale}: english-fallback target differs from masked English source: ${receiptSegment.segmentId}`);
+      }
+      if (
+        unchangedTargets &&
+        receiptSegment.state === PROMOTABLE_STATE &&
+        Buffer.from(targetSegment.maskedSource, "utf8").equals(
+          Buffer.from(inventory.segments[segmentIndex].maskedSource, "utf8"),
+        )
+      ) {
+        unchangedTargets.push({
+          locale,
+          document: sourceDocument.sourcePath,
+          segmentId: receiptSegment.segmentId,
+          sourceSha256: receiptSegment.sourceSha256,
+        });
       }
       return targetSegment.maskedSource;
     });
@@ -1322,6 +1349,74 @@ export function validateLocaleReceipt(manifest, locale, receipt, { repository })
     }
   }
   return receipt;
+}
+
+function unchangedTargetKey(exception) {
+  return `${exception.locale}\0${exception.document}\0${exception.segmentId}\0${exception.sourceSha256}`;
+}
+
+function unchangedTargetLabel(exception) {
+  return `${exception.locale}:${exception.document}:${exception.segmentId}:${exception.sourceSha256}`;
+}
+
+export function validateUnchangedTargetExceptions(manifest, allowlist, unchangedTargets) {
+  exactKeys(allowlist, UNCHANGED_TARGET_EXCEPTIONS_ROOT_KEYS, "unchanged-target exceptions");
+  if (allowlist.schema !== UNCHANGED_TARGET_EXCEPTIONS_SCHEMA || !Array.isArray(allowlist.exceptions)) {
+    throw new Error("unsupported unchanged-target exceptions schema");
+  }
+  if (!Array.isArray(unchangedTargets)) throw new Error("unchanged targets must be an array");
+
+  const allowedDocuments = new Set(UNCHANGED_TARGET_EXCEPTION_DOCUMENTS);
+  const manifestDocuments = new Map(manifest.documents.map((document) => [document.sourcePath, document]));
+  const listed = new Map();
+  let previousKey = null;
+  for (const [index, exception] of allowlist.exceptions.entries()) {
+    exactKeys(exception, UNCHANGED_TARGET_EXCEPTION_KEYS, `unchanged-target exceptions[${index}]`);
+    normalizeLocale(exception.locale);
+    if (!allowedDocuments.has(exception.document)) {
+      throw new Error(`unchanged-target exception is outside the four hardware documents: ${exception.document}`);
+    }
+    assertSha(exception.sourceSha256, `unchanged-target exceptions[${index}].sourceSha256`);
+    const document = manifestDocuments.get(exception.document);
+    const segment = document?.segments.find((candidate) => candidate.id === exception.segmentId);
+    if (
+      !segment ||
+      segment.sourceSha256 !== exception.sourceSha256 ||
+      segment.requiredState !== PROMOTABLE_STATE
+    ) {
+      throw new Error(`unchanged-target exception binding mismatch: ${unchangedTargetLabel(exception)}`);
+    }
+    const key = unchangedTargetKey(exception);
+    if (listed.has(key)) throw new Error(`duplicate unchanged-target exception: ${unchangedTargetLabel(exception)}`);
+    if (previousKey !== null && key < previousKey) {
+      throw new Error("unchanged-target exceptions must be sorted by locale, document, and segmentId");
+    }
+    previousKey = key;
+    listed.set(key, exception);
+  }
+
+  const actual = new Map();
+  for (const target of unchangedTargets) {
+    const key = unchangedTargetKey(target);
+    if (!allowedDocuments.has(target.document)) {
+      throw new Error(
+        `machine-cross-checked target equals English outside the four hardware documents: ${unchangedTargetLabel(target)}`,
+      );
+    }
+    if (actual.has(key)) throw new Error(`duplicate detected unchanged target: ${unchangedTargetLabel(target)}`);
+    actual.set(key, target);
+  }
+  for (const [key, target] of actual) {
+    if (!listed.has(key)) throw new Error(`missing unchanged-target exception: ${unchangedTargetLabel(target)}`);
+  }
+  for (const [key, exception] of listed) {
+    if (!actual.has(key)) {
+      throw new Error(
+        `listed unchanged-target exception is not byte-identical to English: ${unchangedTargetLabel(exception)}`,
+      );
+    }
+  }
+  return allowlist;
 }
 
 function atomicNoClobber(repository, files, validate) {
@@ -1392,13 +1487,14 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
   ) {
     throw new Error(`the current localization proof must select exactly ${PRODUCTION_DOCUMENTS.join(", ")}`);
   }
+  const unchangedTargets = [];
   for (const locale of SUPPORTED_LOCALES) {
     const receiptFile = confinedWorkingPath(root, localeReceiptPath(locale), {
       mustExist: true,
       allowFile: true,
     });
     const receipt = readCanonicalJson(receiptFile);
-    validateLocaleReceipt(manifest, locale, receipt, { repository: root });
+    validateLocaleReceipt(manifest, locale, receipt, { repository: root, unchangedTargets });
     const expectedOutputs = new Set(manifest.documents.map((document) => document.outputs[locale]));
     const localeRoot = confinedWorkingPath(root, `docs/${locale}`, { mustExist: true });
     const actualOutputs = [];
@@ -1429,5 +1525,11 @@ export function validateRepository({ repository, manifestPath = "docs/i18n/manif
   if (JSON.stringify(receiptFiles) !== JSON.stringify(expectedReceipts)) {
     throw new Error("locale receipt directory differs from the exact release locale set");
   }
+  const exceptionFile = confinedWorkingPath(root, UNCHANGED_TARGET_EXCEPTIONS_PATH, {
+    mustExist: true,
+    allowFile: true,
+  });
+  const allowlist = readCanonicalJson(exceptionFile);
+  validateUnchangedTargetExceptions(manifest, allowlist, unchangedTargets);
   return manifest;
 }

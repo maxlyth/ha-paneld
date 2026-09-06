@@ -13,6 +13,8 @@ import {
   MAX_TARGET_CHARACTERS_PER_SEGMENT,
   PROMOTABLE_STATE,
   PRODUCTION_DOCUMENTS,
+  UNCHANGED_TARGET_EXCEPTION_DOCUMENTS,
+  UNCHANGED_TARGET_EXCEPTIONS_PATH,
   applyLocaleReceipt,
   buildLocaleReceipt,
   buildSourceManifest,
@@ -25,6 +27,7 @@ import {
   validateRepository,
   validateSourceManifest,
   validateTranslationPlan,
+  validateUnchangedTargetExceptions,
 } from "../lib/contract.mjs";
 import {
   SUPPORTED_LOCALES,
@@ -167,6 +170,18 @@ function localeResults(manifest, locale, repository) {
       };
     }),
   }));
+}
+
+function translatedLocaleResults(manifest, locale, repository) {
+  const results = localeResults(manifest, locale, repository);
+  for (const record of results.flatMap((result) => result.records)) {
+    if (record.state === PROMOTABLE_STATE) record.translation += ` translated-${locale}`;
+  }
+  return results;
+}
+
+function writeUnchangedTargetExceptions(repository, exceptions) {
+  write(repository, UNCHANGED_TARGET_EXCEPTIONS_PATH, canonicalJson({ schema: 1, exceptions }));
 }
 
 function clone(value) {
@@ -638,6 +653,86 @@ test("english-fallback accepts only the exact masked English source", () => {
   assert.throws(
     () => buildLocaleReceipt(current.manifest, "de", results, { repository: current.repository }),
     /result state must be english-fallback/,
+  );
+});
+
+test("unchanged-target exceptions are exact, source-bound, unique, sorted, and hardware-only", () => {
+  const current = consequentialFixture();
+  assert.deepEqual(UNCHANGED_TARGET_EXCEPTION_DOCUMENTS, [
+    "docs/hardware/README.md",
+    "docs/hardware/nspanel-pro.md",
+    "docs/hardware/tpa10.md",
+    "docs/hardware/wf1589t.md",
+  ]);
+  const document = current.manifest.documents.find(
+    (candidate) => candidate.sourcePath === "docs/hardware/README.md",
+  );
+  const segment = document.segments.find((candidate) => candidate.requiredState === PROMOTABLE_STATE);
+  const exception = {
+    locale: "de",
+    document: document.sourcePath,
+    segmentId: segment.id,
+    sourceSha256: segment.sourceSha256,
+  };
+  const allowlist = { schema: 1, exceptions: [exception] };
+  assert.deepEqual(
+    validateUnchangedTargetExceptions(current.manifest, allowlist, [exception]),
+    allowlist,
+  );
+
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, { schema: 1, exceptions: [] }, [exception]),
+    /missing unchanged-target exception/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, allowlist, []),
+    /listed unchanged-target exception is not byte-identical to English/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(
+      current.manifest,
+      { schema: 1, exceptions: [exception, exception] },
+      [exception],
+    ),
+    /duplicate unchanged-target exception/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, {
+      schema: 1,
+      exceptions: [{ ...exception, sourceSha256: "0".repeat(64) }],
+    }, [exception]),
+    /binding mismatch/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, {
+      schema: 1,
+      exceptions: [{ ...exception, document: "README.md" }],
+    }, [exception]),
+    /outside the four hardware documents/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, { schema: 1, exceptions: [] }, [{
+      ...exception,
+      document: "README.md",
+    }]),
+    /target equals English outside the four hardware documents/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, {
+      schema: 1,
+      exceptions: [{ ...exception, locale: "xx" }],
+    }, [exception]),
+    /unsupported locale/,
+  );
+  assert.throws(
+    () => validateUnchangedTargetExceptions(current.manifest, {
+      schema: 1,
+      exceptions: [
+        { ...exception, locale: "fr" },
+        exception,
+      ],
+    }, [{ ...exception, locale: "fr" }, exception]),
+    /must be sorted/,
   );
 });
 
@@ -1145,9 +1240,14 @@ test("repository validation requires the exact manifest, receipt set, and output
       repository: current.repository,
       manifest,
       locale,
-      results: localeResults(manifest, locale, current.repository),
+      results: translatedLocaleResults(manifest, locale, current.repository),
     });
   }
+  assert.throws(
+    () => validateRepository({ repository: current.repository }),
+    /unchanged-target-exceptions\.json/,
+  );
+  writeUnchangedTargetExceptions(current.repository, []);
   assert.deepEqual(validateRepository({
     repository: current.repository,
     manifestPath: path.join(current.repository, "docs/i18n/manifest.json"),
@@ -1156,6 +1256,69 @@ test("repository validation requires the exact manifest, receipt set, and output
   assert.throws(
     () => validateRepository({ repository: current.repository }),
     /output tree differs/,
+  );
+});
+
+test("repository validation permits only exactly listed byte-identical machine-cross-checked hardware targets", () => {
+  const current = consequentialFixture();
+  const manifest = current.manifest;
+  write(current.repository, "docs/i18n/manifest.json", canonicalJson(manifest));
+  let exception;
+  for (const locale of SUPPORTED_LOCALES) {
+    const results = translatedLocaleResults(manifest, locale, current.repository);
+    if (locale === "de") {
+      const record = results.flatMap((result) => result.records).find(
+        (candidate) =>
+          candidate.document === "docs/hardware/README.md" &&
+          candidate.state === PROMOTABLE_STATE,
+      );
+      const sourceSegment = manifest.documents
+        .find((document) => document.sourcePath === record.document)
+        .segments.find((segment) => segment.id === record.segmentId);
+      record.translation = record.translation.replace(" translated-de", "");
+      exception = {
+        locale,
+        document: record.document,
+        segmentId: record.segmentId,
+        sourceSha256: sourceSegment.sourceSha256,
+      };
+    }
+    applyLocaleReceipt({ repository: current.repository, manifest, locale, results });
+  }
+  const manifestBytes = fs.readFileSync(path.join(current.repository, "docs/i18n/manifest.json"));
+  const receiptSegments = Object.fromEntries(SUPPORTED_LOCALES.map((locale) => {
+    const receiptFile = path.join(current.repository, `docs/i18n/locales/${locale}.json`);
+    return [locale, readCanonicalJson(receiptFile).documents.map((document) => document.segments)];
+  }));
+  writeUnchangedTargetExceptions(current.repository, [exception]);
+  assert.deepEqual(validateRepository({ repository: current.repository }), manifest);
+  assert.ok(fs.readFileSync(path.join(current.repository, "docs/i18n/manifest.json")).equals(manifestBytes));
+  for (const locale of SUPPORTED_LOCALES) {
+    const receiptFile = path.join(current.repository, `docs/i18n/locales/${locale}.json`);
+    assert.deepEqual(readCanonicalJson(receiptFile).documents.map((document) => document.segments), receiptSegments[locale]);
+  }
+
+  writeUnchangedTargetExceptions(current.repository, []);
+  assert.throws(
+    () => validateRepository({ repository: current.repository }),
+    /missing unchanged-target exception/,
+  );
+  writeUnchangedTargetExceptions(current.repository, [{
+    ...exception,
+    segmentId: manifest.documents
+      .find((document) => document.sourcePath === exception.document)
+      .segments.find((segment) =>
+        segment.requiredState === PROMOTABLE_STATE && segment.id !== exception.segmentId)
+      .id,
+    sourceSha256: manifest.documents
+      .find((document) => document.sourcePath === exception.document)
+      .segments.find((segment) =>
+        segment.requiredState === PROMOTABLE_STATE && segment.id !== exception.segmentId)
+      .sourceSha256,
+  }]);
+  assert.throws(
+    () => validateRepository({ repository: current.repository }),
+    /missing unchanged-target exception|listed unchanged-target exception is not byte-identical/,
   );
 });
 
