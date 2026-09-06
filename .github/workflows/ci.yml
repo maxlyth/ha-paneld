@@ -20,35 +20,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  runner:
-    name: Select runner
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      label: ${{ steps.pick.outputs.label }}
-    steps:
-      # ha-paneld is public. Code from a fork must never execute on the project
-      # runner, so a fork pull request is pinned to a hosted image. Everything
-      # else - push to main, workflow_dispatch, and pull requests from branches
-      # in this repository - uses the project runner.
-      #
-      # There is deliberately no availability check here. GitHub does not fall
-      # back when a self-hosted label has no runner, and detecting that needs the
-      # runner list, which GITHUB_TOKEN cannot read: `administration` is not a
-      # workflow permission scope. A real fallback needs a fine-grained token
-      # carrying that scope, which is a decision about adding a secret rather
-      # than a workflow change. Until then an unreachable runner queues.
-      - id: pick
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] \
-             && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "fork pull request -> hosted"
-            echo "label=ubuntu-24.04" >> "$GITHUB_OUTPUT"
-          else
-            echo "trusted ref -> project runner"
-            echo "label=self-hosted" >> "$GITHUB_OUTPUT"
-          fi
-
   build:
     name: Android build
     # Hosted, like Host contracts and for the same reason: two cases in this
@@ -58,7 +29,6 @@ jobs:
     # HelperSocketCompositionTest. Both bind sockets and both pass on hosted and
     # fail on the runner, with and without parallel workers. Moving the job back
     # is a change to those tests, not to runs-on.
-    needs: runner
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -127,9 +97,6 @@ jobs:
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: basic
-          # Warm ~/.gradle already persists on the self-hosted runner; re-caching it
-          # would add a save/restore cycle for no gain. Hosted images still cache.
-          cache-disabled: ${{ needs.runner.outputs.label == 'self-hosted' }}
 
       # The bundled-helper installer tests drive the real staging script, which requires
       # its transaction record to be owned by root exactly as it is on a panel, so the
@@ -275,8 +242,7 @@ jobs:
 
   dependency-integrity:
     name: Dependency integrity
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.label }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -296,9 +262,6 @@ jobs:
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: basic
-          # Warm ~/.gradle already persists on the self-hosted runner; re-caching it
-          # would add a save/restore cycle for no gain. Hosted images still cache.
-          cache-disabled: ${{ needs.runner.outputs.label == 'self-hosted' }}
 
       - name: Resolve dependency artifacts from a fresh cache
         shell: bash
@@ -338,14 +301,9 @@ jobs:
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
     name: Privileged helper
-    needs: runner
-    runs-on: ${{ needs.runner.outputs.label }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Make the workspace writable
-        if: needs.runner.outputs.label == 'self-hosted'
-        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
