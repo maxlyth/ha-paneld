@@ -87,6 +87,7 @@ UNCHANGED_TARGET_EXCEPTIONS = {
     ("fr", "entities.issue.source"): "Source",
     ("fr", "entities.row.option.auto"): "Auto",
     ("fr", "install.shared.version"): "Version",
+    ("fr", "profiles.editor.codemirror.diagnostics"): "Diagnostics",
     ("fr", "shell.runtime.duration_minutes"): "{count} min",
     ("fr", "shell.runtime.duration_seconds"): "{count} s",
     ("fr", "settings.dashboard_zoom.label"): "Zoom (%)",
