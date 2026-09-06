@@ -24,22 +24,47 @@ jobs:
     name: Select runner
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      # Reading the runner list is what makes the availability check possible.
+      administration: read
     outputs:
       label: ${{ steps.pick.outputs.label }}
     steps:
-      # ha-paneld is public. Code from a fork must never execute on the homelab
-      # runner, so a fork PR is pinned to a hosted image regardless of the job.
-      # Everything else — push to main, workflow_dispatch, and PRs from branches
-      # in this repository — uses the self-hosted machine.
       - id: pick
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -uo pipefail
+
+          # ha-paneld is public. Code from a fork must never execute on the
+          # project runner, so a fork pull request is pinned to a hosted image
+          # before anything else is considered.
           if [ "${{ github.event_name }}" = "pull_request" ] \
              && [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "label=ubuntu-24.04" >> "$GITHUB_OUTPUT"
             echo "fork pull request -> hosted"
-          else
+            echo "label=ubuntu-24.04" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # GitHub does not fall back when a self-hosted label has no runner. The
+          # job queues instead, and a queued job ignores timeout-minutes, so it can
+          # sit for twenty-four hours: a homelab that is down would stall a release
+          # rather than fail it. Ask whether a runner is actually there, and treat
+          # anything but a confirmed online one as absent, so an unreachable
+          # machine costs a slower build and nothing else.
+          runners=$(curl -sf --max-time 20 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/runners" || true)
+          online=$(printf '%s' "$runners" | grep -o '"status"[[:space:]]*:[[:space:]]*"online"' | wc -l)
+
+          if [ "${online:-0}" -gt 0 ]; then
+            echo "$online self-hosted runner(s) online -> self-hosted"
             echo "label=self-hosted" >> "$GITHUB_OUTPUT"
-            echo "trusted ref -> self-hosted"
+          else
+            echo "::warning::no self-hosted runner is online; using a hosted image for this run"
+            echo "label=ubuntu-24.04" >> "$GITHUB_OUTPUT"
           fi
 
   build:
