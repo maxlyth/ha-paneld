@@ -87,10 +87,17 @@ function consequentialFixture(policyMutation) {
   const renderer = "# Built-in renderer\n\nA failed login stops retries.\n\nContinue normally.\n";
   const performance = "# Performance\n\nChanging the filter can hide required entities.\n\nContinue normally.\n";
   const security = "# Security mode\n\nChanging a protected setting requires physical approval.\n\nContinue normally.\n";
+  const hardware = new Map([
+    ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n\nContinue normally.\n"],
+    ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n\nContinue normally.\n"],
+    ["docs/hardware/tpa10.md", "# TPA10\n\nKeep a recovery path available.\n\nContinue normally.\n"],
+    ["docs/hardware/wf1589t.md", "# WF1589T\n\nVerify the system bar before hiding it.\n\nContinue normally.\n"],
+  ]);
   write(current.repository, "docs/provisioning.md", provisioning);
   write(current.repository, "docs/built-in-renderer.md", renderer);
   write(current.repository, "docs/performance.md", performance);
   write(current.repository, "docs/security-mode.md", security);
+  for (const [document, source] of hardware) write(current.repository, document, source);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
   const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
@@ -132,11 +139,20 @@ function consequentialFixture(policyMutation) {
         segmentCount: securityInventory.segments.length,
         consequentialSegments: [securityConsequential.segmentId],
       },
+      ...[...hardware].map(([document, source]) => {
+        const inventory = inventoryMarkdown(document, source);
+        return {
+          document,
+          sourceSha256: sha256(Buffer.from(source, "utf8")),
+          segmentCount: inventory.segments.length,
+          consequentialSegments: [inventory.segments[1].segmentId],
+        };
+      }),
     ],
   };
   policyMutation?.(policy);
   write(current.repository, "docs/i18n/consequential-segments.json", canonicalJson(policy));
-  command(current.repository, ["git", "add", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md", "docs/i18n/consequential-segments.json"]);
+  command(current.repository, ["git", "add", "."]);
   command(current.repository, ["git", "commit", "-qm", "add consequential policy"]);
   const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({
@@ -219,7 +235,17 @@ function rebindReceiptResults(receipt, manifest) {
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();
   assert.equal(manifest.schema, 5);
-  assert.deepEqual(PRODUCTION_DOCUMENTS, ["README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md"]);
+  assert.deepEqual(PRODUCTION_DOCUMENTS, [
+    "README.md",
+    "docs/provisioning.md",
+    "docs/built-in-renderer.md",
+    "docs/performance.md",
+    "docs/security-mode.md",
+    "docs/hardware/README.md",
+    "docs/hardware/nspanel-pro.md",
+    "docs/hardware/tpa10.md",
+    "docs/hardware/wf1589t.md",
+  ]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
   assert.deepEqual(Object.keys(AUTHORITY_NOTICE_TEMPLATES).sort(), [...SUPPORTED_LOCALES].sort());

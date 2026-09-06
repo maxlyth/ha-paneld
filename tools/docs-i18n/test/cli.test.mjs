@@ -45,10 +45,20 @@ Changing the filter can hide required entities.
 
 Changing a protected setting requires physical approval.
 `;
+  const hardware = new Map([
+    ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n"],
+    ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n"],
+    ["docs/hardware/tpa10.md", "# TPA10\n\nKeep a recovery path available.\n"],
+    ["docs/hardware/wf1589t.md", "# WF1589T\n\nVerify the system bar before hiding it.\n"],
+  ]);
   fs.writeFileSync(path.join(repository, "docs/provisioning.md"), provisioning);
   fs.writeFileSync(path.join(repository, "docs/built-in-renderer.md"), renderer);
   fs.writeFileSync(path.join(repository, "docs/performance.md"), performance);
   fs.writeFileSync(path.join(repository, "docs/security-mode.md"), security);
+  for (const [document, source] of hardware) {
+    fs.mkdirSync(path.dirname(path.join(repository, document)), { recursive: true });
+    fs.writeFileSync(path.join(repository, document), source);
+  }
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
   const performanceInventory = inventoryMarkdown("docs/performance.md", performance);
@@ -84,9 +94,18 @@ Changing a protected setting requires physical approval.
         segmentCount: securityInventory.segments.length,
         consequentialSegments: [securityConsequential.segmentId],
       },
+      ...[...hardware].map(([document, source]) => {
+        const inventory = inventoryMarkdown(document, source);
+        return {
+          document,
+          sourceSha256: sha256(Buffer.from(source, "utf8")),
+          segmentCount: inventory.segments.length,
+          consequentialSegments: [inventory.segments[1].segmentId],
+        };
+      }),
     ],
   }));
-  command(repository, ["git", "add", "README.md", "docs/provisioning.md", "docs/built-in-renderer.md", "docs/performance.md", "docs/security-mode.md", "docs/i18n/consequential-segments.json"]);
+  command(repository, ["git", "add", "."]);
   command(repository, ["git", "commit", "-qm", "fixture"]);
   const sourceRevision = command(repository, ["git", "rev-parse", "HEAD"]);
   const manifest = buildSourceManifest({ repository, sourceRevision, documents: PRODUCTION_DOCUMENTS });
@@ -95,7 +114,7 @@ Changing a protected setting requires physical approval.
   return { manifestPath, repository, temporary };
 }
 
-test("CLI plan selects the exact Tier-1 document prefix", () => {
+test("CLI plan selects the exact production document prefix", () => {
   const current = exportFixture();
   const manifestPath = path.join(current.repository, "docs/i18n/manifest.json");
   assert.equal(main([
@@ -111,6 +130,10 @@ test("CLI plan selects the exact Tier-1 document prefix", () => {
     "docs/built-in-renderer.md",
     "docs/performance.md",
     "docs/security-mode.md",
+    "docs/hardware/README.md",
+    "docs/hardware/nspanel-pro.md",
+    "docs/hardware/tpa10.md",
+    "docs/hardware/wf1589t.md",
   ]);
   assert.throws(() => main([
     "plan",
