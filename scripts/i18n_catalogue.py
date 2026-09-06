@@ -39,6 +39,7 @@ REV_RE = re.compile(r"[0-9a-f]{40}\Z")
 PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[a-zA-Z]|\{[a-zA-Z_][a-zA-Z0-9_]*\}")
 LATIN_RE = re.compile(r"[A-Za-z\u00c0-\u024f]")
 HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+UKRAINIAN_CYRILLIC_RE = re.compile(r"[\u0410-\u044f\u0490\u0491\u0404\u0454\u0406\u0456\u0407\u0457]")
 ENGLISH_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]{2,}")
 TARGET_SCRIPT_POLICIES = {
     "de": "latin",
@@ -47,6 +48,17 @@ TARGET_SCRIPT_POLICIES = {
     "it": "latin",
     "zh-Hans": "han",
 }
+# A locale remains unsupported until it is present in LOCALES and has a catalogue. These
+# requirements reserve script policies for later locales so extending LOCALES cannot silently
+# inherit a nearby language's policy or select a convenient but incorrect policy.
+REQUIRED_TARGET_SCRIPT_POLICIES = {
+    "uk": "ukrainian-cyrillic",
+}
+UKRAINIAN_ALPHABETIC_CHARACTERS = frozenset(
+    "абвгґдеєжзиіїйклмнопрстуфхцчшщьюя"
+    "АБВГҐДЕЄЖЗИІЇЙКЛМНОПРСТУФХЦЧШЩЬЮЯ"
+    "ʼ"
+)
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
 MAX_TARGET_TEXT_CHARS = 16_384
@@ -224,10 +236,18 @@ def validate_target_script_policies() -> None:
         raise CatalogueError("target script policies must exactly cover supported locales")
     invalid = sorted(
         locale for locale, policy in TARGET_SCRIPT_POLICIES.items()
-        if policy not in {"latin", "han"}
+        if policy not in {"latin", "han", "ukrainian-cyrillic"}
     )
     if invalid:
         raise CatalogueError(f"target script policy is invalid for: {', '.join(invalid)}")
+    incorrect_required = sorted(
+        locale for locale, required_policy in REQUIRED_TARGET_SCRIPT_POLICIES.items()
+        if locale in LOCALES and TARGET_SCRIPT_POLICIES.get(locale) != required_policy
+    )
+    if incorrect_required:
+        raise CatalogueError(
+            f"target script policy violates locale requirement for: {', '.join(incorrect_required)}"
+        )
 
 
 def validate_target_language(key: str, text: str, locale: str, source_record: dict[str, Any]) -> None:
@@ -260,6 +280,17 @@ def validate_target_language(key: str, text: str, locale: str, source_record: di
             and UNCHANGED_TARGET_EXCEPTIONS.get((locale, key)) != text
         ):
             raise CatalogueError(f"{key}: target is unchanged English")
+    elif policy == "ukrainian-cyrillic":
+        if not UKRAINIAN_CYRILLIC_RE.search(target_visible):
+            raise CatalogueError(f"{key}: {locale} target has no Ukrainian Cyrillic text")
+        unexpected = sorted({
+            character
+            for character in target_visible
+            if character.isalpha() and character not in UKRAINIAN_ALPHABETIC_CHARACTERS
+        })
+        if unexpected:
+            codepoints = ", ".join(f"U+{ord(character):04X}" for character in unexpected)
+            raise CatalogueError(f"{key}: {locale} target has unexpected script: {codepoints}")
 
 
 def validate_target_text_hygiene(key: str, text: str) -> None:

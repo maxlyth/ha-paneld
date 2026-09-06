@@ -168,6 +168,115 @@ class CatalogueTest(unittest.TestCase):
         ):
             i18n.validate_target_script_policies()
 
+    def test_future_uk_registration_requires_the_reserved_cyrillic_policy(self):
+        future_locales = {*i18n.LOCALES, "uk"}
+        source_record = {"text": "Settings", "placeholders": [], "frozen": []}
+        for policies, message in (
+            (i18n.TARGET_SCRIPT_POLICIES, "must exactly cover"),
+            ({**i18n.TARGET_SCRIPT_POLICIES, "uk": "latin"}, "violates locale requirement"),
+        ):
+            with (
+                self.subTest(policies=policies),
+                mock.patch.object(i18n, "LOCALES", future_locales),
+                mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", policies),
+                self.assertRaisesRegex(i18n.CatalogueError, message),
+            ):
+                i18n.validate_target_language(
+                    "settings.example.label", "Налаштування", "uk", source_record
+                )
+
+    def test_ukrainian_policy_accepts_ukrainian_and_exact_protected_technical_tokens(self):
+        future_locales = {*i18n.LOCALES, "uk"}
+        future_policies = {**i18n.TARGET_SCRIPT_POLICIES, "uk": "ukrainian-cyrillic"}
+        cases = (
+            (
+                "settings.example.label",
+                "Settings",
+                [],
+                "Налаштування",
+            ),
+            (
+                "settings.example.help",
+                "Keep MQTT connected.",
+                ["MQTT"],
+                "Зберігати повʼязане з’єднання MQTT.",
+            ),
+            (
+                "settings.region.label",
+                "Russia",
+                [],
+                "Слава Украине 🇺🇦",
+            ),
+        )
+        with (
+            mock.patch.object(i18n, "LOCALES", future_locales),
+            mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", future_policies),
+        ):
+            for key, source_text, frozen, target_text in cases:
+                source_record = {
+                    "text": source_text,
+                    "placeholders": [],
+                    "frozen": frozen,
+                }
+                with self.subTest(key=key):
+                    i18n.validate_target_language(key, target_text, "uk", source_record)
+
+    def test_ukrainian_policy_rejects_latin_russian_only_and_other_cyrillic_letters(self):
+        future_locales = {*i18n.LOCALES, "uk"}
+        future_policies = {**i18n.TARGET_SCRIPT_POLICIES, "uk": "ukrainian-cyrillic"}
+        source_record = {"text": "System settings", "placeholders": [], "frozen": []}
+        invalid_targets = (
+            "123",
+            "System settings",
+            "Системні settings",
+            "Системы",
+            "Налады ўжо",
+        )
+        with (
+            mock.patch.object(i18n, "LOCALES", future_locales),
+            mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", future_policies),
+        ):
+            for target_text in invalid_targets:
+                with (
+                    self.subTest(target_text=target_text),
+                    self.assertRaises(i18n.CatalogueError),
+                ):
+                    i18n.validate_target_language(
+                        "settings.example.label", target_text, "uk", source_record
+                    )
+
+    def test_ukrainian_english_fallback_preserves_machine_diagnostics(self):
+        future_locales = {*i18n.LOCALES, "uk"}
+        future_policies = {**i18n.TARGET_SCRIPT_POLICIES, "uk": "ukrainian-cyrillic"}
+        source = self.source()
+        key = "settings.example.help"
+        diagnostic = "Raw diagnostic ru_RU from MQTT."
+        source["strings"][key].update({
+            "text": diagnostic,
+            "sourceHash": i18n.source_hash(diagnostic),
+            "placeholders": [],
+            "frozen": ["MQTT"],
+            "hardMaxChars": 80,
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            target_path = Path(directory) / "uk.json"
+            self.write(target_path, {
+                "schema": 1,
+                "locale": "uk",
+                "sourceRevision": "e" * 40,
+                "strings": {key: {
+                    "text": diagnostic,
+                    "sourceHash": source["strings"][key]["sourceHash"],
+                    "state": "english-fallback",
+                }},
+            })
+            with (
+                mock.patch.object(i18n, "LOCALES", future_locales),
+                mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", future_policies),
+            ):
+                target = i18n.validate_target(target_path, source, expected_locale="uk")
+            self.assertEqual(diagnostic, target["strings"][key]["text"])
+
     def test_terminology_translations_exactly_cover_supported_locales(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "context.json"
