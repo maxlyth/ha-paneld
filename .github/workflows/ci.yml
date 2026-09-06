@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    name: Android build
+    name: Android ${{ matrix.name }}
     # Hosted, like Host contracts and for the same reason: two cases in this
     # suite are calibrated to the hosted image and fail on the container. They
     # are HiveMqTransportBrokerTest, covering an advertised but unroutable AAAA
@@ -31,6 +31,19 @@ jobs:
     # is a change to those tests, not to runs-on.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: unit tests
+            tasks: ":app:testDebugUnitTest :app:testReleaseUnitTest"
+            apks: "no"
+          - name: lint
+            tasks: ":app:lintDebug"
+            apks: "no"
+          - name: assemble
+            tasks: ":app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease"
+            apks: "yes"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -115,7 +128,7 @@ jobs:
       # the invocation runs as root and hands the tree back afterwards. Verified
       # 2026-09-06: without this, four BundledHelperInstallerTest cases and
       # HelperSocketCompositionTest fail as the runner account.
-      - name: Test, lint, and build APKs
+      - name: Run ${{ matrix.name }}
         run: |
           # Hand the tree back on EVERY exit, not just success. A failing Gradle
           # used to skip this and leave a root-owned workspace that the runner
@@ -124,10 +137,11 @@ jobs:
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
           sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
-            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
+            ./gradlew ${{ matrix.tasks }} \
               --stacktrace
 
       - name: Verify supported Android and ABI floors
+        if: matrix.apks == 'yes'
         run: |
           build_tools="$ANDROID_HOME/build-tools/36.0.0"
           debug_apk=app/build/outputs/apk/debug/app-debug.apk
@@ -219,10 +233,6 @@ jobs:
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
           sudo -E env "PROVISION_TEST_SCOPE=$PROVISION_TEST_SCOPE" bash -c '
             set -e
-            # The serial provisioning suite was 23.2 of this job's 24.6 minutes.
-            # The repository ships a sharded runner over the same script, which
-            # verification policy names as the canonical command.
-            scripts/tests/provision_gate_parallel.sh -j 4
             scripts/tests/root_helper_authority_test.sh
             scripts/tests/install_legacy_database_gate_test.sh
             scripts/tests/hardware_collector_test.sh
@@ -238,6 +248,44 @@ jobs:
           python3 scripts/i18n_catalogue.py validate \
             --source app/src/main/assets/i18n/en.json \
             --target-dir app/src/main/assets/i18n
+
+
+  # 23 of this workflow's 26 minutes was the provisioning contract as one
+  # serial step. It already ships as fourteen isolated shards, and running
+  # them in process barely parallelised on a two-core image, so each shard
+  # gets a runner and the wall time is the longest shard, not their sum.
+  provisioning:
+    name: Provisioning ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - database-host
+          - database-runtime
+          - install-export
+          - install-runtime
+          - helper-transaction
+          - release-integrity
+          - renderer-seeding
+          - install-finish
+          - backup
+          - publication
+          - database-authority
+          - fleet-installer
+          - host-reclamation
+          - git-bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run provisioning shard
+        run: |
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
+          sudo -E env "PROVISION_TEST_SCOPE=shard-${{ matrix.shard }}" \
+            bash scripts/tests/provision_test.sh
 
   dependency-integrity:
     name: Dependency integrity
