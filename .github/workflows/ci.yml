@@ -140,10 +140,22 @@ jobs:
         # last privileged one. Failing to remove them is not fatal on its own.
         run: sudo rm -rf /tmp/.hapaneld-guard-app-test /tmp/.hapaneld-guard-db-test /tmp/.hapaneld-guard-installed || true
 
+      # The bundled-helper installer tests drive the real staging script, whose
+      # transaction record must be owned by root exactly as it is on a panel, so
+      # the invocation runs as root and hands the tree back afterwards. Verified
+      # 2026-09-06: without this, four BundledHelperInstallerTest cases and
+      # HelperSocketCompositionTest fail as the runner account.
       - name: Test, lint, and build APKs
         run: |
-          ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
-            --parallel --max-workers=8 --stacktrace
+          # Hand the tree back on EVERY exit, not just success. A failing Gradle
+          # used to skip this and leave a root-owned workspace that the runner
+          # account cannot delete, so the next checkout wiped the working copy,
+          # found no repository and stopped before any step of ours ran.
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
+          sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
+            "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
+            ./gradlew :app:testDebugUnitTest :app:testReleaseUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease \
+              --parallel --max-workers=8 --stacktrace
 
       - name: Verify supported Android and ABI floors
         run: |
