@@ -39,7 +39,10 @@ jobs:
             tasks: ":app:testDebugUnitTest"
             apks: "no"
           - name: release unit tests
-            tasks: ":app:testReleaseUnitTest"
+            # DatabaseCompatibilityApkContractTest asserts against the merged
+            # DEBUG manifest, so the release suite needs it built even though the
+            # rest of the split is release-only.
+            tasks: ":app:processDebugManifest :app:testReleaseUnitTest"
             apks: "no"
           - name: lint
             tasks: ":app:lintDebug"
