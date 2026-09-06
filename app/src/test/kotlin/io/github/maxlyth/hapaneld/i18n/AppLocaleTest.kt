@@ -69,6 +69,51 @@ class AppLocaleTest {
         assertEquals("en", AppLocale.resolve(null, acceptLanguage = "ar", deviceLanguageTag = "ja-JP", allowPseudo = false))
     }
 
+    @Test fun `Russian automatic alias remains dormant until Ukrainian is supported`() {
+        assertTrue(AppLocale.UKRAINIAN !in AppLocale.RELEASE_LOCALES)
+        assertNull(AppLocale.automaticLocaleOverride("ru-RU", AppLocale.RELEASE_LOCALES))
+        assertEquals(
+            "de",
+            AppLocale.resolve(
+                explicit = null, persisted = "auto", haUser = "ru-RU",
+                acceptLanguage = "de", deviceLanguageTag = "fr", allowPseudo = false,
+            ),
+        )
+        assertEquals(
+            "en",
+            AppLocale.resolve(
+                explicit = null, persisted = "auto", haUser = "ru",
+                acceptLanguage = "ru-RU", deviceLanguageTag = "ru_UA", allowPseudo = false,
+            ),
+        )
+    }
+
+    @Test fun `Russian automatic signals select Ukrainian after Ukrainian is supported`() {
+        val supported = AppLocale.RELEASE_LOCALES + AppLocale.UKRAINIAN
+        assertEquals("uk", AppLocale.automaticLocaleOverride("ru-RU", supported))
+        assertNull(AppLocale.automaticLocaleOverride("be-RU", supported))
+        assertEquals("uk", resolveSupported(haUser = "ru", supported = supported))
+        assertEquals("uk", resolveSupported(acceptLanguage = "ru-RU", supported = supported))
+        assertEquals("uk", resolveSupported(deviceLanguageTag = "ru_UA", supported = supported))
+        assertEquals("uk", resolveSupported(acceptLanguage = "ru-Latn-RU", supported = supported))
+        assertEquals("de", resolveSupported(acceptLanguage = "de;q=1, ru;q=.8", supported = supported))
+        assertEquals("uk", resolveSupported(acceptLanguage = "de;q=.8, ru;q=1", supported = supported))
+    }
+
+    @Test fun `supported explicit choices outrank the Russian automatic alias`() {
+        val supported = AppLocale.RELEASE_LOCALES + AppLocale.UKRAINIAN
+        assertEquals("fr", resolveSupported(explicit = "fr-CA", haUser = "ru", supported = supported))
+        assertEquals("de", resolveSupported(persisted = "de-DE", haUser = "ru", supported = supported))
+        assertEquals("uk", resolveSupported(explicit = "uk-UA", haUser = "ru", supported = supported))
+        assertEquals("uk", resolveSupported(persisted = "uk", haUser = "ru", supported = supported))
+    }
+
+    @Test fun `unsupported explicit Russian tags are not treated as automatic signals`() {
+        val supported = AppLocale.RELEASE_LOCALES + AppLocale.UKRAINIAN
+        assertEquals("fr", resolveSupported(explicit = "ru-RU", acceptLanguage = "fr", supported = supported))
+        assertEquals("it", resolveSupported(persisted = "ru", acceptLanguage = "it", supported = supported))
+    }
+
     @Test fun `pseudolocale requires an explicit debug admission`() {
         assertEquals("en-XA", AppLocale.resolve("en-XA", acceptLanguage = "de", deviceLanguageTag = "fr", allowPseudo = true))
         assertEquals("en", AppLocale.resolve("en-XA", acceptLanguage = "de", deviceLanguageTag = "fr", allowPseudo = false))
@@ -83,4 +128,21 @@ class AppLocaleTest {
         assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=NaN, fr;q=.8", deviceLanguageTag = "it", allowPseudo = false))
         assertEquals("fr", AppLocale.resolve(null, acceptLanguage = "de;q=Infinity, fr;q=.8", deviceLanguageTag = "it", allowPseudo = false))
     }
+
+    private fun resolveSupported(
+        explicit: String? = null,
+        persisted: String? = "auto",
+        haUser: String? = null,
+        acceptLanguage: String? = null,
+        deviceLanguageTag: String? = null,
+        supported: Collection<String>,
+    ): String = AppLocale.resolveForSupportedLocales(
+        explicit = explicit,
+        persisted = persisted,
+        haUser = haUser,
+        acceptLanguage = acceptLanguage,
+        deviceLanguageTag = deviceLanguageTag,
+        allowPseudo = false,
+        supportedLocales = supported,
+    )
 }

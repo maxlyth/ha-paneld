@@ -55,6 +55,23 @@ class StringsTest {
         assertEquals("Keep {name} on MQTT.", Strings(source, TargetCatalogue.parse(emptyTarget, source)).get("settings.example.help"))
     }
 
+    @Test fun `a future Ukrainian catalogue retains English fallback for a missing record`() {
+        val source = SourceCatalogue.parse(english)
+        val emptyUkrainian = target("{name} у MQTT.", "machine-cross-checked")
+            .replace("\"locale\":\"de\"", "\"locale\":\"uk\"")
+            .replace(Regex("\"settings\\.example\\.help\"\\s*:\\s*\\{.*?\\n\\s*}", RegexOption.DOT_MATCHES_ALL), "")
+            .replace("\"strings\":{\n        \n      }", "\"strings\":{}")
+        val target = TargetCatalogue.parseForSupportedLocales(
+            emptyUkrainian,
+            source,
+            supportedLocales = AppLocale.RELEASE_LOCALES + AppLocale.UKRAINIAN,
+        )
+
+        val strings = Strings(source, target)
+        assertEquals("uk", strings.requestedLocale)
+        assertEquals(LocalizedText("Keep {name} on MQTT.", "en"), strings.resolve("settings.example.help"))
+    }
+
     @Test fun `web surfaces share the validated catalogue and can be resolved by prefix`() {
         val settingText = "Settings label"
         val menuText = "Dashboard"

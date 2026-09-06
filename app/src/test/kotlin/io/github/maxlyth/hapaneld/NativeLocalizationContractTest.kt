@@ -105,6 +105,8 @@ class NativeLocalizationContractTest {
         assertTrue(!beforeDatabase.contains("Config(") && !beforeDatabase.contains("AppState.preferences"))
         assertTrue(application.contains("NativeLocale.apply(Config(this).uiLanguage)"))
         assertTrue(locale.contains("AppCompatDelegate.setApplicationLocales(desired)"))
+        assertTrue(locale.contains("AppLocale.automaticLocaleOverride(systemLanguageTag(), AppLocale.RELEASE_LOCALES)"))
+        assertTrue(locale.contains("ConfigurationCompat.getLocales(Resources.getSystem().configuration)"))
         assertTrue(kotlin("ConfigActivity.kt").contains("NativeLocale.apply(Config(this@ConfigActivity).uiLanguage)"))
         assertTrue(kotlin("DashboardActivity.kt").contains("NativeLocale.apply(Config(this).uiLanguage)"))
         assertTrue(kotlin("AdminLauncherActivity.kt").contains("NativeLocale.apply(Config(this).uiLanguage)"))

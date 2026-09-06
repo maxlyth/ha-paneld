@@ -6,6 +6,7 @@ import java.util.Locale
 object AppLocale {
     const val ENGLISH = "en"
     const val PSEUDO = "en-XA"
+    internal const val UKRAINIAN = "uk"
 
     /** Release locales admitted for the Tier-A bootstrap. English is always the final fallback. */
     val RELEASE_LOCALES: List<String> = listOf(ENGLISH, "de", "fr", "it", "es", "zh-Hans")
@@ -23,26 +24,57 @@ object AppLocale {
         acceptLanguage: String?,
         deviceLanguageTag: String?,
         allowPseudo: Boolean,
+    ): String = resolveForSupportedLocales(
+        explicit = explicit,
+        persisted = persisted,
+        haUser = haUser,
+        acceptLanguage = acceptLanguage,
+        deviceLanguageTag = deviceLanguageTag,
+        allowPseudo = allowPseudo,
+        supportedLocales = RELEASE_LOCALES,
+    )
+
+    /**
+     * Resolve against an injected release set so a future locale can be verified before its catalogue
+     * is shipped. Russian automatic signals select Ukrainian only after Ukrainian is actually in that
+     * set. Explicit browser and panel choices continue to use ordinary supported-locale lookup.
+     */
+    internal fun resolveForSupportedLocales(
+        explicit: String?,
+        persisted: String? = null,
+        haUser: String? = null,
+        acceptLanguage: String?,
+        deviceLanguageTag: String?,
+        allowPseudo: Boolean,
+        supportedLocales: Collection<String>,
     ): String {
-        canonical(explicit, allowPseudo = allowPseudo)?.let { return it }
+        require(ENGLISH in supportedLocales) { "supported locales must include English" }
+        canonicalForSupportedLocales(explicit, allowPseudo, supportedLocales)?.let { return it }
         persisted?.takeUnless { it.equals("auto", ignoreCase = true) }
-            ?.let { canonical(it, allowPseudo = false) }
+            ?.let { canonicalForSupportedLocales(it, allowPseudo = false, supportedLocales) }
             ?.let { return it }
-        canonical(haUser, allowPseudo = false)?.let { return it }
+        canonicalAutomatic(haUser, supportedLocales)?.let { return it }
         parseAcceptLanguage(acceptLanguage).forEach { requested ->
-            canonical(requested, allowPseudo = false)?.let { return it }
+            canonicalAutomatic(requested, supportedLocales)?.let { return it }
         }
-        canonical(deviceLanguageTag, allowPseudo = false)?.let { return it }
+        canonicalAutomatic(deviceLanguageTag, supportedLocales)?.let { return it }
         return ENGLISH
     }
 
     /** RFC-4647-style lookup over the locales currently implemented by the product. */
-    fun canonical(raw: String?, allowPseudo: Boolean = false): String? {
+    fun canonical(raw: String?, allowPseudo: Boolean = false): String? =
+        canonicalForSupportedLocales(raw, allowPseudo, RELEASE_LOCALES)
+
+    private fun canonicalForSupportedLocales(
+        raw: String?,
+        allowPseudo: Boolean,
+        supportedLocales: Collection<String>,
+    ): String? {
         val tag = raw?.trim()?.replace('_', '-')?.takeIf { it.isNotEmpty() } ?: return null
         if (tag.length > 63 || !tag.matches(Regex("[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*"))) return null
         if (allowPseudo && tag.equals(PSEUDO, ignoreCase = true)) return PSEUDO
         val lower = tag.lowercase(Locale.ROOT)
-        RELEASE_LOCALES.forEach { releaseLocale ->
+        supportedLocales.forEach { releaseLocale ->
             val candidate = releaseLocale.lowercase(Locale.ROOT)
             // Language-only releases accept regional variants. Script-specific releases accept
             // variants of that script, but do not consume a different script with the same root.
@@ -50,8 +82,24 @@ object AppLocale {
         }
         return when {
             lower == "zh" || lower == "zh-cn" || lower.startsWith("zh-cn-") ||
-                lower == "zh-sg" || lower.startsWith("zh-sg-") -> "zh-Hans"
+                lower == "zh-sg" || lower.startsWith("zh-sg-") ->
+                "zh-Hans".takeIf { it in supportedLocales }
             else -> null
+        }
+    }
+
+    private fun canonicalAutomatic(raw: String?, supportedLocales: Collection<String>): String? {
+        automaticLocaleOverride(raw, supportedLocales)?.let { return it }
+        return canonicalForSupportedLocales(raw, allowPseudo = false, supportedLocales)
+    }
+
+    /** A special automatic-only alias, dormant until its destination locale is a shipped locale. */
+    internal fun automaticLocaleOverride(raw: String?, supportedLocales: Collection<String>): String? {
+        val tag = raw?.trim()?.replace('_', '-')?.takeIf { it.isNotEmpty() } ?: return null
+        if (tag.length > 63 || !tag.matches(Regex("[A-Za-z0-9]{1,8}(?:-[A-Za-z0-9]{1,8})*"))) return null
+        val lower = tag.lowercase(Locale.ROOT)
+        return UKRAINIAN.takeIf {
+            it in supportedLocales && (lower == "ru" || lower.startsWith("ru-"))
         }
     }
 

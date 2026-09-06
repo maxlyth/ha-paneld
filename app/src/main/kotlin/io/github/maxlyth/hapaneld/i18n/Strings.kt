@@ -104,12 +104,19 @@ class TargetCatalogue private constructor(
     companion object {
         const val SCHEMA = 1
 
-        fun parse(json: String, source: SourceCatalogue): TargetCatalogue {
+        fun parse(json: String, source: SourceCatalogue): TargetCatalogue =
+            parseForSupportedLocales(json, source, AppLocale.RELEASE_LOCALES)
+
+        internal fun parseForSupportedLocales(
+            json: String,
+            source: SourceCatalogue,
+            supportedLocales: Collection<String>,
+        ): TargetCatalogue {
             val root = JSONObject(json)
             requireExactKeys(root, setOf("schema", "locale", "sourceRevision", "strings"), "target root")
             require(root.getInt("schema") == SCHEMA) { "unsupported target catalogue schema" }
             val locale = root.getString("locale")
-            require(locale in AppLocale.RELEASE_LOCALES - AppLocale.ENGLISH) { "unsupported target locale: $locale" }
+            require(locale in supportedLocales - AppLocale.ENGLISH) { "unsupported target locale: $locale" }
             val revision = root.getString("sourceRevision").also {
                 require(it.matches(Regex("[0-9a-f]{40}"))) { "target sourceRevision must be an exact Git SHA" }
             }

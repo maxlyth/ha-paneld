@@ -2,18 +2,20 @@ package io.github.maxlyth.hapaneld
 
 import android.content.Context
 import android.content.res.Configuration
+import android.content.res.Resources
 import android.os.Build
 import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.os.ConfigurationCompat
 import androidx.core.os.LocaleListCompat
 import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
 import io.github.maxlyth.hapaneld.util.HaTransportFault
 import java.util.Locale
 
-/** Keep native Android resources on the same explicit language selected for ha-paneld's web UI. */
+/** Keep native Android resources aligned with ha-paneld's locale-selection policy. */
 internal object NativeLocale {
-    @Volatile private var explicitLanguageTag: String? = null
+    @Volatile private var resourceLanguageTag: String? = null
 
     /** Read only the downgrade-compatible XML mirror; Guard DB recovery must not construct Config/AppState. */
     fun applyBeforeDatabase(context: Context) {
@@ -26,17 +28,24 @@ internal object NativeLocale {
     }
 
     fun apply(raw: String) {
-        val locale = raw.takeUnless { it.equals("auto", ignoreCase = true) }
-            ?.let { AppLocale.canonical(it, allowPseudo = BuildConfig.DEBUG) }
-        explicitLanguageTag = locale
+        val automatic = raw.equals(AUTO_LANGUAGE, ignoreCase = true)
+        val locale = if (automatic) {
+            AppLocale.automaticLocaleOverride(systemLanguageTag(), AppLocale.RELEASE_LOCALES)
+        } else {
+            AppLocale.canonical(raw, allowPseudo = BuildConfig.DEBUG)
+        }
+        resourceLanguageTag = locale
         val desired = locale?.let(LocaleListCompat::forLanguageTags) ?: LocaleListCompat.getEmptyLocaleList()
         if (AppCompatDelegate.getApplicationLocales().toLanguageTags() != desired.toLanguageTags()) {
             AppCompatDelegate.setApplicationLocales(desired)
         }
     }
 
+    private fun systemLanguageTag(): String? =
+        ConfigurationCompat.getLocales(Resources.getSystem().configuration)[0]?.toLanguageTag()
+
     fun string(context: Context, @StringRes id: Int, vararg formatArgs: Any): String {
-        val tag = explicitLanguageTag
+        val tag = resourceLanguageTag
         val localized = if (Build.VERSION.SDK_INT >= 33 || tag == null) {
             context
         } else {
