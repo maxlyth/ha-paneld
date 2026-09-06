@@ -53,6 +53,7 @@ export const PRODUCTION_DOCUMENTS = Object.freeze([
   "docs/adaptive-brightness.md",
   "docs/adaptive-proximity.md",
   "docs/tts.md",
+  "docs/api.md",
 ]);
 export const CONSEQUENTIAL_POLICY_SCHEMA = 2;
 export const CONSEQUENTIAL_POLICY_PATH = "docs/i18n/consequential-segments.json";

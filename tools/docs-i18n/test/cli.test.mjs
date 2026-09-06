@@ -61,6 +61,10 @@ Reset learning erases sensor evidence.
 
 Sending a remote URL starts playback.
 `;
+  const api = `# API
+
+Remote commands can change panel state.
+`;
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n"],
@@ -75,6 +79,7 @@ Sending a remote URL starts playback.
   fs.writeFileSync(path.join(repository, "docs/adaptive-brightness.md"), adaptiveBrightness);
   fs.writeFileSync(path.join(repository, "docs/adaptive-proximity.md"), adaptiveProximity);
   fs.writeFileSync(path.join(repository, "docs/tts.md"), tts);
+  fs.writeFileSync(path.join(repository, "docs/api.md"), api);
   for (const [document, source] of hardware) {
     fs.mkdirSync(path.dirname(path.join(repository, document)), { recursive: true });
     fs.writeFileSync(path.join(repository, document), source);
@@ -104,6 +109,8 @@ Sending a remote URL starts playback.
   const adaptiveProximityConsequential = adaptiveProximityInventory.segments[1];
   const ttsInventory = inventoryMarkdown("docs/tts.md", tts);
   const ttsConsequential = ttsInventory.segments[1];
+  const apiInventory = inventoryMarkdown("docs/api.md", api);
+  const apiConsequential = apiInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -164,6 +171,12 @@ Sending a remote URL starts playback.
         segmentCount: ttsInventory.segments.length,
         consequentialSegments: [ttsConsequential.segmentId],
       },
+      {
+        document: "docs/api.md",
+        sourceSha256: sha256(Buffer.from(api, "utf8")),
+        segmentCount: apiInventory.segments.length,
+        consequentialSegments: [apiConsequential.segmentId],
+      },
     ],
   }));
   command(repository, ["git", "add", "."]);
@@ -199,6 +212,7 @@ test("CLI plan selects the exact production document prefix", () => {
     "docs/adaptive-brightness.md",
     "docs/adaptive-proximity.md",
     "docs/tts.md",
+    "docs/api.md",
   ]);
   assert.throws(() => main([
     "plan",

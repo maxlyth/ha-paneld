@@ -95,6 +95,7 @@ function consequentialFixture(policyMutation) {
   const adaptiveBrightness = "# Adaptive brightness\n\nAutomatic brightness follows the room.\n\nContinue normally.\n";
   const adaptiveProximity = "# Adaptive proximity\n\nReset learning erases sensor evidence.\n\nContinue normally.\n";
   const tts = "# TTS\n\nSending a remote URL starts playback.\n\nContinue normally.\n";
+  const api = "# API\n\nRemote commands can change panel state.\n\nContinue normally.\n";
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n\nContinue normally.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n\nContinue normally.\n"],
@@ -109,6 +110,7 @@ function consequentialFixture(policyMutation) {
   write(current.repository, "docs/adaptive-brightness.md", adaptiveBrightness);
   write(current.repository, "docs/adaptive-proximity.md", adaptiveProximity);
   write(current.repository, "docs/tts.md", tts);
+  write(current.repository, "docs/api.md", api);
   for (const [document, source] of hardware) write(current.repository, document, source);
   const provisioningInventory = inventoryMarkdown("docs/provisioning.md", provisioning);
   const rendererInventory = inventoryMarkdown("docs/built-in-renderer.md", renderer);
@@ -127,6 +129,7 @@ function consequentialFixture(policyMutation) {
     adaptiveProximity,
   );
   const ttsInventory = inventoryMarkdown("docs/tts.md", tts);
+  const apiInventory = inventoryMarkdown("docs/api.md", api);
   const consequential = provisioningInventory.segments.find((segment) => segment.maskedSource.includes("Reset erases"));
   const rendererConsequential = rendererInventory.segments.find(
     (segment) => segment.maskedSource.includes("failed login"),
@@ -148,6 +151,9 @@ function consequentialFixture(policyMutation) {
   );
   const ttsConsequential = ttsInventory.segments.find(
     (segment) => segment.maskedSource.includes("starts playback"),
+  );
+  const apiConsequential = apiInventory.segments.find(
+    (segment) => segment.maskedSource.includes("change panel state"),
   );
   const policy = {
     schema: 2,
@@ -208,6 +214,12 @@ function consequentialFixture(policyMutation) {
         sourceSha256: sha256(Buffer.from(tts, "utf8")),
         segmentCount: ttsInventory.segments.length,
         consequentialSegments: [ttsConsequential.segmentId],
+      },
+      {
+        document: "docs/api.md",
+        sourceSha256: sha256(Buffer.from(api, "utf8")),
+        segmentCount: apiInventory.segments.length,
+        consequentialSegments: [apiConsequential.segmentId],
       },
     ],
   };
@@ -526,6 +538,7 @@ test("canonical source manifest binds fixed schema, parser, locales, outputs, bu
     "docs/adaptive-brightness.md",
     "docs/adaptive-proximity.md",
     "docs/tts.md",
+    "docs/api.md",
   ]);
   assert.deepEqual(validateSourceManifest(manifest, { repository }), manifest);
   assert.deepEqual(manifest.locales, SUPPORTED_LOCALES);
