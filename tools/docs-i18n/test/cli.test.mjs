@@ -45,6 +45,10 @@ Changing the filter can hide required entities.
 
 Changing a protected setting requires physical approval.
 `;
+  const provisioningSafety = `# Provisioning safety
+
+Resetting the panel irreversibly erases its data.
+`;
   const hardware = new Map([
     ["docs/hardware/README.md", "# Hardware\n\nDisconnect power before opening the panel.\n"],
     ["docs/hardware/nspanel-pro.md", "# NSPanel Pro\n\nDo not flash an unverified image.\n"],
@@ -55,6 +59,7 @@ Changing a protected setting requires physical approval.
   fs.writeFileSync(path.join(repository, "docs/built-in-renderer.md"), renderer);
   fs.writeFileSync(path.join(repository, "docs/performance.md"), performance);
   fs.writeFileSync(path.join(repository, "docs/security-mode.md"), security);
+  fs.writeFileSync(path.join(repository, "docs/provisioning-safety.md"), provisioningSafety);
   for (const [document, source] of hardware) {
     fs.mkdirSync(path.dirname(path.join(repository, document)), { recursive: true });
     fs.writeFileSync(path.join(repository, document), source);
@@ -67,6 +72,11 @@ Changing a protected setting requires physical approval.
   const rendererConsequential = rendererInventory.segments[1];
   const performanceConsequential = performanceInventory.segments[1];
   const securityConsequential = securityInventory.segments[1];
+  const provisioningSafetyInventory = inventoryMarkdown(
+    "docs/provisioning-safety.md",
+    provisioningSafety,
+  );
+  const provisioningSafetyConsequential = provisioningSafetyInventory.segments[1];
   fs.writeFileSync(path.join(repository, "docs/i18n/consequential-segments.json"), canonicalJson({
     schema: 2,
     documents: [
@@ -103,6 +113,12 @@ Changing a protected setting requires physical approval.
           consequentialSegments: [inventory.segments[1].segmentId],
         };
       }),
+      {
+        document: "docs/provisioning-safety.md",
+        sourceSha256: sha256(Buffer.from(provisioningSafety, "utf8")),
+        segmentCount: provisioningSafetyInventory.segments.length,
+        consequentialSegments: [provisioningSafetyConsequential.segmentId],
+      },
     ],
   }));
   command(repository, ["git", "add", "."]);
@@ -134,6 +150,7 @@ test("CLI plan selects the exact production document prefix", () => {
     "docs/hardware/nspanel-pro.md",
     "docs/hardware/tpa10.md",
     "docs/hardware/wf1589t.md",
+    "docs/provisioning-safety.md",
   ]);
   assert.throws(() => main([
     "plan",
