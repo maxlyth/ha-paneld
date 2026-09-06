@@ -96,7 +96,8 @@ export const LANGUAGE_PICKER_VERSION = 1;
 export const LANGUAGE_PICKER_START = "<!-- docs-i18n-language-picker:start -->";
 export const LANGUAGE_PICKER_END = "<!-- docs-i18n-language-picker:end -->";
 
-const LANGUAGE_NAMES = Object.freeze({
+export const ALL_DOC_LOCALES = Object.freeze(["en", ...SUPPORTED_LOCALES]);
+export const LANGUAGE_NAMES = Object.freeze({
   en: "English",
   de: "Deutsch",
   fr: "Français",
@@ -104,7 +105,45 @@ const LANGUAGE_NAMES = Object.freeze({
   es: "Español",
   "zh-Hans": "简体中文",
 });
-const PICKER_ORDER = Object.freeze(["en", "de", "fr", "it", "es", "zh-Hans"]);
+export const PICKER_ORDER = Object.freeze(["en", "de", "fr", "it", "es", "zh-Hans"]);
+
+export function validateLanguagePickerPolicy({
+  supportedLocales = SUPPORTED_LOCALES,
+  languageNames = LANGUAGE_NAMES,
+  pickerOrder = PICKER_ORDER,
+} = {}) {
+  const expected = ["en", ...supportedLocales];
+  if (
+    !Array.isArray(supportedLocales) ||
+    supportedLocales.length === 0 ||
+    supportedLocales.some((locale) => typeof locale !== "string" || !locale || locale === "en") ||
+    new Set(supportedLocales).size !== supportedLocales.length
+  ) {
+    throw new Error("supported documentation locales must be non-empty, unique, and exclude en");
+  }
+  if (
+    !languageNames ||
+    typeof languageNames !== "object" ||
+    Array.isArray(languageNames) ||
+    JSON.stringify(Object.keys(languageNames).sort()) !== JSON.stringify([...expected].sort()) ||
+    Object.values(languageNames).some((name) => typeof name !== "string" || !name) ||
+    new Set(Object.values(languageNames)).size !== expected.length
+  ) {
+    throw new Error("language names must uniquely and exactly cover en plus supported locales");
+  }
+  if (
+    !Array.isArray(pickerOrder) ||
+    pickerOrder.length !== expected.length ||
+    pickerOrder[0] !== "en" ||
+    new Set(pickerOrder).size !== pickerOrder.length ||
+    JSON.stringify([...pickerOrder].sort()) !== JSON.stringify([...expected].sort())
+  ) {
+    throw new Error("picker order must uniquely and exactly cover en plus supported locales, with en first");
+  }
+  return true;
+}
+
+validateLanguagePickerPolicy();
 
 const SOURCE_ROOT_KEYS = [
   "schema",
@@ -296,6 +335,10 @@ function sourceLanguagePicker(source) {
   ) {
     throw new Error("README.md language picker must contain exactly one LF-terminated paragraph");
   }
+  const row = source.slice(contentStart, contentEnd);
+  if (row !== languagePickerRow("en")) {
+    throw new Error("README.md language picker does not match the exact documentation locale policy");
+  }
   return {
     start,
     end,
@@ -304,14 +347,21 @@ function sourceLanguagePicker(source) {
   };
 }
 
-function localizedLanguagePickerRow(locale) {
-  normalizeLocale(locale);
+function languagePickerRow(locale) {
+  if (locale !== "en") normalizeLocale(locale);
   const items = PICKER_ORDER.map((itemLocale) => {
     if (itemLocale === locale) return `**${LANGUAGE_NAMES[itemLocale]}**`;
-    const destination = itemLocale === "en" ? "../../README.md" : `../${itemLocale}/README.md`;
+    const destination = locale === "en"
+      ? `docs/${itemLocale}/README.md`
+      : itemLocale === "en" ? "../../README.md" : `../${itemLocale}/README.md`;
     return `[${LANGUAGE_NAMES[itemLocale]}](${destination})`;
   });
   return items.join(" · ");
+}
+
+function localizedLanguagePickerRow(locale) {
+  normalizeLocale(locale);
+  return languagePickerRow(locale);
 }
 
 function localizedLanguagePicker(locale) {
@@ -324,6 +374,15 @@ function exactPickerRange(source, picker) {
     throw new Error("localized README must contain exactly one canonical language picker");
   }
   return { start, end: start + picker.length };
+}
+
+function localizedLanguagePickerOwner(source, locale) {
+  const range = exactPickerRange(source, localizedLanguagePicker(locale));
+  return {
+    start: range.start + LANGUAGE_PICKER_START.length + 1,
+    end: range.end - LANGUAGE_PICKER_END.length - 2,
+    label: "language-picker",
+  };
 }
 
 function splitDestination(url) {
@@ -478,8 +537,12 @@ function relocateDocumentLinks(item, allItems, manifest, locale, repository) {
   });
 }
 
-function inventoryFor(sourcePath, source) {
-  const excludedRanges = sourcePath === "README.md" ? [sourceLanguagePicker(source).owner] : [];
+function inventoryFor(sourcePath, source, pickerLocale = "en") {
+  const excludedRanges = sourcePath === "README.md"
+    ? [pickerLocale === "en"
+      ? sourceLanguagePicker(source).owner
+      : localizedLanguagePickerOwner(source, pickerLocale)]
+    : [];
   return inventoryMarkdown(sourcePath, source, { excludedRanges });
 }
 
@@ -1304,7 +1367,7 @@ export function validateLocaleReceipt(
       throw new Error(`${locale}: authority notice mismatch: ${document.targetPath}`);
     }
     const targetBody = targetText.slice(expectedNotice.length);
-    const targetInventory = inventoryFor(sourceDocument.sourcePath, targetBody);
+    const targetInventory = inventoryFor(sourceDocument.sourcePath, targetBody, locale);
     if (targetInventory.segments.length !== sourceDocument.segments.length) {
       throw new Error(`${locale}: target segment coverage mismatch: ${document.targetPath}`);
     }

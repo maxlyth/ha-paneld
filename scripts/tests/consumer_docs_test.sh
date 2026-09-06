@@ -21,16 +21,22 @@ checkout_free_docs=(
 )
 
 # Localized consumer documents are declared by the committed, provider-neutral documentation
-# manifest. Keep this extraction independent of the Node translation tooling: this test must only
-# read committed data, and an unsafe or malformed output path must fail before awk opens it.
+# manifest. Load the release-locale authority from the Node module instead of restating it here;
+# an unsafe locale list, manifest, or output path fails before awk opens a localized document.
 docs_i18n_manifest="docs/i18n/manifest.json"
 if [[ -f "$docs_i18n_manifest" ]]; then
-  if ! localized_document_rows="$(python3 - "$docs_i18n_manifest" <<'PY'
+  if ! docs_i18n_locales="$(node --input-type=module -e '
+    import { SUPPORTED_LOCALES } from "./tools/docs-i18n/lib/paths.mjs";
+    process.stdout.write(JSON.stringify(SUPPORTED_LOCALES));
+  ')"; then
+    echo "unable to load the supported documentation locale set" >&2
+    exit 1
+  fi
+  if ! localized_document_rows="$(python3 - "$docs_i18n_manifest" "$docs_i18n_locales" <<'PY'
 import json
 import pathlib
 import sys
 
-EXPECTED_LOCALES = ("de", "es", "fr", "it", "zh-Hans")
 root = pathlib.Path.cwd().resolve()
 manifest_path = pathlib.Path(sys.argv[1])
 
@@ -54,9 +60,18 @@ def normalized_relative(value, label):
 
 
 try:
+    expected_locales = json.loads(sys.argv[2], object_pairs_hook=reject_duplicates)
+    if (
+        not isinstance(expected_locales, list)
+        or not expected_locales
+        or any(not isinstance(locale, str) or not locale or locale == "en" for locale in expected_locales)
+        or len(set(expected_locales)) != len(expected_locales)
+    ):
+        raise ValueError("supported locales must be a non-empty unique string array without en")
+
     with manifest_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle, object_pairs_hook=reject_duplicates)
-    if not isinstance(manifest, dict) or tuple(manifest.get("locales", ())) != EXPECTED_LOCALES:
+    if not isinstance(manifest, dict) or manifest.get("locales") != expected_locales:
         raise ValueError("manifest locales do not match the exact supported locale set")
     documents = manifest.get("documents")
     if not isinstance(documents, list) or not documents:
@@ -72,17 +87,17 @@ try:
         source_text = source.as_posix()
         if source_text != "README.md" and not source_text.startswith("docs/"):
             raise ValueError(f"source document is outside the admitted roots: {source_text}")
-        if source_text.startswith(tuple(f"docs/{locale}/" for locale in EXPECTED_LOCALES)):
+        if source_text.startswith(tuple(f"docs/{locale}/" for locale in expected_locales)):
             raise ValueError(f"localized document cannot be a source: {source_text}")
         if source_text in seen_sources:
             raise ValueError(f"duplicate source document: {source_text}")
         seen_sources.add(source_text)
 
         outputs = document.get("outputs")
-        if not isinstance(outputs, dict) or set(outputs) != set(EXPECTED_LOCALES):
+        if not isinstance(outputs, dict) or set(outputs) != set(expected_locales):
             raise ValueError(f"outputs for {source_text} do not cover the exact locale set")
         source_tail = "README.md" if source_text == "README.md" else source_text.removeprefix("docs/")
-        for locale in EXPECTED_LOCALES:
+        for locale in expected_locales:
             output = normalized_relative(outputs[locale], f"outputs[{locale}] for {source_text}")
             expected = pathlib.PurePosixPath("docs", locale, source_tail)
             if output != expected:

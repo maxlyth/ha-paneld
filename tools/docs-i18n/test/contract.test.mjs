@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  ALL_DOC_LOCALES,
   AUTHORITY_NOTICE_TEMPLATES,
   ENGLISH_FALLBACK_STATE,
   MAX_SEGMENTS_PER_PACKET,
@@ -15,6 +16,8 @@ import {
   PRODUCTION_DOCUMENTS,
   REVIEW_DISPOSITION_DOCUMENTS,
   REVIEW_DISPOSITIONS_PATH,
+  LANGUAGE_NAMES,
+  PICKER_ORDER,
   applyLocaleReceipt,
   buildLocaleReceipt,
   buildSourceManifest,
@@ -24,6 +27,7 @@ import {
   sha256,
   sourceManifestSha256,
   validateLocaleReceipt,
+  validateLanguagePickerPolicy,
   validateRepository,
   validateSourceManifest,
   validateTranslationPlan,
@@ -231,6 +235,136 @@ function rebindReceiptResults(receipt, manifest) {
     return { packetId: packet.id, packetSha256, resultSha256: sha256(canonicalJson(commitment)) };
   });
 }
+
+function expectedPickerRow(locale) {
+  return PICKER_ORDER.map((itemLocale) => {
+    if (itemLocale === locale) return `**${LANGUAGE_NAMES[itemLocale]}**`;
+    const destination = locale === "en"
+      ? `docs/${itemLocale}/README.md`
+      : itemLocale === "en" ? "../../README.md" : `../${itemLocale}/README.md`;
+    return `[${LANGUAGE_NAMES[itemLocale]}](${destination})`;
+  }).join(" · ");
+}
+
+test("documentation picker policy exactly and uniquely covers the supported locale authority", () => {
+  assert.deepEqual(ALL_DOC_LOCALES, ["en", ...SUPPORTED_LOCALES]);
+  assert.deepEqual(Object.keys(LANGUAGE_NAMES).sort(), [...ALL_DOC_LOCALES].sort());
+  assert.deepEqual([...PICKER_ORDER].sort(), [...ALL_DOC_LOCALES].sort());
+  assert.equal(validateLanguagePickerPolicy(), true);
+
+  const names = { ...LANGUAGE_NAMES };
+  const order = [...PICKER_ORDER];
+  const mutations = [
+    ["missing name", { languageNames: Object.fromEntries(Object.entries(names).slice(0, -1)) }],
+    ["extra name", { languageNames: { ...names, nl: "Nederlands" } }],
+    ["blank name", { languageNames: { ...names, de: "" } }],
+    ["duplicate name", { languageNames: { ...names, es: names.de } }],
+    ["missing picker locale", { pickerOrder: order.slice(0, -1) }],
+    ["extra picker locale", { pickerOrder: [...order, "nl"] }],
+    ["duplicate picker locale", { pickerOrder: [...order.slice(0, -1), order[1]] }],
+  ];
+  for (const [name, mutation] of mutations) {
+    assert.notDeepEqual(mutation.languageNames ?? mutation.pickerOrder, mutation.languageNames ? names : order, name);
+    assert.throws(() => validateLanguagePickerPolicy(mutation), undefined, name);
+  }
+
+  const nextSupported = [...SUPPORTED_LOCALES, "nl"];
+  const nextNames = { ...names, nl: "Nederlands" };
+  const nextOrder = [...order, "nl"];
+  assert.equal(validateLanguagePickerPolicy({
+    supportedLocales: nextSupported,
+    languageNames: nextNames,
+    pickerOrder: nextOrder,
+  }), true);
+  assert.throws(() => validateLanguagePickerPolicy({ supportedLocales: nextSupported }), /exactly cover/);
+});
+
+test("source README picker is the exact canonical ordered locale map", () => {
+  const canonical = expectedPickerRow("en");
+  const items = canonical.split(" · ");
+  const mutations = [
+    ["omitted locale", items.slice(0, -1).join(" · ")],
+    ["duplicate locale", [...items, items[1]].join(" · ")],
+    ["extra locale", [...items, "[Nederlands](docs/nl/README.md)"].join(" · ")],
+    ["reordered locale", [items[0], items[2], items[1], ...items.slice(3)].join(" · ")],
+    ["wrong destination", canonical.replace("docs/de/README.md", "docs/es/README.md")],
+    ["wrong English self", canonical.replace("**English**", "[English](README.md)")],
+    ["wrong bold self", canonical.replace("[Deutsch](docs/de/README.md)", "**Deutsch**")],
+  ];
+  for (const [name, row] of mutations) {
+    assert.notEqual(row, canonical, name);
+    const current = fixture();
+    const readme = fs.readFileSync(path.join(current.repository, "README.md"), "utf8");
+    write(current.repository, "README.md", readme.replace(canonical, row));
+    command(current.repository, ["git", "add", "README.md"]);
+    command(current.repository, ["git", "commit", "-qm", name]);
+    const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+    assert.throws(
+      () => buildSourceManifest({ repository: current.repository, sourceRevision, documents: ["README.md"] }),
+      /exact documentation locale policy/,
+      name,
+    );
+  }
+});
+
+test("every localized README picker has one self-bold entry and deterministic destinations", () => {
+  const current = fixture();
+  for (const locale of SUPPORTED_LOCALES) {
+    const built = buildLocaleReceipt(
+      current.manifest,
+      locale,
+      localeResults(current.manifest, locale, current.repository),
+      { repository: current.repository },
+    );
+    const readme = built.outputs.find((output) => output.path === `docs/${locale}/README.md`).content;
+    const text = readme.toString("utf8");
+    const expected = `<!-- docs-i18n-language-picker:start -->\n${expectedPickerRow(locale)}\n<!-- docs-i18n-language-picker:end -->\n`;
+    assert.equal(text.split(expected).length - 1, 1, locale);
+    assert.equal((expectedPickerRow(locale).match(/\*\*/g) ?? []).length, 2, locale);
+    for (const itemLocale of PICKER_ORDER.filter((candidate) => candidate !== locale)) {
+      const destination = itemLocale === "en" ? "../../README.md" : `../${itemLocale}/README.md`;
+      assert.ok(expected.includes(`[${LANGUAGE_NAMES[itemLocale]}](${destination})`), `${locale}/${itemLocale}`);
+    }
+  }
+});
+
+test("localized README picker drift is rejected even when its receipt hashes are forged", () => {
+  const mutations = [
+    ["omitted locale", (items) => items.slice(0, -1).join(" · ")],
+    ["duplicate locale", (items) => [...items, items[1]].join(" · ")],
+    ["extra locale", (items) => [...items, "[Nederlands](../nl/README.md)"].join(" · ")],
+    ["reordered locale", (items) => [items[0], items[2], items[1], ...items.slice(3)].join(" · ")],
+    ["missing self-bold", (items, locale) => items.join(" · ").replace(
+      `**${LANGUAGE_NAMES[locale]}**`,
+      `[${LANGUAGE_NAMES[locale]}](../${locale}/README.md)`,
+    )],
+  ];
+  for (const [locale, [name, mutate]] of SUPPORTED_LOCALES.map((locale, index) => [locale, mutations[index]])) {
+    const current = fixture();
+    const receipt = applyLocaleReceipt({
+      repository: current.repository,
+      manifest: current.manifest,
+      locale,
+      results: localeResults(current.manifest, locale, current.repository),
+    });
+    const document = receipt.documents.find((candidate) => candidate.sourcePath === "README.md");
+    const target = path.join(current.repository, document.targetPath);
+    const canonicalRow = expectedPickerRow(locale);
+    const changedRow = mutate(canonicalRow.split(" · "), locale);
+    assert.notEqual(changedRow, canonicalRow, name);
+    const changedContent = fs.readFileSync(target, "utf8").replace(canonicalRow, changedRow);
+    fs.writeFileSync(target, changedContent);
+    document.targetSha256 = sha256(changedContent);
+    document.languagePickerSha256 = sha256(
+      `<!-- docs-i18n-language-picker:start -->\n${changedRow}\n<!-- docs-i18n-language-picker:end -->\n`,
+    );
+    assert.throws(
+      () => validateLocaleReceipt(current.manifest, locale, receipt, { repository: current.repository }),
+      /canonical language picker/,
+      `${locale}: ${name}`,
+    );
+  }
+});
 
 test("canonical source manifest binds fixed schema, parser, locales, outputs, budgets, and ownership", () => {
   const { repository, manifest } = fixture();

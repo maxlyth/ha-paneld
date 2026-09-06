@@ -16,7 +16,37 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 DEPENDABOT = ROOT / ".github" / "dependabot.yml"
 CONSUMER_TEST = ROOT / "scripts" / "tests" / "consumer_docs_test.sh"
-LOCALES = ("de", "es", "fr", "it", "zh-Hans")
+
+
+def supported_locales() -> tuple[str, ...]:
+    result = subprocess.run(
+        [
+            "node",
+            "--input-type=module",
+            "-e",
+            'import { SUPPORTED_LOCALES } from "./tools/docs-i18n/lib/paths.mjs"; '
+            "process.stdout.write(JSON.stringify(SUPPORTED_LOCALES));",
+        ],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    locales = json.loads(result.stdout)
+    if (
+        not isinstance(locales, list)
+        or not locales
+        or any(
+            not isinstance(locale, str) or not locale or locale == "en"
+            for locale in locales
+        )
+        or len(set(locales)) != len(locales)
+    ):
+        raise ValueError("invalid supported documentation locale set")
+    return tuple(locales)
+
+
+LOCALES = supported_locales()
 
 
 def named_step(workflow: str, name: str) -> str:
@@ -119,10 +149,10 @@ def manifest_extractor(shell: str) -> str:
     return shell[start:end]
 
 
-def source_manifest() -> dict:
-    readme_outputs = {locale: f"docs/{locale}/README.md" for locale in LOCALES}
+def source_manifest(locales: tuple[str, ...] = LOCALES) -> dict:
+    readme_outputs = {locale: f"docs/{locale}/README.md" for locale in locales}
     provisioning_outputs = {
-        locale: f"docs/{locale}/provisioning.md" for locale in LOCALES
+        locale: f"docs/{locale}/provisioning.md" for locale in locales
     }
     return {
         "schema": 1,
@@ -130,7 +160,7 @@ def source_manifest() -> dict:
         "parser": {},
         "notice": {},
         "limits": {},
-        "locales": list(LOCALES),
+        "locales": list(locales),
         "documents": [
             {
                 "sourcePath": "README.md",
@@ -216,6 +246,9 @@ class DocsI18nCiContractTest(unittest.TestCase):
         extractor = manifest_extractor(shell)
         self.assertIn('is_checkout_free_source "$source"', shell)
         self.assertIn('checkout_free_docs+=("$output")', shell)
+        self.assertIn("SUPPORTED_LOCALES", shell)
+        self.assertNotIn("EXPECTED_LOCALES", shell)
+        self.assertNotIn(repr(LOCALES), shell)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -230,7 +263,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             result = subprocess.run(
-                ["python3", "-", "docs/i18n/manifest.json"],
+                ["python3", "-", "docs/i18n/manifest.json", json.dumps(LOCALES)],
                 input=extractor,
                 text=True,
                 cwd=root,
@@ -249,7 +282,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
             manifest["documents"][0]["outputs"]["de"] = "docs/de/../outside.md"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
             rejected = subprocess.run(
-                ["python3", "-", "docs/i18n/manifest.json"],
+                ["python3", "-", "docs/i18n/manifest.json", json.dumps(LOCALES)],
                 input=extractor,
                 text=True,
                 cwd=root,
@@ -258,6 +291,53 @@ class DocsI18nCiContractTest(unittest.TestCase):
             )
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("relative path", rejected.stderr)
+
+    def test_consumer_manifest_extractor_follows_a_complete_next_locale_policy(self) -> None:
+        extractor = manifest_extractor(CONSUMER_TEST.read_text(encoding="utf-8"))
+        next_locales = (*LOCALES, "nl")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = source_manifest(next_locales)
+            manifest_path = root / "docs" / "i18n" / "manifest.json"
+            manifest_path.parent.mkdir(parents=True)
+            for document in manifest["documents"]:
+                for output in document["outputs"].values():
+                    target = root / output
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text("translated\n", encoding="utf-8")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            def run(candidate: dict, locales: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
+                manifest_path.write_text(json.dumps(candidate), encoding="utf-8")
+                return subprocess.run(
+                    ["python3", "-", "docs/i18n/manifest.json", json.dumps(locales)],
+                    input=extractor,
+                    text=True,
+                    cwd=root,
+                    capture_output=True,
+                    check=False,
+                )
+
+            accepted = run(manifest, next_locales)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            self.assertIn("README.md\tdocs/nl/README.md", accepted.stdout)
+
+            mutations = []
+            missing_output = json.loads(json.dumps(manifest))
+            del missing_output["documents"][0]["outputs"]["nl"]
+            mutations.append(("missing output", missing_output, next_locales))
+            extra_output = json.loads(json.dumps(manifest))
+            extra_output["documents"][0]["outputs"]["pt"] = "docs/pt/README.md"
+            mutations.append(("extra output", extra_output, next_locales))
+            missing_manifest_locale = json.loads(json.dumps(manifest))
+            missing_manifest_locale["locales"].remove("nl")
+            mutations.append(("missing manifest locale", missing_manifest_locale, next_locales))
+            mutations.append(("extra manifest locale", manifest, LOCALES))
+            mutations.append(("duplicate authority locale", manifest, (*next_locales, "nl")))
+            for name, candidate, locales in mutations:
+                self.assertNotEqual((candidate, locales), (manifest, next_locales), name)
+                rejected = run(candidate, locales)
+                self.assertNotEqual(rejected.returncode, 0, name)
 
     @unittest.skipUnless(hasattr(os, "symlink"), "symlinks are unavailable")
     def test_consumer_manifest_extractor_rejects_symlinked_output(self) -> None:
@@ -280,7 +360,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             rejected = subprocess.run(
-                ["python3", "-", "docs/i18n/manifest.json"],
+                ["python3", "-", "docs/i18n/manifest.json", json.dumps(LOCALES)],
                 input=extractor,
                 text=True,
                 cwd=root,
