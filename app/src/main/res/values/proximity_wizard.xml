@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="proximity_wizard_waiting_reading">Move your hand towards the sensor, then away</string>
+    <string name="proximity_wizard_waiting_reading_hint">Waiting for a fresh sensor reading. You can start when the sensor responds.</string>
     <string name="proximity_wizard_title">Proximity setup</string>
     <string name="proximity_wizard_intro">Set up a wave to wake this panel</string>
     <string name="proximity_wizard_intro_hint">Follow the steps here on the panel. Keep the space in front of the sensor clear until asked to move your hand.</string>

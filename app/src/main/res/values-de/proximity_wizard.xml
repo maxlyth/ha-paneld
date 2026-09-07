@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="proximity_wizard_waiting_reading">Führen Sie Ihre Hand zum Sensor und dann wieder weg</string>
+    <string name="proximity_wizard_waiting_reading_hint">Warten auf einen neuen Sensorwert. Sie können starten, sobald der Sensor reagiert.</string>
     <string name="proximity_wizard_title">Näherungssensor einrichten</string>
     <string name="proximity_wizard_intro">Dieses Panel durch eine Handbewegung aufwecken</string>
     <string name="proximity_wizard_intro_hint">Folgen Sie den Schritten hier auf dem Panel. Halten Sie den Bereich vor dem Sensor frei, bis Sie aufgefordert werden, Ihre Hand zu bewegen.</string>

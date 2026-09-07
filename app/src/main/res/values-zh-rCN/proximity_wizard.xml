@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="proximity_wizard_waiting_reading">将手靠近传感器，然后移开</string>
+    <string name="proximity_wizard_waiting_reading_hint">正在等待传感器的新读数。传感器响应后即可开始。</string>
     <string name="proximity_wizard_title">接近传感器设置</string>
     <string name="proximity_wizard_intro">设置挥手唤醒面板</string>
     <string name="proximity_wizard_intro_hint">请按照面板上的步骤操作。在提示您移动手之前，请保持传感器前方无遮挡。</string>

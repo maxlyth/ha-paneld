@@ -173,8 +173,11 @@ class ProximityWizardActivity : AppCompatActivity() {
 
     private fun render(snapshot: JSONObject) {
         stage = snapshot.optString("stage", "unavailable")
+        val awaitingReading = stage == "intro" && snapshot.optString("health") != "healthy"
         val (title, hint) = when (stage) {
-            "intro" -> R.string.proximity_wizard_intro to R.string.proximity_wizard_intro_hint
+            "intro" -> if (awaitingReading) {
+                R.string.proximity_wizard_waiting_reading to R.string.proximity_wizard_waiting_reading_hint
+            } else R.string.proximity_wizard_intro to R.string.proximity_wizard_intro_hint
             "clear" -> R.string.proximity_wizard_clear to R.string.proximity_wizard_clear_hint
             "near" -> R.string.proximity_wizard_near to R.string.proximity_wizard_near_hint
             "return_clear" -> R.string.proximity_wizard_return_clear to R.string.proximity_wizard_return_clear_hint
@@ -188,7 +191,7 @@ class ProximityWizardActivity : AppCompatActivity() {
             else -> R.string.proximity_wizard_unavailable to R.string.proximity_wizard_unavailable_hint
         }
         // Do not re-announce unchanged instructions four times per second to accessibility services.
-        val presentation = "$stage|${snapshot.optString("message")}|${snapshot.optString("mode")}|${snapshot.optInt("acceptedGestures")}|${snapshot.optInt("requiredGestures", 3)}"
+        val presentation = "$stage|${snapshot.optString("health")}|${snapshot.optString("message")}|${snapshot.optString("mode")}|${snapshot.optInt("acceptedGestures")}|${snapshot.optInt("requiredGestures", 3)}"
         if (presentation != lastPresentation) {
             lastPresentation = presentation
             instruction.setText(title)
@@ -209,7 +212,7 @@ class ProximityWizardActivity : AppCompatActivity() {
             indicator.progress = accepted
             cancel.visibility = if (stage in TERMINAL) View.GONE else View.VISIBLE
             cancel.isEnabled = stage != "saving"
-            primary.isEnabled = stage != "saving"
+            primary.isEnabled = stage != "saving" && !awaitingReading
             primary.visibility = if (stage in COLLECTING) View.GONE else View.VISIBLE
             primary.setText(when (stage) {
                 "intro" -> R.string.proximity_wizard_start

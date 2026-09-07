@@ -108,6 +108,7 @@ internal class ProximityCalibrationRuntime(
         visibleAt = 0L
         startedAt = now
         failureMessage = ""
+        sourceProven = false
         view = engine.start(now)
         return view.active
     }
@@ -133,7 +134,9 @@ internal class ProximityCalibrationRuntime(
         expireOwner(now)
         if (action !in setOf("begin", "retry", "save", "cancel")) return false
         if (action != "cancel" && (visibleAt <= 0L || now - visibleAt > LOCAL_VISIBILITY_MS)) return false
-        if (action == "retry") {
+        if (action == "begin" && (!sourceProven || !view.available)) return false
+        if (action == "retry" && !view.active) {
+            sourceProven = false
             startedAt = now
             browserAt = now
             failureMessage = ""

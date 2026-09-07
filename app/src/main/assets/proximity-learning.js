@@ -75,12 +75,14 @@
       timed_out: ["timed_out", "Setup timed out. Existing calibration is unchanged."], failed: ["failed", "Setup could not complete. Existing calibration is unchanged."]
     };
     var progress = stages[stage];
-    evidence.textContent = progress ? label("stage." + progress[0], progress[1], {
+    evidence.textContent = active && stage === "intro" && d.health === "source_unavailable"
+      ? label("waiting", "Waiting for sensor status…")
+      : progress ? label("stage." + progress[0], progress[1], {
       seen: d.acceptedGestures == null ? 0 : d.acceptedGestures,
       required: d.requiredGestures == null ? 3 : d.requiredGestures
     }) : "";
     start.hidden = active;
-    start.disabled = busy || !available || d.canCalibrate === false || (d.canCalibrate == null && d.canTeach === false);
+    start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true) || d.canCalibrate === false || (d.canCalibrate == null && d.canTeach === false);
     cancel.hidden = !active;
     cancel.disabled = busy || !currentSession;
     reset.disabled = busy || active || !available;

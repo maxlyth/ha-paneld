@@ -29,7 +29,9 @@ async function fixture(t, initial = {}) {
   });
   await page.goto('http://panel.test/');
   await page.addScriptTag({ content: asset });
-  await page.getByText(initial.phase === 'calibrating' ? 'Setup is running on the panel' : 'Proximity is ready', { exact: true }).waitFor();
+  const expectedStatus = initial.present === false || initial.phase === 'source_unavailable' ? 'Proximity source is unavailable'
+    : initial.phase === 'calibrating' ? 'Setup is running on the panel' : 'Proximity is ready';
+  await page.getByText(expectedStatus, { exact: true }).waitFor();
   return { page, posts, setStatus: (value) => { status = value; } };
 }
 
@@ -92,4 +94,31 @@ browserTest('starter heartbeat pauses after failure and resumes for an on-panel 
   await page.clock.runFor(5100);
   await heartbeat;
   assert.ok(posts.some(({ body }) => body.action === 'heartbeat' && body.sessionId === 'starter-session'));
+});
+
+browserTest('a present source without an initial reading can explicitly launch setup on the panel', async (t) => {
+  const { page, posts, setStatus } = await fixture(t, { present: true, phase: 'source_unavailable', health: 'source_unavailable', raw: null, canCalibrate: true });
+  const start = page.getByRole('button', { name: 'Set up proximity on panel', exact: true });
+  assert.equal(await start.isEnabled(), true, 'an on-change source needs on-panel instructions before its first physical transition');
+  assert.equal(posts.length, 0, 'source admission must never start setup automatically');
+  assert.equal(await page.getByRole('button', { name: 'Restore profile defaults' }).isDisabled(), true);
+  await start.click();
+  await page.getByText('Waiting for sensor status…', { exact: true }).waitFor();
+  assert.equal(await page.getByText('Ready to begin on the panel', { exact: true }).count(), 0);
+  assert.deepEqual(posts.map(({ body }) => body), [{ action: 'start' }]);
+  assert.equal(posts[0].headers['x-proximity-ui'], '1');
+  setStatus({ present: true, phase: 'calibrating', stage: 'intro', sessionActive: true, sessionId: 'starter-session', health: 'healthy', raw: 0, canCalibrate: true });
+  await page.clock.runFor(1100);
+  await page.getByText('Ready to begin on the panel', { exact: true }).waitFor();
+});
+
+browserTest('missing or explicitly non-calibratable sources cannot launch setup', async (t) => {
+  for (const status of [
+    { present: false, phase: 'source_unavailable', canCalibrate: true },
+    { present: true, phase: 'source_unavailable', canCalibrate: false },
+  ]) {
+    const { page, posts } = await fixture(t, status);
+    assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel', exact: true }).isDisabled(), true);
+    assert.equal(posts.length, 0);
+  }
 });

@@ -45,7 +45,7 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(script.contains("/api/v1/proximity/calibration"))
         assertTrue(script.contains("request(\"heartbeat\", id)"))
         assertTrue(script.contains("if (error.opaque) result.setAttribute(\"lang\", \"en\")"))
-        assertTrue(script.contains("start.disabled = busy || !available"))
+        assertTrue(script.contains("start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true)"))
         assertTrue(script.indexOf("active = d.sessionActive") < script.indexOf("start.hidden = active"))
         assertFalse(script.contains("post(\"save\")"))
         assertFalse(script.contains("post(\"begin\")"))

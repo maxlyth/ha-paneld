@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="proximity_wizard_waiting_reading">Approchez la main du capteur, puis éloignez-la</string>
+    <string name="proximity_wizard_waiting_reading_hint">En attente d’une nouvelle mesure du capteur. Vous pourrez commencer dès que le capteur répondra.</string>
     <string name="proximity_wizard_title">Configuration de la proximité</string>
     <string name="proximity_wizard_intro">Réveiller ce panneau par un geste de la main</string>
     <string name="proximity_wizard_intro_hint">Suivez les étapes sur le panneau. Laissez l’espace devant le capteur dégagé jusqu’à ce qu’il vous soit demandé de déplacer la main.</string>

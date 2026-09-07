@@ -429,6 +429,74 @@ class ProximityCalibrationEngineTest {
         assertEquals(100, engine.observe(Float.MAX_VALUE, 1_000).level)
     }
 
+    @Test fun introWaitsForFreshAcquisitionThenNormalCalibrationCanComplete() {
+        val old = ranged()
+        var writes = 0
+        val engine = ProximityCalibrationEngine(old) { writes++; true }
+        engine.start(0)
+        val generation = engine.current().generation
+        engine.sourceUnavailable(100)
+        assertEquals(Stage.INTRO, engine.current().stage)
+        assertTrue(engine.current().active)
+        assertFalse(engine.current().available)
+        assertTrue(engine.current().generation > generation)
+        engine.observe(0f, 200, live = false, calibrationLive = false)
+        assertFalse(engine.current().available)
+        assertFalse(engine.current().wakeReady)
+        assertFalse(engine.observe(0f, 300, live = false, calibrationLive = true).gesture)
+        assertTrue(engine.current().available)
+        engine.action("begin", 400)
+        engine.tick(1_600)
+        engine.tick(2_400)
+        assertEquals(Stage.NEAR, engine.current().stage)
+        engine.observe(1f, 3_600)
+        engine.tick(4_400)
+        engine.observe(0f, 4_500)
+        engine.tick(5_300)
+        assertEquals(Stage.WAVES, engine.current().stage)
+        for (start in listOf(6_500L, 8_500L, 10_500L)) {
+            assertFalse(engine.observe(1f, start).gesture)
+            assertFalse(engine.observe(0f, start + 400).gesture)
+            assertFalse(engine.tick(start + 550).gesture)
+        }
+        assertEquals(Stage.REVIEW, engine.current().stage)
+        assertEquals(old, engine.current().calibration)
+        assertEquals(0, writes)
+        engine.action("save", 12_000)
+        assertEquals(Stage.SAVED, engine.current().stage)
+        assertEquals(1, writes)
+    }
+
+    @Test fun introSourceWaitDoesNotExtendTimeoutOrAlterCalibrationOnCancel() {
+        for (cancel in listOf(true, false)) {
+            val old = ranged()
+            var writes = 0
+            val engine = ProximityCalibrationEngine(old) { writes++; true }
+            engine.start(0)
+            engine.sourceUnavailable(1_000)
+            engine.sourceUnavailable(ProximityCalibrationEngine.SESSION_TIMEOUT_MS - 1)
+            if (cancel) engine.action("cancel", ProximityCalibrationEngine.SESSION_TIMEOUT_MS - 1)
+            else engine.tick(ProximityCalibrationEngine.SESSION_TIMEOUT_MS)
+            assertEquals(if (cancel) Stage.CANCELLED else Stage.TIMED_OUT, engine.current().stage)
+            assertEquals(old, engine.current().calibration)
+            assertEquals(0, writes)
+            assertFalse(engine.current().wakeReady)
+        }
+    }
+
+    @Test fun malformedIntroSampleAndSourceLossAfterBeginStillFail() {
+        val malformed = ProximityCalibrationEngine(ranged())
+        malformed.start(0)
+        malformed.observe(Float.NaN, 100)
+        assertEquals(Stage.FAILED, malformed.current().stage)
+        val collecting = ProximityCalibrationEngine(ranged())
+        collecting.start(0)
+        collecting.observe(40f, 100, live = false, calibrationLive = true)
+        collecting.action("begin", 200)
+        collecting.sourceUnavailable(300)
+        assertEquals(Stage.FAILED, collecting.current().stage)
+    }
+
     private fun ranged() = Calibration(mode = Mode.RANGED, clearRaw = 40f, nearRaw = 5f)
     private fun binary() = Calibration(mode = Mode.BINARY, clearRaw = 0f, nearRaw = 1f)
 

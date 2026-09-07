@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="proximity_wizard_waiting_reading">Acerca la mano al sensor y luego aléjala</string>
+    <string name="proximity_wizard_waiting_reading_hint">Esperando una nueva lectura del sensor. Puedes empezar cuando el sensor responda.</string>
     <string name="proximity_wizard_title">Configuración de proximidad</string>
     <string name="proximity_wizard_intro">Configura un gesto para activar este panel</string>
     <string name="proximity_wizard_intro_hint">Sigue los pasos en el panel. Mantén despejado el espacio frente al sensor hasta que se te indique mover la mano.</string>

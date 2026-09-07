@@ -90,6 +90,8 @@ internal class ProximityCalibrationEngine(
         discardCandidate()
         accepted = 0
         sessionStarted = now
+        available = false
+        lastRaw = null
         lastRawCapture = false
         transition(Stage.INTRO, now, "Proximity setup. Stand in front of the panel, then tap Begin.")
         return result()
@@ -128,7 +130,10 @@ internal class ProximityCalibrationEngine(
         if (!active() && calibration?.mode == Mode.BINARY && raw != 0f && raw != 1f) {
             return loseSource(now, "The sensor representation changed. Start setup again.")
         }
-        available = true
+        available = if (stage == Stage.INTRO) calibrationLive else true
+        if (stage == Stage.INTRO && calibrationLive) {
+            message = "Proximity setup. Stand in front of the panel, then tap Begin."
+        }
         lastRaw = raw
         lastRawCapture = calibrationLive
         if (active() && candidate?.let { !compatible(it, raw) } == true) {
@@ -167,6 +172,19 @@ internal class ProximityCalibrationEngine(
 
     @Synchronized fun sourceUnavailable(now: Long): Result {
         if (!admit(now)) return result()
+        expire(now)
+        if (stage == Stage.INTRO) {
+            // Acquisition may still be waiting for its first current event. Keep the explicit
+            // introduction open, without granting source readiness or extending its deadline.
+            available = false
+            lastRaw = null
+            lastRawCapture = false
+            generation++
+            detector?.reset()
+            discardCandidate()
+            message = "Waiting for a fresh proximity reading. Move your hand toward the panel, then move clear."
+            return result()
+        }
         return loseSource(now, "Sensor connection lost. Your previous calibration is unchanged.")
     }
 

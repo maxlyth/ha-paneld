@@ -170,6 +170,7 @@ class ProximityCalibrationRuntimeTest {
         assertFalse(fixture.runtime.cancel("wrong-session"))
         assertEquals("intro", fixture.status().getString("stage"))
         fixture.runtime.visible()
+        fixture.runtime.observe(40f, fixture.now, true, live = false, calibrationLive = true)
         assertTrue(fixture.runtime.localAction("begin"))
         assertTrue(fixture.runtime.heartbeat(session))
     }
@@ -219,18 +220,19 @@ class ProximityCalibrationRuntimeTest {
 
     @Test fun retryRequiresFreshProbeBeforeQuietSourceCanBeCapturedAgain() {
         val fixture = Fixture(Backing())
-        fixture.begin()
-        fixture.runtime.observe(0f, fixture.now, true, live = false, calibrationLive = true)
+        fixture.begin(0f)
         fixture.at(1_100)
         assertTrue(fixture.runtime.localAction("cancel"))
         fixture.at(1_200)
         assertTrue(fixture.runtime.localAction("retry"))
-        assertTrue(fixture.runtime.localAction("begin"))
+        assertFalse(fixture.runtime.localAction("begin"))
         fixture.at(2_400); fixture.runtime.tick(fixture.now, true)
         fixture.at(3_200); fixture.runtime.tick(fixture.now, true)
-        assertEquals("clear", fixture.status().getString("stage"))
+        assertEquals("intro", fixture.status().getString("stage"))
         fixture.runtime.observe(0f, fixture.now, true, live = false, calibrationLive = true)
-        fixture.at(4_000); fixture.runtime.tick(fixture.now, true)
+        assertTrue(fixture.runtime.localAction("begin"))
+        fixture.at(4_400); fixture.runtime.tick(fixture.now, true)
+        fixture.at(5_200); fixture.runtime.tick(fixture.now, true)
         assertEquals("near", fixture.status().getString("stage"))
     }
 
@@ -245,6 +247,58 @@ class ProximityCalibrationRuntimeTest {
         fixture.at(2_210); fixture.runtime.tick(fixture.now, true)
         fixture.at(3_010); fixture.runtime.tick(fixture.now, true)
         assertEquals("near", fixture.status().getString("stage"))
+    }
+
+    @Test fun introAcquisitionWaitRequiresFreshEvidenceAndPreservesPreviousRow() {
+        val previous = row(binary())
+        val fixture = Fixture(Backing(previous))
+        fixture.runtime.observe(0f, fixture.now, true)
+        fixture.at(1_200); fixture.runtime.tick(fixture.now, true)
+        assertTrue(fixture.runtime.isWaveReady())
+        assertTrue(fixture.runtime.start())
+        fixture.session = fixture.status().getString("sessionId")
+        fixture.runtime.visible()
+        assertEquals("source_unavailable", fixture.status().getString("health"))
+        assertFalse(fixture.runtime.localAction("begin"))
+        fixture.runtime.sourceUnavailable(fixture.now)
+        assertEquals("intro", fixture.status().getString("stage"))
+        assertTrue(fixture.runtime.active())
+        fixture.runtime.observe(0f, fixture.now, true, live = false, calibrationLive = false)
+        assertEquals("source_unavailable", fixture.status().getString("health"))
+        assertFalse(fixture.runtime.localAction("begin"))
+        assertFalse(fixture.runtime.isWaveReady())
+        fixture.at(1_300)
+        assertFalse(fixture.runtime.observe(0f, fixture.now, true, live = false, calibrationLive = true).deliberateGesture)
+        assertEquals("healthy", fixture.status().getString("health"))
+        assertTrue(fixture.runtime.localAction("begin"))
+        fixture.at(2_500); fixture.runtime.tick(fixture.now, true)
+        fixture.at(3_300); fixture.runtime.tick(fixture.now, true)
+        assertEquals("near", fixture.status().getString("stage"))
+        assertEquals(previous, fixture.backing.row)
+        assertEquals(0, fixture.backing.writes)
+    }
+
+    @Test fun introWaitingCancelTimeoutAndMalformedSampleKeepDurableCalibration() {
+        for (ending in listOf("cancel", "timeout", "malformed")) {
+            val previous = row(binary())
+            val fixture = Fixture(Backing(previous))
+            assertTrue(fixture.runtime.start())
+            fixture.session = fixture.status().getString("sessionId")
+            fixture.runtime.visible()
+            fixture.runtime.sourceUnavailable(fixture.now)
+            when (ending) {
+                "cancel" -> fixture.runtime.cancel(fixture.session)
+                "timeout" -> {
+                    fixture.at(1_000 + ProximityCalibrationRuntime.SESSION_TIMEOUT_MS)
+                    fixture.runtime.tick(fixture.now, true)
+                }
+                "malformed" -> fixture.runtime.observe(Float.NaN, fixture.now, true)
+            }
+            assertFalse(fixture.runtime.active())
+            assertFalse(fixture.runtime.isWaveReady())
+            assertEquals(previous, fixture.backing.row)
+            assertEquals(0, fixture.backing.writes)
+        }
     }
 
     private class Fixture(
@@ -263,15 +317,16 @@ class ProximityCalibrationRuntimeTest {
                 runtime.visible()
             }
         }
-        fun begin() {
+        fun begin(probeRaw: Float = 40f) {
             assertTrue(runtime.start())
             session = status().getString("sessionId")
             assertTrue(runtime.visible())
+            runtime.observe(probeRaw, now, true, live = false, calibrationLive = true)
             at(1_010)
             assertTrue(runtime.localAction("begin"))
         }
         fun toReview(clear: Float, near: Float) {
-            begin()
+            begin(clear)
             runtime.observe(clear, now, true, live = false, calibrationLive = true)
             at(2_210); runtime.tick(now, true)
             at(3_010); runtime.tick(now, true)
