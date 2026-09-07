@@ -122,3 +122,30 @@ browserTest('missing or explicitly non-calibratable sources cannot launch setup'
     assert.equal(posts.length, 0);
   }
 });
+
+browserTest('ready status reports presence and wave capabilities independently', async (t) => {
+  for (const [presenceSupported, waveSupported, expected] of [
+    [true, true, 'Presence and wave are ready'],
+    [true, false, 'Presence is ready; wave is unavailable'],
+    [false, true, 'Wave is ready; presence is unavailable'],
+    [false, false, 'Presence and wave are unavailable'],
+  ]) {
+    const { page, setStatus, posts } = await fixture(t);
+    assert.equal(await page.locator('.prox-learning-state').textContent(), 'Proximity is ready', 'older status without capability fields retains its fallback');
+    setStatus({ present: true, phase: 'ready', presenceSupported, waveSupported });
+    await page.clock.runFor(5100);
+    await page.getByText(expected, { exact: true }).waitFor();
+    assert.equal(posts.length, 0, 'rendering capabilities must not change settings');
+  }
+});
+
+browserTest('new hand-wave stages report progress while physical instructions remain on the panel', async (t) => {
+  const session = { present: true, phase: 'calibrating', sessionActive: true, sessionId: 'other-browser' };
+  const { page, setStatus, posts } = await fixture(t, { ...session, stage: 'wave_baseline' });
+  assert.equal(await page.locator('.prox-learning-evidence').textContent(), 'Checking the starting position for hand waves');
+  setStatus({ ...session, stage: 'wave_capture' });
+  await page.clock.runFor(1100);
+  await page.getByText('Measuring a deliberate hand wave', { exact: true }).waitFor();
+  assert.match(await page.locator('.prox-learning .note').first().textContent(), /Follow the instructions on the panel/);
+  assert.equal(posts.length, 0);
+});

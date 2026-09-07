@@ -35,7 +35,7 @@ class AdaptiveProximitySurfaceContractTest {
         val panel = source("ProximityWizardActivity.kt")
         val help = SettingsRegistry.spec("wake_on_wave")!!.help
 
-        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration())"))
+        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration(),"))
         assertTrue(runtime.contains("fun localAction(action: String)"))
         assertTrue(runtime.contains("now - visibleAt > LOCAL_VISIBILITY_MS"))
         assertTrue(runtime.contains("put(\"sessionActive\", state.active)"))
@@ -134,7 +134,7 @@ class AdaptiveProximitySurfaceContractTest {
         val configure = asset("configure.js")
 
         assertTrue(runtime.contains("store.writeProximityBatch("))
-        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration()) { candidate ->"))
+        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration(), commit = { candidate ->"))
         assertTrue(runtime.contains("encode(candidate)"))
         assertFalse(runtime.contains("requestPersist("))
         assertFalse(runtime.contains("ProximityLearningEngine"))
@@ -155,7 +155,7 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(server.contains("if (proximityLearningEnabled) \"\"\"<div id=\"proximity-learning-mount\""))
         assertTrue(configure.contains("submittedValues, \"wake_on_wave\""))
         assertTrue(configure.contains("window.location.reload();"))
-        assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = !closed && view.calibration != null"))
+        assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = !closed && view.calibration?.presenceSupported == true"))
         assertTrue(mqttTombstonesAllPresenceSurfaces())
     }
 

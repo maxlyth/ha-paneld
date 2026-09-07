@@ -699,7 +699,13 @@ internal class AutoSleepController private constructor(
         val previous = lastProximityNear
         lastProximityNear = next.near
         if (next.near == true && previous != true) {
-            applyLocalEvidence(AutoSleepLocalEvidence.PROXIMITY, next.atMs, false)
+            // Presence may extend an already visible interaction, never override a dark screen.
+            // Keep the check and reduction with the screen transition monitor: a queued approach
+            // must not race a manual/automatic OFF and turn its lease extension into a wake.
+            synchronized(screen) {
+                if (screen.isIntendedOff() || !screen.isOn() || screen.observedLit() != true) return
+                applyLocalEvidence(AutoSleepLocalEvidence.PROXIMITY, next.atMs, false)
+            }
         }
     }
 

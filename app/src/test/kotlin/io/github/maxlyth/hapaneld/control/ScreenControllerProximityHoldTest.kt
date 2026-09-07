@@ -101,4 +101,62 @@ class ScreenControllerProximityHoldTest {
         assertFalse(screen.isIntendedOff())
         assertTrue(backlight.level > 0)
     }
+
+    @Test
+    fun livePresenceBrightensEveryLitRouteWithoutWakingOrChangingBrightness() {
+        for (route in ScreenOff.entries) {
+            val screen = controller(route)
+            val previousPulses = power.brightnessPulses
+            assertTrue(screen.brightenForPresence { true })
+            assertEquals(previousPulses + 1, power.brightnessPulses)
+            assertEquals(0, power.pulses)
+            assertTrue(backlight.calls.isEmpty())
+            assertEquals(160, backlight.level)
+            assertFalse(screen.isIntendedOff())
+        }
+    }
+
+    @Test
+    fun rejectedOrStalePresenceCannotBrighten() {
+        val screen = controller()
+        assertFalse(screen.brightenForPresence { false })
+        screen.closeAdmission()
+        assertFalse(screen.brightenForPresence { true })
+        assertEquals(0, power.brightnessPulses)
+        assertEquals(0, power.pulses)
+        assertTrue(backlight.calls.isEmpty())
+    }
+
+    @Test
+    fun manualAndAutomaticOffRejectQueuedApproachAndPreserveTouchRecovery() {
+        for (automatic in listOf(false, true)) {
+            val screen = controller()
+            if (automatic) screen.sleepAutomatically() else screen.sleep()
+            val generation = screen.currentOffGeneration()
+            assertTrue(generation != null)
+            assertFalse(screen.brightenForPresence { true })
+            assertEquals(generation, screen.currentOffGeneration())
+            assertEquals(0, power.brightnessPulses)
+            assertEquals(0, backlight.level)
+            tap.fireTap()
+            assertFalse(screen.isIntendedOff())
+            assertTrue(backlight.level > 0)
+        }
+    }
+
+    @Test
+    fun physicallyDarkNoninteractiveAndUnknownScreensRejectApproach() {
+        val screen = controller()
+        backlight.level = 0
+        assertFalse(screen.brightenForPresence { true })
+        backlight.level = 160
+        power.interactive = false
+        assertFalse(screen.brightenForPresence { true })
+        power.interactive = true
+        val unknown = ScreenController(backlight, power, FakeRootShell(), FakeDaemon(), tap, ScreenOff.SU_BLPOWER)
+        assertFalse(unknown.brightenForPresence { true })
+        assertEquals(0, power.brightnessPulses)
+        assertEquals(0, power.pulses)
+        assertTrue(backlight.calls.isEmpty())
+    }
 }

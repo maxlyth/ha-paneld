@@ -18,25 +18,26 @@ internal class ProximityCalibrationRuntime(
     private val store: ProximityModelStore,
     private val elapsed: () -> Long = SystemClock::elapsedRealtime,
     private val wall: () -> Long = System::currentTimeMillis,
+    requestedWavePattern: ProximityCalibrationEngine.WavePattern = ProximityCalibrationEngine.WavePattern.SINGLE,
 ) : AutoCloseable {
-    data class Decision(val reportMask: Int, val near: Boolean?, val normalizedLevel: Int?, val deliberateGesture: Boolean)
+    data class Decision(val reportMask: Int, val near: Boolean?, val normalizedLevel: Int?, val deliberateGesture: Boolean, val presenceApproach: Boolean = false)
 
     private val fingerprint = fingerprint("$profileIdentity|$sourceIdentity")
     private val reportGate = ProximityReportGate(densePresenceStabilityMs = 0)
     private var userOverride = false
     private var readFailed = false
-    private val engine = ProximityCalibrationEngine(readCalibration()) { candidate ->
+    private val engine = ProximityCalibrationEngine(readCalibration(), commit = { candidate ->
         val now = wall()
         // This is the only calibration write. The store commits the whole row in one transaction;
         // observation, cancellation, close, and restart have no persistence queue to race it.
         runCatching {
             store.writeProximityBatch(
                 EntityCatalogStore.ProximityModelRow(
-                    fingerprint, STORAGE_VERSION, "explicit-calibration-v1", encode(candidate), true, now,
+                    fingerprint, STORAGE_VERSION, "explicit-calibration-v2", encode(candidate), true, now,
                 ), emptyList(), emptyList(), now,
             )
         }.isSuccess.also { if (it) { userOverride = true; readFailed = false } }
-    }
+    }, requestedWavePattern = requestedWavePattern)
     @Volatile private var view = engine.current()
     @Volatile private var sessionId = ""
     @Volatile private var browserAt = 0L
@@ -53,6 +54,7 @@ internal class ProximityCalibrationRuntime(
     constructor(context: Context, sourceIdentity: String, profileIdentity: String, profile: ProfileProximityCalibration?) : this(
         sourceIdentity, profileIdentity, profile?.let(::fromProfile),
         SqliteProximityModelStore(EntityCatalogStore(context.applicationContext)),
+        requestedWavePattern = profileWavePattern(profile),
     )
 
     @Synchronized
@@ -84,9 +86,11 @@ internal class ProximityCalibrationRuntime(
     }
 
     fun needsTick(): Boolean = !closed && (view.active || engine.needsTick())
-    fun isReady(): Boolean = !closed && sourceProven && view.available && view.near != null
+    fun isReady(): Boolean = isPresenceReady()
+    fun isPresenceReady(): Boolean = !closed && sourceProven && !saving && !view.active && view.presenceReady
+    fun isPresenceNear(): Boolean = isPresenceReady() && view.near == true
     fun isWaveReady(): Boolean = !closed && sourceProven && !saving && view.wakeReady
-    fun isLearnedSignal(): Boolean = !closed && view.calibration != null
+    fun isLearnedSignal(): Boolean = !closed && view.calibration?.presenceSupported == true
     fun generation(): Long = view.generation
     fun gestureToken(): Long = gestureToken
 
@@ -209,6 +213,16 @@ internal class ProximityCalibrationRuntime(
             put("remainingSeconds", ((SESSION_TIMEOUT_MS - (elapsed() - startedAt)).coerceAtLeast(0L) / 1000L))
             put("ready", isReady())
             put("wakeReady", isWaveReady())
+            put("presenceReady", isPresenceReady())
+            put("presenceSupported", state.presenceSupported)
+            put("presenceStatus", state.presenceStatus.name.lowercase(Locale.ROOT))
+            put("waveSupported", state.waveSupported)
+            put("waveStatus", state.waveStatus.name.lowercase(Locale.ROOT))
+            put("wavePattern", state.wavePattern?.name?.lowercase(Locale.ROOT) ?: JSONObject.NULL)
+            put("cue", state.cue.name.lowercase(Locale.ROOT))
+            put("cueRemainingMs", state.cueRemainingMs)
+            put("cueDurationMs", state.cueDurationMs)
+            put("canSave", !closed && !saving && state.canSave)
             put("canCalibrate", !closed && !state.active && !saving)
             put("canTeach", !closed && !state.active && !saving)
             put("canTest", false)
@@ -243,18 +257,21 @@ internal class ProximityCalibrationRuntime(
 
     private fun decision(now: Long, sparseReporting: Boolean): Decision {
         val state = view
-        val near = state.near.takeIf { sourceProven && state.available }
+        if (state.active && sourceProven && state.available) return Decision(ProximityReportGate.NONE, null, null, false)
+        val near = state.near.takeIf { sourceProven && state.available && state.presenceSupported && !state.active }
         val level = state.level.takeIf { near != null }?.let { if (near == false) 0 else it }
         val gesture = state.gesture && sourceProven && !saving
         if (gesture) gestureToken++
-        return Decision(reportGate.project(near, level, now, sparseReporting), near, level, gesture)
+        val approach = state.presenceApproach && sourceProven && !saving && !state.active
+        return Decision(reportGate.project(near, level, now, sparseReporting), near, level, gesture, approach)
     }
 
     private fun readCalibration(): ProximityCalibrationEngine.Calibration? {
         val row = runCatching { store.readProximityModel(fingerprint) }.getOrElse { readFailed = true; return baseline }
             ?: return baseline
-        if (row.algorithmVersion != STORAGE_VERSION || row.fingerprint != fingerprint || !row.ready) return baseline
+        if (row.algorithmVersion !in setOf(LEGACY_STORAGE_VERSION, STORAGE_VERSION) || row.fingerprint != fingerprint || !row.ready) return baseline
         val value = decode(row.snapshotJson) ?: return baseline
+        if (row.algorithmVersion == LEGACY_STORAGE_VERSION && value.version != 1) return baseline
         userOverride = true
         return value
     }
@@ -271,7 +288,8 @@ internal class ProximityCalibrationRuntime(
         .getOrElse { CompletableFuture<Unit>().also { future -> future.completeExceptionally(it) } }
 
     companion object {
-        const val STORAGE_VERSION = 1001
+        const val STORAGE_VERSION = 1002
+        const val LEGACY_STORAGE_VERSION = 1001
         const val SESSION_TIMEOUT_MS = 300_000L
         const val BROWSER_LEASE_MS = 30_000L
         const val LOCAL_VISIBILITY_MS = 5_000L
@@ -281,13 +299,28 @@ internal class ProximityCalibrationRuntime(
             .digest("explicit-proximity-v1|$identity".toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(Locale.ROOT, it.toInt() and 255) }
 
+        fun profileWavePattern(profile: ProfileProximityCalibration?): ProximityCalibrationEngine.WavePattern =
+            profile?.wave?.pattern?.let { ProximityCalibrationEngine.WavePattern.valueOf(it.uppercase(Locale.ROOT)) }
+                ?: ProximityCalibrationEngine.WavePattern.SINGLE
+
         fun fromProfile(value: ProfileProximityCalibration) = ProximityCalibrationEngine.Calibration(
+            version = value.formatVersion,
             mode = ProximityCalibrationEngine.Mode.valueOf(value.mode.uppercase(Locale.ROOT)),
             clearRaw = value.clearRaw, nearRaw = value.nearRaw,
             nearEnter = value.nearEnter, clearExit = value.clearExit,
             debounceMs = value.debounceMs.toLong(), clearArmMs = value.clearArmMs.toLong(),
             minimumNearMs = value.minimumNearMs.toLong(), maximumNearMs = value.maximumNearMs.toLong(),
             cooldownMs = value.cooldownMs.toLong(),
+            presenceSupported = value.presenceSupported,
+            wave = value.wave?.let {
+                ProximityCalibrationEngine.WaveCalibration(
+                    pattern = ProximityCalibrationEngine.WavePattern.valueOf(it.pattern.uppercase(Locale.ROOT)),
+                    clearRaw = it.clearRaw, nearRaw = it.nearRaw, nearEnter = it.nearEnter, clearExit = it.clearExit,
+                    debounceMs = it.debounceMs.toLong(), clearArmMs = it.clearArmMs.toLong(),
+                    minimumNearMs = it.minimumNearMs.toLong(), maximumNearMs = it.maximumNearMs.toLong(),
+                    cooldownMs = it.cooldownMs.toLong(), maxInterWaveGapMs = it.maxInterWaveGapMs.toLong(),
+                )
+            },
         )
 
         fun encode(value: ProximityCalibrationEngine.Calibration): String = JSONObject().apply {
@@ -297,22 +330,67 @@ internal class ProximityCalibrationRuntime(
             put("debounceMs", value.debounceMs); put("clearArmMs", value.clearArmMs)
             put("minimumNearMs", value.minimumNearMs); put("maximumNearMs", value.maximumNearMs)
             put("cooldownMs", value.cooldownMs)
+            if (value.version == 2) {
+                put("presenceSupported", value.presenceSupported)
+                put("wave", value.wave?.let { wave -> JSONObject().apply {
+                    put("pattern", wave.pattern.name)
+                    put("clearRaw", wave.clearRaw); put("nearRaw", wave.nearRaw)
+                    put("nearEnter", wave.nearEnter); put("clearExit", wave.clearExit)
+                    put("debounceMs", wave.debounceMs); put("clearArmMs", wave.clearArmMs)
+                    put("minimumNearMs", wave.minimumNearMs); put("maximumNearMs", wave.maximumNearMs)
+                    put("cooldownMs", wave.cooldownMs); put("maxInterWaveGapMs", wave.maxInterWaveGapMs)
+                } } ?: JSONObject.NULL)
+            }
         }.toString()
 
         fun decode(raw: String): ProximityCalibrationEngine.Calibration? = runCatching {
             require(raw.length <= 4096)
             val value = JSONObject(raw)
+            val version = integer(value, "version").toInt()
+            require(version in 1..2)
+            val mode = ProximityCalibrationEngine.Mode.valueOf(value.getString("mode"))
+            val wave = if (version == 2 && !value.isNull("wave")) {
+                val nested = value.getJSONObject("wave")
+                ProximityCalibrationEngine.WaveCalibration(
+                    pattern = ProximityCalibrationEngine.WavePattern.valueOf(nested.getString("pattern")),
+                    clearRaw = number(nested, "clearRaw"), nearRaw = number(nested, "nearRaw"),
+                    nearEnter = number(nested, "nearEnter"), clearExit = number(nested, "clearExit"),
+                    debounceMs = integer(nested, "debounceMs"), clearArmMs = integer(nested, "clearArmMs"),
+                    minimumNearMs = integer(nested, "minimumNearMs"), maximumNearMs = integer(nested, "maximumNearMs"),
+                    cooldownMs = integer(nested, "cooldownMs"), maxInterWaveGapMs = integer(nested, "maxInterWaveGapMs"),
+                ).also {
+                    require(mode != ProximityCalibrationEngine.Mode.BINARY || setOf(it.clearRaw, it.nearRaw) == setOf(0f, 1f))
+                    boundedTiming(it.debounceMs, it.clearArmMs, it.minimumNearMs, it.maximumNearMs, it.cooldownMs)
+                }
+            } else null
+            if (version == 1) require(!value.has("wave") && !value.has("presenceSupported"))
             ProximityCalibrationEngine.Calibration(
-                version = value.getInt("version"), mode = ProximityCalibrationEngine.Mode.valueOf(value.getString("mode")),
-                clearRaw = value.getDouble("clearRaw").toFloat(), nearRaw = value.getDouble("nearRaw").toFloat(),
-                nearEnter = value.getDouble("nearEnter").toFloat(), clearExit = value.getDouble("clearExit").toFloat(),
-                debounceMs = value.getLong("debounceMs"), clearArmMs = value.getLong("clearArmMs"),
-                minimumNearMs = value.getLong("minimumNearMs"), maximumNearMs = value.getLong("maximumNearMs"),
-                cooldownMs = value.getLong("cooldownMs"),
-            ).also {
-                require(it.debounceMs in 0..5_000 && it.clearArmMs in 0..30_000 && it.minimumNearMs in 0..10_000)
-                require(it.maximumNearMs <= 30_000 && it.cooldownMs <= 60_000)
-            }
+                version = version, mode = mode,
+                clearRaw = number(value, "clearRaw"), nearRaw = number(value, "nearRaw"),
+                nearEnter = number(value, "nearEnter"), clearExit = number(value, "clearExit"),
+                debounceMs = integer(value, "debounceMs"), clearArmMs = integer(value, "clearArmMs"),
+                minimumNearMs = integer(value, "minimumNearMs"), maximumNearMs = integer(value, "maximumNearMs"),
+                cooldownMs = integer(value, "cooldownMs"),
+                presenceSupported = if (version == 1) true else value.get("presenceSupported").let { require(it is Boolean); it },
+                wave = wave,
+            ).also { boundedTiming(it.debounceMs, it.clearArmMs, it.minimumNearMs, it.maximumNearMs, it.cooldownMs) }
         }.getOrNull()
+
+        private fun number(value: JSONObject, key: String): Float {
+            val raw = value.get(key)
+            require(raw is Number && raw.toDouble().isFinite())
+            return raw.toFloat().also { require(it.isFinite()) }
+        }
+
+        private fun integer(value: JSONObject, key: String): Long {
+            val raw = value.get(key)
+            require(raw is Number && raw.toDouble().isFinite() && raw.toDouble() % 1.0 == 0.0)
+            return raw.toLong().also { require(it in 0..60_000) }
+        }
+
+        private fun boundedTiming(debounce: Long, clearArm: Long, minimumNear: Long, maximumNear: Long, cooldown: Long) {
+            require(debounce in 0..5_000 && clearArm in 0..30_000 && minimumNear in 0..10_000)
+            require(maximumNear in 0..30_000 && cooldown in 0..60_000)
+        }
     }
 }

@@ -1,542 +1,365 @@
 package io.github.maxlyth.hapaneld.sensors
 
-import io.github.maxlyth.hapaneld.sensors.ProximityCalibrationEngine.Calibration
-import io.github.maxlyth.hapaneld.sensors.ProximityCalibrationEngine.Mode
-import io.github.maxlyth.hapaneld.sensors.ProximityCalibrationEngine.Stage
+import io.github.maxlyth.hapaneld.sensors.ProximityCalibrationEngine.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class ProximityCalibrationEngineTest {
+    @Test fun normalApproachAndHandWaveUseIndependentAnchorsAndEvents() {
+        val h = Journey()
+        h.presence(100f, 50f)
+        h.wave(50f, 5f)
+        assertEquals(Stage.REVIEW, h.state.stage)
+        assertTrue(h.state.presenceSupported)
+        assertTrue(h.state.waveSupported)
+        assertEquals(0, h.writes)
+        h.save()
+        assertEquals(50f, h.saved!!.nearRaw, 0f)
+        assertEquals(50f, h.saved!!.wave!!.clearRaw, 0f)
+        assertEquals(5f, h.saved!!.wave!!.nearRaw, 0f)
+        h.observe(100f); h.tick(200)
+        h.tick(1_000); assertFalse(h.observe(50f).presenceApproach)
+        val approach = h.tick(150)
+        assertTrue(approach.presenceApproach)
+        assertFalse(approach.gesture)
+        assertEquals(true, approach.near)
+        assertFalse(h.tick(100).presenceApproach)
+        val wave = h.pulse(50f, 5f)
+        assertTrue(wave.gesture)
+        assertFalse(wave.presenceApproach)
+        assertEquals(true, wave.near)
+    }
+
     @Test fun rangedCalibrationWorksAcrossPositiveScalesAndBothDirections() {
-        for ((clear, near) in listOf(40f to 5f, 1_000f to 100f, 2f to 100f, .04f to .006f)) {
-            var committed: Calibration? = null
-            val engine = ProximityCalibrationEngine(commit = { committed = it; true })
-            completeWizard(engine, clear, near)
-            assertEquals(Stage.REVIEW, engine.current().stage)
-            assertNull(committed)
-            assertEquals(3, engine.current().accepted)
-            assertFalse(engine.current().wakeReady)
-            engine.action("save", 11_000)
-            assertEquals(Stage.SAVED, engine.current().stage)
-            assertEquals(Mode.RANGED, committed?.mode)
-            assertEquals(clear, committed!!.clearRaw, 0f)
-            assertEquals(near, committed!!.nearRaw, 0f)
-            assertWave(engine, clear, near, 12_000)
+        for ((clear, body, hand) in listOf(Triple(100f, 50f, 5f), Triple(1f, 20f, 80f), Triple(.1f, .05f, .005f))) {
+            val h = Journey()
+            h.presence(clear, body); h.wave(body, hand); h.save()
+            assertEquals(Mode.RANGED, h.saved!!.mode)
+            assertEquals(body, h.saved!!.nearRaw, 0f)
+            assertEquals(hand, h.saved!!.wave!!.nearRaw, 0f)
         }
     }
 
-    @Test fun binaryPolarityComesFromActualClearAndNearValues() {
-        for ((clear, near) in listOf(0f to 1f, 1f to 0f)) {
-            var committed: Calibration? = null
-            val engine = ProximityCalibrationEngine(commit = { committed = it; true })
-            completeWizard(engine, clear, near)
-            assertEquals(Mode.BINARY, engine.current().mode)
-            assertTrue(engine.current().message.contains("distance is fixed"))
-            engine.action("save", 11_000)
-            assertEquals(Mode.BINARY, committed!!.mode)
-            assertEquals(clear, committed!!.clearRaw, 0f)
-            assertWave(engine, clear, near, 12_000)
+    @Test fun binaryNormalApproachCanSavePresenceWithoutAnIndistinguishableSingleWave() {
+        for ((clear, body) in listOf(0f to 1f, 1f to 0f)) {
+            val h = Journey()
+            h.presence(clear, body)
+            h.capture(body)
+            assertEquals(Stage.WAVE_CAPTURE, h.state.stage)
+            h.tick(WAVE_PHASE_TIMEOUT_MS)
+            assertEquals(Stage.REVIEW, h.state.stage)
+            assertTrue(h.state.presenceSupported)
+            assertFalse(h.state.waveSupported)
+            assertTrue(h.state.canSave)
+            h.save()
+            assertEquals(Mode.BINARY, h.saved!!.mode)
+            assertNull(h.saved!!.wave)
+            assertFalse(h.pulse(clear, body).gesture)
         }
     }
 
-    @Test fun noMetadataParameterCanTurnBinaryValuesIntoAnAdvertisedRange() {
-        val engine = ProximityCalibrationEngine()
-        completeWizard(engine, 1f, 0f)
-        assertEquals(Mode.BINARY, engine.current().mode)
+    @Test fun unseenBodyApproachCanStillValidateWaveOnlyInEitherBinaryPolarity() {
+        for ((clear, hand) in listOf(0f to 1f, 1f to 0f)) {
+            val h = Journey()
+            h.begin(clear); h.capture(clear)
+            h.tick(APPROACH_TIMEOUT_MS)
+            assertEquals(Stage.WAVE_BASELINE, h.state.stage)
+            h.wave(clear, hand)
+            assertFalse(h.state.presenceSupported)
+            assertTrue(h.state.waveSupported)
+            h.save()
+            assertFalse(h.saved!!.presenceSupported)
+            assertNull(h.observe(clear).near)
+            assertTrue(h.pulse(clear, hand).gesture)
+            assertNull(h.state.level)
+        }
+    }
+
+    @Test fun neitherCapabilityLeavesPreviousCalibrationUnchangedAndCannotSave() {
+        val old = legacy()
+        val h = Journey(old)
+        h.begin(0f); h.capture(0f); h.tick(APPROACH_TIMEOUT_MS)
+        h.capture(0f); h.tick(WAVE_PHASE_TIMEOUT_MS)
+        assertEquals(Stage.REVIEW, h.state.stage)
+        assertFalse(h.state.presenceSupported)
+        assertFalse(h.state.waveSupported)
+        assertFalse(h.state.canSave)
+        h.engine.action("save", h.now)
+        assertEquals(old, h.state.calibration)
+        assertEquals(0, h.writes)
+    }
+
+    @Test fun doublePatternRequiresTwoTransitionsAndOrdinarySingleApproachCannotWake() {
+        val h = Journey(pattern = WavePattern.DOUBLE)
+        h.presence(0f, 1f)
+        h.wave(0f, 1f)
+        h.save()
+        assertEquals(WavePattern.DOUBLE, h.saved!!.wave!!.pattern)
+        assertFalse(h.pulse(0f, 1f).gesture)
+        h.tick(2_000)
+        assertFalse(h.pulse(0f, 1f).gesture)
+        assertTrue(h.pulse(0f, 1f).gesture)
+        assertFalse(h.tick(200).gesture)
+    }
+
+    @Test fun firstProbeBackfillAndHistoricalReturnNeverPublishPresenceApproachOrWake() {
+        val h = Journey(legacy())
+        assertFalse(h.observe(5f, live = false).presenceApproach)
+        assertFalse(h.tick(200).presenceApproach)
+        h.observe(40f); h.tick(200)
+        h.tick(800); h.observe(5f, live = false)
+        assertFalse(h.tick(200).presenceApproach)
+        h.observe(40f, live = false)
+        assertFalse(h.tick(200).gesture)
+        h.tick(800); h.observe(5f)
+        assertTrue(h.tick(150).presenceApproach)
+        h.observe(40f, live = false)
+        assertFalse(h.tick(150).gesture)
+    }
+
+    @Test fun sourceLossBetweenObservedEdgeAndDebounceRevokesBothEvents() {
+        val h = Journey(legacy())
+        h.observe(40f); h.tick(200); h.tick(800); h.observe(5f)
+        val generation = h.state.generation
+        h.engine.sourceUnavailable(h.now + 50); h.now += 50
+        val result = h.tick(200)
+        assertFalse(result.presenceApproach)
+        assertFalse(result.gesture)
+        assertFalse(result.wakeReady)
+        assertTrue(result.generation > generation)
     }
 
     @Test fun ordinaryMovementCannotTrainOrPersist() {
-        var writes = 0
-        val engine = ProximityCalibrationEngine(commit = { writes++; true })
-        repeat(30) { index ->
-            engine.observe(40f, index * 2_000L)
-            engine.observe(4f, index * 2_000L + 800)
-            assertFalse(engine.observe(40f, index * 2_000L + 1_200).gesture)
-            assertFalse(engine.tick(index * 2_000L + 1_400).gesture)
-        }
-        assertNull(engine.current().calibration)
-        assertFalse(engine.current().wakeReady)
-        assertEquals(0, writes)
+        val h = Journey()
+        repeat(20) { assertFalse(h.pulse(40f, 5f).gesture) }
+        assertEquals(0, h.writes)
+        assertNull(h.state.calibration)
     }
 
     @Test fun fixedCalibrationNeverRebasesAfterMovementOrLongHolds() {
-        val fixed = ranged()
-        var writes = 0
-        val engine = ProximityCalibrationEngine(fixed) { writes++; true }
-        repeat(50) { index ->
-            engine.observe(38f, index * 2_000L)
-            engine.observe(1f, index * 2_000L + 800)
-            engine.observe(38f, index * 2_000L + 1_200)
-        }
-        engine.observe(20f, 110_000)
-        engine.tick(200_000)
-        assertEquals(fixed, engine.current().calibration)
-        assertEquals(0, writes)
+        val old = legacy()
+        val h = Journey(old)
+        repeat(20) { h.pulse(38f, 1f) }
+        h.observe(20f); h.tick(60_000)
+        assertEquals(old, h.state.calibration)
+        assertEquals(0, h.writes)
     }
 
-    @Test fun cancellationAtEveryStagePreservesPreviousCalibrationAndDoesNotWrite() {
-        for (target in listOf(Stage.INTRO, Stage.CLEAR, Stage.NEAR, Stage.RETURN_CLEAR, Stage.WAVES, Stage.REVIEW)) {
-            val original = ranged()
-            var writes = 0
-            val engine = ProximityCalibrationEngine(original) { writes++; true }
-            progressTo(engine, 0f, 1f, target)
-            assertEquals(target, engine.current().stage)
-            engine.action("cancel", 11_000)
-            assertEquals(Stage.CANCELLED, engine.current().stage)
-            assertEquals(original, engine.current().calibration)
-            assertEquals(0, writes)
-            assertWave(engine, original.clearRaw, original.nearRaw, 12_000)
-        }
-    }
-
-    @Test fun timeoutAndProcessRestartDiscardStagedChanges() {
-        val old = ranged()
-        var writes = 0
-        val engine = ProximityCalibrationEngine(old) { writes++; true }
-        completeWizard(engine, 0f, 1f)
-        engine.tick(ProximityCalibrationEngine.SESSION_TIMEOUT_MS)
-        assertEquals(Stage.TIMED_OUT, engine.current().stage)
-        assertEquals(old, engine.current().calibration)
-        assertEquals(0, writes)
-        val restarted = ProximityCalibrationEngine(old) { writes++; true }
-        assertNull(restarted.current().stage)
-        assertFalse(restarted.current().active)
-        assertWave(restarted, 40f, 5f, 1_000)
-        assertEquals(0, writes)
-    }
-
-    @Test fun sensorLossAndMalformedSamplesDiscardCandidateAndRevokeWakeGeneration() {
-        for (invalid in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, null)) {
-            val old = ranged()
-            var writes = 0
-            val engine = ProximityCalibrationEngine(old) { writes++; true }
-            completeWizard(engine, 0f, 1f)
-            val generation = engine.current().generation
-            if (invalid == null) engine.sourceUnavailable(11_000) else engine.observe(invalid, 11_000)
-            assertEquals(Stage.FAILED, engine.current().stage)
-            assertFalse(engine.current().available)
-            assertFalse(engine.current().wakeReady)
-            assertTrue(engine.current().generation > generation)
-            assertEquals(old, engine.current().calibration)
-            engine.action("save", 11_001)
-            assertEquals(0, writes)
-        }
-    }
-
-    @Test fun atomicCommitFailurePreservesPreviousLiveAndDurableCalibration() {
-        for (throws in listOf(false, true)) {
-            val old = ranged()
-            val stored = old
-            var writes = 0
-            val engine = ProximityCalibrationEngine(old) {
-                writes++
-                if (throws) throw IllegalStateException("disk unavailable")
-                false
+    @Test fun cancellationAndTimeoutPreservePreviousCalibrationAtEveryCollectionStage() {
+        for (target in listOf(Stage.INTRO, Stage.CLEAR, Stage.NEAR, Stage.RETURN_CLEAR, Stage.WAVE_BASELINE, Stage.WAVE_CAPTURE, Stage.WAVES, Stage.REVIEW)) {
+            for (timeout in listOf(false, true)) {
+                val old = legacy()
+                val h = Journey(old)
+                h.to(target)
+                if (timeout) h.tick(SESSION_TIMEOUT_MS) else h.engine.action("cancel", h.now)
+                assertEquals(if (timeout) Stage.TIMED_OUT else Stage.CANCELLED, h.state.stage)
+                assertEquals(old, h.state.calibration)
+                assertEquals(0, h.writes)
             }
-            completeWizard(engine, 0f, 1f)
-            assertEquals(old, engine.current().calibration)
-            engine.action("save", 11_000)
-            assertEquals(Stage.FAILED, engine.current().stage)
-            assertEquals(old, engine.current().calibration)
-            assertEquals(old, stored)
-            assertEquals(1, writes)
-            assertWave(engine, 40f, 5f, 12_000)
         }
     }
 
-    @Test fun successfulCommitOccursOnceOnlyAfterAllEvidenceAndExplicitSave() {
-        var writes = 0
-        var durable = ranged()
-        val engine = ProximityCalibrationEngine(durable) { proposed -> writes++; durable = proposed; true }
-        completeWizard(engine, 0f, 1f)
-        assertEquals(0, writes)
-        assertEquals(Mode.RANGED, durable.mode)
-        engine.action("save", 11_000)
-        assertEquals(1, writes)
-        assertEquals(durable, engine.current().calibration)
-        engine.action("save", 11_001)
-        assertEquals(1, writes)
-        assertEquals(durable, ProximityCalibrationEngine(durable).current().calibration)
-    }
-
-    @Test fun noisyTransitionsDoNotWakeOrConsumeCooldown() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        assertFalse(engine.observe(0f, 1_020).gesture)
-        assertFalse(engine.tick(1_200).gesture)
-        engine.observe(1f, 1_800)
-        engine.observe(0f, 2_100)
-        assertTrue(engine.tick(2_250).gesture)
-        assertFalse(engine.tick(2_400).gesture)
-    }
-
-    @Test fun shortClearBounceDoesNotCompleteWaveOrConsumeProvisionalCooldown() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        engine.observe(0f, 1_300)
-        assertFalse(engine.tick(1_350).gesture)
-        engine.observe(1f, 1_400)
-        assertFalse(engine.tick(1_600).gesture)
-        engine.observe(0f, 1_700)
-        assertFalse(engine.tick(1_850).gesture)
-        engine.observe(1f, 2_450)
-        engine.observe(0f, 2_750)
-        assertTrue(engine.tick(2_900).gesture)
-    }
-
-    @Test fun heldNearOverMaximumIsRejectedAndNextWaveCanWake() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        assertFalse(engine.tick(5_001).gesture)
-        engine.observe(0f, 5_100)
-        assertFalse(engine.tick(5_300).gesture)
-        engine.observe(1f, 5_900)
-        engine.observe(0f, 6_200)
-        assertTrue(engine.tick(6_350).gesture)
-    }
-
-    @Test fun stateOnlyNearOrReturnCannotWakeAndCancelsPendingLiveWave() {
-        for (historicalNear in listOf(true, false)) {
-            val engine = ProximityCalibrationEngine(binary())
-            engine.observe(0f, 0)
-            engine.tick(200)
-            engine.observe(1f, 1_000, live = !historicalNear)
-            engine.observe(0f, 1_300, live = historicalNear)
-            assertFalse(engine.tick(1_500).gesture)
-            assertWave(engine, 0f, 1f, 3_000)
-        }
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        engine.observe(0f, 1_300)
-        val generation = engine.current().generation
-        engine.observe(0f, 1_350, live = false)
-        assertTrue(engine.current().generation > generation)
-        assertFalse(engine.tick(1_500).gesture)
-    }
-
-    @Test fun sourceLossBetweenEdgeAndDebounceCannotWake() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        engine.observe(0f, 1_300)
-        engine.sourceUnavailable(1_400)
-        assertFalse(engine.tick(1_500).gesture)
-        assertFalse(engine.current().wakeReady)
-    }
-
-    @Test fun wizardStartRevokesPendingWaveAndNoWizardGestureActuates() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        engine.observe(0f, 1_300)
-        val generation = engine.current().generation
-        engine.start(1_350)
-        assertTrue(engine.current().generation > generation)
-        assertFalse(engine.tick(1_500).gesture)
-        assertFalse(engine.current().wakeReady)
-    }
-
-    @Test fun hysteresisAndDebouncePreventPresenceChatter() {
-        val engine = ProximityCalibrationEngine(ranged())
-        engine.observe(40f, 0)
-        assertNull(engine.current().near)
-        assertEquals(false, engine.tick(200).near)
-        engine.observe(5f, 1_000)
-        assertEquals(false, engine.current().near)
-        assertEquals(true, engine.tick(1_150).near)
-        for (now in 1_200L..1_400L step 50) assertEquals(true, engine.observe(22f, now).near)
-        engine.observe(40f, 1_500)
-        assertEquals(true, engine.current().near)
-        assertEquals(false, engine.tick(1_650).near)
-    }
-
-    @Test fun noClearOrNoNearCannotPassWizard() {
-        val engine = ProximityCalibrationEngine(ranged())
-        engine.start(0)
-        engine.action("begin", 0)
-        engine.tick(ProximityCalibrationEngine.SESSION_TIMEOUT_MS)
-        assertEquals(Stage.TIMED_OUT, engine.current().stage)
-        val unchanged = ProximityCalibrationEngine(ranged())
-        unchanged.start(0)
-        unchanged.observe(40f, 0)
-        unchanged.action("begin", 0)
-        unchanged.tick(1_200)
-        unchanged.tick(2_000)
-        unchanged.observe(40f, 3_200)
-        unchanged.tick(4_000)
-        assertEquals(Stage.NEAR, unchanged.current().stage)
-        unchanged.tick(ProximityCalibrationEngine.SESSION_TIMEOUT_MS)
-        assertEquals(Stage.TIMED_OUT, unchanged.current().stage)
-    }
-
-    @Test fun clockRegressionAndUnexpectedBinaryValueFailClosedWithoutErasingCalibration() {
-        val fixed = binary()
-        for (clockRegression in listOf(true, false)) {
-            val engine = ProximityCalibrationEngine(fixed)
-            engine.observe(0f, 100)
-            engine.tick(300)
-            if (clockRegression) engine.observe(1f, 200) else engine.observe(8f, 400)
-            assertFalse(engine.current().available)
-            assertFalse(engine.current().wakeReady)
-            assertEquals(fixed, engine.current().calibration)
-        }
-    }
-
-    @Test fun retainedWizardStateCannotBePromotedToCaptureEvidenceByTick() {
-        val engine = ProximityCalibrationEngine()
-        engine.start(0)
-        engine.action("begin", 0)
-        engine.observe(0f, 1_200, live = false)
-        engine.tick(2_000)
-        engine.tick(3_000)
-        assertEquals(Stage.CLEAR, engine.current().stage)
-        engine.observe(0f, 3_100)
-        engine.tick(3_900)
-        assertEquals(Stage.NEAR, engine.current().stage)
-    }
-
-    @Test fun representationChangeAfterReviewCannotBeSaved() {
-        var writes = 0
-        val old = ranged()
-        val engine = ProximityCalibrationEngine(old) { writes++; true }
-        completeWizard(engine, 0f, 1f)
-        engine.observe(3f, 11_000)
-        assertEquals(Stage.FAILED, engine.current().stage)
-        engine.action("save", 11_001)
-        assertEquals(0, writes)
-        assertEquals(old, engine.current().calibration)
-    }
-
-    @Test fun freshProbeCanCaptureCalibrationButCannotWake() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 1_000)
-        engine.observe(0f, 1_300, live = false, calibrationLive = true)
-        assertFalse(engine.tick(1_500).gesture)
-        engine.start(2_000)
-        engine.action("begin", 2_000)
-        engine.observe(0f, 3_200, live = false, calibrationLive = true)
-        engine.tick(4_000)
-        assertEquals(Stage.NEAR, engine.current().stage)
-    }
-
-    @Test fun startingWizardRequiresNewSourceEvidenceRatherThanOldHeldState() {
-        val engine = ProximityCalibrationEngine()
-        engine.observe(0f, 0)
-        engine.start(10_000)
-        engine.action("begin", 10_000)
-        engine.tick(11_200)
-        engine.tick(12_000)
-        assertEquals(Stage.CLEAR, engine.current().stage)
-    }
-
-    @Test fun rejectedServiceAdmissionReleasesCooldownWithoutLosingClearEvidence() {
-        val engine = ProximityCalibrationEngine(binary())
-        engine.observe(0f, 0)
-        engine.tick(200)
-        engine.observe(1f, 800)
-        engine.observe(0f, 1_100)
-        assertTrue(engine.tick(1_250).gesture)
-        assertTrue(engine.current().wakeReady)
-        engine.releaseGestureCooldown()
-        assertTrue(engine.current().wakeReady)
-        engine.observe(1f, 1_800)
-        engine.observe(0f, 2_100)
-        assertTrue(engine.tick(2_250).gesture)
-    }
-
-    @Test fun noisyButSeparatedCaptureUsesBoundedWindowsInsteadOfWaitingForStillRawValues() {
-        for ((clearValues, nearValues) in listOf(
-            listOf(16.875f, 23.625f, 18f, 22f) to listOf(78f, 83f, 81f, 80f),
-            listOf(20f, 30f, 22f, 28f) to listOf(1f, 2f, 1.5f, 2.5f),
-        )) {
-            val engine = ProximityCalibrationEngine()
-            engine.start(0)
-            engine.action("begin", 0)
-            for (index in 0..8) engine.observe(clearValues[index % clearValues.size], 1_200L + index * 100)
-            assertEquals(Stage.NEAR, engine.current().stage)
-            for (index in 0..8) engine.observe(nearValues[index % nearValues.size], 3_200L + index * 100)
-            assertEquals(Stage.RETURN_CLEAR, engine.current().stage)
-            val clear = clearValues[0]
-            val near = nearValues[0]
-            engine.observe(clear, 4_100)
-            engine.tick(4_900)
-            assertEquals(Stage.WAVES, engine.current().stage)
-            for (start in listOf(6_000L, 8_000L, 10_000L)) {
-                engine.observe(near, start)
-                engine.observe(clear, start + 400)
-                engine.tick(start + 550)
-            }
-            assertEquals(Stage.REVIEW, engine.current().stage)
-            assertEquals(Mode.RANGED, engine.current().mode)
-        }
-    }
-
-    @Test fun overlappingNoiseWaitsWithoutChangingPreviousCalibration() {
-        val original = ranged()
-        val engine = ProximityCalibrationEngine(original)
-        engine.start(0)
-        engine.action("begin", 0)
-        for (index in 0..8) engine.observe(if (index % 2 == 0) 20f else 40f, 1_200L + index * 100)
-        assertEquals(Stage.NEAR, engine.current().stage)
-        for (index in 0..8) engine.observe(if (index % 2 == 0) 21f else 39f, 3_200L + index * 100)
-        assertEquals(Stage.NEAR, engine.current().stage)
-        assertEquals(original, engine.current().calibration)
-    }
-
-    @Test fun clearNoiseCanContinueDuringNearInstructionsUntilAnActualApproach() {
-        val engine = ProximityCalibrationEngine()
-        engine.start(0)
-        engine.action("begin", 0)
-        val clearBand = listOf(20f, 25f, 30f)
-        for (index in 0..8) engine.observe(clearBand[index % clearBand.size], 1_200L + index * 100)
-        assertEquals(Stage.NEAR, engine.current().stage)
-        for (index in 0..30) {
-            engine.observe(if (index % 2 == 0) 20f else 30f, 3_200L + index * 100)
-            assertEquals(Stage.NEAR, engine.current().stage)
-        }
-        for (index in 0..8) engine.observe(1f, 6_300L + index * 100)
-        assertEquals(Stage.RETURN_CLEAR, engine.current().stage)
-        engine.observe(20f, 7_200)
-        engine.tick(8_000)
-        assertEquals(Stage.WAVES, engine.current().stage)
-        for (start in listOf(9_000L, 11_000L, 13_000L)) {
-            engine.observe(1f, start)
-            engine.observe(20f, start + 400)
-            engine.tick(start + 550)
-        }
-        assertEquals(Stage.REVIEW, engine.current().stage)
-    }
-
-    @Test fun finiteExtremeRawValuesUseDoubleArithmeticWithoutCrashing() {
-        val calibration = Calibration(mode = Mode.RANGED, clearRaw = -Float.MAX_VALUE, nearRaw = -Float.MAX_VALUE / 2f)
-        assertEquals(0, calibration.level(-Float.MAX_VALUE))
-        assertEquals(100, calibration.level(Float.MAX_VALUE))
-        val engine = ProximityCalibrationEngine(calibration)
-        engine.observe(-Float.MAX_VALUE, 0)
-        engine.tick(200)
-        assertEquals(100, engine.observe(Float.MAX_VALUE, 1_000).level)
+    @Test fun optionalWaveSourceLossIsNotDowngradedToPresenceOnlySuccess() {
+        val h = Journey(legacy())
+        h.presence(100f, 50f); h.capture(50f)
+        assertEquals(Stage.WAVE_CAPTURE, h.state.stage)
+        h.engine.sourceUnavailable(h.now)
+        assertEquals(Stage.FAILED, h.state.stage)
+        assertEquals(0, h.writes)
+        assertFalse(h.state.canSave)
     }
 
     @Test fun introWaitsForFreshAcquisitionThenNormalCalibrationCanComplete() {
-        val old = ranged()
-        var writes = 0
-        val engine = ProximityCalibrationEngine(old) { writes++; true }
-        engine.start(0)
-        val generation = engine.current().generation
-        engine.sourceUnavailable(100)
-        assertEquals(Stage.INTRO, engine.current().stage)
-        assertTrue(engine.current().active)
-        assertFalse(engine.current().available)
-        assertTrue(engine.current().generation > generation)
-        engine.observe(0f, 200, live = false, calibrationLive = false)
-        assertFalse(engine.current().available)
-        assertFalse(engine.current().wakeReady)
-        assertFalse(engine.observe(0f, 300, live = false, calibrationLive = true).gesture)
-        assertTrue(engine.current().available)
-        engine.action("begin", 400)
-        engine.tick(1_600)
-        engine.tick(2_400)
-        assertEquals(Stage.NEAR, engine.current().stage)
-        engine.observe(1f, 3_600)
-        engine.tick(4_400)
-        engine.observe(0f, 4_500)
-        engine.tick(5_300)
-        assertEquals(Stage.WAVES, engine.current().stage)
-        for (start in listOf(6_500L, 8_500L, 10_500L)) {
-            assertFalse(engine.observe(1f, start).gesture)
-            assertFalse(engine.observe(0f, start + 400).gesture)
-            assertFalse(engine.tick(start + 550).gesture)
-        }
-        assertEquals(Stage.REVIEW, engine.current().stage)
-        assertEquals(old, engine.current().calibration)
-        assertEquals(0, writes)
-        engine.action("save", 12_000)
-        assertEquals(Stage.SAVED, engine.current().stage)
-        assertEquals(1, writes)
-    }
-
-    @Test fun introSourceWaitDoesNotExtendTimeoutOrAlterCalibrationOnCancel() {
-        for (cancel in listOf(true, false)) {
-            val old = ranged()
-            var writes = 0
-            val engine = ProximityCalibrationEngine(old) { writes++; true }
-            engine.start(0)
-            engine.sourceUnavailable(1_000)
-            engine.sourceUnavailable(ProximityCalibrationEngine.SESSION_TIMEOUT_MS - 1)
-            if (cancel) engine.action("cancel", ProximityCalibrationEngine.SESSION_TIMEOUT_MS - 1)
-            else engine.tick(ProximityCalibrationEngine.SESSION_TIMEOUT_MS)
-            assertEquals(if (cancel) Stage.CANCELLED else Stage.TIMED_OUT, engine.current().stage)
-            assertEquals(old, engine.current().calibration)
-            assertEquals(0, writes)
-            assertFalse(engine.current().wakeReady)
-        }
+        val h = Journey()
+        h.engine.start(h.now)
+        h.engine.sourceUnavailable(h.now)
+        assertEquals(Stage.INTRO, h.state.stage)
+        assertTrue(h.state.active)
+        assertFalse(h.state.available)
+        h.observe(100f, live = false, capture = false)
+        assertFalse(h.state.available)
+        h.observe(100f, live = false, capture = true)
+        h.engine.action("begin", h.now)
+        h.capture(100f); h.capture(50f); h.capture(100f)
+        h.wave(50f, 5f); h.save()
+        assertEquals(1, h.writes)
     }
 
     @Test fun malformedIntroSampleAndSourceLossAfterBeginStillFail() {
-        val malformed = ProximityCalibrationEngine(ranged())
-        malformed.start(0)
-        malformed.observe(Float.NaN, 100)
-        assertEquals(Stage.FAILED, malformed.current().stage)
-        val collecting = ProximityCalibrationEngine(ranged())
-        collecting.start(0)
-        collecting.observe(40f, 100, live = false, calibrationLive = true)
-        collecting.action("begin", 200)
-        collecting.sourceUnavailable(300)
-        assertEquals(Stage.FAILED, collecting.current().stage)
+        val h = Journey(legacy())
+        h.engine.start(h.now); h.observe(Float.NaN)
+        assertEquals(Stage.FAILED, h.state.stage)
+        val second = Journey(legacy()); second.begin(40f)
+        second.engine.sourceUnavailable(second.now)
+        assertEquals(Stage.FAILED, second.state.stage)
     }
 
-    private fun ranged() = Calibration(mode = Mode.RANGED, clearRaw = 40f, nearRaw = 5f)
-    private fun binary() = Calibration(mode = Mode.BINARY, clearRaw = 0f, nearRaw = 1f)
-
-    private fun assertWave(engine: ProximityCalibrationEngine, clear: Float, near: Float, start: Long) {
-        assertFalse(engine.observe(clear, start).gesture)
-        engine.tick(start + 200)
-        assertTrue(engine.current().wakeReady)
-        assertFalse(engine.observe(near, start + 800).gesture)
-        assertFalse(engine.observe(clear, start + 1_100).gesture)
-        assertFalse(engine.tick(start + 1_249).gesture)
-        assertTrue(engine.tick(start + 1_250).gesture)
-        assertFalse(engine.tick(start + 1_251).gesture)
+    @Test fun atomicCommitFailurePreservesPreviousLiveAndDurableCalibration() {
+        val old = legacy()
+        val h = Journey(old, failCommit = true)
+        h.presence(100f, 50f); h.wave(50f, 5f)
+        h.engine.action("save", h.now)
+        assertEquals(Stage.FAILED, h.state.stage)
+        assertEquals(old, h.state.calibration)
+        assertNull(h.saved)
+        assertEquals(1, h.writes)
     }
 
-    private fun completeWizard(engine: ProximityCalibrationEngine, clear: Float, near: Float) =
-        progressTo(engine, clear, near, Stage.REVIEW)
+    @Test fun restartDropsCandidateButRestoresVersionOneWaveCompatibilityWithoutWriting() {
+        val old = legacy()
+        val h = Journey(old); h.presence(100f, 50f); h.capture(50f)
+        val restarted = Journey(old)
+        assertNull(restarted.state.stage)
+        assertTrue(restarted.pulse(40f, 5f).gesture)
+        assertEquals(0, restarted.writes)
+    }
 
-    private fun progressTo(engine: ProximityCalibrationEngine, clear: Float, near: Float, target: Stage) {
-        engine.start(0)
-        engine.observe(clear, 0)
-        if (target == Stage.INTRO) return
-        engine.action("begin", 10)
-        if (target == Stage.CLEAR) return
-        engine.tick(1_210)
-        engine.tick(2_010)
-        assertEquals(Stage.NEAR, engine.current().stage)
-        if (target == Stage.NEAR) return
-        engine.observe(near, 3_310)
-        engine.tick(4_110)
-        assertEquals(Stage.RETURN_CLEAR, engine.current().stage)
-        if (target == Stage.RETURN_CLEAR) return
-        engine.observe(clear, 4_210)
-        engine.tick(5_010)
-        assertEquals(Stage.WAVES, engine.current().stage)
-        if (target == Stage.WAVES) return
-        for (start in listOf(6_000L, 8_000L, 10_000L)) {
-            assertFalse(engine.observe(near, start).gesture)
-            assertFalse(engine.observe(clear, start + 400).gesture)
-            assertFalse(engine.tick(start + 550).gesture)
+    @Test fun noisyTransitionsDoNotWakeOrConsumeCooldown() {
+        val h = Journey(legacy())
+        h.observe(40f); h.tick(200); h.tick(800); h.observe(5f)
+        h.tick(20); h.observe(40f); assertFalse(h.tick(200).gesture)
+        assertTrue(h.pulse(40f, 5f).gesture)
+    }
+
+    @Test fun rejectedServiceAdmissionReleasesCooldownWithoutLosingClearEvidence() {
+        val h = Journey(legacy())
+        assertTrue(h.pulse(40f, 5f).gesture)
+        h.engine.releaseGestureCooldown()
+        h.tick(550); h.observe(5f); h.tick(300); h.observe(40f)
+        assertTrue(h.tick(150).gesture)
+    }
+
+    @Test fun cueCountdownAndHeldCaptureAreEngineOwnedAndObservationStagesAdvanceAutomatically() {
+        val h = Journey()
+        h.begin(100f)
+        assertEquals(Cue.MOVE_AWAY, h.state.cue)
+        assertEquals(COUNTDOWN_MS, h.state.cueRemainingMs)
+        h.tick(COUNTDOWN_MS)
+        assertEquals(Cue.HOLD, h.state.cue)
+        assertEquals(CAPTURE_HOLD_MS, h.state.cueDurationMs)
+        h.tick(CAPTURE_HOLD_MS)
+        assertEquals(Stage.NEAR, h.state.stage)
+        assertEquals(Cue.APPROACH, h.state.cue)
+        assertEquals(COUNTDOWN_MS, h.state.cueRemainingMs)
+    }
+
+    @Test fun noisyClearObservationCannotBecomeBodyApproachUntilTheBodyActuallyMovesNear() {
+        val h = Journey(); h.begin(100f)
+        h.tick(COUNTDOWN_MS)
+        for (raw in listOf(98f, 100f, 102f, 99f, 101f)) { h.observe(raw); h.tick(200) }
+        h.tick(CAPTURE_HOLD_MS - 1_000)
+        assertEquals(Stage.NEAR, h.state.stage)
+        h.tick(COUNTDOWN_MS)
+        repeat(10) { h.observe(if (it % 2 == 0) 98f else 102f); h.tick(200) }
+        assertEquals(Stage.NEAR, h.state.stage)
+        h.observe(50f); h.tick(CAPTURE_HOLD_MS)
+        assertEquals(Stage.RETURN_CLEAR, h.state.stage)
+    }
+
+    @Test fun rangedSourceWithBinaryEndpointMediansRetainsObservedIntermediateValues() {
+        val h = Journey()
+        h.begin(0f)
+        h.observe(.2f); h.observe(0f)
+        h.capture(0f)
+        // No body response: hand support may still use the endpoints 0 and 1.
+        h.tick(APPROACH_TIMEOUT_MS)
+        h.wave(0f, 1f)
+        h.save()
+        assertEquals(Mode.RANGED, h.saved!!.mode)
+        assertFalse(h.observe(.8f).stage == Stage.FAILED)
+        assertTrue(h.state.available)
+    }
+
+    @Test fun waveOnlyBinaryRepresentationCannotChangeDuringValidation() {
+        val old = legacy()
+        val h = Journey(old)
+        h.begin(0f); h.capture(0f); h.tick(APPROACH_TIMEOUT_MS)
+        h.capture(0f); h.tick(COUNTDOWN_MS); h.pulse(0f, 1f)
+        assertEquals(Stage.WAVES, h.state.stage)
+        h.observe(8f)
+        assertEquals(Stage.FAILED, h.state.stage)
+        assertEquals(old, h.state.calibration)
+        assertEquals(0, h.writes)
+    }
+
+    @Test fun observedRangedSourceWithZeroOneWaveAnchorsStillAcceptsIntermediateValidationValues() {
+        val h = Journey()
+        h.begin(0f); h.observe(.2f); h.observe(0f)
+        h.capture(0f); h.tick(APPROACH_TIMEOUT_MS)
+        h.capture(0f); h.tick(COUNTDOWN_MS); h.pulse(0f, 1f)
+        assertEquals(Stage.WAVES, h.state.stage)
+        h.observe(.8f); h.observe(0f)
+        h.tick(COUNTDOWN_MS)
+        repeat(REQUIRED_WAVES) { h.pulse(0f, 1f) }
+        assertEquals(Stage.REVIEW, h.state.stage)
+        h.save()
+        assertEquals(Mode.RANGED, h.saved!!.mode)
+    }
+
+    @Test fun binaryCalibrationRejectsNestedWaveAnchorsOutsideObservedRepresentation() {
+        assertThrows(IllegalArgumentException::class.java) {
+            Calibration(mode = Mode.BINARY, clearRaw = 0f, nearRaw = 1f,
+                wave = WaveCalibration(clearRaw = 1f, nearRaw = 2f))
         }
-        assertEquals(Stage.REVIEW, engine.current().stage)
+    }
+
+    @Test fun finiteExtremeRawValuesUseDoubleArithmeticWithoutCrashing() {
+        val c = Calibration(mode = Mode.RANGED, clearRaw = -Float.MAX_VALUE, nearRaw = -Float.MAX_VALUE / 2)
+        assertEquals(0, c.level(-Float.MAX_VALUE))
+        assertEquals(100, c.level(Float.MAX_VALUE))
+    }
+
+    private class Journey(initial: Calibration? = null, pattern: WavePattern = WavePattern.SINGLE, failCommit: Boolean = false) {
+        var now = 0L
+        var writes = 0
+        var saved: Calibration? = null
+        val engine = ProximityCalibrationEngine(initial, requestedWavePattern = pattern) {
+            writes++; if (failCommit) false else { saved = it; true }
+        }
+        val state get() = engine.current()
+        fun observe(raw: Float, live: Boolean = true, capture: Boolean = live) = engine.observe(raw, now, live, capture)
+        fun tick(delta: Long): Result { now += delta; return engine.tick(now) }
+        fun begin(clear: Float) { engine.start(now); observe(clear, false, true); engine.action("begin", now) }
+        fun capture(raw: Float) { tick(COUNTDOWN_MS); observe(raw); tick(CAPTURE_HOLD_MS) }
+        fun presence(clear: Float, body: Float) { begin(clear); capture(clear); capture(body); capture(clear); assertEquals(Stage.WAVE_BASELINE, state.stage) }
+        fun pulse(clear: Float, near: Float): Result {
+            observe(clear); tick(800); observe(near); tick(400); observe(clear); return tick(150)
+        }
+        fun wave(baseline: Float, hand: Float) {
+            assertEquals(Stage.WAVE_BASELINE, state.stage)
+            capture(baseline)
+            assertEquals(Stage.WAVE_CAPTURE, state.stage)
+            tick(COUNTDOWN_MS)
+            pulse(baseline, hand)
+            assertEquals(Stage.WAVES, state.stage)
+            tick(COUNTDOWN_MS)
+            repeat(REQUIRED_WAVES) {
+                pulse(baseline, hand)
+                if (state.wavePattern == WavePattern.DOUBLE) pulse(baseline, hand)
+            }
+            assertEquals(Stage.REVIEW, state.stage)
+        }
+        fun save() { assertTrue(state.canSave); engine.action("save", now); assertEquals(Stage.SAVED, state.stage) }
+        fun to(target: Stage) {
+            engine.start(now); observe(100f, false, true)
+            if (target == Stage.INTRO) return
+            engine.action("begin", now); if (target == Stage.CLEAR) return
+            capture(100f); if (target == Stage.NEAR) return
+            capture(50f); if (target == Stage.RETURN_CLEAR) return
+            capture(100f); if (target == Stage.WAVE_BASELINE) return
+            capture(50f); if (target == Stage.WAVE_CAPTURE) return
+            tick(COUNTDOWN_MS); pulse(50f, 5f); if (target == Stage.WAVES) return
+            tick(COUNTDOWN_MS); repeat(REQUIRED_WAVES) { pulse(50f, 5f) }
+            assertEquals(target, state.stage)
+        }
+    }
+    companion object {
+        private const val COUNTDOWN_MS = ProximityCalibrationEngine.COUNTDOWN_MS
+        private const val CAPTURE_HOLD_MS = ProximityCalibrationEngine.CAPTURE_HOLD_MS
+        private const val APPROACH_TIMEOUT_MS = ProximityCalibrationEngine.APPROACH_TIMEOUT_MS
+        private const val WAVE_PHASE_TIMEOUT_MS = ProximityCalibrationEngine.WAVE_PHASE_TIMEOUT_MS
+        private const val SESSION_TIMEOUT_MS = ProximityCalibrationEngine.SESSION_TIMEOUT_MS
+        private const val REQUIRED_WAVES = ProximityCalibrationEngine.REQUIRED_WAVES
+        private fun legacy() = Calibration(version = 1, mode = Mode.RANGED, clearRaw = 40f, nearRaw = 5f)
     }
 }

@@ -171,6 +171,26 @@ data class ProfileProximityCalibration(
     val minimumNearMs: Int = 200,
     val maximumNearMs: Int = 4000,
     val cooldownMs: Int = 1000,
+    /** Format 1 retains its original single-wave interpretation; format 2 separates presence and wave. */
+    val formatVersion: Int = 1,
+    val wave: ProfileWaveCalibration? = null,
+    /** False only for a verified wave-only source; no ordinary-presence publication. */
+    val presenceSupported: Boolean = true,
+)
+
+/** Optional independently measured and validated wave capability; absence in format 2 means presence only. */
+data class ProfileWaveCalibration(
+    val pattern: String,
+    val clearRaw: Float,
+    val nearRaw: Float,
+    val nearEnter: Float = 0.65f,
+    val clearExit: Float = 0.30f,
+    val debounceMs: Int = 150,
+    val clearArmMs: Int = 700,
+    val minimumNearMs: Int = 200,
+    val maximumNearMs: Int = 4000,
+    val cooldownMs: Int = 1000,
+    val maxInterWaveGapMs: Int = 1800,
 )
 
 data class ProfileIdentity(

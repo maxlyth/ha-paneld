@@ -405,14 +405,54 @@ class AutoSleepControllerTest {
         assertTrue(h.learning.corrections.isEmpty())
     }
 
-    @Test fun proximityWakeThenTouchNeverManufacturesTapProof() = Harness().use { h ->
-        h.prepareAutomaticSleep()
-        h.controller.noteProximityState(true)
-        h.await { !h.screen.isIntendedOff() }
+    @Test fun proximityCannotWakeAutomaticOrManualOffEvenWhenQueuedBeforeOff() = runTest {
+        for (automatic in listOf(false, true)) {
+            val h = Harness(this, StandardTestDispatcher(testScheduler))
+            assertTrue(h.controller.start())
+            runCurrent()
+            val request = h.requests.single()
+            h.offer(aggregate(request, 0L, HaPresenceValue.OFF))
+            runCurrent()
+            if (automatic) {
+                h.now.set(15 * MINUTE)
+                h.controller.advanceToForTest(h.now.get())
+                runCurrent()
+                assertTrue(h.screen.isIntendedOff())
+                assertTrue(h.controller.noteProximityState(true))
+            } else {
+                assertTrue(h.controller.noteProximityState(true))
+                h.screen.sleep()
+            }
+            val generation = h.screen.currentOffGeneration()
+            runCurrent()
+            assertEquals(generation, h.screen.currentOffGeneration())
+            assertTrue(h.learning.corrections.isEmpty())
+            assertFalse(h.learning.events.contains("gap"))
+            h.closeWithVirtualTime { runCurrent() }
+        }
+    }
 
-        h.controller.noteTouchForTest(h.now.incrementAndGet(), null)
-        Thread.sleep(30L)
-        assertTrue(h.learning.corrections.isEmpty())
+    @Test fun proximityOnlyExtendsLocalEvidenceWhileScreenIsProvenLit() = runTest {
+        val h = Harness(this, StandardTestDispatcher(testScheduler))
+        assertTrue(h.controller.start())
+        runCurrent()
+        val request = h.requests.single()
+        h.offer(aggregate(request, 0L, HaPresenceValue.OFF,
+            marker = HaPresenceActivityMarker(1L, SOURCE, h.now.get())))
+        runCurrent()
+        h.now.set(MINUTE)
+        h.backlight.level = 0
+        assertTrue(h.controller.noteProximityState(true))
+        runCurrent()
+        assertFalse(h.learning.events.contains("gap"))
+        assertTrue(h.controller.noteProximityState(false))
+        runCurrent()
+        h.backlight.level = 160
+        assertTrue(h.controller.noteProximityState(true))
+        runCurrent()
+        assertTrue(h.learning.events.contains("gap"))
+        assertFalse(h.screen.isIntendedOff())
+        h.closeWithVirtualTime { runCurrent() }
     }
 
     @Test fun genericScreenWakeThenTouchNeverManufacturesTapProof() = Harness().use { h ->
@@ -557,7 +597,7 @@ class AutoSleepControllerTest {
         h.now.incrementAndGet()
         assertTrue(h.offer(aggregate(request, 1L, HaPresenceValue.OFF,
             marker = HaPresenceActivityMarker(1L, SOURCE, h.now.get()))))
-        assertTrue(h.controller.noteProximityState(true))
+        assertTrue(h.controller.noteTouchForTest(h.now.get(), null))
 
         val closeResult = AtomicBoolean()
         val closer = Thread { closeResult.set(h.controller.closeAndJoin(2_000L)) }.apply { start() }
@@ -635,9 +675,10 @@ class AutoSleepControllerTest {
         val scope = scopeOverride ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
         val learning = FakeLearning()
         val wakeTap = FakeWakeTap(canArm = wakeTapAvailable)
+        val backlight = FakeBacklight()
         val screen = ScreenController(
-            FakeBacklight(), FakeScreenPower(), FakeRootShell(),
-            FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK")),
+            backlight, FakeScreenPower(), FakeRootShell(),
+            FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK", "BLPOWER" to "0")),
             wakeTap, ScreenOff.DAEMON_BLPOWER,
         )
         val requests = CopyOnWriteArrayList<HaPresenceRequest>()

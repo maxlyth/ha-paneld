@@ -61,6 +61,11 @@
     };
     var status = phases[available ? phase : "source_unavailable"] || phases.calibration_required;
     state.textContent = label(status[0], status[1]);
+    if (available && phase === "ready" && typeof d.presenceSupported === "boolean" && typeof d.waveSupported === "boolean") {
+      state.textContent = d.presenceSupported
+        ? (d.waveSupported ? label("ready_both", "Presence and wave are ready") : label("ready_presence", "Presence is ready; wave is unavailable"))
+        : (d.waveSupported ? label("ready_wave", "Wave is ready; presence is unavailable") : label("ready_neither", "Presence and wave are unavailable"));
+    }
     var mode = d.signalMode || d.mode;
     detail.textContent = active
       ? label("follow", "Follow the instructions on the panel. Keep the browser tab open until setup finishes; you can leave it in the background.")
@@ -70,6 +75,8 @@
     var stages = {
       intro: ["intro", "Ready to begin on the panel"], clear: ["clear", "Measuring the clear observation"],
       near: ["near", "Measuring the near observation"], return_clear: ["return_clear", "Checking the return to clear"],
+      wave_baseline: ["wave_baseline", "Checking the starting position for hand waves"],
+      wave_capture: ["wave_capture", "Measuring a deliberate hand wave"],
       waves: ["waves", "Validating waves: {seen}/{required}"], review: ["review", "Ready for review and Save on the panel"],
       saved: ["saved", "Calibration saved"], cancelled: ["cancelled", "Setup cancelled. Existing calibration is unchanged."],
       timed_out: ["timed_out", "Setup timed out. Existing calibration is unchanged."], failed: ["failed", "Setup could not complete. Existing calibration is unchanged."]

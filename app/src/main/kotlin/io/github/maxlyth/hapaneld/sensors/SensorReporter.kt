@@ -315,6 +315,8 @@ class SensorReporter(
 
     fun proximityReady(): Boolean = proximityRuntime?.isWaveReady() == true
 
+    fun proximityPresenceReady(): Boolean = proximityRuntime?.isPresenceNear() == true
+
     /** Notify the service only when empirical signal-shape eligibility changes. Notifications carry no
      *  truth: every active consumer re-reads this service-owned reporter before acting. */
     fun setLearnedProximityListener(listener: (() -> Unit)?) {
@@ -413,10 +415,11 @@ class SensorReporter(
         onTemperature: (Float) -> Unit = {},
         onHumidity: (Float) -> Unit = {},
         onLuxRaw: (Float) -> Unit = {},
+        onPresenceApproach: () -> Unit = {},
     ) {
         if (!hasLight() && !hasProximity() && tempSensor == null && humiditySensor == null && !hasCht8305) return
         if (activeRun != null) return
-        val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity)
+        val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity, onPresenceApproach)
         activeRun = run
         proximitySampleCount = 0
         proximityReceived = false
@@ -616,6 +619,7 @@ class SensorReporter(
         if (decision.reportMask != ProximityReportGate.NONE) {
             run.proximity(decision.near, decision.normalizedLevel, decision.reportMask)
         }
+        if (decision.presenceApproach) run.presenceApproach()
         if (decision.deliberateGesture) run.gesture()
     }
 

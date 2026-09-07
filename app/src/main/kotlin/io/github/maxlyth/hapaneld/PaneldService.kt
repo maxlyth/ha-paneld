@@ -3298,7 +3298,18 @@ class PaneldService : Service() {
                 onLuxRaw = autoBright::submitLux,
                 onProximity = { near, level, reportMask ->
                     mqtt.publishProximity(near, level, reportMask)
-                    autoSleep.noteProximityState(near)
+                    if (!sensors.proximityCalibrationActive()) autoSleep.noteProximityState(near)
+                },
+                onPresenceApproach = {
+                    val proximityGeneration = sensors.proximityGeneration()
+                    val observedAt = android.os.SystemClock.elapsedRealtime()
+                    wakeOnWaveWorker.execute {
+                        screen.brightenForPresence {
+                            !teardownBoundary.isStopping && sensors.proximityPresenceReady() &&
+                                sensors.proximityGeneration() == proximityGeneration &&
+                                android.os.SystemClock.elapsedRealtime() - observedAt in 0L..750L
+                        }
+                    }
                 },
                 onGesture = gesture@{
                     val token = sensors.proximityGestureToken()

@@ -1433,6 +1433,36 @@
       "sourceHash": "285ddd52ae6ab42b287d85dbaa0dd509fece2d3cb53dbb3cde9c1c7915e5b4f8",
       "state": "machine-cross-checked"
     },
+    "configure.proximity.setup.ready_both": {
+      "text": "Anwesenheitserkennung und Handbewegung sind bereit",
+      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_presence": {
+      "text": "Anwesenheitserkennung bereit; Handbewegung nicht verfügbar",
+      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_wave": {
+      "text": "Handbewegung bereit; Anwesenheitserkennung nicht verfügbar",
+      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_neither": {
+      "text": "Anwesenheitserkennung und Handbewegung nicht verfügbar",
+      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.wave_baseline": {
+      "text": "Ausgangsposition für Handbewegungen wird geprüft",
+      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.wave_capture": {
+      "text": "Eine gezielte Handbewegung wird gemessen",
+      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
+      "state": "machine-cross-checked"
+    },
     "configure.proximity.setup.binary": {
       "text": "Dieser Sensor meldet nur „nah“ oder „frei“. Sein Erkennungsabstand lässt sich nicht einstellen.",
       "sourceHash": "d30827a01bb255c475f6136c3deb16d36e314496ad3a5c24e053b08a4759f429",

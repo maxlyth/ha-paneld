@@ -1,0 +1,88 @@
+package io.github.maxlyth.hapaneld
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class ProximityWizardPresentationTest {
+    @Test
+    fun clearCaptureKeepsPersonAwayWhileNearCaptureKeepsPersonAtPanel() {
+        assertFalse(proximityWizardHoldsNearPanel("clear", "single"))
+        assertFalse(proximityWizardHoldsNearPanel("return_clear", "single"))
+        assertTrue(proximityWizardHoldsNearPanel("near", "single"))
+        assertTrue(proximityWizardHoldsNearPanel("wave_baseline", "single"))
+        assertFalse(proximityWizardHoldsNearPanel("wave_baseline", "double"))
+    }
+
+    @Test
+    fun doubleWaveInstructionsRequireExplicitPattern() {
+        assertEquals(1, proximityWizardWaveCount("single"))
+        assertEquals(1, proximityWizardWaveCount(""))
+        assertEquals(1, proximityWizardWaveCount("unknown"))
+        assertEquals(2, proximityWizardWaveCount("double"))
+    }
+
+    @Test
+    fun reviewKeepsPresenceAndWaveCapabilitiesIndependent() {
+        assertEquals(ProximityWizardCapabilities.BOTH, proximityWizardCapabilities(true, true))
+        assertEquals(ProximityWizardCapabilities.PRESENCE_ONLY, proximityWizardCapabilities(true, false))
+        assertEquals(ProximityWizardCapabilities.WAVE_ONLY, proximityWizardCapabilities(false, true))
+        assertEquals(ProximityWizardCapabilities.NEITHER, proximityWizardCapabilities(false, false))
+    }
+
+    @Test
+    fun countdownRoundsUpWithoutInventingTimeAfterExpiry() {
+        assertEquals(3, proximityWizardCountdownSeconds(3000, 3000))
+        assertEquals(3, proximityWizardCountdownSeconds(2001, 3000))
+        assertEquals(2, proximityWizardCountdownSeconds(2000, 3000))
+        assertEquals(1, proximityWizardCountdownSeconds(1, 3000))
+        assertNull(proximityWizardCountdownSeconds(0, 3000))
+    }
+
+    @Test
+    fun missingOrInvalidCueDurationShowsWaitingInsteadOfFalseCountdown() {
+        assertNull(proximityWizardCountdownSeconds(0, 0))
+        assertNull(proximityWizardCountdownSeconds(2500, 0))
+        assertNull(proximityWizardCountdownSeconds(3001, 3000))
+        assertNull(proximityWizardCountdownSeconds(-1, 3000))
+        assertNull(proximityWizardCountdownSeconds(3000, -1))
+        assertEquals(Int.MAX_VALUE, proximityWizardCountdownSeconds(Long.MAX_VALUE, Long.MAX_VALUE))
+    }
+
+    @Test
+    fun presenceAndWaveBaselinesUseDifferentPhysicalIllustrations() {
+        for (stage in listOf("clear", "near", "return_clear", "wave_baseline")) {
+            assertFalse(proximityWizardUsesHand(stage, ProximityWizardCue.HOLD))
+            assertFalse(proximityWizardUsesHand(stage, ProximityWizardCue.APPROACH))
+        }
+        for (stage in listOf("wave_capture", "waves")) {
+            assertTrue(proximityWizardUsesHand(stage, ProximityWizardCue.HOLD))
+            assertTrue(proximityWizardUsesHand(stage, ProximityWizardCue.PREPARE))
+        }
+        assertTrue(proximityWizardUsesHand("intro", ProximityWizardCue.WAVE))
+    }
+
+    @Test
+    fun observationsAndSavingNeverOfferAnIntermediateAdvanceButton() {
+        for (stage in listOf("clear", "near", "return_clear", "wave_baseline", "wave_capture", "waves", "saving")) {
+            assertFalse(stage, proximityWizardHasLocalStepAction(stage))
+        }
+        assertTrue(proximityWizardHasLocalStepAction("intro"))
+        assertTrue(proximityWizardHasLocalStepAction("review"))
+        assertTrue(proximityWizardHasLocalStepAction("failed"))
+        assertTrue(proximityWizardHasLocalStepAction("saved"))
+    }
+
+    @Test
+    fun cueWireContractKeepsPreparationSeparateFromSensorCapture() {
+        assertEquals(ProximityWizardCue.PREPARE, ProximityWizardCue.fromWire("prepare"))
+        assertEquals(ProximityWizardCue.APPROACH, ProximityWizardCue.fromWire("approach"))
+        assertEquals(ProximityWizardCue.HOLD, ProximityWizardCue.fromWire("hold"))
+        assertEquals(ProximityWizardCue.MOVE_AWAY, ProximityWizardCue.fromWire("move_away"))
+        assertEquals(ProximityWizardCue.WAIT_CLEAR, ProximityWizardCue.fromWire("wait_clear"))
+        assertEquals(ProximityWizardCue.WAVE, ProximityWizardCue.fromWire("wave"))
+        assertEquals(ProximityWizardCue.NONE, ProximityWizardCue.fromWire("unknown"))
+    }
+}

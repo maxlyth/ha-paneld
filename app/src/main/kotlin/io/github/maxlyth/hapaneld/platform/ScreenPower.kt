@@ -16,6 +16,9 @@ interface ScreenPower {
     /** Briefly acquire a SCREEN_BRIGHT wakelock that also wakes the device — the wake "pulse". */
     fun pulseWake()
 
+    /** Briefly lift Android idle dim without waking a sleeping device or changing its brightness. */
+    fun brightenWhileOn(): Boolean = false
+
     /**
      * True when a PIN/pattern/password is configured, so leaving Android's interactive state would
      * put a credential screen between the user and the dashboard. A wall panel has nobody to type
@@ -39,6 +42,17 @@ class AndroidScreenPower(context: Context) : ScreenPower {
             PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
             "ha-paneld:wake",
         ).acquire(3_000)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun brightenWhileOn(): Boolean {
+        if (!pm.isInteractive) return false
+        return runCatching {
+            // No ACQUIRE_CAUSES_WAKEUP: a concurrent platform sleep must win over an approach.
+            pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "ha-paneld:presence")
+                .acquire(5_000)
+            true
+        }.getOrDefault(false)
     }
 
     // An unavailable KeyguardManager is treated as secured: refusing to sleep costs a dimmer panel,

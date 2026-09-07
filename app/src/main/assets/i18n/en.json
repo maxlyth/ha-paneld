@@ -4078,6 +4078,78 @@
       "softMaxChars": 76,
       "hardMaxChars": 114
     },
+    "configure.proximity.setup.ready_both": {
+      "text": "Presence and wave are ready",
+      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 54,
+      "hardMaxChars": 81
+    },
+    "configure.proximity.setup.ready_presence": {
+      "text": "Presence is ready; wave is unavailable",
+      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 76,
+      "hardMaxChars": 114
+    },
+    "configure.proximity.setup.ready_wave": {
+      "text": "Wave is ready; presence is unavailable",
+      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 76,
+      "hardMaxChars": 114
+    },
+    "configure.proximity.setup.ready_neither": {
+      "text": "Presence and wave are unavailable",
+      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 66,
+      "hardMaxChars": 99
+    },
+    "configure.proximity.setup.stage.wave_baseline": {
+      "text": "Checking the starting position for hand waves",
+      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 90,
+      "hardMaxChars": 135
+    },
+    "configure.proximity.setup.stage.wave_capture": {
+      "text": "Measuring a deliberate hand wave",
+      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 64,
+      "hardMaxChars": 96
+    },
     "configure.proximity.setup.binary": {
       "text": "This sensor reports near or clear only. Its detection distance cannot be adjusted.",
       "sourceHash": "d30827a01bb255c475f6136c3deb16d36e314496ad3a5c24e053b08a4759f429",

@@ -18,7 +18,7 @@ class ProximitySampleFreshnessTest {
 
     @Test fun retainedBackfillCanEstablishStateButCannotBecomeALiveWave() {
         val engine = ProximityCalibrationEngine(ProximityCalibrationEngine.Calibration(
-            mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 0f, nearRaw = 1f,
+            version = 1, mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 0f, nearRaw = 1f,
         ))
         engine.observe(0f, 10_000)
         engine.tick(10_200)
@@ -31,7 +31,7 @@ class ProximitySampleFreshnessTest {
     @Test fun monotonicSeedAndEpochEdgesInOneStreamProduceOneLiveWave() {
         val gate = ProximityTimestampGate()
         val engine = ProximityCalibrationEngine(ProximityCalibrationEngine.Calibration(
-            mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 1f, nearRaw = 0f,
+            version = 1, mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 1f, nearRaw = 0f,
         ))
         val elapsed = 1_218_386_275L
         val wall = 1_788_784_339_895L
@@ -82,7 +82,7 @@ class ProximitySampleFreshnessTest {
     @Test fun freshCrossDomainProbeReturnStillCannotActuate() {
         val gate = ProximityTimestampGate()
         val engine = ProximityCalibrationEngine(ProximityCalibrationEngine.Calibration(
-            mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 0f, nearRaw = 1f,
+            version = 1, mode = ProximityCalibrationEngine.Mode.BINARY, clearRaw = 0f, nearRaw = 1f,
         ))
         assertTrue(gate.accept(ns(10_000), 10_000, WALL))
         engine.observe(0f, 10_000, live = false, calibrationLive = true)

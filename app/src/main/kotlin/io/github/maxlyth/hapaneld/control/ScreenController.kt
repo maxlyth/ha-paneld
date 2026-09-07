@@ -119,6 +119,14 @@ class ScreenController(
         return true
     }
 
+    /** A live approach restores idle brightness only on a proven lit screen; it never owns a wake. */
+    @Synchronized
+    fun brightenForPresence(admit: () -> Boolean): Boolean {
+        if (intendedOff || admissionClosed.get() || !power.isInteractive() || observedLit() != true) return false
+        if (!admit()) return false
+        return power.brightenWhileOn()
+    }
+
     /** Best-effort: is the backlight actually dark? bl_power 4=off/0=on (root/daemon panels); else the
      *  brightness-fallback path where 0 == off. Unknown → false (never re-light on a guess). */
     fun observedDark(): Boolean? {
