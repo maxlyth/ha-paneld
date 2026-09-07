@@ -246,8 +246,34 @@ internal fun dispatchLiveSetting(
     }
 }
 
+/**
+ * A live-setting handler failed because this panel has no path to the hardware at all.
+ *
+ * The classification is thrown rather than returned because the command dispatcher between the handler
+ * and the live-setting journal reports one boolean per command. Throwing carries the distinction across
+ * that boundary without giving every MQTT command a typed result it has no use for; on the plain MQTT
+ * command path, where nothing is journalled, it is an ordinary failure.
+ */
+internal class LiveSettingUnavailableException(val key: String) :
+    IllegalStateException("$key has no apply path on this hardware")
+
+/** Fail a handler while preserving whether the attempt found no path at all. */
+internal fun requireControlApplied(
+    key: String,
+    outcome: io.github.maxlyth.hapaneld.control.ControlApplyOutcome,
+    message: () -> String,
+) {
+    when (outcome) {
+        io.github.maxlyth.hapaneld.control.ControlApplyOutcome.APPLIED -> Unit
+        io.github.maxlyth.hapaneld.control.ControlApplyOutcome.UNAVAILABLE ->
+            throw LiveSettingUnavailableException(key)
+        io.github.maxlyth.hapaneld.control.ControlApplyOutcome.FAILED -> error(message())
+    }
+}
+
 internal fun liveSettingApplyResult(
     result: MqttCommandDispatcher.RunResult,
+    unavailable: () -> Boolean = { false },
 ): LiveSettingApplyResult = when {
     result.admission == MqttCommandDispatcher.Admission.CLOSED ||
         result.admission == MqttCommandDispatcher.Admission.REJECTED ->
@@ -256,19 +282,29 @@ internal fun liveSettingApplyResult(
         LiveSettingApplyResult.DEFERRED
     result.execution == MqttCommandDispatcher.Execution.SUCCEEDED ->
         LiveSettingApplyResult.APPLIED
+    // Only a handler that ran and failed can report unavailability. Superseded and never-admitted work
+    // observed no hardware at all, so it stays an ordinary retryable failure whatever the flag says.
+    result.execution == MqttCommandDispatcher.Execution.FAILED && unavailable() ->
+        LiveSettingApplyResult.UNAVAILABLE
     else -> LiveSettingApplyResult.FAILED
 }
 
 internal fun liveSettingApplication(
     result: MqttCommandDispatcher.RunResult,
+    unavailable: () -> Boolean = { false },
 ): LiveSettingApplication {
-    val initial = liveSettingApplyResult(result)
+    val initial = liveSettingApplyResult(result, unavailable)
     if (result.execution != MqttCommandDispatcher.Execution.PENDING) {
         return LiveSettingApplication.immediate(initial)
     }
     return LiveSettingApplication(initial) { observer ->
         result.observeLateCompletion { terminal ->
-            observer(liveSettingApplyResult(MqttCommandDispatcher.RunResult(result.admission, terminal)))
+            observer(
+                liveSettingApplyResult(
+                    MqttCommandDispatcher.RunResult(result.admission, terminal),
+                    unavailable,
+                ),
+            )
         }
     }
 }
@@ -720,7 +756,7 @@ internal data class MqttWatchdogObservation(
 
 /** Immutable proof that queued recovery still targets the exact stale bridge epoch it observed. */
 internal data class MqttRecoveryTicket(
-    val authorityRevision: Long,
+    val recoveryEpoch: Long,
     val familyConnectAttempt: Long,
     val stagedBrokerIdentity: String? = null,
 )
@@ -789,6 +825,14 @@ internal fun reconcileMqttAnnouncementReadinessBudget(
 
 internal data class MqttRecoverySnapshot(
     val revision: Long,
+    /**
+     * Advances ONLY on genuine recovery progress: a new connect attempt, real broker progress
+     * (CONNACK/PUBACK), or a consumed claim. [revision] advances on every lifecycle write, so it cannot
+     * decide staleness — a black-holed family disconnects roughly every socket-connect bound, and using
+     * [revision] made the watchdog's staged alternate-family recovery read as "already recovered" on
+     * every entry, roll itself back, and pin the dead family indefinitely.
+     */
+    val recoveryEpoch: Long,
     val state: String,
     val addressFamily: MqttAddressFamily?,
     val familyConnectAttempt: Long,
@@ -808,6 +852,7 @@ internal class MqttRecoveryAuthority(
     private val current = AtomicReference(
         MqttRecoverySnapshot(
             revision = 0L,
+            recoveryEpoch = 0L,
             state = initialState,
             addressFamily = null,
             familyConnectAttempt = 0L,
@@ -823,7 +868,7 @@ internal class MqttRecoveryAuthority(
         snapshot: MqttRecoverySnapshot,
         stagedBrokerIdentity: String? = null,
     ): MqttRecoveryTicket = MqttRecoveryTicket(
-        snapshot.revision,
+        snapshot.recoveryEpoch,
         snapshot.familyConnectAttempt,
         stagedBrokerIdentity,
     )
@@ -873,6 +918,7 @@ internal class MqttRecoveryAuthority(
             val attempt = previous.familyConnectAttempt + 1L
             val updated = previous.copy(
                 revision = previous.revision + 1L,
+                recoveryEpoch = previous.recoveryEpoch + 1L,
                 state = state,
                 addressFamily = null,
                 familyConnectAttempt = attempt,
@@ -895,7 +941,11 @@ internal class MqttRecoveryAuthority(
     }
 
     fun updateProgress(progress: MqttBrokerProgress) = update { previous ->
-        previous.copy(revision = previous.revision + 1L, brokerProgress = progress)
+        previous.copy(
+            revision = previous.revision + 1L,
+            recoveryEpoch = previous.recoveryEpoch + 1L,
+            brokerProgress = progress,
+        )
     }
 
     fun claim(ticket: MqttRecoveryTicket): Claim {
@@ -905,9 +955,11 @@ internal class MqttRecoveryAuthority(
                 return Claim.CONSUMED_BY_NEW_ATTEMPT
             }
             if (!observed.matches(ticket)) return Claim.STALE_SAME_ATTEMPT
-            if (current.compareAndSet(observed, observed.copy(revision = observed.revision + 1L))) {
-                return Claim.CLAIMED
-            }
+            val consumed = observed.copy(
+                revision = observed.revision + 1L,
+                recoveryEpoch = observed.recoveryEpoch + 1L,
+            )
+            if (current.compareAndSet(observed, consumed)) return Claim.CLAIMED
         }
     }
 
@@ -919,7 +971,7 @@ internal class MqttRecoveryAuthority(
     }
 
     private fun MqttRecoverySnapshot.matches(ticket: MqttRecoveryTicket): Boolean =
-        revision == ticket.authorityRevision && familyConnectAttempt == ticket.familyConnectAttempt
+        recoveryEpoch == ticket.recoveryEpoch && familyConnectAttempt == ticket.familyConnectAttempt
 }
 
 /**
@@ -2080,8 +2132,11 @@ internal class MqttBridge(
                     return@reconnect MqttRecoveryOutcome.NO_LONGER_NEEDED
                 }
                 MqttRecoveryAuthority.Claim.STALE_SAME_ATTEMPT -> {
-                // The original attempt recovered while owner work waited. Restore its actual route while
-                // the lifecycle gate excludes a newer startOpen from consuming the staged alternate.
+                // The original attempt made real broker progress while owner work waited. Ordinary
+                // reconnect churn on a dead address family is NOT progress and must not reach here:
+                // rolling the staged alternate back on every disconnect is what pinned a panel to a
+                // black-holed family. Restore the actual route while the lifecycle gate excludes a
+                // newer startOpen from consuming the staged alternate.
                     ticket.stagedBrokerIdentity?.let { identity ->
                         val rolledBack = synchronized(familyRecoveryLock) {
                             familyPreference.cancelStaged(identity, ticket.familyConnectAttempt)
@@ -2777,7 +2832,7 @@ internal class MqttBridge(
 
     override fun handleTouchSound(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        check(touchSound.set(on)) { "touch sound transition failed" }
+        requireControlApplied("touch_sound", touchSound.apply(on)) { "touch sound transition failed" }
         stateConverger.reconcile("touch_sound", force = true)
     }
 
@@ -2973,7 +3028,7 @@ internal class MqttBridge(
 
     override fun handleSilenceBootChime(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        check(bootChime.set(on)) { "boot chime transition failed" }
+        requireControlApplied("silence_boot_chime", bootChime.apply(on)) { "boot chime transition failed" }
         stateConverger.reconcile("silence_boot_chime", force = true)
     }
 
@@ -3438,6 +3493,9 @@ internal class MqttBridge(
         if (key !in APPLY_SETTING_KEYS) return LiveSettingApplication.immediate(LiveSettingApplyResult.FAILED)
         if (!lifecycle.isOpen()) return LiveSettingApplication.immediate(LiveSettingApplyResult.DEFERRED)
         var started = false
+        // Written on the dispatcher thread by the handler below, read by this caller and by the late
+        // completion observer, so it must be published across both.
+        val unavailable = java.util.concurrent.atomic.AtomicBoolean(false)
         val result = commandDispatcher.runLatestResult(
             key = "http:$key",
             onAdmission = ::recordCommandAdmission,
@@ -3455,6 +3513,10 @@ internal class MqttBridge(
                     sensitiveApprovalRequired = false,
                     handlers = this,
                 )
+            } catch (e: LiveSettingUnavailableException) {
+                unavailable.set(true)
+                cost.outcome(FeatureCostOutcome.FAILURE)
+                throw e
             } catch (e: Exception) {
                 cost.outcome(FeatureCostOutcome.FAILURE)
                 throw e
@@ -3475,7 +3537,7 @@ internal class MqttBridge(
             FeatureCostOperation.MQTT_COMMAND_DISPATCH,
             commandDispatcher.pendingCount(),
         )
-        return liveSettingApplication(result)
+        return liveSettingApplication(result, unavailable::get)
     }
 
     /** Publish the already-durable auto-sleep value without running its mutating command handler.

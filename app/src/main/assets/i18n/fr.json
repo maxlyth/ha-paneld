@@ -1618,6 +1618,11 @@
       "sourceHash": "9bd2748bda208a2e6c2bac42067692436f2f9189a3f7e197e5b338bdba1c44ef",
       "state": "machine-cross-checked"
     },
+    "configure.save.hardware_unavailable": {
+      "text": "Enregistré. Ce panneau ne peut pas encore appliquer ce réglage ; il sera appliqué dès que ce sera possible.",
+      "sourceHash": "67b5afeafe3ae46c4d5fe55a308ba88d39ff45f61c663e5fae47d17317334f3b",
+      "state": "machine-cross-checked"
+    },
     "configure.save.now_applied": {
       "text": "Les réglages enregistrés sont maintenant appliqués.",
       "sourceHash": "f7bfcea102edeb4ba0e93aa5a17733d1de0cc1183edc5b707e474640363b018e",
@@ -1646,6 +1651,11 @@
     "configure.save.saving": {
       "text": "Enregistrement…",
       "sourceHash": "23e39291d6135814ed7c936e278974544b0df5fbf0eb0427b6700979b7472a93",
+      "state": "machine-cross-checked"
+    },
+    "configure.save.unavailable_to_apply": {
+      "text": "Enregistré, mais ce panneau ne peut pas encore les appliquer : {settings}.",
+      "sourceHash": "54f575188113309c907825190ece15259dc8d17ae43647dbc27c593b497258d9",
       "state": "machine-cross-checked"
     },
     "configure.save.waiting_to_apply": {

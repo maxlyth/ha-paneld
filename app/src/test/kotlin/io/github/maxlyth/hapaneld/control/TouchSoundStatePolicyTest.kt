@@ -14,8 +14,8 @@ class TouchSoundStatePolicyTest {
         val hardware = FakeHardware(prior, events)
         val policy = TouchSoundStatePolicy(store, hardware)
 
-        assertTrue(policy.enable())
-        assertTrue(policy.disable())
+        assertEquals(ControlApplyOutcome.APPLIED, policy.enable())
+        assertEquals(ControlApplyOutcome.APPLIED, policy.disable())
 
         assertEquals(
             listOf("retire-legacy-stream", "capture", "save:$prior", "enable", "restore:$prior", "disable-state"),
@@ -31,7 +31,7 @@ class TouchSoundStatePolicyTest {
         val store = FakeStore(events, saveSucceeds = false)
         val hardware = FakeHardware(TouchSoundState(1), events)
 
-        assertFalse(TouchSoundStatePolicy(store, hardware).enable())
+        assertEquals(ControlApplyOutcome.FAILED, TouchSoundStatePolicy(store, hardware).enable())
         assertEquals(
             listOf("retire-legacy-stream", "capture", "save:TouchSoundState(effectsSetting=1)"),
             events,
@@ -43,7 +43,7 @@ class TouchSoundStatePolicyTest {
         val store = FakeStore(events)
         val hardware = FakeHardware(TouchSoundState(1), events)
 
-        assertTrue(TouchSoundStatePolicy(store, hardware).disable())
+        assertEquals(ControlApplyOutcome.APPLIED, TouchSoundStatePolicy(store, hardware).disable())
 
         assertEquals(listOf("retire-legacy-stream", "disable-conservative", "disable-state"), events)
         assertNull(hardware.restored)
@@ -97,18 +97,18 @@ class TouchSoundStatePolicyTest {
             events += "capture"
             return captured
         }
-        override fun enable(): Boolean {
+        override fun enable(): ControlApplyOutcome {
             events += "enable"
-            return true
+            return ControlApplyOutcome.APPLIED
         }
-        override fun restore(state: TouchSoundState): Boolean {
+        override fun restore(state: TouchSoundState): ControlApplyOutcome {
             events += "restore:$state"
             restored = state
-            return true
+            return ControlApplyOutcome.APPLIED
         }
-        override fun disableConservatively(): Boolean {
+        override fun disableConservatively(): ControlApplyOutcome {
             events += "disable-conservative"
-            return true
+            return ControlApplyOutcome.APPLIED
         }
     }
 }

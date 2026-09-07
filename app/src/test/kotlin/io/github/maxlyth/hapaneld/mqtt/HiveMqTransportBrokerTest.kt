@@ -128,6 +128,104 @@ class HiveMqTransportBrokerTest {
         }
     }
 
+    @Test(timeout = 90_000)
+    fun blackHoledFamilyReachesItsLiveSiblingWithinTheBoundedConnect() {
+        EmbeddedBroker(host = "::1").use { broker ->
+            run {
+                val planner = MqttRoutePlanner(
+                    logicalHost = "mqtt.test.invalid",
+                    port = broker.port,
+                    policy = MqttAddressFamilyPolicy.AUTOMATIC,
+                    // Start on the black hole. The families are inverted relative to the field report
+                    // because only unrouted IPv4 documentation space actually black-holes here: this
+                    // container has no IPv6 default route, so a global IPv6 fails instantly instead.
+                    // The contract under test is family-symmetric, and what matters is that the first
+                    // family swallows the SYN rather than refusing it.
+                    initialPreferIpv4 = true,
+                    rapidInitialFallbackAllowed = true,
+                    resolver = MqttBrokerResolver {
+                        // RFC 5737 documentation space is not routed anywhere, so this connect gets no
+                        // SYN-ACK and no RST and hangs until the socket bound expires — a real black
+                        // hole rather than a simulated one, and unlike the unroutable AAAA in the test
+                        // above, which fails immediately and never exercises the bounded connect.
+                        listOf(InetAddress.getByName("192.0.2.1"), InetAddress.getByName("::1"))
+                    },
+                )
+                assertEquals(
+                    io.github.maxlyth.hapaneld.MqttAddressFamily.IPV4,
+                    planner.resolveInitial()?.family,
+                )
+                val connected = CountDownLatch(1)
+                val connectedFamily = AtomicReference<io.github.maxlyth.hapaneld.MqttAddressFamily?>()
+                val firstCause = AtomicReference<String?>()
+                val disconnected = CountDownLatch(1)
+                val transport = HiveMqTransport()
+                val startedAt = System.nanoTime()
+                try {
+                    transport.connect(
+                        broker.config("black-hole-${UUID.randomUUID()}").copy(
+                            host = "mqtt.test.invalid",
+                            routePlanner = planner,
+                        ),
+                        object : MqttCallbacks {
+                            override fun onConnected(
+                                connection: MqttConnectionLease,
+                                addressFamily: io.github.maxlyth.hapaneld.MqttAddressFamily?,
+                            ) {
+                                connectedFamily.set(addressFamily)
+                                connected.countDown()
+                            }
+
+                            override fun onDisconnected(
+                                connection: MqttConnectionLease?,
+                                causeMessage: String?,
+                            ): Boolean {
+                                firstCause.compareAndSet(null, causeMessage)
+                                disconnected.countDown()
+                                return true
+                            }
+                        },
+                    )
+
+                    // A dropped SYN fails only when the socket-connect bound expires, so this wait must
+                    // exceed ADDRESS_FAMILY_CONNECT_TIMEOUT_SECONDS rather than the shared short one.
+                    assertTrue(
+                        disconnected.await(
+                            HiveMqTransport.ADDRESS_FAMILY_CONNECT_TIMEOUT_SECONDS + 20L,
+                            TimeUnit.SECONDS,
+                        ),
+                        "the black-holed family never exhausted its connect bound",
+                    )
+                    // The suppression this recovery depends on is keyed on that classification, so
+                    // prove a dropped-SYN timeout really reads as a network failure, never assume it.
+                    assertEquals(
+                        "unreachable",
+                        classifyDisconnect(firstCause.get()),
+                        "black-holed connect cause was not classified as a network failure: " +
+                            firstCause.get(),
+                    )
+                    assertTrue(
+                        connected.await(60, TimeUnit.SECONDS),
+                        "the same client never reached the live sibling family " +
+                            "(cause=${firstCause.get()}, route=${planner.currentRoute?.family})",
+                    )
+                    assertEquals(
+                        io.github.maxlyth.hapaneld.MqttAddressFamily.IPV6,
+                        connectedFamily.get(),
+                    )
+                    val elapsedSeconds = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - startedAt)
+                    assertTrue(
+                        elapsedSeconds < 45,
+                        "reaching the live sibling took ${elapsedSeconds}s, which is the minute-scale " +
+                            "watchdog rather than the bounded socket connect",
+                    )
+                } finally {
+                    transport.disconnectDetached()
+                }
+            }
+        }
+    }
+
     @Test(timeout = 20_000)
     fun connectedAnnouncementBackpressureCannotBlockPubAckProcessing() {
         EmbeddedBroker().use { broker ->
@@ -445,10 +543,10 @@ class HiveMqTransportBrokerTest {
         }
     }
 
-    private class EmbeddedBroker : AutoCloseable {
+    private class EmbeddedBroker(private val host: String = "127.0.0.1") : AutoCloseable {
         val port = ServerSocket(0).use { it.localPort }
         val server = Server().withConfig()
-            .host("127.0.0.1")
+            .host(host)
             .port(port)
             .disablePersistence()
             .disableTelemetry()

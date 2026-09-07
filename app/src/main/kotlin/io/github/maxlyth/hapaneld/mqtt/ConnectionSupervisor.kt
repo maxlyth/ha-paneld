@@ -15,8 +15,11 @@ package io.github.maxlyth.hapaneld.mqtt
  * not recovery. After one rebuild, keep its selected address family and wait up to [rebuildAbandonMs]
  * for exact application readiness on a different concrete connection. A previously live process then crosses the
  * bounded process boundary. A new process first gives its durably restored route the same full grace;
- * only after that may it try the alternate family once, without entering a restart loop. Broker progress
- * resets the epoch and allows one later fallback if a different connection subsequently goes stale.
+ * only after that may it alternate the family. A runtime that has never been application-ready never
+ * crosses a process boundary — that would be a restart loop — but it does keep alternating its address
+ * family at the [rebuildAbandonMs] cadence, because otherwise nothing can reach a live sibling family.
+ * Broker progress resets the epoch and allows one later fallback if a different connection subsequently
+ * goes stale.
  *
  * Not thread-safe; the single watchdog thread calls [tick] serially.
  */
@@ -124,17 +127,19 @@ class ConnectionSupervisor(
                     }
                     if (attempt.heldSelectedFamily && !rebuildInFlight) {
                         // A route restored after the process boundary gets one uninterrupted grace
-                        // window. If it still cannot reach the broker, try the alternate family exactly
-                        // once; the baseline-zero policy below then prevents a restart/flip loop.
-                        recoveryAttempt = RecoveryAttempt(
-                            wasPreviouslyLive = false,
-                            baselineConnectionGeneration = connectionGeneration,
-                            startedAt = now,
-                            reason = attempt.reason,
-                            heldSelectedFamily = false,
-                            announcementBoundaryAvailable = false,
-                        )
-                        return Action.Rebuild(attempt.reason, flipFamily = true)
+                        // window. If it still cannot reach the broker, try the alternate family.
+                        return alternateFamily(attempt, connectionGeneration, now)
+                    }
+                    // A runtime that has NEVER been application-ready keeps alternating at this bounded
+                    // cadence while its address family remains unproven. Going silent here is what
+                    // stranded a panel on a black-holed address family for hours: the process boundary
+                    // is correctly withheld from a never-live runtime — that would be a restart loop —
+                    // but withholding the cheap in-place rebuild along with it left nothing able to
+                    // reach the live sibling family at all. An announcing or connected wedge already
+                    // proved its family through CONNACK and is never flipped by this path.
+                    val addressFamilyUnproven = state != ANNOUNCING && state != CONNECTED
+                    if (!attempt.wasPreviouslyLive && addressFamilyUnproven && !rebuildInFlight) {
+                        return alternateFamily(attempt, connectionGeneration, now)
                     }
                 }
                 return Action.SkipRebuild(attempt.reason, elapsedMs)
@@ -177,6 +182,23 @@ class ConnectionSupervisor(
             announcementBoundaryAvailable = announcementBoundaryAvailable,
         )
         return Action.Rebuild(reason, flipFamily = !holdSelectedFamily)
+    }
+
+    /** Open a fresh recovery epoch that selects the other address family. */
+    private fun alternateFamily(
+        attempt: RecoveryAttempt,
+        connectionGeneration: Long?,
+        now: Long,
+    ): Action {
+        recoveryAttempt = RecoveryAttempt(
+            wasPreviouslyLive = false,
+            baselineConnectionGeneration = connectionGeneration,
+            startedAt = now,
+            reason = attempt.reason,
+            heldSelectedFamily = false,
+            announcementBoundaryAvailable = false,
+        )
+        return Action.Rebuild(attempt.reason, flipFamily = true)
     }
 
     /** The runtime owner accepted and completed the fallback mutation. Completion proves submission,

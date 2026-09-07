@@ -190,6 +190,7 @@ class ConfigPostProductionRouteTest {
         setField(server, "sensors", sensors)
         setField(server, "applySetting", applySetting)
         setField(server, "pendingLiveSettings", { emptyMap<String, String>() })
+        setField(server, "stalledLiveSettings", { emptySet<String>() })
         setField(server, "configLiveValues", { emptyMap<String, String>() })
         setField(server, "onReconfigure", { _: Set<String> -> })
         setField(server, "rendererPreparation", renderer)

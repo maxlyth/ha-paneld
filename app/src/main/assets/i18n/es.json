@@ -1618,6 +1618,11 @@
       "state": "machine-cross-checked",
       "text": "Valor deseado guardado; falta aplicarlo al hardware."
     },
+    "configure.save.hardware_unavailable": {
+      "text": "Guardado. Este panel todavía no puede aplicar el ajuste; se aplicará en cuanto sea posible.",
+      "sourceHash": "67b5afeafe3ae46c4d5fe55a308ba88d39ff45f61c663e5fae47d17317334f3b",
+      "state": "machine-cross-checked"
+    },
     "configure.save.now_applied": {
       "sourceHash": "f7bfcea102edeb4ba0e93aa5a17733d1de0cc1183edc5b707e474640363b018e",
       "state": "machine-cross-checked",
@@ -1647,6 +1652,11 @@
       "sourceHash": "23e39291d6135814ed7c936e278974544b0df5fbf0eb0427b6700979b7472a93",
       "state": "machine-cross-checked",
       "text": "Guardando…"
+    },
+    "configure.save.unavailable_to_apply": {
+      "text": "Guardado, pero este panel todavía no puede aplicarlos: {settings}.",
+      "sourceHash": "54f575188113309c907825190ece15259dc8d17ae43647dbc27c593b497258d9",
+      "state": "machine-cross-checked"
     },
     "configure.save.waiting_to_apply": {
       "sourceHash": "38120c8464a6a191ec813e411dd11ae6c3ad94acf6cd05d5e6842f03ef02b400",

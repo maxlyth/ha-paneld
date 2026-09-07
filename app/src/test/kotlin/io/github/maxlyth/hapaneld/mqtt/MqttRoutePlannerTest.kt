@@ -32,7 +32,7 @@ class MqttRoutePlannerTest {
         assertEquals(MqttAddressFamilyPolicy.FORCE_IPV4, MqttAddressFamilyPolicy.fromConfig("FORCE IPV4"))
     }
 
-    @Test fun `automatic suppresses failed advertised IPv6 once and re-resolves before IPv4`() {
+    @Test fun `automatic alternates on every pre-CONNACK network failure until one family connects`() {
         val resolutions = AtomicInteger()
         val planner = planner(MqttAddressFamilyPolicy.AUTOMATIC) {
             resolutions.incrementAndGet()
@@ -40,24 +40,64 @@ class MqttRoutePlannerTest {
         }
 
         assertEquals(MqttAddressFamily.IPV6, planner.resolveInitial()?.family)
+        // A single-shot allowance meant one transient IPv4 failure could pin the client back onto a
+        // black-holed AAAA with nothing left able to select the live sibling. Every pre-CONNACK network
+        // failure now suppresses the family that just failed, bounded by HiveMQ's own growing backoff.
+        val families = (1..6).map {
+            planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family
+        }
         assertEquals(
-            MqttAddressFamily.IPV4,
-            planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
+            listOf(
+                MqttAddressFamily.IPV4,
+                MqttAddressFamily.IPV6,
+                MqttAddressFamily.IPV4,
+                MqttAddressFamily.IPV6,
+                MqttAddressFamily.IPV4,
+                MqttAddressFamily.IPV6,
+            ),
+            families,
         )
-        // The rapid-family allowance is bounded. A second pre-CONNACK failure keeps the selected
-        // family and ordinary HiveMQ backoff instead of ping-ponging to the failed AAAA.
-        assertEquals(
-            MqttAddressFamily.IPV4,
-            planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
-        )
-        assertEquals(3, resolutions.get())
+        assertEquals(7, resolutions.get())
     }
 
-    @Test fun `initial alternate budget survives a DNS answer without the sibling family`() {
+    @Test fun `prefer IPv4 keeps its single excursion and returns to the stated family`() {
+        val planner = planner(MqttAddressFamilyPolicy.PREFER_IPV4) { listOf(ipv6, ipv4) }
+
+        assertEquals(MqttAddressFamily.IPV4, planner.resolveInitial()?.family)
+        // The unbounded alternation belongs to Automatic, which has no user-stated family to return
+        // to. An explicit policy looks at the sibling exactly once and then pins back to its own
+        // choice, which is the behaviour the setting promises and the live workaround relies on.
+        assertEquals(
+            MqttAddressFamily.IPV6,
+            planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
+        )
+        repeat(4) {
+            assertEquals(
+                MqttAddressFamily.IPV4,
+                planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
+            )
+        }
+    }
+
+    @Test fun `a non-network pre-CONNACK failure never alternates the family`() {
+        val planner = planner(MqttAddressFamilyPolicy.AUTOMATIC) { listOf(ipv6, ipv4) }
+
+        assertEquals(MqttAddressFamily.IPV6, planner.resolveInitial()?.family)
+        repeat(3) {
+            assertEquals(
+                MqttAddressFamily.IPV6,
+                planner.resolveReconnect(preConnackFailure = true, networkFailure = false)
+                    .join()?.family,
+            )
+        }
+    }
+
+    @Test fun `initial alternate survives a DNS answer without the sibling family`() {
         var addresses = listOf(ipv6)
         val planner = planner(MqttAddressFamilyPolicy.AUTOMATIC) { addresses }
 
         assertEquals(MqttAddressFamily.IPV6, planner.resolveInitial()?.family)
+        // No sibling was published, so nothing was selected and nothing was consumed.
         assertEquals(
             MqttAddressFamily.IPV6,
             planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
@@ -67,10 +107,28 @@ class MqttRoutePlannerTest {
             MqttAddressFamily.IPV4,
             planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
         )
-        assertEquals(
-            MqttAddressFamily.IPV4,
-            planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
+    }
+
+    @Test fun `a durably restored route is held for the watchdog rather than alternated in place`() {
+        val planner = MqttRoutePlanner(
+            logicalHost = "mqtt.example.test",
+            port = 8883,
+            policy = MqttAddressFamilyPolicy.AUTOMATIC,
+            initialPreferIpv4 = false,
+            // The process boundary restored a learned route that has not yet reached the broker. It
+            // gets the watchdog's full grace window before any family change, so no in-place alternate.
+            rapidInitialFallbackAllowed = false,
+            resolver = MqttBrokerResolver { listOf(ipv6, ipv4) },
+            resolverExecutor = direct,
         )
+
+        assertEquals(MqttAddressFamily.IPV6, planner.resolveInitial()?.family)
+        repeat(3) {
+            assertEquals(
+                MqttAddressFamily.IPV6,
+                planner.resolveReconnect(preConnackFailure = true, networkFailure = true).join()?.family,
+            )
+        }
     }
 
     @Test fun `successful route remains preferred while every reconnect gets fresh DNS`() {

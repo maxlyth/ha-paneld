@@ -5,12 +5,30 @@ package io.github.maxlyth.hapaneld.platform
  * depend on an interface (and be unit-tested with a fake) instead of the concrete su executor. Production
  * injects the `Su` object; tests inject a fake. Behaviour is unchanged; this only adds a test seam.
  */
+/** What one root command attempt found. [NO_LAUNCH] is the only device-level answer. */
+enum class RootRunOutcome { RAN_OK, RAN_FAILED, NO_LAUNCH }
+
 interface RootShell {
     /** True if any su form works (a `su true` succeeds). */
     fun available(): Boolean
 
     /** Run [cmd] as root, waiting for completion; true on exit 0. */
     fun run(cmd: String): Boolean
+
+    /**
+     * Run [cmd] as root and report what the attempt itself found.
+     *
+     * [RootRunOutcome.NO_LAUNCH] means no root process was ever created — the su binary is absent, or it
+     * is present and this app may not execute it. Both are properties of the device: the shipped su on
+     * at least one supported panel is mode 4750 `root:shell`, so an app outside that group is refused
+     * with EACCES rather than ENOENT while the file plainly exists. A root manager that ran the command
+     * and returned non-zero is [RootRunOutcome.RAN_FAILED] and can succeed on the next attempt.
+     *
+     * The default reports only RAN_OK/RAN_FAILED, so no fake or older implementation can claim a
+     * capability is structurally absent.
+     */
+    fun runClassified(cmd: String): RootRunOutcome =
+        if (run(cmd)) RootRunOutcome.RAN_OK else RootRunOutcome.RAN_FAILED
 
     /** Run exactly one command attempt, waiting at most [timeoutMs]. Implementations must not retry
      * [cmd] after an ambiguous timeout. The default preserves test/legacy implementations. */

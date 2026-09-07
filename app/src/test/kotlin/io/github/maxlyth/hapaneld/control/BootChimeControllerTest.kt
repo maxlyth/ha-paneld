@@ -112,7 +112,7 @@ class BootChimeControllerTest {
     @Test fun directTransitionAttemptsEveryDurableSettingAndLiveStream() {
         val attempted = mutableListOf<String>()
 
-        assertFalse(applyBootChimeDirect(
+        assertEquals(ControlApplyOutcome.FAILED, applyBootChimeDirect(
             state = prior,
             writeSetting = { key, value ->
                 attempted += "setting:$key=${value ?: "-"}"
@@ -143,7 +143,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(available = false, runResult = false)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertEquals(listOf(BootChimeState(0, 0, 0, 0, 0)), direct.applied)
         assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
@@ -156,7 +156,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = true)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertEquals(listOf("BOOTCHIME SILENCE"), daemon.sent)
         assertEquals(listOf(silenceShellCommand(0)), root.ran)
@@ -169,7 +169,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = false)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.restore(prior))
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.restore(prior))
 
         assertEquals(command, restoreHelperCommand(prior))
         assertEquals(listOf(command), daemon.sent)
@@ -182,7 +182,7 @@ class BootChimeControllerTest {
         val root = FakeRootShell(runResult = true)
         val hardware = AndroidBootChimeHardware(direct, root, daemon)
 
-        assertTrue(hardware.silence())
+        assertEquals(ControlApplyOutcome.APPLIED, hardware.silence())
 
         assertTrue(daemon.sent.isEmpty())
         assertTrue(root.ran.isEmpty())
@@ -229,6 +229,35 @@ class BootChimeControllerTest {
         assertEquals(prior, store.state)
     }
 
+    @Test fun `an unappliable OFF keeps the divergence visible instead of resolving it`() {
+        // Retiring a pending OFF was rejected because it strands divergent hardware, config and MQTT
+        // state with nothing left to say so. The controller reports the absence and changes nothing:
+        // the snapshot is retained for retry, config stays enabled, and isEnabled() — which is what the
+        // MQTT switch state publishes — still reads ON while the user's saved desired value is OFF.
+        var configured = true
+        val events = mutableListOf<String>()
+        val store = FakeBootStore(events).apply { state = prior }
+        val hardware = FakeBootHardware(prior, events, restoreOutcome = ControlApplyOutcome.UNAVAILABLE)
+        val controller = BootChimeController({ configured }, { configured = it }, store, hardware)
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, controller.apply(false))
+
+        assertTrue("config must not record a transition that did not happen", configured)
+        assertTrue("MQTT keeps publishing the panel's actual state", controller.isEnabled())
+        assertEquals("the snapshot is retained so a repaired panel can still restore", prior, store.state)
+    }
+
+    @Test fun `an unappliable ON reports the absence to a caller that can use it`() {
+        var configured = false
+        val events = mutableListOf<String>()
+        val store = FakeBootStore(events)
+        val hardware = FakeBootHardware(prior, events, silenceOutcome = ControlApplyOutcome.UNAVAILABLE)
+        val controller = BootChimeController({ configured }, { configured = it }, store, hardware)
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, controller.apply(true))
+        assertFalse("set() still reports a plain failure to its existing callers", controller.set(true))
+    }
+
     private class FakeBootStore(
         private val events: MutableList<String>,
         private val saveSucceeds: Boolean = true,
@@ -251,6 +280,9 @@ class BootChimeControllerTest {
         private val captured: BootChimeState,
         private val events: MutableList<String>,
         private val restoreSucceeds: Boolean = true,
+        /** What the hardware reported, so a test can tell "no path at all" from "failed this time". */
+        private val silenceOutcome: ControlApplyOutcome = ControlApplyOutcome.APPLIED,
+        private val restoreOutcome: ControlApplyOutcome? = null,
     ) : BootChimeHardware {
         var silenced = false
         var restored: BootChimeState? = null
@@ -258,27 +290,30 @@ class BootChimeControllerTest {
             events += "capture"
             return captured
         }
-        override fun silence(): Boolean {
+        override fun silence(): ControlApplyOutcome {
             events += "silence"
-            silenced = true
-            return true
+            silenced = silenceOutcome == ControlApplyOutcome.APPLIED
+            return silenceOutcome
         }
-        override fun restore(state: BootChimeState): Boolean {
+        override fun restore(state: BootChimeState): ControlApplyOutcome {
             events += "restore:$state"
             restored = state
-            return restoreSucceeds
+            return restoreOutcome
+                ?: if (restoreSucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
         }
     }
 
     private class FakeBootChimeDirect(
         private val captured: BootChimeState,
         private val applySucceeds: Boolean,
+        private val outcome: ControlApplyOutcome =
+            if (applySucceeds) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED,
     ) : BootChimeDirectAccess {
         val applied = mutableListOf<BootChimeState>()
         override fun capture(): BootChimeState = captured
-        override fun apply(state: BootChimeState): Boolean {
+        override fun apply(state: BootChimeState): ControlApplyOutcome {
             applied += state
-            return applySucceeds
+            return outcome
         }
     }
 }

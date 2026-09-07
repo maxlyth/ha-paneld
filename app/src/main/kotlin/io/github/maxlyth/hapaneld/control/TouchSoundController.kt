@@ -50,28 +50,37 @@ class TouchSoundController(context: Context, clickGain: Float) {
         Settings.System.getInt(ctx.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1,
     )
 
+    fun set(on: Boolean): Boolean = apply(on).applied
+
+    /**
+     * Apply the transition and report what the attempt learned. Touch sound owns `SOUND_EFFECTS_ENABLED`
+     * through `WRITE_SETTINGS` alone, so a panel that has never granted that permission can never apply
+     * this value, and a caller journalling the intent has to be able to tell that from a failure.
+     */
     @Synchronized
-    fun set(on: Boolean): Boolean {
+    internal fun apply(on: Boolean): ControlApplyOutcome {
         return try {
             if (on) {
-                if (!statePolicy.enable()) {
+                val enabled = statePolicy.enable()
+                if (!enabled.applied) {
                     Log.w(TAG, "touch sound enable refused: prior state could not be captured durably")
-                    return false
+                    return enabled
                 }
                 am.loadSoundEffects()
                 enableOverlay()
             } else {
                 disableOverlay()
-                if (!statePolicy.disable()) {
+                val disabled = statePolicy.disable()
+                if (!disabled.applied) {
                     Log.w(TAG, "touch sound exact restore failed; retained for retry")
-                    return false
+                    return disabled
                 }
             }
             Log.i(TAG, "touch sound -> ${if (on) "on" else "off"}")
-            true
+            ControlApplyOutcome.APPLIED
         } catch (error: Exception) {
             Log.w(TAG, "touch sound set failed: ${error.message}")
-            false
+            ControlApplyOutcome.FAILED
         }
     }
 
@@ -168,9 +177,9 @@ internal interface TouchSoundStateStore {
 
 internal interface TouchSoundHardware {
     fun capture(): TouchSoundState?
-    fun enable(): Boolean
-    fun restore(state: TouchSoundState): Boolean
-    fun disableConservatively(): Boolean
+    fun enable(): ControlApplyOutcome
+    fun restore(state: TouchSoundState): ControlApplyOutcome
+    fun disableConservatively(): ControlApplyOutcome
 }
 
 /** State machine separated from Android UI/audio objects so ordering and legacy behavior stay testable. */
@@ -186,19 +195,21 @@ internal class TouchSoundStatePolicy(
 
     fun isEnabled(platformFallback: Boolean): Boolean = store.active() ?: platformFallback
 
-    fun enable(): Boolean {
+    fun enable(): ControlApplyOutcome {
+        // A capture or persistence failure is this attempt's problem, never the panel's: it says nothing
+        // about whether the hardware could ever be written.
         if (store.active() != true || store.prior() == null) {
-            val prior = hardware.capture() ?: return false
-            if (!store.saveEnabled(prior)) return false
+            val prior = hardware.capture() ?: return ControlApplyOutcome.FAILED
+            if (!store.saveEnabled(prior)) return ControlApplyOutcome.FAILED
         }
         return hardware.enable()
     }
 
-    fun disable(): Boolean {
+    fun disable(): ControlApplyOutcome {
         val prior = store.prior()
         val restored = if (prior != null) hardware.restore(prior) else hardware.disableConservatively()
-        if (!restored) return false
-        return store.saveDisabledAndClearPrior()
+        if (!restored.applied) return restored
+        return if (store.saveDisabledAndClearPrior()) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
     }
 }
 
@@ -258,20 +269,30 @@ private class AndroidTouchSoundHardware(
         )
     }.getOrNull()
 
-    override fun enable(): Boolean = runCatching {
+    override fun enable(): ControlApplyOutcome = write {
         Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, 1)
-    }.getOrDefault(false)
+    }
 
-    override fun restore(state: TouchSoundState): Boolean = runCatching {
-        val setting = if (state.effectsSetting == null) {
+    override fun restore(state: TouchSoundState): ControlApplyOutcome = write {
+        if (state.effectsSetting == null) {
             cr.delete(Settings.System.CONTENT_URI, "name=?", arrayOf(Settings.System.SOUND_EFFECTS_ENABLED)) >= 0
         } else {
             Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, state.effectsSetting)
         }
-        setting
-    }.getOrDefault(false)
+    }
 
-    override fun disableConservatively(): Boolean = runCatching {
+    override fun disableConservatively(): ControlApplyOutcome = write {
         Settings.System.putInt(cr, Settings.System.SOUND_EFFECTS_ENABLED, 0)
-    }.getOrDefault(false)
+    }
+
+    /** `WRITE_SETTINGS` is this controller's only path, so its refusal is the panel's answer rather than
+     *  this attempt's: a `SecurityException` will be raised again on the next boot. */
+    private inline fun write(operation: () -> Boolean): ControlApplyOutcome {
+        val result = runCatching(operation)
+        return when {
+            result.getOrDefault(false) -> ControlApplyOutcome.APPLIED
+            result.exceptionOrNull() is SecurityException -> ControlApplyOutcome.UNAVAILABLE
+            else -> ControlApplyOutcome.FAILED
+        }
+    }
 }

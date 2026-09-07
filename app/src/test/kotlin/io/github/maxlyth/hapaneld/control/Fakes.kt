@@ -9,6 +9,7 @@ import io.github.maxlyth.hapaneld.metrics.MetricSource
 import io.github.maxlyth.hapaneld.platform.ActivityRef
 import io.github.maxlyth.hapaneld.platform.Daemon
 import io.github.maxlyth.hapaneld.platform.DaemonLongResult
+import io.github.maxlyth.hapaneld.platform.RootRunOutcome
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.platform.ScreenPower
 import io.github.maxlyth.hapaneld.platform.SystemEnv
@@ -62,12 +63,21 @@ class FakeRootShell(
     /** The effect a real root command would have had on the panel. Lets a test tell an actuator that
      *  genuinely changed the device from one that only reported success. */
     private val onRun: (String) -> Unit = {},
+    /** A panel where no root process can be created at all — su absent, or present and not executable
+     *  by this app. Never a root manager that ran the command and refused it, which is [runResult]
+     *  false with this left alone. */
+    private val suLaunchable: Boolean = true,
 ) : RootShell {
     val ran = mutableListOf<String>()
     val outputRan = mutableListOf<String>()
     val isolatedOutputRan = mutableListOf<String>()
     override fun available() = available
     override fun run(cmd: String): Boolean { ran += cmd; onRun(cmd); return runResult }
+    override fun runClassified(cmd: String): RootRunOutcome = when {
+        run(cmd) -> RootRunOutcome.RAN_OK
+        !suLaunchable -> RootRunOutcome.NO_LAUNCH
+        else -> RootRunOutcome.RAN_FAILED
+    }
     override fun runOutput(cmd: String): String? {
         outputRan += cmd
         return outputs.entries.sortedByDescending { it.key.length }.firstOrNull { cmd.contains(it.key) }?.value

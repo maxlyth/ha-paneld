@@ -8,6 +8,7 @@ import android.util.Log
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.platform.Daemon
+import io.github.maxlyth.hapaneld.platform.RootRunOutcome
 import io.github.maxlyth.hapaneld.platform.RootShell
 import io.github.maxlyth.hapaneld.util.HelperClient
 
@@ -41,18 +42,22 @@ class BootChimeController internal constructor(
 
     fun isEnabled(): Boolean = configured()
 
+    fun set(on: Boolean): Boolean = apply(on).applied
+
+    /**
+     * Apply the transition and report what the attempt learned. A caller that journals unapplied intent
+     * needs to tell a panel that has no path to this hardware from one that merely failed this time —
+     * only the attempt itself knows, and a snapshot or persistence failure here is always retryable.
+     */
     @Synchronized
-    fun set(on: Boolean): Boolean {
+    internal fun apply(on: Boolean): ControlApplyOutcome {
         if (on) {
-            if (!ensureSnapshot()) return false
+            if (!ensureSnapshot()) return ControlApplyOutcome.FAILED
             setConfigured(true)
-            return if (hardware.silence()) {
-                Log.i(TAG, "boot chime silenced")
-                true
-            } else {
-                Log.w(TAG, "silence failed through app and root settings paths")
-                false
-            }
+            val silenced = hardware.silence()
+            if (silenced.applied) Log.i(TAG, "boot chime silenced")
+            else Log.w(TAG, "silence failed through app and root settings paths")
+            return silenced
         }
 
         val prior = stateStore.load()
@@ -60,19 +65,20 @@ class BootChimeController internal constructor(
             // Old versions did not record the prior volume. Do not resurrect sound with a guessed level.
             setConfigured(false)
             Log.i(TAG, "boot chime control disabled; no legacy volume snapshot to restore")
-            return true
+            return ControlApplyOutcome.APPLIED
         }
-        if (!hardware.restore(prior)) {
+        val restored = hardware.restore(prior)
+        if (!restored.applied) {
             Log.w(TAG, "exact boot-chime restore failed; retaining snapshot for retry")
-            return false
+            return restored
         }
         if (!stateStore.clear()) {
             Log.w(TAG, "boot-chime state restored but snapshot cleanup failed; retaining enabled state for retry")
-            return false
+            return ControlApplyOutcome.FAILED
         }
         setConfigured(false)
         Log.i(TAG, "boot chime state restored exactly")
-        return true
+        return ControlApplyOutcome.APPLIED
     }
 
     fun applyPersisted() {
@@ -88,7 +94,7 @@ class BootChimeController internal constructor(
         // The setting may have been turned off after the worker was submitted. Serializing with [set]
         // guarantees an in-flight silence happens before its exact restore, never after it.
         if (!configured() || !ensureSnapshot()) return
-        if (hardware.silence()) Log.i(TAG, "boot chime silenced")
+        if (hardware.silence().applied) Log.i(TAG, "boot chime silenced")
         else Log.w(TAG, "silence failed through app and root settings paths")
     }
 
@@ -128,8 +134,8 @@ internal interface BootChimeStateStore {
 
 internal interface BootChimeHardware {
     fun capture(): BootChimeState?
-    fun silence(): Boolean
-    fun restore(state: BootChimeState): Boolean
+    fun silence(): ControlApplyOutcome
+    fun restore(state: BootChimeState): ControlApplyOutcome
 }
 
 private class AndroidBootChimeStateStore(
@@ -202,36 +208,57 @@ internal class AndroidBootChimeHardware(
 
     override fun capture(): BootChimeState? = direct.capture()
 
-    override fun silence(): Boolean = applyTransition(
+    override fun silence(): ControlApplyOutcome = applyTransition(
         state = SILENCED_STATE,
         helperCommand = "BOOTCHIME SILENCE",
         rootCommand = silenceShellCommand(0),
     )
 
-    override fun restore(state: BootChimeState): Boolean = applyTransition(
+    override fun restore(state: BootChimeState): ControlApplyOutcome = applyTransition(
         state = state,
         helperCommand = restoreHelperCommand(state),
         rootCommand = restoreShellCommand(state),
     )
 
+    /**
+     * Every path in turn, and unavailability only when all three agree.
+     *
+     * Boot chime is not a root-only setting — it has an app path — so root's absence alone proves
+     * nothing, which is why an earlier attempt to classify this from the root probe was wrong. Each
+     * path here reports what its own attempt found, and a single path that merely failed keeps the
+     * whole transition retryable.
+     */
     private fun applyTransition(
         state: BootChimeState,
         helperCommand: String,
         rootCommand: String,
-    ): Boolean {
-        val directSucceeded = runCatching { direct.apply(state) }
+    ): ControlApplyOutcome {
+        val direct = runCatching { direct.apply(state) }
             .onFailure { Log.w(TAG, "app boot-chime transition failed; trying helper: ${it.message}") }
-            .getOrDefault(false)
-        if (directSucceeded) return true
+            .getOrDefault(ControlApplyOutcome.FAILED)
+        if (direct.applied) return ControlApplyOutcome.APPLIED
 
-        val helperSucceeded = runCatching { daemon.send(helperCommand) == "OK" }
+        // A null reply is an unreachable daemon socket. Within one boot that cannot be told from a
+        // helper which simply has not started yet — hence "every path agrees, on two separate boots"
+        // before anything is presented as unappliable.
+        val helperReply = runCatching { daemon.send(helperCommand) }
             .onFailure { Log.w(TAG, "helper boot-chime transition failed; trying root: ${it.message}") }
-            .getOrDefault(false)
-        if (helperSucceeded) return true
+            .getOrNull()
+        if (helperReply == "OK") return ControlApplyOutcome.APPLIED
 
-        return runCatching { root.run(rootCommand) }
+        val rootOutcome = runCatching { root.runClassified(rootCommand) }
             .onFailure { Log.w(TAG, "root boot-chime transition failed: ${it.message}") }
-            .getOrDefault(false)
+            .getOrDefault(RootRunOutcome.RAN_FAILED)
+        if (rootOutcome == RootRunOutcome.RAN_OK) return ControlApplyOutcome.APPLIED
+
+        // Root counts as structurally absent only when no root process was ever created. A root manager
+        // that ran this command and refused it is a transient failure, not a missing capability.
+        val rootMissing = rootOutcome == RootRunOutcome.NO_LAUNCH
+        return if (direct == ControlApplyOutcome.UNAVAILABLE && helperReply == null && rootMissing) {
+            ControlApplyOutcome.UNAVAILABLE
+        } else {
+            ControlApplyOutcome.FAILED
+        }
     }
 
     companion object {
@@ -242,7 +269,7 @@ internal class AndroidBootChimeHardware(
 
 internal interface BootChimeDirectAccess {
     fun capture(): BootChimeState?
-    fun apply(state: BootChimeState): Boolean
+    fun apply(state: BootChimeState): ControlApplyOutcome
 }
 
 private class AndroidBootChimeDirectAccess(context: Context) : BootChimeDirectAccess {
@@ -259,7 +286,7 @@ private class AndroidBootChimeDirectAccess(context: Context) : BootChimeDirectAc
         )
     }.onFailure { Log.w(TAG, "boot-chime state capture failed: ${it.message}") }.getOrNull()
 
-    override fun apply(state: BootChimeState): Boolean = applyBootChimeDirect(
+    override fun apply(state: BootChimeState): ControlApplyOutcome = applyBootChimeDirect(
         state = state,
         writeSetting = ::writeSetting,
         writeStream = { stream, level ->
@@ -278,17 +305,28 @@ private class AndroidBootChimeDirectAccess(context: Context) : BootChimeDirectAc
     }
 }
 
-/** Every direct mutation is attempted; a partial transition is never reported as successful. */
+/**
+ * Every direct mutation is attempted; a partial transition is never reported as successful.
+ *
+ * The app path is unavailable rather than failed when every write that did not succeed was refused for
+ * a permission this app does not hold: without `WRITE_SETTINGS` the `Settings.System` writes throw on
+ * this panel and will throw on the next boot too. A write that returned false, or threw anything else,
+ * could succeed next time and keeps the whole transition merely failed.
+ */
 internal fun applyBootChimeDirect(
     state: BootChimeState,
     writeSetting: (String, Int?) -> Boolean,
     writeStream: (Int, Int) -> Boolean,
     onFailure: (Throwable) -> Unit = {},
-): Boolean {
+): ControlApplyOutcome {
     var complete = true
+    var everyFailureStructural = true
     fun attempt(operation: () -> Boolean) {
-        val succeeded = runCatching(operation).onFailure(onFailure).getOrDefault(false)
-        if (!succeeded) complete = false
+        val result = runCatching(operation)
+        result.exceptionOrNull()?.let(onFailure)
+        if (result.getOrDefault(false)) return
+        complete = false
+        if (result.exceptionOrNull() !is SecurityException) everyFailureStructural = false
     }
 
     attempt { writeSetting(RING_SPEAKER_KEY, state.ringSpeakerSetting) }
@@ -296,7 +334,11 @@ internal fun applyBootChimeDirect(
     attempt { writeSetting(NOTIFICATION_KEY, state.notificationSetting) }
     attempt { writeStream(RING_STREAM, state.ringStream) }
     attempt { writeStream(NOTIFICATION_STREAM, state.notificationStream) }
-    return complete
+    return when {
+        complete -> ControlApplyOutcome.APPLIED
+        everyFailureStructural -> ControlApplyOutcome.UNAVAILABLE
+        else -> ControlApplyOutcome.FAILED
+    }
 }
 
 internal fun restoreHelperCommand(state: BootChimeState): String = listOf(
