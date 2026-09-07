@@ -24,6 +24,25 @@ internal enum class SuExecFailure {
     OTHER,
 }
 
+/**
+ * Decide what one root attempt proved, separated from the exec machinery so it can be tested without a
+ * device — this is the judgement that decides whether a setting may be presented as unappliable.
+ *
+ * [launchCreatedNoProcess] covers every launch-level refusal, not only a missing file: the shipped su on
+ * at least one supported panel is mode 4750 `root:shell`, so an app outside that group is refused EACCES
+ * while the binary plainly exists. A command that ran and exited non-zero is a root manager saying no,
+ * which can change on the next attempt and must stay retryable.
+ */
+internal fun classifyRootRun(
+    ran: Boolean,
+    launchCreatedNoProcess: Boolean,
+    binaryKnownMissing: Boolean,
+): RootRunOutcome = when {
+    ran -> RootRunOutcome.RAN_OK
+    launchCreatedNoProcess || binaryKnownMissing -> RootRunOutcome.NO_LAUNCH
+    else -> RootRunOutcome.RAN_FAILED
+}
+
 /** Process-lifetime cache for the definitive "su binary does not exist" launch failure. */
 internal class SuExecFailureCache {
     private val missing = AtomicBoolean(false)
@@ -159,12 +178,12 @@ object Su : RootShell {
     @Synchronized
     override fun runClassified(cmd: String): RootRunOutcome {
         launchCreatedNoProcess = false
-        if (run(cmd)) return RootRunOutcome.RAN_OK
-        return if (launchCreatedNoProcess || execFailureCache.shouldSkipExec()) {
-            RootRunOutcome.NO_LAUNCH
-        } else {
-            RootRunOutcome.RAN_FAILED
-        }
+        val ran = run(cmd)
+        return classifyRootRun(
+            ran = ran,
+            launchCreatedNoProcess = launchCreatedNoProcess,
+            binaryKnownMissing = execFailureCache.shouldSkipExec(),
+        )
     }
 
     /** Fire [cmd] as root without waiting (for commands like `reboot` that kill the process). Always a

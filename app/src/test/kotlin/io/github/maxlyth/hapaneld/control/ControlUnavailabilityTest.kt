@@ -42,6 +42,30 @@ class ControlUnavailabilityTest {
         assertEquals(ControlApplyOutcome.UNAVAILABLE, hardware.silence())
     }
 
+    @Test fun `a launch that started no process is an absent root path whatever the errno was`() {
+        // The production judgement, separated from the exec machinery so it can be scored without a
+        // device. A refused launch is not a missing file, and the reported panel is exactly that case:
+        // su exists, and the app may not execute it.
+        assertEquals(
+            "a launch refusal is a property of the device, not of this attempt",
+            RootRunOutcome.NO_LAUNCH,
+            classifyRootRun(ran = false, launchCreatedNoProcess = true, binaryKnownMissing = false),
+        )
+        assertEquals(
+            RootRunOutcome.NO_LAUNCH,
+            classifyRootRun(ran = false, launchCreatedNoProcess = false, binaryKnownMissing = true),
+        )
+        assertEquals(
+            "a root manager that ran the command and refused it can succeed next time",
+            RootRunOutcome.RAN_FAILED,
+            classifyRootRun(ran = false, launchCreatedNoProcess = false, binaryKnownMissing = false),
+        )
+        assertEquals(
+            RootRunOutcome.RAN_OK,
+            classifyRootRun(ran = true, launchCreatedNoProcess = false, binaryKnownMissing = false),
+        )
+    }
+
     @Test fun `the default root shell never claims a capability is absent`() {
         // Any RootShell that has not been taught the distinction must fail safe: a fake or an older
         // implementation reporting NO_LAUNCH by accident would stall values on no evidence at all.
