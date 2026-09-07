@@ -191,7 +191,7 @@ class SensorReporter(
     private var onChangeProbeAwaiting = false
     private var calibrationTickScheduled = false
     private var proximityReceived = false
-    private var lastProximityTimestampNs = 0L
+    private val proximityTimestampGate = ProximityTimestampGate()
 
     private val calibrationTick = object : Runnable {
         override fun run() {
@@ -420,7 +420,7 @@ class SensorReporter(
         activeRun = run
         proximitySampleCount = 0
         proximityReceived = false
-        lastProximityTimestampNs = 0L
+        proximityTimestampGate.reset()
         cadenceClassified = proximityPolicy.sparseLearning
         continuousCadenceConfirmed = false
         cadenceCheckScheduled = false
@@ -572,10 +572,9 @@ class SensorReporter(
     private fun handleProximity(raw: Float, run: SensorRunCallbacks, timestampNs: Long? = null) {
         if (!run.isOpen() || activeRun !== run) return
         val now = SystemClock.elapsedRealtime()
-        val fresh = timestampNs == null || proximitySampleFresh(timestampNs, now, lastProximityTimestampNs)
+        val fresh = timestampNs == null || proximityTimestampGate.accept(timestampNs, now, System.currentTimeMillis())
         val wakeEligible = fresh && proximityReceived && !onChangeProbeAwaiting
         proximityReceived = true
-        if (fresh && timestampNs != null) lastProximityTimestampNs = timestampNs
         // Preserve the admitted final edge, then immediately reopen empirical classification. A HAL
         // that resumes dense delivery after a quiet startup therefore gets at most that one sparse
         // report before returning to the numeric rate budget.
@@ -737,9 +736,66 @@ class SensorReporter(
     }
 }
 
-/** Vendor range metadata is not evidence of freshness or signal representation. */
-internal fun proximitySampleFresh(timestampNs: Long, receivedMs: Long, previousTimestampNs: Long): Boolean {
-    if (timestampNs <= 0L || timestampNs <= previousTimestampNs) return false
-    val sampleMs = timestampNs / 1_000_000L
-    return sampleMs <= receivedMs && receivedMs - sampleMs <= 750L
+/** Some HALs mix a monotonic registration seed with wall-clock live edges in the same stream.
+ * Accept only samples contemporary with one unambiguous clock, then order both on elapsed time.
+ * Rejected observations never advance either timestamp highwater. Acquisition still decides whether
+ * an otherwise fresh registration/probe sample is allowed to actuate a wake.
+ */
+internal class ProximityTimestampGate {
+    private var elapsedTimestampNs = 0L
+    private var wallTimestampNs = 0L
+    private var normalizedSampleMs: Long? = null
+    private var lastReceivedElapsed: Long? = null
+    private var lastClockOffset: Long? = null
+    private var wallUncertainUntil = 0L
+
+    fun reset() {
+        elapsedTimestampNs = 0L
+        wallTimestampNs = 0L
+        normalizedSampleMs = null
+        lastReceivedElapsed = null
+        lastClockOffset = null
+        wallUncertainUntil = 0L
+    }
+
+    fun accept(timestampNs: Long, receivedElapsedMs: Long, receivedWallMs: Long): Boolean {
+        if (timestampNs <= 0L || receivedElapsedMs < 0L || receivedWallMs < 0L) return false
+        if (lastReceivedElapsed?.let { receivedElapsedMs < it } == true) return false
+        lastReceivedElapsed = receivedElapsedMs
+        val offset = receivedWallMs - receivedElapsedMs
+        val previousOffset = lastClockOffset
+        lastClockOffset = offset
+        if (previousOffset != null && kotlin.math.abs(offset.toDouble() - previousOffset.toDouble()) > CLOCK_PAIR_TOLERANCE_MS) {
+            wallUncertainUntil = receivedElapsedMs + FRESHNESS_MS
+            // Invalidate any in-flight wave at the first sign of a wall-clock discontinuity.
+            return false
+        }
+        val sampleMs = timestampNs / 1_000_000L
+        val elapsedContemporary = contemporary(sampleMs, receivedElapsedMs)
+        val wallContemporary = contemporary(sampleMs, receivedWallMs)
+        // A timestamp fitting both clocks is ambiguous; fitting neither is stale or malformed.
+        if (elapsedContemporary == wallContemporary) return false
+        val normalized: Long
+        if (elapsedContemporary) {
+            if (timestampNs <= elapsedTimestampNs) return false
+            normalized = sampleMs
+        } else {
+            if (receivedElapsedMs < wallUncertainUntil || timestampNs <= wallTimestampNs) return false
+            normalized = receivedElapsedMs - (receivedWallMs - sampleMs)
+            if (normalized < 0L) return false
+        }
+        if (normalizedSampleMs?.let { normalized <= it } == true) return false
+        if (elapsedContemporary) elapsedTimestampNs = timestampNs else wallTimestampNs = timestampNs
+        normalizedSampleMs = normalized
+        return true
+    }
+
+    private fun contemporary(sampleMs: Long, receivedMs: Long): Boolean =
+        sampleMs <= receivedMs && receivedMs - sampleMs <= FRESHNESS_MS
+
+    companion object {
+        private const val FRESHNESS_MS = 750L
+        // The clocks are read consecutively; tolerate their millisecond quantization, not clock steps.
+        private const val CLOCK_PAIR_TOLERANCE_MS = 5.0
+    }
 }
