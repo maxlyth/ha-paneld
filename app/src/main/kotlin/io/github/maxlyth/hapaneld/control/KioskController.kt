@@ -13,6 +13,7 @@ import android.view.View
 import android.view.WindowManager
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.KioskAdminUi
+import io.github.maxlyth.hapaneld.isKioskCompanionForeground
 import io.github.maxlyth.hapaneld.shouldKioskReturnToDashboard
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
@@ -151,7 +152,12 @@ class KioskController(
                             outcome = FeatureCostOutcome.CANCELLED
                             break
                         }
-                        if (shouldKioskReturnToDashboard(state, KioskAdminUi.isVisible())) {
+                        val companions = config.kioskCompanionPackages
+                        if (shouldKioskReturnToDashboard(state, KioskAdminUi.isVisible()) {
+                                companions.isNotEmpty() &&
+                                    isKioskCompanionForeground(system.foregroundPackage(), companions)
+                            }
+                        ) {
                             Log.i(TAG, "left the dashboard while locked -> returning to it")
                             system.launchHome(pkg)
                         }

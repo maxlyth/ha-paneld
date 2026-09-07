@@ -712,6 +712,18 @@ class Config private constructor(
 
     /** Dashboard renderer selection. Empty means the automatic built-in renderer. */
     val dashboardPackage: String get() = stringPref("dashboard_package")
+
+    /**
+     * Packages the kiosk lock allows to hold the foreground without being pulled back.
+     *
+     * Empty by default, and deliberately so: a shipped default would change kiosk behaviour for every
+     * existing panel on upgrade, and would make this project the arbiter of which third-party apps
+     * deserve the foreground on someone else's wall. The operator names a companion because they
+     * installed one and want to reach its UI — a voice assistant's setup screens, for instance —
+     * without unlocking the kiosk on a panel nobody is standing at.
+     */
+    val kioskCompanionPackages: Set<String>
+        get() = parseKioskCompanionPackages(prefs.getString("kiosk_companion_packages", "").orEmpty())
     fun setDashboardPackage(pkg: String) {
         require(AndroidInput.isDashboardTarget(pkg)) { "invalid dashboard package" }
         val changed = pkg != dashboardPackage
