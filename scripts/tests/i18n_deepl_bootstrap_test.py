@@ -83,6 +83,22 @@ class BootstrapTest(unittest.TestCase):
         with self.assertRaises(BOOTSTRAP.catalogue.CatalogueError):
             BOOTSTRAP.validate_plan(plan, self.source_path)
 
+    def test_empty_xml_placeholders_round_trip_frozen_text(self):
+        record = {
+            "key": "settings.example.label",
+            "english": "Use Home Assistant with {name}",
+            "placeholders": ["{name}"],
+            "frozen": ["Home Assistant"],
+        }
+        protected, values = BOOTSTRAP._protected_xml(record)
+        self.assertEqual(protected, 'Use <x id="0"/> with <x id="1"/>')
+        self.assertEqual(
+            BOOTSTRAP._restore_xml('Gebruik <x id="0"/> met <x id="1"/>', values, record["key"]),
+            "Gebruik Home Assistant met {name}",
+        )
+        with self.assertRaisesRegex(BOOTSTRAP.deepl.DeepLError, "missing protected token"):
+            BOOTSTRAP._restore_xml('Gebruik <x id="0"/>', values, record["key"])
+
     def test_generate_batches_and_emits_review_only_artifact(self):
         plan = BOOTSTRAP.build_plan(self.source_path, ["uk"], REVISION)
         plan_path = self.root / "plan.json"

@@ -6,12 +6,15 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
+import html
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from typing import Any
+import xml.etree.ElementTree as ElementTree
 
 import i18n_catalogue as catalogue
 import i18n_deepl as deepl
@@ -33,10 +36,54 @@ def _digest(path: Path) -> str:
 
 
 def _records(source: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        deepl._selected_record(key, value, source)
-        for key, value in source["strings"].items()
-    ]
+    records = []
+    for key, value in source["strings"].items():
+        record = deepl._selected_record(key, value, source)
+        record["maximumBilledCharacters"] = len(_protected_xml(record)[0])
+        records.append(record)
+    return records
+
+
+def _protected_xml(record: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """Replace immutable text with empty XML placeholders DeepL can move but not rewrite."""
+    tokens = list(record["placeholders"]) + list(record["frozen"])
+    if not tokens:
+        return html.escape(record["english"], quote=False), {}
+    if any(token not in record["english"] for token in set(tokens)):
+        raise deepl.DeepLError(f"{record['key']}: protected-token metadata does not match English")
+    alternatives = "|".join(re.escape(token) for token in sorted(set(tokens), key=len, reverse=True))
+    protected: dict[str, str] = {}
+    chunks: list[str] = []
+    cursor = 0
+    for match in re.finditer(alternatives, record["english"]):
+        chunks.append(html.escape(record["english"][cursor:match.start()], quote=False))
+        identifier = str(len(protected))
+        protected[identifier] = match.group(0)
+        chunks.append(f'<x id="{identifier}"/>')
+        cursor = match.end()
+    chunks.append(html.escape(record["english"][cursor:], quote=False))
+    return "".join(chunks), protected
+
+
+def _restore_xml(value: str, protected: dict[str, str], key: str) -> str:
+    try:
+        root = ElementTree.fromstring(f"<root>{value}</root>")
+    except ElementTree.ParseError as error:
+        raise deepl.DeepLError(f"{key}: malformed translated XML") from error
+    result = root.text or ""
+    seen: set[str] = set()
+    for child in root:
+        if child.tag != "x" or set(child.attrib) != {"id"} or list(child) or child.text:
+            raise deepl.DeepLError(f"{key}: unexpected translated XML structure")
+        identifier = child.attrib["id"]
+        if identifier not in protected or identifier in seen:
+            raise deepl.DeepLError(f"{key}: changed protected token")
+        seen.add(identifier)
+        result += protected[identifier]
+        result += child.tail or ""
+    if seen != set(protected):
+        raise deepl.DeepLError(f"{key}: missing protected token")
+    return result
 
 
 def build_plan(source_path: Path, locales: list[str], base_revision: str) -> dict[str, Any]:
@@ -152,7 +199,7 @@ def _translate_batch(
     api_key: str,
     http: deepl.HTTP,
 ) -> tuple[list[str], int]:
-    protected = [deepl._protected_xml(record) for record in records]
+    protected = [_protected_xml(record) for record in records]
     response = deepl._request_json(
         "/v2/translate", api_key, http,
         _request_body(locale, records, [item[0] for item in protected]),
@@ -175,7 +222,7 @@ def _translate_batch(
             or billed > record["maximumBilledCharacters"]
         ):
             raise deepl.DeepLError(f"{record['key']}: malformed translation result")
-        restored = deepl._restore_xml(text, protection[1], record["key"])
+        restored = _restore_xml(text, protection[1], record["key"])
         source_record = record
         if len(restored) > catalogue.MAX_TARGET_TEXT_CHARS:
             raise deepl.DeepLError(f"{record['key']}: translated text is unreasonably large")
