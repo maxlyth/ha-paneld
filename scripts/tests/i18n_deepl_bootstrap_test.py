@@ -118,6 +118,7 @@ class BootstrapTest(unittest.TestCase):
         first_body = json.loads(translate_requests[0].data)
         self.assertEqual(first_body["model_type"], "prefer_quality_optimized")
         self.assertEqual(first_body["formality"], "prefer_less")
+        self.assertNotIn("ignore_tags", first_body)
         self.assertNotIn("custom_instructions", first_body)
 
     def test_quota_preflight_prevents_translation(self):

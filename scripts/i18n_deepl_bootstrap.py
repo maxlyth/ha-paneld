@@ -188,7 +188,6 @@ def _request_body(locale: str, records: list[dict[str, Any]], texts: list[str]) 
         "model_type": "prefer_quality_optimized",
         "tag_handling": "xml",
         "tag_handling_version": "v2",
-        "ignore_tags": ["x"],
         "preserve_formatting": True,
     }
 
