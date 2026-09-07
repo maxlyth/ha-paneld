@@ -486,6 +486,110 @@ class DeepLAdapterTest(unittest.TestCase):
         self.assertEqual(candidate["translations"][1]["translation"], "Behalte {name} auf MQTT")
         self.assertEqual(result["resultHashes"]["de"], DEEPL._source_digest(output / "candidates/de.json"))
 
+    def test_custom_instruction_support_covers_documented_language_families(self):
+        supported = {
+            "DE", "DE-AT", "EN", "EN-GB", "EN-US", "ES", "ES-419", "FR", "IT",
+            "JA", "KO", "ZH", "ZH-HANS", "ZH-HANT",
+        }
+        unsupported = {"NL", "PL", "CS", "PT-BR", "PT-PT", "UK"}
+
+        self.assertEqual(
+            {target for target in supported if DEEPL._supports_custom_instructions(target)},
+            supported,
+        )
+        self.assertEqual(
+            {target for target in unsupported if DEEPL._supports_custom_instructions(target)},
+            set(),
+        )
+
+    def test_custom_instruction_support_rejects_noncanonical_target_codes(self):
+        malformed = (
+            None, True, 1, "", "de", "Pt-BR", "PT_br", "-DE", "DE-", "DE--AT",
+            "DE-A", "DE-ABCDEFGHI",
+        )
+        for target in malformed:
+            with self.subTest(target=target):
+                with self.assertRaisesRegex(DEEPL.DeepLError, "target language is not canonical"):
+                    DEEPL._supports_custom_instructions(target)
+
+    def test_request_body_preserves_tier_a_and_omits_instructions_for_tier_b(self):
+        record = DEEPL._selected_record(
+            "settings.alpha.label",
+            self.source["strings"]["settings.alpha.label"],
+            self.source,
+        )
+        context = DEEPL._load_context(self.context_path)[0]
+        protected_text = DEEPL._protected_xml(record)[0]
+        tier_a = {
+            "de": "DE",
+            "fr": "FR",
+            "it": "IT",
+            "es": "ES",
+            "zh-Hans": "ZH-HANS",
+        }
+        tier_b = {
+            "nl": ("NL", "prefer_less"),
+            "pl": ("PL", "prefer_less"),
+            "cs": ("CS", "prefer_less"),
+            "pt-BR": ("PT-BR", "prefer_less"),
+            "uk": ("UK", "prefer_less"),
+        }
+
+        for locale, target in tier_a.items():
+            with self.subTest(locale=locale):
+                first = DEEPL._translation_request_body(record, locale, context, protected_text)
+                second = DEEPL._translation_request_body(record, locale, context, protected_text)
+                self.assertEqual(first, second)
+                self.assertEqual(first["target_lang"], target)
+                self.assertEqual(len(first["custom_instructions"]), 2)
+                self.assertEqual(
+                    list(first),
+                    [
+                        "text", "source_lang", "target_lang", "context", "show_billed_characters",
+                        "formality", "model_type", "custom_instructions", "tag_handling",
+                        "tag_handling_version", "ignore_tags", "preserve_formatting",
+                    ],
+                )
+
+        with mock.patch.dict(DEEPL.TARGETS, tier_b):
+            for locale, (target, formality) in tier_b.items():
+                with self.subTest(locale=locale):
+                    first = DEEPL._translation_request_body(record, locale, context, protected_text)
+                    second = DEEPL._translation_request_body(record, locale, context, protected_text)
+                    self.assertEqual(first, second)
+                    self.assertEqual(first["target_lang"], target)
+                    self.assertEqual(first["formality"], formality)
+                    self.assertNotIn("custom_instructions", first)
+                    self.assertEqual(first["context"], second["context"])
+                    self.assertEqual(first["text"], second["text"])
+                    self.assertEqual(first["tag_handling"], "xml")
+                    self.assertEqual(first["tag_handling_version"], "v2")
+                    self.assertEqual(first["ignore_tags"], ["x"])
+                    self.assertIs(first["show_billed_characters"], True)
+
+                    fake = FakeHttp([f"Alpha {locale}"])
+                    translated, billed = DEEPL._translate(record, locale, context, "key:fx", fake)
+                    emitted = json.loads(fake.requests[0].data)
+                    self.assertEqual(translated, f"Alpha {locale}")
+                    self.assertEqual(billed, len(protected_text))
+                    self.assertEqual(emitted, first)
+                    self.assertNotIn("custom_instructions", emitted)
+
+    def test_malformed_configured_target_fails_before_http(self):
+        record = DEEPL._selected_record(
+            "settings.alpha.label",
+            self.source["strings"]["settings.alpha.label"],
+            self.source,
+        )
+        context = DEEPL._load_context(self.context_path)[0]
+        fake = FakeHttp(["Alpha"])
+
+        with mock.patch.dict(DEEPL.TARGETS, {"bad": ("pt-BR", "prefer_less")}):
+            with self.assertRaisesRegex(DEEPL.DeepLError, "target language is not canonical"):
+                DEEPL._translate(record, "bad", context, "key:fx", fake)
+
+        self.assertEqual(fake.requests, [])
+
     def test_insufficient_quota_is_a_no_op_with_reserve(self):
         plan = DEEPL.build_plan(self.source_path, self.target_dir, self.context_path, ["fr"], REVISION, set())
         plan_path = self.root / "plan.json"

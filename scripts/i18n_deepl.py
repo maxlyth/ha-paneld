@@ -36,6 +36,10 @@ TARGETS = {
     "es": ("ES", "less"),
     "zh-Hans": ("ZH-HANS", "default"),
 }
+CUSTOM_INSTRUCTION_LANGUAGE_FAMILIES = frozenset({
+    "DE", "EN", "ES", "FR", "IT", "JA", "KO", "ZH",
+})
+TARGET_LANGUAGE_RE = re.compile(r"[A-Z]{2}(?:-[A-Z0-9]{2,8})*")
 HTTP = Callable[[urllib.request.Request], bytes]
 
 CONTEXT_ROOT_KEYS = {
@@ -404,6 +408,42 @@ def _translation_context(record: dict[str, Any], locale: str, context: dict[str,
     return "\n".join(lines)
 
 
+def _supports_custom_instructions(target_lang: str) -> bool:
+    if not isinstance(target_lang, str) or not TARGET_LANGUAGE_RE.fullmatch(target_lang):
+        raise DeepLError("configured target language is not canonical")
+    return target_lang.partition("-")[0] in CUSTOM_INSTRUCTION_LANGUAGE_FAMILIES
+
+
+def _translation_request_body(
+    record: dict[str, Any],
+    locale: str,
+    context: dict[str, Any],
+    protected_text: str,
+) -> dict[str, Any]:
+    target_lang, formality = TARGETS[locale]
+    body = {
+        "text": [protected_text],
+        "source_lang": "EN",
+        "target_lang": target_lang,
+        "context": _translation_context(record, locale, context),
+        "show_billed_characters": True,
+        "formality": formality,
+        "model_type": "quality_optimized",
+    }
+    if _supports_custom_instructions(target_lang):
+        body["custom_instructions"] = [
+            "Use concise software settings UI language. Preserve meaning; do not add actions, warnings, or guarantees.",
+            context["instruction"],
+        ]
+    body.update({
+        "tag_handling": "xml",
+        "tag_handling_version": "v2",
+        "ignore_tags": ["x"],
+        "preserve_formatting": True,
+    })
+    return body
+
+
 def _translate(
     record: dict[str, Any],
     locale: str,
@@ -412,28 +452,11 @@ def _translate(
     http: HTTP,
 ) -> tuple[str, int]:
     protected_text, protected = _protected_xml(record)
-    target_lang, formality = TARGETS[locale]
     response = _request_json(
         "/v2/translate",
         key,
         http,
-        {
-            "text": [protected_text],
-            "source_lang": "EN",
-            "target_lang": target_lang,
-            "context": _translation_context(record, locale, context),
-            "show_billed_characters": True,
-            "formality": formality,
-            "model_type": "quality_optimized",
-            "custom_instructions": [
-                "Use concise software settings UI language. Preserve meaning; do not add actions, warnings, or guarantees.",
-                context["instruction"],
-            ],
-            "tag_handling": "xml",
-            "tag_handling_version": "v2",
-            "ignore_tags": ["x"],
-            "preserve_formatting": True,
-        },
+        _translation_request_body(record, locale, context, protected_text),
     )
     if not isinstance(response, dict):
         raise DeepLError(f"{record['key']}: translation response root must be an object")
