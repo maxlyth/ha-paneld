@@ -22,7 +22,7 @@ class TouchSoundStatePolicyTest {
             events,
         )
         assertEquals(prior, hardware.restored)
-        assertFalse(policy.isEnabled(true))
+        assertEquals(false, policy.recordedState())
         assertNull(store.prior)
     }
 
@@ -47,6 +47,41 @@ class TouchSoundStatePolicyTest {
 
         assertEquals(listOf("retire-legacy-stream", "disable-conservative", "disable-state"), events)
         assertNull(hardware.restored)
+    }
+
+    /**
+     * Asserting a durable OFF is not the same operation as switching touch sound off.
+     *
+     * A transition restores the flag ha-paneld found before it first enabled the click, which is right
+     * once. Replaying that capture on every boot would let a panel whose pre-ha-paneld flag was ON restore
+     * the very click its persisted intent says to silence, so reassertion writes the intended state
+     * directly and leaves the restore memory for a real transition.
+     */
+    @Test fun assertingDisabledSilencesTheHardwareInsteadOfRestoringAStaleCapture() {
+        val events = mutableListOf<String>()
+        val store = FakeStore(events)
+        val hardware = FakeHardware(TouchSoundState(1), events)
+        val policy = TouchSoundStatePolicy(store, hardware)
+
+        assertEquals(ControlApplyOutcome.APPLIED, policy.enable())
+        events.clear()
+
+        assertEquals(ControlApplyOutcome.APPLIED, policy.assertDisabled())
+
+        assertEquals(listOf("disable-conservative", "disable-state"), events)
+        assertNull(hardware.restored)
+        assertEquals(false, policy.recordedState())
+    }
+
+    @Test fun aPanelThatCannotWriteTheFlagReportsThatRatherThanClaimingSuccess() {
+        val events = mutableListOf<String>()
+        val store = FakeStore(events)
+        val hardware = FakeHardware(TouchSoundState(1), events, disableOutcome = ControlApplyOutcome.UNAVAILABLE)
+
+        assertEquals(ControlApplyOutcome.UNAVAILABLE, TouchSoundStatePolicy(store, hardware).assertDisabled())
+
+        // Nothing was recorded as disabled, because nothing was disabled.
+        assertEquals(listOf("retire-legacy-stream", "disable-conservative"), events)
     }
 
     @Test fun constructingPolicyPerformsOneWayLegacyStreamCleanupWithoutAudioMutation() {
@@ -91,6 +126,7 @@ class TouchSoundStatePolicyTest {
     private class FakeHardware(
         private val captured: TouchSoundState,
         private val events: MutableList<String>,
+        private val disableOutcome: ControlApplyOutcome = ControlApplyOutcome.APPLIED,
     ) : TouchSoundHardware {
         var restored: TouchSoundState? = null
         override fun capture(): TouchSoundState {
@@ -108,7 +144,7 @@ class TouchSoundStatePolicyTest {
         }
         override fun disableConservatively(): ControlApplyOutcome {
             events += "disable-conservative"
-            return ControlApplyOutcome.APPLIED
+            return disableOutcome
         }
     }
 }

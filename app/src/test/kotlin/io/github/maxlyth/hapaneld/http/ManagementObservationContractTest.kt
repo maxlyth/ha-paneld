@@ -177,7 +177,11 @@ class ManagementObservationContractTest {
         assertTrue(renderHash.contains("configConcurrencyHash(currentValues())"))
         assertFalse(configLive.contains("cpu.currentTier()"))
         assertFalse(configLive.contains("Su."))
-        assertTrue(configLive.contains("touchSound.isEnabled()"))
+        // touch_sound is deliberately absent. A live-map key overrides the persisted registry value on
+        // every surface that reports it, and the platform sound-effects flag has other writers, so an
+        // observation standing in for the setting let firmware drift queue an apply nobody requested.
+        // TouchSoundDriftContractTest owns the full invariant.
+        assertFalse(configLive.contains("touchSound"))
         assertTrue(configLive.contains("adb.isPersisted()"))
         assertTrue(configLive.contains("config.zigbeeRouterEnabled"))
         assertFalse(server.contains("cfg=\${configConcurrencyHash()}"))

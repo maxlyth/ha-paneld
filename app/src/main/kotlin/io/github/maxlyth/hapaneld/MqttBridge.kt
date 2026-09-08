@@ -1687,7 +1687,9 @@ internal class MqttBridge(
             if (hasProximity) known(if (config.wakeOnWave) "ON" else "OFF") else unknown
         }
         channel("auto_sleep", stateAutoSleep) { known(if (config.autoSleep) "ON" else "OFF") }
-        channel("touch_sound", stateTouchSound) { known(if (touchSound.isEnabled()) "ON" else "OFF") }
+        // Persisted intent, not the platform flag: the flag has other writers, and publishing an
+        // observation of it would let firmware drift flip the Home Assistant switch on its own.
+        channel("touch_sound", stateTouchSound) { known(if (config.touchSound) "ON" else "OFF") }
         channel("watchdog", stateWatchdog) { known(if (config.watchdogEnabled) "ON" else "OFF") }
         channel("kiosk_lock", stateKiosk) { known(if (config.kioskLock) "ON" else "OFF") }
         channel("companion_auto_update", stateCompanionAuto) { known(if (config.companionAutoUpdate) "ON" else "OFF") }
@@ -2832,6 +2834,12 @@ internal class MqttBridge(
 
     override fun handleTouchSound(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
+        // Persist the intent before actuating it, like every other live setting. The state channel now
+        // reports the persisted value, so a change that only reached the controller would publish the old
+        // value straight back and flip the switch in Home Assistant. The HTTP path has already committed
+        // the same value through applyLiveSettingObserved, which makes this idempotent rather than
+        // redundant: MQTT reaches this handler without it.
+        check(config.commitTouchSound(on)) { "touch sound intent could not be persisted" }
         requireControlApplied("touch_sound", touchSound.apply(on)) { "touch sound transition failed" }
         stateConverger.reconcile("touch_sound", force = true)
     }

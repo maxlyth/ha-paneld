@@ -46,11 +46,62 @@ class TouchSoundController(context: Context, clickGain: Float) {
     @Volatile private var clickReady = false
     private var touchSubscription: PanelTouchObserver.Subscription? = null
 
-    fun isEnabled(): Boolean = statePolicy.isEnabled(
-        Settings.System.getInt(ctx.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1,
-    )
+    /**
+     * What the platform flag says right now, or null when it cannot be read.
+     *
+     * This is an observation and never a report. `SOUND_EFFECTS_ENABLED` is a global that any holder of
+     * `WRITE_SETTINGS` can write, so firmware and vendor settings apps move it under ha-paneld. A surface
+     * that showed this value would change the panel's touch-sound setting with no user action, and the
+     * next unrelated Configure save would then post a value that no longer matches and queue a
+     * touch-sound edit nobody asked for. Only [resolveTouchSoundIntent] may consume it, and only while
+     * the panel has no persisted intent yet.
+     */
+    fun observedPlatformState(): Boolean? = runCatching {
+        Settings.System.getString(ctx.contentResolver, Settings.System.SOUND_EFFECTS_ENABLED)?.toIntOrNull()
+    }.getOrNull()?.let { it == 1 }
+
+    /** Whether ha-paneld has ever asserted touch sound on this panel, or null if it never has. Actuation
+     *  bookkeeping carried across an upgrade, not a value any surface may report. */
+    fun recordedState(): Boolean? = statePolicy.recordedState()
 
     fun set(on: Boolean): Boolean = apply(on).applied
+
+    /**
+     * Make the hardware match a durable intent at startup, without performing a transition.
+     *
+     * [apply] is a transition, and turning touch sound off there restores whatever `SOUND_EFFECTS_ENABLED`
+     * held before ha-paneld first enabled it, which is the right thing the moment a user switches it off.
+     * A reassertion is not that: the captured prior belongs to a transition that already happened, and
+     * replaying it every boot would let a stale capture contradict the very intent it is meant to enforce
+     * (a panel whose pre-ha-paneld flag was on would restore the click it was told to silence). So an
+     * intended OFF is asserted directly and the restore memory is left for a real transition.
+     */
+    @Synchronized
+    internal fun reassert(on: Boolean): ControlApplyOutcome {
+        return try {
+            if (on) {
+                val enabled = statePolicy.enable()
+                if (!enabled.applied) {
+                    Log.w(TAG, "touch sound reassert on refused: prior state could not be captured durably")
+                    return enabled
+                }
+                am.loadSoundEffects()
+                enableOverlay()
+            } else {
+                disableOverlay()
+                val disabled = statePolicy.assertDisabled()
+                if (!disabled.applied) {
+                    Log.w(TAG, "touch sound reassert off failed; the panel may still be audible")
+                    return disabled
+                }
+            }
+            Log.i(TAG, "touch sound reasserted -> ${if (on) "on" else "off"}")
+            ControlApplyOutcome.APPLIED
+        } catch (error: Exception) {
+            Log.w(TAG, "touch sound reassert failed: ${error.message}")
+            ControlApplyOutcome.FAILED
+        }
+    }
 
     /**
      * Apply the transition and report what the attempt learned. Touch sound owns `SOUND_EFFECTS_ENABLED`
@@ -163,6 +214,51 @@ internal fun touchClickWav(sampleRate: Int = 16_000, durationMs: Int = 58): Byte
     return out
 }
 
+/**
+ * Where a reported touch-sound value came from.
+ *
+ * The distinction is the whole point of this type. Only [INTENT] is a value a user, Home Assistant or a
+ * restored configuration bundle actually chose, and only [INTENT] may reach a reporting surface. [ADOPTED]
+ * and [DEFAULT] both describe a panel that has not resolved its intent yet: they are resolved exactly once
+ * at startup, written to configuration, and never consulted again.
+ */
+internal enum class TouchSoundOrigin { INTENT, ADOPTED, DEFAULT }
+
+/** A resolved touch-sound value together with the authority it came from. */
+internal data class TouchSoundResolution(val enabled: Boolean, val origin: TouchSoundOrigin) {
+    /**
+     * Whether this resolution still has to be written down.
+     *
+     * A resolution that already came from persisted intent is the stored value, so committing it again
+     * would be a write with nothing to say. Everything else is a panel mid-migration whose answer only
+     * becomes authoritative once it is durable — and if that write fails, nothing has been decided and
+     * the next boot resolves from the same evidence.
+     */
+    val needsAdoption: Boolean get() = origin != TouchSoundOrigin.INTENT
+}
+
+/**
+ * The one place that decides what this panel's touch sound is.
+ *
+ * Ordered by authority, and the order is the fix. A persisted intent wins outright, so once a panel has
+ * one, nothing observed about the hardware can move the reported value again — which is what stops an
+ * unrelated Configure save from posting a stale value and minting a live-setting edit for a key the user
+ * never touched. Below that, an upgrading panel is adopted from ha-paneld's own actuation record, then
+ * from a single reading of the platform flag, and a panel that can offer neither takes the registry
+ * default. Pure, so every one of those transitions is provable without a device.
+ */
+internal fun resolveTouchSoundIntent(
+    persistedIntent: Boolean?,
+    controllerRecord: Boolean?,
+    observedHardware: Boolean?,
+    registryDefault: Boolean,
+): TouchSoundResolution = when {
+    persistedIntent != null -> TouchSoundResolution(persistedIntent, TouchSoundOrigin.INTENT)
+    controllerRecord != null -> TouchSoundResolution(controllerRecord, TouchSoundOrigin.ADOPTED)
+    observedHardware != null -> TouchSoundResolution(observedHardware, TouchSoundOrigin.ADOPTED)
+    else -> TouchSoundResolution(registryDefault, TouchSoundOrigin.DEFAULT)
+}
+
 internal data class TouchSoundState(
     val effectsSetting: Int?,
 )
@@ -193,7 +289,9 @@ internal class TouchSoundStatePolicy(
         store.retireLegacyStreamState()
     }
 
-    fun isEnabled(platformFallback: Boolean): Boolean = store.active() ?: platformFallback
+    /** ha-paneld's own actuation record. Null means this panel has never been asserted either way, which
+     *  is a question about migration state and never a value to report. */
+    fun recordedState(): Boolean? = store.active()
 
     fun enable(): ControlApplyOutcome {
         // A capture or persistence failure is this attempt's problem, never the panel's: it says nothing
@@ -209,6 +307,14 @@ internal class TouchSoundStatePolicy(
         val prior = store.prior()
         val restored = if (prior != null) hardware.restore(prior) else hardware.disableConservatively()
         if (!restored.applied) return restored
+        return if (store.saveDisabledAndClearPrior()) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
+    }
+
+    /** Assert a durable OFF intent against the hardware. Unlike [disable] this never restores a captured
+     *  prior; see [TouchSoundController.reassert] for why a transition's memory must not be replayed. */
+    fun assertDisabled(): ControlApplyOutcome {
+        val silenced = hardware.disableConservatively()
+        if (!silenced.applied) return silenced
         return if (store.saveDisabledAndClearPrior()) ControlApplyOutcome.APPLIED else ControlApplyOutcome.FAILED
     }
 }
