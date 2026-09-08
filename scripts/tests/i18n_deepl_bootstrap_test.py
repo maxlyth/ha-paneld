@@ -87,7 +87,7 @@ class BootstrapTest(unittest.TestCase):
         record = {
             "key": "settings.example.label",
             "english": "Use Home Assistant with {name}",
-            "context": "Example setting.",
+            "context": "home assistant example setting for {name}; preserve the result.",
             "placeholders": ["{name}"],
             "frozen": ["Home Assistant"],
             "maximumBilledCharacters": len("Use  with "),
@@ -100,8 +100,27 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(translated, ["Gebruik Home Assistant met {name}"])
         body = json.loads(fake.requests[0].data)
         self.assertEqual(body["text"], ["Use ", " with "])
-        self.assertNotIn("Home Assistant", body["text"])
-        self.assertNotIn("{name}", body["text"])
+        provider_payload = json.dumps(body)
+        self.assertNotIn("Home Assistant", provider_payload)
+        self.assertNotIn("home assistant", provider_payload)
+        self.assertNotIn("{name}", provider_payload)
+        self.assertNotIn("settings.example.label", provider_payload)
+        self.assertNotIn("Use Home Assistant with", provider_payload)
+        self.assertIn("result", body["context"])
+
+    def test_real_catalogue_batches_keep_all_protected_terms_out_of_context(self):
+        source = BOOTSTRAP.catalogue.validate_source(
+            ROOT / "app/src/main/assets/i18n/en.json"
+        )
+        records = BOOTSTRAP._records(source)
+        for batch in BOOTSTRAP._record_batches(records):
+            context = BOOTSTRAP._context(batch)
+            tokens = [
+                token
+                for record in batch
+                for token in list(record["placeholders"]) + list(record["frozen"])
+            ]
+            self.assertEqual(context, BOOTSTRAP._remove_protected(context, tokens))
 
     def test_generate_batches_and_emits_review_only_artifact(self):
         plan = BOOTSTRAP.build_plan(self.source_path, ["uk"], REVISION)

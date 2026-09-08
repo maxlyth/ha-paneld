@@ -173,17 +173,37 @@ def _capabilities(locales: list[str], api_key: str, http: deepl.HTTP) -> None:
             raise deepl.DeepLError(f"{locale}: configured target language is unavailable")
 
 
+def _remove_protected(value: str, tokens: list[str]) -> str:
+    """Remove protected terms without treating short terms as word fragments."""
+    for token in sorted(set(tokens), key=len, reverse=True):
+        left = r"(?<!\w)" if token[0].isalnum() else ""
+        right = r"(?!\w)" if token[-1].isalnum() else ""
+        value = re.sub(left + re.escape(token) + right, "", value, flags=re.IGNORECASE)
+    return value
+
+
+def _safe_context(record: dict[str, Any]) -> str:
+    """Keep this record's immutable values out of its semantic context."""
+    tokens = list(record["placeholders"]) + list(record["frozen"])
+    value = _remove_protected(record["context"], tokens)
+    return " ".join(value.split()) or "Concise software UI text."
+
+
 def _context(records: list[dict[str, Any]]) -> str:
-    meanings = "\n".join(
-        f"{record['key']}: {record['context']} English: {record['english']}"
-        for record in records
-    )
-    return (
-        "ha-paneld is a Home Assistant wall-panel application. Translate concise software UI "
-        "text, preserving meaning, placeholders, product names, warnings, and technical terms. "
+    meanings = "\n".join(f"- {_safe_context(record)}" for record in records)
+    value = (
+        "Translate concise wall-panel software interface text while preserving meaning and warning "
+        "severity. Immutable values are inserted locally and are absent from the input segments; "
+        "do not invent product names, placeholders, paths, units, acronyms, or technical identifiers. "
         "Do not add actions, promises, or guarantees. Each input is independent.\n"
         f"String meanings:\n{meanings}"
     )
+    batch_tokens = [
+        token
+        for record in records
+        for token in list(record["placeholders"]) + list(record["frozen"])
+    ]
+    return _remove_protected(value, batch_tokens)
 
 
 def _request_body(locale: str, records: list[dict[str, Any]], texts: list[str]) -> dict[str, Any]:
