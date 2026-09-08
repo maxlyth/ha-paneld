@@ -20,8 +20,8 @@ class SettingsCatalogueContractTest {
             if (spec.help.isNotEmpty()) expected[spec.helpKey] = spec.help
         }
 
-        assertEquals(87, SettingsRegistry.SPECS.size)
-        assertEquals(173, expected.size)
+        assertEquals(88, SettingsRegistry.SPECS.size)
+        assertEquals(175, expected.size)
         val settings = catalogue.strings.filterKeys { it.startsWith("settings.") }
         assertEquals("Settings must remain an exact independently-owned subset", expected.keys, settings.keys)
         expected.forEach { (key, text) ->
@@ -123,8 +123,13 @@ class SettingsCatalogueContractTest {
                 "http" to ("configure.enum.log_ship_protocol.http" to "HTTP protocol"),
             ),
         )
+        val localPresenceBindings = linkedMapOf(
+            "panel" to ("configure.auto_sleep.source_panel" to "This panel’s proximity sensor"),
+            "home_assistant" to ("configure.auto_sleep.source_ha" to "Home Assistant Area devices"),
+        )
         val declared = SettingsRegistry.SPECS.filter { it.type == SettingType.ENUM }.associate { it.key to it.options }
-        assertEquals(expected.keys + "ui_language", declared.keys)
+        assertEquals(expected.keys + setOf("ui_language", "auto_sleep_source"), declared.keys)
+        assertEquals(localPresenceBindings.keys.toList(), declared["auto_sleep_source"])
         expected.forEach { (setting, bindings) ->
             assertEquals("$setting option domain changed without a localization decision", bindings.keys.toList(), declared[setting])
         }
@@ -137,6 +142,10 @@ class SettingsCatalogueContractTest {
         assertTrue(configure.contains("return binding ? i18nText(binding[0], binding[1]) : String(wireValue)"))
 
         val source = SourceCatalogue.parse(catalogueFile.readText())
+        localPresenceBindings.values.forEach { (key, english) ->
+            assertTrue("missing local proximity label binding for $key", configure.contains("i18nText(\"$key\", \"$english\")"))
+            assertEquals(english, checkNotNull(source.strings[key]).text)
+        }
         val uniqueBindings = expected.values.flatMap { it.values }.toSet()
         assertEquals(27, uniqueBindings.size)
         uniqueBindings.forEach { (key, english) ->
