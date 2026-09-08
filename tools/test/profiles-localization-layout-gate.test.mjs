@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const ASSETS = resolve(ROOT, 'app/src/main/assets');
 const SERVER_SOURCE = resolve(ROOT, 'app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt');
 const CHROME = process.env.CHROME || '/usr/bin/chromium';

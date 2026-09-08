@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const asset = join(process.cwd(), '..', 'app', 'src', 'main', 'assets', 'i18n.js');
+const asset = join(process.cwd(), '..', '..', 'app', 'src', 'main', 'assets', 'i18n.js');
 
 async function load(rawPayload) {
   const source = await readFile(asset, 'utf8');

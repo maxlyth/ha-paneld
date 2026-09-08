@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const ASSETS = resolve(ROOT, 'app/src/main/assets');
 const API_HTML = resolve(ASSETS, 'api.html');
 const API_SPEC = resolve(ASSETS, 'openapi.json');

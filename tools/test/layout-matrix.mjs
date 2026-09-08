@@ -20,7 +20,7 @@ import {
   summarizeSamples,
 } from './layout-statistics.mjs';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url)); // repo root
+const ROOT = fileURLToPath(new URL('../..', import.meta.url)); // repo root
 const CHROME = process.env.CHROME || '/usr/bin/chromium';
 const SECS = +(process.env.SECS || 7);
 const RUNS = parseRunCount(process.env.RUNS);
@@ -72,7 +72,7 @@ async function measure(browser, port, width, font) {
   await page.route('**/perf', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify(perfPayload()) }));
   await page.route('**/proximity', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify(proxPayload()) }));
   await page.route('**/inspect', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ running: false, port: 9222, status: 'no-socket' }) }));
-  await page.goto(`http://127.0.0.1:${port}/test/fixtures/info-fixture.html`, { waitUntil: 'domcontentloaded' });
+  await page.goto(`http://127.0.0.1:${port}/tools/test/fixtures/info-fixture.html`, { waitUntil: 'domcontentloaded' });
   await page.evaluate((px) => { document.documentElement.style.fontSize = px + 'px'; }, font);
   await page.evaluate(() => {
     window.__cls = 0; window.__by = {};
@@ -108,11 +108,11 @@ for (const w of WIDTHS) for (const f of FONTS) {
 await browser.close(); server.close();
 
 let baseline = {};
-try { baseline = JSON.parse(await readFile(join(ROOT, 'test/baseline.json'), 'utf8')); } catch { /* none yet */ }
+try { baseline = JSON.parse(await readFile(join(ROOT, 'tools/test/baseline.json'), 'utf8')); } catch { /* none yet */ }
 
 if (UPDATE_BASELINE) {
   const out = {}; for (const k of Object.keys(results)) out[k] = results[k].cls;
-  await writeFile(join(ROOT, 'test/baseline.json'), JSON.stringify(out, null, 2) + '\n');
+  await writeFile(join(ROOT, 'tools/test/baseline.json'), JSON.stringify(out, null, 2) + '\n');
   console.log('baseline updated:', JSON.stringify(out));
   process.exit(0);
 }

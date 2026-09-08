@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const ROOT = fileURLToPath(new URL('..', import.meta.url));
+const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const ASSETS = resolve(ROOT, 'app/src/main/assets');
-const FIXTURE = resolve(ROOT, 'test/fixtures/install-localization-layout.html');
+const FIXTURE = resolve(ROOT, 'tools/test/fixtures/install-localization-layout.html');
 const CHROME = process.env.CHROME || '/usr/bin/chromium';
 const LOCALES = await catalogueLocales();
 const THEMES = ['light', 'dark'];

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const root = join(process.cwd(), '..', 'app', 'src', 'main', 'assets');
+const root = join(process.cwd(), '..', '..', 'app', 'src', 'main', 'assets');
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 
 function json(body, status = 200) {
@@ -861,8 +861,8 @@ async function requestBody(request) {
 
 function screenshotRoutes(options = {}) {
   const calls = options.calls || [];
-  const initial = readFile(join(process.cwd(), '..', 'docs', 'img', 'ui-dashboard-dark.png'));
-  const fresh = readFile(join(process.cwd(), '..', 'docs', 'img', 'icon.png'));
+  const initial = readFile(join(process.cwd(), '..', '..', 'docs', 'img', 'ui-dashboard-dark.png'));
+  const fresh = readFile(join(process.cwd(), '..', '..', 'docs', 'img', 'icon.png'));
   return async (path, request) => {
     if (path === '/info.css') return { headers: { 'content-type': 'text/css' }, body: await readFile(join(root, 'info.css')) };
     if (path === '/initial.png') return { headers: { 'content-type': 'image/png' }, body: await initial };
@@ -2331,7 +2331,7 @@ browserTest('Configure reconciles structured partial failure instead of blindly 
 
 browserTest('An older background capture cannot overwrite the post-tap screenshot', async (t) => {
   const calls = [];
-  const oldCapture = readFile(join(process.cwd(), '..', 'docs', 'img', 'ui-dashboard-dark.png'));
+  const oldCapture = readFile(join(process.cwd(), '..', '..', 'docs', 'img', 'ui-dashboard-dark.png'));
   const harness = await startHarness(screenshotRoutes({ calls, screenshot: async () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
     return { status: 200, headers: { 'content-type': 'image/png' }, body: await oldCapture };
