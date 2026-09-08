@@ -277,8 +277,8 @@ class ProximityCalibrationRuntimeTest {
         assertEquals("near", fixture.stage())
         val operational = Fixture(Backing(row(binaryLegacy())))
         operational.sample(0f); operational.advance(200)
-        operational.advance(800, 1f)
-        operational.advance(300)
+        assertFalse(operational.advance(800, 1f).deliberateGesture)
+        assertFalse(operational.advance(50).deliberateGesture)
         assertFalse(operational.sample(0f, live = false, capture = true).deliberateGesture)
         assertFalse(operational.advance(200).deliberateGesture)
     }
@@ -289,13 +289,69 @@ class ProximityCalibrationRuntimeTest {
         fixture.operationalWave(model.effectiveWave()!!)
         val first = fixture.runtime.gestureToken()
         fixture.runtime.completeGesture(first, false)
-        fixture.advance(550, 1f); fixture.advance(300, 0f)
-        assertTrue(fixture.advance(150).deliberateGesture)
+        fixture.advance(550, 1f)
+        assertTrue(fixture.advance(200).deliberateGesture)
+        assertFalse(fixture.advance(150, 0f).deliberateGesture)
+        assertFalse(fixture.advance(150).deliberateGesture)
         val second = fixture.runtime.gestureToken()
         assertTrue(second > first)
         fixture.runtime.completeGesture(first, false)
-        fixture.advance(550, 1f); fixture.advance(300, 0f)
+        fixture.advance(550, 1f)
         assertFalse(fixture.advance(150).deliberateGesture)
+        assertFalse(fixture.advance(150, 0f).deliberateGesture)
+        assertFalse(fixture.advance(150).deliberateGesture)
+    }
+
+    @Test fun rejectedApproachCannotRepeatUntilClearAndFreshEntryInEitherBinaryPolarity() {
+        for ((clear, near) in listOf(0f to 1f, 1f to 0f)) {
+            val model = binaryLegacy().copy(clearRaw = clear, nearRaw = near, cooldownMs = 2_000)
+            val fixture = Fixture(Backing(row(model)))
+            fixture.sample(clear)
+            fixture.advance(800)
+            assertFalse(fixture.sample(near).deliberateGesture)
+            assertTrue(fixture.advance(200).deliberateGesture)
+            val token = fixture.runtime.gestureToken()
+            fixture.runtime.completeGesture(token, false)
+            assertFalse(fixture.advance(5_000, near).deliberateGesture)
+            assertFalse(fixture.advance(200).deliberateGesture)
+            assertEquals(token, fixture.runtime.gestureToken())
+            assertFalse(fixture.sample(clear).deliberateGesture)
+            fixture.advance(800)
+            assertFalse(fixture.sample(near).deliberateGesture)
+            assertTrue(fixture.advance(200).deliberateGesture)
+            assertTrue(fixture.runtime.gestureToken() > token)
+            assertEquals(0, fixture.backing.writes)
+        }
+    }
+
+    @Test fun historicalReadSourceLossAndRestartRevokePendingApproachWithoutChangingCalibration() {
+        for (interruption in listOf("historical", "source_loss", "restart")) {
+            val saved = row(binaryLegacy())
+            val backing = Backing(saved)
+            var fixture = Fixture(backing)
+            fixture.sample(0f)
+            fixture.advance(800)
+            assertFalse(fixture.sample(1f).deliberateGesture)
+            fixture.at(fixture.now + 50)
+            when (interruption) {
+                "historical" -> assertFalse(fixture.sample(1f, live = false, capture = false).deliberateGesture)
+                "source_loss" -> assertFalse(fixture.runtime.sourceUnavailable(fixture.now).deliberateGesture)
+                else -> {
+                    fixture.runtime.close()
+                    fixture = Fixture(backing)
+                }
+            }
+            assertFalse(fixture.sample(1f).deliberateGesture)
+            assertFalse(fixture.advance(200).deliberateGesture)
+            assertEquals(0L, fixture.runtime.gestureToken())
+            fixture.sample(0f)
+            fixture.advance(800)
+            fixture.sample(1f)
+            assertTrue(fixture.advance(200).deliberateGesture)
+            assertEquals(saved, backing.row)
+            assertEquals(0, backing.writes)
+            assertEquals(0, backing.clears)
+        }
     }
 
     @Test fun presenceOnlyApproachAndWaveOnlyGesturePublishIndependentCapabilities() {
@@ -464,8 +520,9 @@ class ProximityCalibrationRuntimeTest {
             assertTrue(runtime.isWaveReady())
             repeat(if (wave.pattern == WavePattern.DOUBLE) 2 else 1) { index ->
                 assertFalse(advance(800, wave.nearRaw).deliberateGesture)
-                assertFalse(advance(300, wave.clearRaw).deliberateGesture)
-                assertEquals(index == (if (wave.pattern == WavePattern.DOUBLE) 1 else 0), advance(150).deliberateGesture)
+                assertEquals(wave.pattern == WavePattern.SINGLE, advance(300).deliberateGesture)
+                assertFalse(sample(wave.clearRaw).deliberateGesture)
+                assertEquals(wave.pattern == WavePattern.DOUBLE && index == 1, advance(150).deliberateGesture)
             }
             assertFalse(advance(1).deliberateGesture)
         }

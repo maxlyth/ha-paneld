@@ -10,7 +10,7 @@ import android.provider.Settings
 import android.view.View
 import android.view.animation.LinearInterpolator
 
-/** Native vector instructions: a person approaches and holds; a hand makes a deliberate wave. */
+/** Native vector instructions: a person approaches and holds; a hand approaches the screen before an optional touch. */
 internal class ProximityPictogramView(context: Context) : View(context) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         strokeCap = Paint.Cap.ROUND
@@ -68,7 +68,7 @@ internal class ProximityPictogramView(context: Context) : View(context) {
             return
         }
         animator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = if (cue == ProximityWizardCue.WAVE) 1800L else 3200L
+            duration = if (cue == ProximityWizardCue.WAVE && waveCount == 2) 1800L else 3200L
             repeatCount = ValueAnimator.INFINITE
             interpolator = LinearInterpolator()
             addUpdateListener { phase = it.animatedValue as Float; invalidate() }
@@ -120,20 +120,37 @@ internal class ProximityPictogramView(context: Context) : View(context) {
         val movement = when (cue) {
             ProximityWizardCue.APPROACH -> (phase / 0.6f).coerceAtMost(1f)
             ProximityWizardCue.MOVE_AWAY -> 1f - (phase / 0.6f).coerceAtMost(1f)
-            ProximityWizardCue.WAVE -> if (wavePhase < 0.5f) wavePhase * 2f else (1f - wavePhase) * 2f
+            ProximityWizardCue.WAVE -> if (waveCount == 2) {
+                if (wavePhase < 0.5f) wavePhase * 2f else (1f - wavePhase) * 2f
+            } else {
+                // One inward approach, a near hold, then an invisible reset. The separate
+                // move-away cue teaches rearming without making withdrawal part of waking.
+                val approach = (phase / 0.22f).coerceAtMost(1f)
+                1f - (1f - approach) * (1f - approach)
+            }
             ProximityWizardCue.HOLD -> if (holdNear) 1f else 0f
             else -> 0f
         }
         val x = 50f + movement * 72f
         paint.strokeWidth = 5f
         paint.color = foreground
-        if (hand) drawHand(canvas, x, 82f) else drawPerson(canvas, x)
+        if (hand) {
+            val alpha = if (cue == ProximityWizardCue.WAVE && waveCount == 1) {
+                when {
+                    phase < 0.06f -> phase / 0.06f
+                    phase < 0.70f -> 1f
+                    phase < 0.82f -> 1f - (phase - 0.70f) / 0.12f
+                    else -> 0f
+                }
+            } else 1f
+            drawHand(canvas, x, 82f, (alpha * 255).toInt())
+        } else drawPerson(canvas, x)
         when (cue) {
             ProximityWizardCue.APPROACH -> arrow(canvas, 60f, 164f, 151f)
             ProximityWizardCue.MOVE_AWAY -> arrow(canvas, 164f, 60f, 151f)
             ProximityWizardCue.WAVE -> {
                 arrow(canvas, 58f, 164f, 151f)
-                arrow(canvas, 164f, 58f, 10f)
+                if (waveCount == 2) arrow(canvas, 164f, 58f, 10f)
             }
             ProximityWizardCue.HOLD -> {
                 paint.color = accent
@@ -156,7 +173,7 @@ internal class ProximityPictogramView(context: Context) : View(context) {
         canvas.drawLine(x, 98f, x + 18f, 132f, paint)
     }
 
-    private fun drawHand(canvas: Canvas, x: Float, y: Float) {
+    private fun drawHand(canvas: Canvas, x: Float, y: Float, opacity: Int) {
         val outline = Path().apply {
             moveTo(x - 12f, y + 42f)
             lineTo(x - 12f, y + 23f)
@@ -180,12 +197,14 @@ internal class ProximityPictogramView(context: Context) : View(context) {
         }
         outline.close()
         paint.style = Paint.Style.FILL
-        paint.color = Color.rgb(197, 222, 254)
+        paint.color = Color.argb(opacity, 197, 222, 254)
         canvas.drawPath(outline, paint)
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 2f
         paint.color = foreground
+        paint.alpha = opacity
         canvas.drawPath(outline, paint)
+        paint.alpha = 255
     }
 
     private fun arrow(canvas: Canvas, from: Float, to: Float, y: Float) {

@@ -84,8 +84,13 @@ class ProximityWizardActivity : AppCompatActivity() {
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
         }
+        root.addView(label(20f, true).apply {
+            setText(R.string.proximity_wizard_title)
+            setTextColor(Color.rgb(161, 187, 220))
+            letterSpacing = 0.06f
+        }, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(if (compact) 10 else 20) })
         instruction = label(if (compact) 34f else 40f, true).apply {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
             letterSpacing = -0.025f
@@ -118,13 +123,13 @@ class ProximityWizardActivity : AppCompatActivity() {
         visualRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, dp(12))
+            setPadding(0, dp(if (compact) 12 else 20), 0, dp(if (compact) 12 else 20))
             addView(pictogram, LinearLayout.LayoutParams(0, -1, 1.5f))
             addView(cadenceColumn, LinearLayout.LayoutParams(0, -2, 1f))
         }
         val copy = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
             addView(instruction)
             addView(detail, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
             addView(mode)
@@ -316,7 +321,7 @@ class ProximityWizardActivity : AppCompatActivity() {
             val required = snapshot.optInt("requiredGestures", 3).coerceIn(1, 20)
             val accepted = snapshot.optInt("acceptedGestures", 0).coerceIn(0, required)
             progress.text = getString(R.string.proximity_wizard_progress, accepted, required)
-            progress.visibility = if (cue == ProximityWizardCue.WAVE || (stage == "review" && snapshot.optBoolean("waveSupported"))) View.VISIBLE else View.GONE
+            progress.visibility = if (stage == "waves" || (stage == "review" && snapshot.optBoolean("waveSupported"))) View.VISIBLE else View.GONE
             detail.visibility = View.VISIBLE
             visualRow.visibility = if (collecting || stage == "intro") View.VISIBLE else View.GONE
             visualRow.getChildAt(1).visibility = if (stage == "intro" && !awaitingReading) View.GONE else View.VISIBLE

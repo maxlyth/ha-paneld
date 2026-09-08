@@ -100,7 +100,7 @@ internal class ProximityCalibrationEngine(
 
     private var calibration = initial
     private var detector = initial?.takeIf { it.presenceSupported }?.let(::Detector)
-    private var waveDetector = initial?.let { it.effectiveWave()?.model(it.mode)?.let(::Detector) }
+    private var waveDetector = initial?.let(::createWaveDetector)
     private var pendingOperationalPulse: Long? = null
     private var operationalCooldownUntil = 0L
     private var candidate: Calibration? = null
@@ -161,7 +161,7 @@ internal class ProximityCalibrationEngine(
                 } else if (runCatching { commit(proposed) }.getOrDefault(false)) {
                     calibration = proposed
                     detector = proposed.takeIf { it.presenceSupported }?.let(::Detector)
-                    waveDetector = proposed.effectiveWave()?.model(proposed.mode)?.let(::Detector)
+                    waveDetector = createWaveDetector(proposed)
                     finish(Stage.SAVED, now, "Calibration saved. Presence and wave features use their verified capabilities when enabled.")
                 } else finish(Stage.FAILED, now, "Could not save calibration. Your previous calibration is unchanged.")
             }
@@ -226,7 +226,7 @@ internal class ProximityCalibrationEngine(
         if (!admit(now)) return result()
         this.calibration = calibration
         detector = calibration?.takeIf { it.presenceSupported }?.let(::Detector)
-        waveDetector = calibration?.let { it.effectiveWave()?.model(it.mode)?.let(::Detector) }
+        waveDetector = calibration?.let(::createWaveDetector)
         available = false; lastRaw = null; lastRawCapture = false
         generation++; resetOperational(); discardCandidate()
         stage = null; message = ""; accepted = 0
@@ -293,7 +293,7 @@ internal class ProximityCalibrationEngine(
                 if (!atBaseline) { waveBaselineSamples.clear(); captureStarted = null; return }
                 if (capture(waveBaselineSamples, raw, now, live)) transition(Stage.WAVE_CAPTURE, now,
                     if (requestedWavePattern == WavePattern.DOUBLE) "Wave your hand toward the sensor and withdraw it. Keep your body still."
-                    else "Keep your body still. Wave one hand close to the sensor, then withdraw your hand.")
+                    else "Bring one hand toward the screen as if about to tap it. A touch afterwards is fine. Move your hand away to finish this measurement.")
             }
             Stage.WAVE_CAPTURE -> {
                 if (stageAge >= WAVE_PHASE_TIMEOUT_MS) { reviewWithoutWave(now); return }
@@ -320,7 +320,7 @@ internal class ProximityCalibrationEngine(
                     pendingCandidatePulse = null
                     transition(Stage.WAVES, now, if (wave.pattern == WavePattern.DOUBLE)
                         "Make three deliberate double waves. Pause between each pair."
-                    else "Make three deliberate hand waves. Keep your body still and pause between waves.")
+                    else "Bring your hand toward the screen once for each check. A touch afterwards is fine. Move away between checks.")
                 }
             }
             Stage.WAVES -> {
@@ -436,7 +436,16 @@ internal class ProximityCalibrationEngine(
             Stage.NEAR -> if (captureStarted == null) Cue.APPROACH else Cue.HOLD
             Stage.RETURN_CLEAR -> if (preparation) Cue.MOVE_AWAY else Cue.WAIT_CLEAR
             Stage.WAVE_BASELINE -> if (captureStarted != null) Cue.HOLD else if (requestedWavePattern == WavePattern.DOUBLE) Cue.MOVE_AWAY else Cue.APPROACH
-            Stage.WAVE_CAPTURE, Stage.WAVES -> if (preparation) Cue.PREPARE else Cue.WAVE
+            Stage.WAVE_CAPTURE -> when {
+                preparation -> Cue.PREPARE
+                waveStarted?.let { (lastTime ?: stageStarted) - it >= MINIMUM_NEAR_MS } == true -> Cue.MOVE_AWAY
+                else -> Cue.WAVE
+            }
+            Stage.WAVES -> when {
+                preparation -> Cue.PREPARE
+                candidateDetector?.near == true -> Cue.MOVE_AWAY
+                else -> Cue.WAVE
+            }
             else -> Cue.PREPARE
         }
     }
@@ -450,8 +459,12 @@ internal class ProximityCalibrationEngine(
         if (returnClearSince != null) return (CAPTURE_HOLD_MS - (now - checkNotNull(returnClearSince))).coerceAtLeast(0) to CAPTURE_HOLD_MS
         return 0L to 0L
     }
-    /** Hysteretic reporting plus pulse-duration debounce; cooldown begins only on an accepted cycle. */
-    private class Detector(private val calibration: Calibration) {
+    private fun createWaveDetector(value: Calibration): Detector? = value.effectiveWave()?.let {
+        Detector(it.model(value.mode), triggerOnApproach = it.pattern == WavePattern.SINGLE)
+    }
+
+    /** Hysteretic reporting; single hand approaches fire on entry, explicit double waves on release. */
+    private class Detector(private val calibration: Calibration, private val triggerOnApproach: Boolean = false) {
         var presenceApproach = false
             private set
         private var pendingApproach = false
@@ -506,7 +519,7 @@ internal class ProximityCalibrationEngine(
                 } else {
                     pendingApproach = false
                     val duration = nearSince?.let { now - it }
-                    pendingGesture = live && eligible && duration != null &&
+                    pendingGesture = !triggerOnApproach && live && eligible && duration != null &&
                         duration >= max(calibration.minimumNearMs, calibration.debounceMs) && duration <= calibration.maximumNearMs
                     eligible = false
                     nearSince = null
@@ -530,6 +543,15 @@ internal class ProximityCalibrationEngine(
                     pendingApproach = false
                 }
                 near = rawNear
+                if (triggerOnApproach && near == true && eligible &&
+                    nearSince?.let { now - it in max(calibration.minimumNearMs, calibration.debounceMs)..calibration.maximumNearMs } == true) {
+                    // The inward movement is the gesture. Holding or subsequently touching does not
+                    // revoke it; only a fresh clear interval can arm another entry.
+                    eligible = false
+                    nearSince = null
+                    cooldownUntil = now + calibration.cooldownMs
+                    gesture = true
+                }
                 if (near == false) {
                     hasClearEvidence = true
                     if (pendingGesture) {

@@ -5,6 +5,62 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProximityCalibrationEngineTest {
+    @Test fun singleHandApproachWakesBeforeWithdrawalInRangedAndBothBinaryPolarities() {
+        for ((clear, hand) in listOf(100f to 5f, 5f to 100f, 0f to 1f, 1f to 0f)) {
+            val mode = if (clear in 0f..1f && hand in 0f..1f) Mode.BINARY else Mode.RANGED
+            val h = Journey(Calibration(mode = mode, clearRaw = clear, nearRaw = hand,
+                wave = WaveCalibration(clearRaw = clear, nearRaw = hand)))
+            h.observe(clear, live = false); h.tick(800); h.observe(hand)
+            assertFalse(h.tick(199).gesture)
+            assertTrue("The screen can light while the hand is still approaching/near", h.tick(1).gesture)
+            assertFalse("Holding through a subsequent touch cannot wake twice", h.tick(5_000).gesture)
+            h.observe(clear)
+            assertFalse("Withdrawal only rearms the gesture", h.tick(150).gesture)
+            h.tick(700); h.observe(hand)
+            assertTrue(h.tick(200).gesture)
+            assertEquals(0, h.writes)
+        }
+    }
+
+    @Test fun trainingSeparatesOneApproachFromClearingForTheNextCheck() {
+        val h = Journey()
+        h.presence(100f, 50f); h.capture(50f); h.tick(COUNTDOWN_MS)
+        h.observe(5f); h.tick(250)
+        assertEquals(Cue.MOVE_AWAY, h.state.cue)
+        h.observe(50f)
+        assertEquals(Stage.WAVES, h.state.stage)
+        h.tick(COUNTDOWN_MS); h.observe(50f); h.tick(800)
+        assertEquals(Cue.WAVE, h.state.cue)
+        h.observe(5f); h.tick(250)
+        assertEquals(Cue.MOVE_AWAY, h.state.cue)
+        assertEquals(0, h.state.accepted)
+        h.observe(50f); h.tick(150)
+        assertEquals(1, h.state.accepted)
+        assertEquals(Cue.WAVE, h.state.cue)
+    }
+
+    @Test fun rejectedApproachCannotRepeatWhileHeldEvenAfterCooldownIsReleased() {
+        val h = Journey(legacy())
+        h.observe(40f); h.tick(800); h.observe(5f)
+        assertTrue(h.tick(200).gesture)
+        h.engine.releaseGestureCooldown()
+        repeat(5) { h.observe(5f); assertFalse(h.tick(200).gesture) }
+        h.observe(40f); h.tick(800); h.observe(5f)
+        assertTrue(h.tick(200).gesture)
+    }
+
+    @Test fun historicalNearBeforeDebounceCancelsApproachAndRestartNearCannotWake() {
+        val h = Journey(legacy())
+        h.observe(40f); h.tick(800); h.observe(5f); h.tick(100)
+        h.observe(5f, live = false)
+        assertFalse(h.tick(200).gesture)
+        h.observe(5f)
+        assertFalse(h.tick(1_000).gesture)
+        val restarted = Journey(legacy())
+        restarted.observe(5f)
+        assertFalse(restarted.tick(1_000).gesture)
+    }
+
     @Test fun normalApproachAndHandWaveUseIndependentAnchorsAndEvents() {
         val h = Journey()
         h.presence(100f, 50f)
@@ -239,8 +295,10 @@ class ProximityCalibrationEngineTest {
         val h = Journey(legacy())
         assertTrue(h.pulse(40f, 5f).gesture)
         h.engine.releaseGestureCooldown()
-        h.tick(550); h.observe(5f); h.tick(300); h.observe(40f)
-        assertTrue(h.tick(150).gesture)
+        h.tick(550); h.observe(5f)
+        assertTrue(h.tick(300).gesture)
+        h.observe(40f)
+        assertFalse(h.tick(150).gesture)
     }
 
     @Test fun cueCountdownAndHeldCaptureAreEngineOwnedAndObservationStagesAdvanceAutomatically() {
@@ -337,7 +395,11 @@ class ProximityCalibrationEngineTest {
         fun capture(raw: Float) { tick(COUNTDOWN_MS); observe(raw); tick(CAPTURE_HOLD_MS) }
         fun presence(clear: Float, body: Float) { begin(clear); capture(clear); capture(body); capture(clear); assertEquals(Stage.WAVE_BASELINE, state.stage) }
         fun pulse(clear: Float, near: Float): Result {
-            observe(clear); tick(800); observe(near); tick(400); observe(clear); return tick(150)
+            observe(clear); tick(800); observe(near)
+            val entry = tick(400)
+            observe(clear)
+            val release = tick(150)
+            return release.copy(gesture = entry.gesture || release.gesture)
         }
         fun wave(baseline: Float, hand: Float) {
             assertEquals(Stage.WAVE_BASELINE, state.stage)

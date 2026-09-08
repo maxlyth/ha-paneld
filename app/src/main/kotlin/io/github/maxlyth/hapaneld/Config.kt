@@ -1110,6 +1110,28 @@ class Config private constructor(
         edit { putBoolean("watchdog_enabled", on) }
     }
 
+    // Touch sound: an audible tap, owned as persisted intent rather than read back from the platform.
+    //
+    // The Android `SOUND_EFFECTS_ENABLED` global has other writers — firmware and any vendor app holding
+    // `WRITE_SETTINGS` — so a value read from it drifts with no user action, and a reporting surface that
+    // followed it turned every unrelated Configure save into a touch-sound edit that queued an apply
+    // nobody requested. This is now the sole authority every surface reports; the platform flag is only
+    // ever actuated.
+    val touchSound: Boolean get() = boolPref("touch_sound")
+
+    /**
+     * The recorded intent, or null when this store has never held one.
+     *
+     * `contains` is the migration marker, exactly as it is for the schema-6 response key: it is the one
+     * thing that separates a value somebody chose from the registry default standing in for one. Startup
+     * resolves the null case once and commits the answer, after which this can never be null again and
+     * the panel's reported touch sound is immune to anything that happens to the platform flag.
+     */
+    val touchSoundIntent: Boolean? get() = if (prefs.contains("touch_sound")) touchSound else null
+
+    /** Durably record the touch-sound intent. Persist-before-actuation, like every other live setting. */
+    fun commitTouchSound(on: Boolean): Boolean = commitRaw(specOf("touch_sound"), on.toString())
+
     // Camera trial: the master switch and the hard caps that clamp every stream/snapshot request.
     // Every one of these needs a setter. An earlier comment here claimed the caps reached the owner
     // "through the ordinary reconfigure path" and so needed none — there is no ordinary path. The HTTP

@@ -41,10 +41,11 @@ class ProximitySampleFreshnessTest {
         val nearFresh = gate.accept(ns(wall + 1_000), elapsed + 1_000, wall + 1_000)
         assertTrue(nearFresh)
         assertFalse(engine.observe(0f, elapsed + 1_000, live = nearFresh).gesture)
+        assertTrue(engine.tick(elapsed + 1_200).gesture)
         val clearFresh = gate.accept(ns(wall + 1_400), elapsed + 1_400, wall + 1_400)
         assertTrue(clearFresh)
         assertFalse(engine.observe(1f, elapsed + 1_400, live = clearFresh).gesture)
-        assertTrue(engine.tick(elapsed + 1_550).gesture)
+        assertFalse(engine.tick(elapsed + 1_550).gesture)
         assertFalse(engine.tick(elapsed + 1_600).gesture)
         // An epoch highwater cannot poison a later monotonic registration seed.
         assertTrue(gate.accept(ns(elapsed + 2_000), elapsed + 2_000, wall + 2_000))

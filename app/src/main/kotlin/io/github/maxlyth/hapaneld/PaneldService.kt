@@ -77,6 +77,7 @@ import io.github.maxlyth.hapaneld.control.KioskController
 import io.github.maxlyth.hapaneld.control.LedEffectController
 import io.github.maxlyth.hapaneld.control.WatchdogController
 import io.github.maxlyth.hapaneld.control.TouchSoundController
+import io.github.maxlyth.hapaneld.control.resolveTouchSoundIntent
 import io.github.maxlyth.hapaneld.control.VolumeController
 import io.github.maxlyth.hapaneld.control.ZigbeeController
 import io.github.maxlyth.hapaneld.control.AndroidZigbeeGatewayHealthSource
@@ -91,6 +92,7 @@ import io.github.maxlyth.hapaneld.hardware.Rk3576LedController
 import io.github.maxlyth.hapaneld.hardware.SocketLedController
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.config.SettingValue
+import io.github.maxlyth.hapaneld.config.defaultBool
 import io.github.maxlyth.hapaneld.config.SettingsRegistry
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningManager
 import io.github.maxlyth.hapaneld.dashboard.EntityLearningRuntime
@@ -1780,6 +1782,38 @@ class PaneldService : Service() {
 
     /** Make the journalled desired value immediately visible/durable, but pass the previous value through
      * to transition-sensitive handlers. Transient HA-fed inputs intentionally have no persisted value. */
+    /**
+     * Settle this panel's touch-sound intent exactly once, and return it.
+     *
+     * Reporting has to be a pure function of durable intent. The platform `SOUND_EFFECTS_ENABLED` flag is
+     * writable by firmware and by any other app holding `WRITE_SETTINGS`, so a reported value that
+     * followed it drifted with no user action; the next unrelated Configure save then posted a value that
+     * no longer matched, `DirectConfigMutationPlan` counted touch sound as changed, and the live-setting
+     * journal queued an apply for a key nobody touched — permanently visible on a panel that cannot write
+     * the flag at all.
+     *
+     * So an unresolved panel is adopted here, from its own actuation record first and from a single
+     * reading of the flag second, and the answer is committed. From then on configuration `contains` the
+     * key, [resolveTouchSoundIntent] short-circuits on it, and later drift can move the hardware but never
+     * the setting. A failed commit changes nothing durable: the same evidence resolves again next boot.
+     */
+    private fun resolveTouchSoundIntentOnce(): Boolean {
+        val resolution = resolveTouchSoundIntent(
+            persistedIntent = config.touchSoundIntent,
+            controllerRecord = touchSound.recordedState(),
+            observedHardware = touchSound.observedPlatformState(),
+            registryDefault = requireNotNull(SettingsRegistry.spec("touch_sound")).defaultBool(),
+        )
+        if (resolution.needsAdoption) {
+            if (config.commitTouchSound(resolution.enabled)) {
+                Log.i(TAG, "adopted touch sound intent ${resolution.enabled} (${resolution.origin})")
+            } else {
+                Log.w(TAG, "could not adopt touch sound intent (${resolution.origin}); retrying next boot")
+            }
+        }
+        return resolution.enabled
+    }
+
     private fun previousLiveSettingValue(key: String): String? = SettingsRegistry.spec(key)?.let(config::getRaw)
 
     private fun applyLiveSettingObserved(
@@ -2445,7 +2479,6 @@ class PaneldService : Service() {
 
     /** Controller reads shared by the dashboard facts, live values and capability projection. */
     private data class ManagementControllerObservation(
-        val touchSoundEnabled: Boolean,
         val cpuTier: String?,
         val cpuGovernorsAvailable: Boolean,
         val networkAdbPersisted: Boolean,
@@ -2458,7 +2491,6 @@ class PaneldService : Service() {
     private fun observeManagementControllers(privilege: PrivilegedRouteObservation): ManagementControllerObservation {
         val persistedAdb = adb.isPersisted()
         return ManagementControllerObservation(
-            touchSoundEnabled = touchSound.isEnabled(),
             cpuTier = cpu.currentTier(allowRootFallback = privilege.directSuReady),
             cpuGovernorsAvailable = cpu.available(allowRootFallback = privilege.directSuReady),
             networkAdbPersisted = persistedAdb,
@@ -2471,9 +2503,18 @@ class PaneldService : Service() {
         )
     }
 
-    private fun projectLiveValues(cpuTier: String?, networkAdbPersisted: Boolean, touchEnabled: Boolean): Map<String, String> =
+    /**
+     * Controller-sourced values, which is why `touch_sound` is deliberately absent.
+     *
+     * A key in this map overrides the persisted registry value on every reporting surface, so it must
+     * name state the panel genuinely owns at that instant. Touch sound is not such a state: its platform
+     * flag has other writers, and letting an observation of it stand in for the setting made an unrelated
+     * save post a stale value and queue an apply the user never asked for. Its authority is the persisted
+     * intent, which [io.github.maxlyth.hapaneld.http.PaneldServer.effectiveValue] reaches by falling
+     * through to configuration.
+     */
+    private fun projectLiveValues(cpuTier: String?, networkAdbPersisted: Boolean): Map<String, String> =
         mapOf(
-            "touch_sound" to touchEnabled.toString(),
             "cpu_governor" to (cpuTier ?: "Auto"),
             "network_adb" to networkAdbPersisted.toString(),
             "zigbee_router" to config.zigbeeRouterEnabled.toString(),
@@ -2482,7 +2523,6 @@ class PaneldService : Service() {
     /** Fresh controller values for direct equality, config export and concurrency checks. Direct POST
      * planning also consumes the transient CPU tier, so a full payload cannot reapply an unchanged tier. */
     private fun currentConfigLiveValues(): Map<String, String> = mapOf(
-        "touch_sound" to touchSound.isEnabled().toString(),
         "cpu_governor" to (cpu.currentTier(allowRootFallback = false) ?: "Auto"),
         "network_adb" to adb.isPersisted().toString(),
         "zigbee_router" to config.zigbeeRouterEnabled.toString(),
@@ -2500,7 +2540,6 @@ class PaneldService : Service() {
             live = projectLiveValues(
                 cpuTier = controllers.cpuTier,
                 networkAdbPersisted = controllers.networkAdbPersisted,
-                touchEnabled = controllers.touchSoundEnabled,
             ),
             capabilities = capabilitiesSnapshot(privilege, controllers),
             capabilityRows = diagnostic.rows,
@@ -3184,9 +3223,13 @@ class PaneldService : Service() {
                 Log.w(TAG, "pending kiosk platform state could not be recovered; continuing unlocked")
             }
             if (teardownBoundary.isStopping) return@runtimeStart
-            // Re-apply at boot so a persisted enabled state loads the owned click sample and reconciles
-            // Android's sound-effects setting for this process; touch sound never changes stream volume.
-            if (touchSound.isEnabled()) touchSound.set(true)
+            // Resolve touch-sound intent before the HTTP server can accept a save, then reassert it in
+            // both directions so the panel matches what it reports. Touch sound never changes stream
+            // volume; an ON reassertion also loads the owned click sample for this process.
+            val touchSoundIntent = resolveTouchSoundIntentOnce()
+            if (!touchSound.reassert(touchSoundIntent).applied) {
+                Log.w(TAG, "touch sound could not be reasserted at startup; intent remains $touchSoundIntent")
+            }
             bootChime.applyPersisted()
             sensors.prepare()
             proximityWizard = ProximityWizardCoordinator(

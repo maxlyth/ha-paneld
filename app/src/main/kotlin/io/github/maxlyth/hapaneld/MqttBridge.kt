@@ -151,6 +151,22 @@ internal val externalMqttLiveSettingOwners: Map<String, String> = linkedMapOf(
     "voice_enabled" to "voice_enabled",
 )
 
+/**
+ * The key a *failed* external command must still supersede, or null.
+ *
+ * A handler that persists intent before actuating leaves newer durable truth behind even when the
+ * actuation then fails — and that failure throws straight past the supersession step that normally
+ * retires the older queued HTTP value. Left alone, startup replay commits the stale HTTP value over the
+ * newer external one, inverting last-write-wins on the durable setting.
+ *
+ * Both arguments are required to agree. [committedKey] alone would let a key committed by an earlier
+ * dispatch retire a pending value the current command never touched, and [topicKey] alone would retire
+ * one for a command that threw before committing anything — an unauthorized or refused command must
+ * leave HTTP intent exactly where it was.
+ */
+internal fun supersededKeyAfterFailedDispatch(topicKey: String?, committedKey: String?): String? =
+    topicKey?.takeIf { it == committedKey }
+
 /** Resolve an admitted MQTT setting topic to the same registry key used by HTTP live application. */
 internal fun externalLiveSettingKey(panel: String, topic: String): String? {
     val prefix = "ha-paneld/$panel/"
@@ -1687,7 +1703,9 @@ internal class MqttBridge(
             if (hasProximity) known(if (config.wakeOnWave) "ON" else "OFF") else unknown
         }
         channel("auto_sleep", stateAutoSleep) { known(if (config.autoSleep) "ON" else "OFF") }
-        channel("touch_sound", stateTouchSound) { known(if (touchSound.isEnabled()) "ON" else "OFF") }
+        // Persisted intent, not the platform flag: the flag has other writers, and publishing an
+        // observation of it would let firmware drift flip the Home Assistant switch on its own.
+        channel("touch_sound", stateTouchSound) { known(if (config.touchSound) "ON" else "OFF") }
         channel("watchdog", stateWatchdog) { known(if (config.watchdogEnabled) "ON" else "OFF") }
         channel("kiosk_lock", stateKiosk) { known(if (config.kioskLock) "ON" else "OFF") }
         channel("companion_auto_update", stateCompanionAuto) { known(if (config.companionAutoUpdate) "ON" else "OFF") }
@@ -2617,6 +2635,16 @@ internal class MqttBridge(
         )
     }
 
+    /**
+     * The registry key whose newer external intent became durable during the dispatch running on this
+     * thread, set by a handler that persists before it actuates.
+     *
+     * Thread-scoped rather than a plain field because HTTP live settings reach the same handlers through
+     * the same dispatcher: a shared field could be set by one path and read by another. [consumeCommand]
+     * clears it on entry and exit, so a value can only ever describe the dispatch that is running.
+     */
+    private val externalIntentCommitted = ThreadLocal<String?>()
+
     private fun consumeCommand(topic: String, payloadBytes: ByteArray) {
         FeatureCosts.registry.setBacklog(
             FeatureCostOperation.MQTT_COMMAND_DISPATCH,
@@ -2624,6 +2652,7 @@ internal class MqttBridge(
         )
         val cost = FeatureCosts.registry.span(FeatureCostOperation.MQTT_COMMAND_DISPATCH)
             .work(units = 1, bytes = payloadBytes.size.toLong())
+        externalIntentCommitted.remove()
         try {
             dispatchCommand(topic, payloadBytes)
             externalLiveSettingKey(panel, topic)?.let { key ->
@@ -2632,7 +2661,18 @@ internal class MqttBridge(
         } catch (e: Exception) {
             cost.outcome(FeatureCostOutcome.FAILURE)
             Log.w(TAG, "command failed on $topic (${payloadBytes.size} bytes)", e)
+            // The handler may have made newer intent durable before failing to actuate it. Retire the
+            // older queued HTTP value anyway — leaving it lets startup replay commit the stale value
+            // over the newer one. Best-effort and logged: this is already the failure path, and a
+            // second throw here would only replace one diagnosis with another.
+            supersededKeyAfterFailedDispatch(externalLiveSettingKey(panel, topic), externalIntentCommitted.get())
+                ?.let { key ->
+                    if (!onExternalSettingApplied(key)) {
+                        Log.w(TAG, "failed to supersede pending HTTP setting $key after a failed command")
+                    }
+                }
         } finally {
+            externalIntentCommitted.remove()
             cost.close()
         }
     }
@@ -2832,6 +2872,15 @@ internal class MqttBridge(
 
     override fun handleTouchSound(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
+        // Persist the intent before actuating it, like every other live setting. The state channel now
+        // reports the persisted value, so a change that only reached the controller would publish the old
+        // value straight back and flip the switch in Home Assistant. The HTTP path has already committed
+        // the same value through applyLiveSettingObserved, which makes this idempotent rather than
+        // redundant: MQTT reaches this handler without it.
+        check(config.commitTouchSound(on)) { "touch sound intent could not be persisted" }
+        // Durable from here, so a failed actuation below must not leave an older queued HTTP value alive
+        // to be replayed over this one. The actuation throws past consumeCommand's ordinary supersession.
+        externalIntentCommitted.set("touch_sound")
         requireControlApplied("touch_sound", touchSound.apply(on)) { "touch sound transition failed" }
         stateConverger.reconcile("touch_sound", force = true)
     }
