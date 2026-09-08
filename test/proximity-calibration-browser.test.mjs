@@ -5,6 +5,7 @@ import test from 'node:test';
 import { chromium } from 'playwright-core';
 
 const asset = await readFile(new URL('../app/src/main/assets/proximity-learning.js', import.meta.url), 'utf8');
+const stylesheet = await readFile(process.argv[2] || new URL('../app/src/main/assets/info.css', import.meta.url), 'utf8');
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 
@@ -28,6 +29,7 @@ async function fixture(t, initial = {}) {
     return route.fulfill({ json: status });
   });
   await page.goto('http://panel.test/');
+  await page.addStyleTag({ content: stylesheet });
   await page.addScriptTag({ content: asset });
   const expectedStatus = initial.present === false || initial.phase === 'source_unavailable' ? 'Proximity source is unavailable'
     : initial.phase === 'calibrating' ? 'Setup is running on the panel' : 'Proximity is ready';
@@ -37,10 +39,14 @@ async function fixture(t, initial = {}) {
 
 browserTest('browser launches on-panel setup, heartbeats only its own session, and cancels with session binding', async (t) => {
   const { page, posts } = await fixture(t);
+  assert.equal(await page.getByRole('button', { name: 'Cancel setup', includeHidden: true }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel', exact: true }).isVisible(), true);
   assert.match(await page.locator('.prox-learning .note').first().textContent(), /detection distance cannot be adjusted/);
   assert.equal(await page.getByRole('button', { name: /Teach|Test a wave|Forget/ }).count(), 0);
   await page.getByRole('button', { name: 'Set up proximity on panel', exact: true }).click();
   await page.getByText('Ready to begin on the panel', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel', exact: true, includeHidden: true }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Cancel setup' }).isVisible(), true);
   assert.match(await page.locator('.prox-learning .note').first().textContent(), /Follow the instructions on the panel/);
   assert.equal(await page.getByRole('button', { name: 'Save', exact: true }).count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Restore profile defaults' }).isDisabled(), true);
@@ -52,6 +58,8 @@ browserTest('browser launches on-panel setup, heartbeats only its own session, a
   assert.ok(posts.some(({ body }) => body.action === 'heartbeat' && body.sessionId === 'starter-session'));
   await page.getByRole('button', { name: 'Cancel setup' }).click();
   await page.getByText('Setup cancelled. Existing calibration is unchanged.', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Cancel setup', includeHidden: true }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel', exact: true }).isVisible(), true);
   assert.ok(posts.some(({ body }) => body.action === 'cancel' && body.sessionId === 'starter-session'));
   const count = posts.length;
   await page.clock.runFor(10000);
@@ -63,7 +71,7 @@ browserTest('a monitoring browser never adopts heartbeat ownership and shows pro
   assert.equal(await page.locator('.prox-learning-evidence').textContent(), 'Validating waves: 2/3');
   await page.clock.runFor(16000);
   assert.equal(posts.length, 0);
-  assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel' }).isVisible(), false);
+  assert.equal(await page.getByRole('button', { name: 'Set up proximity on panel', includeHidden: true }).isVisible(), false);
 });
 
 browserTest('profile reset requires confirmation and does not restart calibration', async (t) => {
