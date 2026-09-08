@@ -93,19 +93,15 @@ class BootstrapTest(unittest.TestCase):
             "maximumBilledCharacters": len("Use  with "),
         }
         parts, texts = BOOTSTRAP._split_record(record)
-        self.assertEqual(parts, [("text", 0), ("literal", "{name}")])
-        self.assertEqual(texts, ["Use Home Assistant with "])
-        fake = FakeHttp(["Gebruik Home Assistant met"])
+        self.assertEqual(parts, [("text", 0), ("literal", "Home Assistant"), ("text", 1), ("literal", "{name}")])
+        self.assertEqual(texts, ["Use ", " with "])
+        fake = FakeHttp(["Gebruik", "met"])
         translated, _ = BOOTSTRAP._translate_batch("nl", [record], "key:fx", fake)
         self.assertEqual(translated, ["Gebruik Home Assistant met {name}"])
         body = json.loads(fake.requests[0].data)
-        self.assertEqual(body["text"], ["Use Home Assistant with "])
-        self.assertIn("Home Assistant", body["text"][0])
+        self.assertEqual(body["text"], ["Use ", " with "])
+        self.assertNotIn("Home Assistant", body["text"])
         self.assertNotIn("{name}", body["text"])
-        with self.assertRaisesRegex(BOOTSTRAP.deepl.DeepLError, "changed frozen literal"):
-            BOOTSTRAP._translate_batch(
-                "nl", [record], "key:fx", FakeHttp(["Gebruik Thuisassistent met"]),
-            )
 
     def test_generate_batches_and_emits_review_only_artifact(self):
         plan = BOOTSTRAP.build_plan(self.source_path, ["uk"], REVISION)

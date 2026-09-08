@@ -44,7 +44,7 @@ def _records(source: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _split_record(record: dict[str, Any]) -> tuple[list[tuple[str, str | int]], list[str]]:
     """Separate provider text from immutable literals for local-only reassembly."""
-    tokens = list(record["placeholders"])
+    tokens = list(record["placeholders"]) + list(record["frozen"])
     if not tokens:
         return [("text", 0)], [record["english"]]
     if any(token not in record["english"] for token in set(tokens)):
