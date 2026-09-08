@@ -11902,6 +11902,21 @@
       "text": "Der Netzwerkpfad zu Home Assistant ist langsam. Jede Aktion wartet auf diesen Pfad. Er wird auf Netzwerkebene gemessen; daher sind weder das Panel noch Home Assistant langsam – prüfen Sie Wi-Fi oder die Verbindung zwischen beiden.",
       "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
       "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_ready_state_unavailable": {
+      "text": "Sicherung bereit, ohne Panelzustand",
+      "sourceHash": "df783634b6ab429676f0459ad7279d1a349b3ba3c6b7857b34df5e2fcc443119",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_completed_state_unavailable": {
+      "text": "Wiederherstellung abgeschlossen; diese Sicherung enthielt keinen Panelzustand",
+      "sourceHash": "634e79faec27e14712a5c81b756955e808723baecd2c66159561ef8722a138fb",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_state_unavailable": {
+      "text": "Diese Sicherung enthält keinen Panelzustand: das Panelgerät, von dem sie stammt, konnte seine eigene Datenbank nicht lesen. Eine Wiederherstellung bringt den Panelzustand nicht zurück.",
+      "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
+      "state": "machine-cross-checked"
     }
   }
 }

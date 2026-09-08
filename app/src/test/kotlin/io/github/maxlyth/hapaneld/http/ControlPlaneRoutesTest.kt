@@ -1037,6 +1037,58 @@ class ControlPlaneRoutesTest {
         assertFalse(summary.any { Character.getType(it) == Character.FORMAT.toInt() })
     }
 
+    /**
+     * A bundle whose panel state could not be read still downloads — losing the config projection too
+     * would punish exactly the panel that most needs a backup — but the owner is told now. Reporting the
+     * same "backup ready" would move the silence out of the manifest and into the progress line.
+     */
+    @Test
+    fun backupTerminalSeparatesAnIncompleteArchiveFromACompleteOne() = testApplication {
+        var stateUnavailable = false
+        application {
+            routing {
+                controlPlaneRoutes(
+                    dependencies(
+                        buildBackup = { _, _ ->
+                            PanelBackup.Artifact(
+                                temporary.newFile("state-marker-$stateUnavailable.zip").apply {
+                                    writeBytes(byteArrayOf(7))
+                                },
+                                "zip",
+                                stateUnavailable,
+                            )
+                        },
+                    ),
+                )
+            }
+        }
+
+        suspend fun requestBackup() = client.post("/api/v1/backup") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("allow_plaintext=1")
+        }
+
+        assertEquals(HttpStatusCode.OK, requestBackup().status)
+        val complete = InstallProgress.presentationSnapshot()
+        assertEquals("backup ready", complete.message)
+        assertEquals("backup-ready", complete.presentation?.code)
+        assertOperationLaneReleased()
+
+        stateUnavailable = true
+        val incomplete = requestBackup()
+        assertEquals("an incomplete archive is still delivered", HttpStatusCode.OK, incomplete.status)
+        assertArrayEquals(byteArrayOf(7), incomplete.bodyAsBytes())
+        val marked = InstallProgress.presentationSnapshot()
+        assertEquals("backup ready without panel state", marked.message)
+        assertEquals("backup-ready-state-unavailable", marked.presentation?.code)
+        assertNotEquals(
+            "the incomplete terminal must not reuse the complete one",
+            complete.presentation?.code,
+            marked.presentation?.code,
+        )
+        assertOperationLaneReleased()
+    }
+
     private fun dependencies(
         playAudio: (String) -> Boolean = { true },
         installComponent: (String, String, String) -> Boolean = { _, _, _ -> true },

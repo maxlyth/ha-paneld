@@ -10,7 +10,7 @@ import org.json.JSONObject
 
 class InstallPresentationTest {
     @Test fun frozenVocabularyAndCanonicalEnvelopeAreExact() {
-        assertEquals(112, InstallPresentation.SUPPORTED_CODES.size)
+        assertEquals(114, InstallPresentation.SUPPORTED_CODES.size)
         val presentation = InstallPresentation(
             "status-update-available",
             mapOf(

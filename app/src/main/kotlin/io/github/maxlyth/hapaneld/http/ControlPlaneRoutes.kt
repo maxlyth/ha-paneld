@@ -886,8 +886,13 @@ private suspend fun handleBackup(call: ApplicationCall, dependencies: ControlPla
     try {
         val built = dependencies.buildBackup(companionRequest, passphrase)
         artifact = built
-        progressResult = "backup ready"
-        progressPresentation = InstallPresentation("backup-ready")
+        // The archive records its own incompleteness, but the owner is standing here now: a bundle whose
+        // panel state could not be read must not report the same "backup ready" as a whole one, or the
+        // silence simply moves from the manifest to the progress line.
+        progressResult = if (built.stateUnavailable) "backup ready without panel state" else "backup ready"
+        progressPresentation = InstallPresentation(
+            if (built.stateUnavailable) "backup-ready-state-unavailable" else "backup-ready",
+        )
         InstallProgress.finish(progress, progressResult, presentation = progressPresentation)
         progressFinished = true
         call.response.headers.append(

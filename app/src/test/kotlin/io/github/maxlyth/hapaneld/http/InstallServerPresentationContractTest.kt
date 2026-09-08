@@ -102,6 +102,7 @@ class InstallServerPresentationContractTest {
             "restore-request-rejected",
             "restore-completed",
             "restore-completed-with-state",
+            "restore-completed-state-unavailable",
             "restore-partial",
             "restore-failed",
         ).forEach { code ->

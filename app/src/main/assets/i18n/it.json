@@ -11902,6 +11902,21 @@
       "text": "Il percorso di rete verso Home Assistant è lento. Ogni azione deve attendere questo percorso. La misurazione avviene a livello di rete, quindi non indica che il pannello o Home Assistant siano lenti — controlla il Wi-Fi o il collegamento tra i due.",
       "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
       "state": "machine-cross-checked"
+    },
+    "install.presentation.backup_ready_state_unavailable": {
+      "text": "backup pronto, senza stato del pannello",
+      "sourceHash": "df783634b6ab429676f0459ad7279d1a349b3ba3c6b7857b34df5e2fcc443119",
+      "state": "machine-cross-checked"
+    },
+    "install.presentation.restore_completed_state_unavailable": {
+      "text": "Ripristino completato; questo backup non conteneva alcuno stato del pannello",
+      "sourceHash": "634e79faec27e14712a5c81b756955e808723baecd2c66159561ef8722a138fb",
+      "state": "machine-cross-checked"
+    },
+    "install.backup.dynamic.preview_state_unavailable": {
+      "text": "Questo backup non contiene alcuno stato del pannello: il pannello da cui proviene non è riuscito a leggere il proprio database. Ripristinarlo non riporterà indietro lo stato del pannello.",
+      "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
+      "state": "machine-cross-checked"
     }
   }
 }

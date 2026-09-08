@@ -18000,6 +18000,18 @@
       "softMaxChars": 20,
       "hardMaxChars": 40
     },
+    "install.backup.dynamic.preview_state_unavailable": {
+      "text": "This backup carries no panel state: the panel it came from could not read its own database. Restoring it will not bring panel state back.",
+      "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
+      "surface": "install",
+      "context": "Warning shown under the restore preview when the selected bundle marked itself incomplete; it is the administrator's last chance to notice before restoring.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 140,
+      "hardMaxChars": 260
+    },
     "install.backup.dynamic.request_failed": {
       "text": "request failed",
       "sourceHash": "fbbc1b5ba8644e5c54c2af5b1616eeb8644446465dfaae001bf9167a2ed30567",
@@ -19183,6 +19195,18 @@
       "softMaxChars": 20,
       "hardMaxChars": 40
     },
+    "install.presentation.backup_ready_state_unavailable": {
+      "text": "backup ready without panel state",
+      "sourceHash": "df783634b6ab429676f0459ad7279d1a349b3ba3c6b7857b34df5e2fcc443119",
+      "surface": "install",
+      "context": "Install operation result shown to the panel administrator when the backup was created but the panel's stored state could not be read; preserve the exact safety meaning.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 35,
+      "hardMaxChars": 60
+    },
     "install.presentation.backup_restore_rejected_before_mutation": {
       "text": "Profile catalog restore was rejected before mutation.",
       "sourceHash": "b80876accead761400633dffbe6c55e0dbe94e01678dabf741467ad8b18c7f3d",
@@ -19900,6 +19924,18 @@
       "frozen": [],
       "softMaxChars": 20,
       "hardMaxChars": 40
+    },
+    "install.presentation.restore_completed_state_unavailable": {
+      "text": "Restore completed; this backup carried no panel state",
+      "sourceHash": "634e79faec27e14712a5c81b756955e808723baecd2c66159561ef8722a138fb",
+      "surface": "install",
+      "context": "Backup restore result shown in the Install page when the restored bundle was marked incomplete by the panel that wrote it; preserve the exact safety meaning.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 55,
+      "hardMaxChars": 100
     },
     "install.presentation.restore_config_invalid": {
       "text": "invalid backup config",
