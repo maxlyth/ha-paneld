@@ -40,8 +40,18 @@ object PanelBackup {
         val allowEmpty: Boolean = false,
     )
 
-    /** A response artifact whose private temporary file must be deleted after the response is consumed. */
-    class Artifact(val file: File, val extension: String = "hpb") : Closeable {
+    /**
+     * A response artifact whose private temporary file must be deleted after the response is consumed.
+     *
+     * [stateUnavailable] carries the manifest's incomplete marker back out to the response layer: the
+     * owner downloading a backup whose `app_state` could not be read has to learn that now, not when a
+     * later restore quietly brings nothing back.
+     */
+    class Artifact(
+        val file: File,
+        val extension: String = "hpb",
+        val stateUnavailable: Boolean = false,
+    ) : Closeable {
         override fun close() {
             file.delete()
         }

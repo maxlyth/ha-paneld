@@ -1688,6 +1688,12 @@ assert_log_contains '^adb .* pm clear io.github.maxlyth.hapaneld$' "database fai
 
 # A panel whose health cannot be read or understood is a candidate for replacement, not a panel to
 # refuse. Standalone verification above still reports both states as failures.
+if grep -Fq 'STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-15}"' "$PROVISION"; then
+  pass "the shipped package-presence proof allows both bounded queries on slower panels"
+else
+  fail_test "the shipped package-presence proof allows both bounded queries on slower panels"
+fi
+
 MOCK_STORAGE_HEALTH=missing-state run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "a malformed installed-app storage contract admits an ordinary replacement"
 assert_log_contains '^adb .* install' "malformed storage status does not preempt the APK install"

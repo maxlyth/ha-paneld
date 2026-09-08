@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld.persistence
 
+import io.github.maxlyth.hapaneld.util.Json
+
 /**
  * Which durable `app_state` rows a backup carries, and which of them a restore may write back.
  *
@@ -77,4 +79,66 @@ object StateBackupPolicy {
                 Disposition.MANIFEST_OWNED, Disposition.TRANSIENT, null -> false
             }
         }
+}
+
+/**
+ * Whether a backup archive carries the panel's durable `app_state`, and what a reader may conclude when
+ * it does not.
+ *
+ * The archive used to answer only "are there rows?", which conflated two opposite facts: a panel that had
+ * nothing stored, and a panel whose database could not be read. Both produced a bundle with no `state`
+ * section, so a damaged archive was indistinguishable from a complete one and restore reported success
+ * having brought back nothing. A capture failure is now written into the manifest, and every reader of an
+ * archive resolves the section through [restoreStateDisposition] instead of testing for an entry and
+ * falling through to silence.
+ *
+ * A genuinely empty panel keeps the historical shape: no `state` section at all. That is also what every
+ * pre-marker archive carries, so old bundles read back exactly as before.
+ */
+object StateArchiveSection {
+    /**
+     * The only value ever written to `state.error`. A fixed code, never the throwable's message: the
+     * manifest is bounded and shared, and SQLite failure text carries filesystem paths.
+     */
+    const val CAPTURE_FAILED = "capture-failed"
+
+    private const val MAX_ERROR_CHARS = 64
+
+    /** What a reader may do with an archive's `state` section. */
+    enum class Disposition {
+        /** No section: the panel that wrote this archive had no stored rows, or predates the marker. */
+        ABSENT,
+
+        /** A payload entry is declared and may be read back. */
+        RESTORABLE,
+
+        /** The writer could not read its own database. The archive is incomplete and says so. */
+        INCOMPLETE,
+    }
+
+    /**
+     * The manifest's `state` value, or null when there is nothing to say. A failed capture and a captured
+     * [entry] are mutually exclusive by construction: a read that failed produces no payload to point at.
+     */
+    fun manifestFragment(entry: String, bytes: Long?, rows: Int, captureFailed: Boolean): String? {
+        require(!(captureFailed && bytes != null)) { "a failed app_state capture cannot declare a payload" }
+        if (captureFailed) return "{\"error\":${Json.str(CAPTURE_FAILED)}}"
+        if (bytes == null) return null
+        return "{\"entry\":${Json.str(entry)},\"size\":$bytes,\"rows\":$rows}"
+    }
+
+    /**
+     * Classify an archive's `state` section, or null when it is malformed and the restore must be refused.
+     * Malformed means a section claiming neither a payload nor a failure, or claiming both: a writer emits
+     * exactly one, so anything else is a truncated, hand-edited or substituted manifest and must not
+     * resolve to the silent "nothing to restore" that this section exists to eliminate.
+     */
+    fun restoreStateDisposition(state: org.json.JSONObject?): Disposition? {
+        if (state == null) return Disposition.ABSENT
+        val error = state.opt("error")
+        if (state.has("entry")) return if (error == null) Disposition.RESTORABLE else null
+        val text = error as? String ?: return null
+        if (text.isEmpty() || text.length > MAX_ERROR_CHARS) return null
+        return Disposition.INCOMPLETE
+    }
 }

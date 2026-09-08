@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.7-rc4 - 2026-09-08
+
+### Fixed
+
+- **A backup taken from a panel that could not read its own stored state now says so.** A backup carries the panel's durable state alongside its configuration, and a failure to read that state was quietly replaced with nothing: the bundle then looked exactly like one from a panel that had never stored anything, and restoring it reported plain success while bringing none of it back. The backup is still created, because the configuration in it is still worth having, but it now records the failure. The Install page reports it when the backup is made, the restore preview warns before anything is written, and the restore result says the bundle carried no panel state. A backup from a panel with genuinely nothing stored is unchanged, and existing backups restore exactly as before.
+
+- **Installation no longer refuses a slow panel while checking whether ha-paneld is already present.** The safety check asks Android for both the app and framework package paths before changing anything. On some older panels those two answers can take more than five seconds, so the second answer was cut off and a responsive package manager was reported as unavailable. The bounded check now allows enough time for both answers without weakening its fail-closed validation.
+
 ## v0.9.7-rc3 - 2026-09-04
 
 This release candidate adds a six-language interface, experimental camera streaming and clearer Home Assistant network diagnostics. It also improves recovery when an update changes a pinned device profile or leaves a dashboard waiting for an entity-filter decision. The changes below are since v0.9.7-rc2.

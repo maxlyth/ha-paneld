@@ -111,6 +111,7 @@ import io.github.maxlyth.hapaneld.logship.NetworkLogSinkFactory
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import io.github.maxlyth.hapaneld.persistence.AppState
 import io.github.maxlyth.hapaneld.persistence.ConfigVault
+import io.github.maxlyth.hapaneld.persistence.StateArchiveSection
 import io.github.maxlyth.hapaneld.persistence.StateBackupPolicy
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
@@ -925,7 +926,11 @@ internal inline fun <T : java.io.Closeable, R> withBackupCaptureAndPlaintext(
     }
 }
 
-internal fun encryptedBackupArtifact(plain: File, sealed: File): PanelBackup.Artifact {
+internal fun encryptedBackupArtifact(
+    plain: File,
+    sealed: File,
+    stateUnavailable: Boolean = false,
+): PanelBackup.Artifact {
     val retained = runCatching {
         plain.delete()
         plain.exists()
@@ -935,7 +940,7 @@ internal fun encryptedBackupArtifact(plain: File, sealed: File): PanelBackup.Art
         runCatching { sealed.delete() }
         throw BackupStagingRetainedException()
     }
-    return PanelBackup.Artifact(sealed)
+    return PanelBackup.Artifact(sealed, stateUnavailable = stateUnavailable)
 }
 
 /** Render one trusted Dashboard control without accepting pre-quoted HTML attribute fragments. */
@@ -8991,6 +8996,7 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
         val manifest: String,
         val sources: List<PanelBackup.ArchiveSource>,
         val ownedFiles: List<File>,
+        val stateUnavailable: Boolean,
     )
 
     /** Build a file-backed v2 container. Companion bytes are raw ZIP entries, not base64 JSON. */
@@ -9029,13 +9035,16 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                 val plaintextLimit = if (passphrase.isEmpty()) MAX_RESTORE_BYTES
                     else PanelBackup.maxSealablePlaintextBytes(MAX_RESTORE_BYTES)
                 if (plain.length() !in 1..plaintextLimit) throw ByteLimitExceeded(plaintextLimit)
-                if (passphrase.isEmpty()) return@withBackupCaptureAndPlaintext PanelBackup.Artifact(plain, "zip")
+                val stateUnavailable = parts.stateUnavailable
+                if (passphrase.isEmpty()) {
+                    return@withBackupCaptureAndPlaintext PanelBackup.Artifact(plain, "zip", stateUnavailable)
+                }
                 sealed = File.createTempFile("panel-backup-", ".hpb", cacheDir)
                 plain.inputStream().use { input ->
                     sealed.outputStream().use { output -> PanelBackup.seal(input, output, passphrase) }
                 }
                 if (sealed.length() !in 1..MAX_RESTORE_BYTES) throw ByteLimitExceeded(MAX_RESTORE_BYTES)
-                encryptedBackupArtifact(plain, sealed)
+                encryptedBackupArtifact(plain, sealed, stateUnavailable)
             }
         }
     }
@@ -9056,16 +9065,20 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
             val profile = profileAdmin?.exportBackup()?.let {
                 textEntry(PROFILE_BACKUP_ENTRY, "profile-backup-", it.toJson().toString(), MAX_PROFILE_BACKUP_ENTRY_BYTES)
             }
-            // Best-effort: a database that will not read must not cost the owner the rest of the backup,
-            // which still carries the validated config projection.
+            // A database that will not read must not cost the owner the rest of the backup, which still
+            // carries the validated config projection — but it must not be silent either. The failure is
+            // logged and marked in the manifest below, so this archive can never be mistaken for one taken
+            // from a panel that simply had nothing stored.
             // Not `use { }`: SQLiteOpenHelper only implements AutoCloseable from API 29, so `use`
             // compiles against the current compileSdk yet throws ClassCastException at runtime on
-            // Android 8.1 — and behind this getOrDefault the failure would be silent, a backup with
-            // no app_state entry and nothing reported. readThenClose also isolates the close, so a
-            // store that exported successfully but failed to close still contributes its rows.
-            val stateRows = runCatching {
+            // Android 8.1. readThenClose also isolates the close, so a store that exported successfully
+            // but failed to close still contributes its rows.
+            val stateCapture = runCatching {
                 readThenClose(EntityCatalogStore(appContext), { it.close() }) { it.exportAppState() }
-            }.getOrDefault(emptyList())
+            }
+            val stateFailure = stateCapture.exceptionOrNull()
+            if (stateFailure != null) Log.w(TAG, "backup could not read app_state", stateFailure)
+            val stateRows = stateCapture.getOrDefault(emptyList())
             val state = stateRows.takeIf { it.isNotEmpty() }?.let { rows ->
                 textEntry(
                     STATE_BACKUP_ENTRY,
@@ -9091,9 +9104,11 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                     profile?.file?.length(),
                     state?.file?.length(),
                     stateRows.size,
+                    stateFailure != null,
                 ),
                 sources = sources,
                 ownedFiles = owned,
+                stateUnavailable = stateFailure != null,
             )
             staged.commit()
             parts
@@ -9109,6 +9124,7 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
         profileBytes: Long?,
         stateBytes: Long?,
         stateRows: Int,
+        stateCaptureFailed: Boolean,
     ): String {
         val live = configLiveValues()
         val cfg = projectConfigSnapshot(
@@ -9129,11 +9145,12 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
             sb.append(",\"profiles\":{\"entry\":").append(jsonStr(PROFILE_BACKUP_ENTRY))
                 .append(",\"size\":").append(profileBytes).append('}')
         }
-        if (stateBytes != null) {
-            sb.append(",\"state\":{\"entry\":").append(jsonStr(STATE_BACKUP_ENTRY))
-                .append(",\"size\":").append(stateBytes)
-                .append(",\"rows\":").append(stateRows).append('}')
-        }
+        StateArchiveSection.manifestFragment(
+            STATE_BACKUP_ENTRY,
+            stateBytes,
+            stateRows,
+            stateCaptureFailed,
+        )?.let { sb.append(",\"state\":").append(it) }
         if (companion != null) {
             val files = companion.files.mapIndexed { index, file ->
                 "{\"rel\":${jsonStr(file.relativePath)},\"entry\":${jsonStr("companion/$index")},\"size\":${file.file.length()}}"
@@ -9440,6 +9457,19 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                 ContentType.Application.Json,
                 HttpStatusCode.BadRequest,
             )
+            // Resolve the section before anything reads it. A `state` object that declares neither a
+            // payload nor a capture failure cannot be resolved to "nothing to restore" — that silence is
+            // the defect this marker exists to remove.
+            val stateDisposition = StateArchiveSection.restoreStateDisposition(stateObj)
+                ?: return call.respondText(
+                    withInstallPresentation(
+                        """{"ok":false,"error":"invalid state object"}""",
+                        InstallPresentation("restore-state-object-invalid"),
+                    ),
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+            val stateUnavailable = stateDisposition == StateArchiveSection.Disposition.INCOMPLETE
             val archiveEntries = if (archiveManifest != null) {
                 runCatching { declaredArchiveEntries(entityObj, profilesObj, comp, stateObj) }.getOrNull()
                     ?: return call.respondText(
@@ -9494,7 +9524,9 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
             // it still identifies the physical target: device-local rows return only to their own panel.
             // A cleared panel that no longer carries its old id is treated as a different one, which
             // withholds hardware-specific rows rather than guessing.
-            val restorableState = if (archiveManifest != null && stateObj?.has("entry") == true) {
+            val restorableState = if (
+                archiveManifest != null && stateDisposition == StateArchiveSection.Disposition.RESTORABLE
+            ) {
                 val samePanel = obj.optString("panel_id").let { it.isNotEmpty() && it == config.panelId }
                 runCatching {
                     val ref = archiveTextRef(
@@ -9580,7 +9612,7 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                 requestAccepted = true
                 return call.respondText(
                     """{"ok":true,"dry_run":true,"panel_id":${jsonStr(obj.optString("panel_id"))},""" +
-                        """"config_keys":${configPlan.values.size},"config_warnings":${jarr(configPlan.warnings)},"profile_revisions":${profilePlan?.toImport?.size ?: 0},"profile_restart_required":${profilePlan?.restartRequired ?: false},"companion_pkg":${jsonStr(companionPlan?.packageName ?: "")},"companion_files":$compFiles}""",
+                        """"config_keys":${configPlan.values.size},"config_warnings":${jarr(configPlan.warnings)},"profile_revisions":${profilePlan?.toImport?.size ?: 0},"profile_restart_required":${profilePlan?.restartRequired ?: false},"companion_pkg":${jsonStr(companionPlan?.packageName ?: "")},"companion_files":$compFiles,"state_unavailable":$stateUnavailable}""",
                     ContentType.Application.Json,
                 )
             }
@@ -9675,10 +9707,13 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                         },
                     )
                     RestoreOperationResult(
-                        message = if (restoredStateRows > 0) {
-                            "Restore completed, including $restoredStateRows panel state values"
-                        } else {
-                            "Restore completed"
+                        // An archive that marked itself incomplete restored everything it held, and still
+                        // must not report the plain success of one that held the panel's state.
+                        message = when {
+                            restoredStateRows > 0 ->
+                                "Restore completed, including $restoredStateRows panel state values"
+                            stateUnavailable -> "Restore completed; this backup carried no panel state"
+                            else -> "Restore completed"
                         },
                         structured = InstallProgress.OperationResult(
                             status = InstallProgress.Outcome.SUCCEEDED,
@@ -9687,13 +9722,13 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                             companion = companionResult?.component
                                 ?: skippedComponent("not present"),
                         ),
-                        presentation = if (restoredStateRows > 0) {
-                            InstallPresentation(
+                        presentation = when {
+                            restoredStateRows > 0 -> InstallPresentation(
                                 "restore-completed-with-state",
                                 mapOf("count" to restoredStateRows.toString()),
                             )
-                        } else {
-                            InstallPresentation("restore-completed")
+                            stateUnavailable -> InstallPresentation("restore-completed-state-unavailable")
+                            else -> InstallPresentation("restore-completed")
                         },
                     )
                 }.getOrElse { error ->

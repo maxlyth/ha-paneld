@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.http
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,6 +41,62 @@ class RestoreAndImportContractTest {
         assertTrue("the entry must be declared", "STATE_BACKUP_ENTRY" in parts)
         assertTrue("an unreadable database must not lose the rest of the backup", "runCatching" in parts)
         assertTrue("no rows means no entry rather than an empty one", "takeIf { it.isNotEmpty() }" in parts)
+        assertTrue("the read failure must be kept, not defaulted away", "exceptionOrNull()" in parts)
+        assertTrue("the read failure must be logged", "backup could not read app_state" in parts)
+        assertTrue("the manifest must be told the capture failed", "stateFailure != null" in parts)
+        assertTrue(
+            "the archive parts must carry the marker out to the response layer",
+            "stateUnavailable = stateFailure != null" in parts,
+        )
+
+        val manifest = source.substring(
+            source.indexOf("private fun backupManifest"),
+            source.indexOf("private fun captureCompanion"),
+        )
+        assertTrue(
+            "the state section must be built by the shared policy, not inline",
+            "StateArchiveSection.manifestFragment(" in manifest,
+        )
+    }
+
+    /**
+     * The defect this replaced: an archive whose `app_state` could not be read was byte-indistinguishable
+     * from one taken with nothing stored, so preview showed nothing unusual and restore reported plain
+     * success having brought back nothing.
+     */
+    @Test fun restoreResolvesTheStateSectionExplicitlyAndCannotFallThroughToSilence() {
+        val handler = source.substring(
+            source.indexOf("private suspend fun handleRestore"),
+            source.indexOf("private fun planCompanionRestore"),
+        )
+        assertTrue(
+            "the section must be classified rather than probed for an entry",
+            "StateArchiveSection.restoreStateDisposition(stateObj)" in handler,
+        )
+        assertFalse(
+            "no reader may fall back to testing the entry directly",
+            "stateObj?.has(\"entry\")" in handler,
+        )
+        assertTrue(
+            "a malformed section must refuse the restore",
+            "InstallPresentation(\"restore-state-object-invalid\")" in handler,
+        )
+        assertTrue(
+            "only a restorable section may be read back",
+            "stateDisposition == StateArchiveSection.Disposition.RESTORABLE" in handler,
+        )
+        assertTrue(
+            "the preview must report an incomplete bundle before the owner confirms",
+            "\"state_unavailable\":\$stateUnavailable" in handler,
+        )
+        assertTrue(
+            "completion must not report the plain success of a whole bundle",
+            "InstallPresentation(\"restore-completed-state-unavailable\")" in handler,
+        )
+        assertTrue(
+            "the completion text must say what is missing",
+            "Restore completed; this backup carried no panel state" in handler,
+        )
     }
 
     /**

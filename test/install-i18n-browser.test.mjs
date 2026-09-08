@@ -61,8 +61,8 @@ async function realCatalogueProjection(locale, prefixes) {
 test('Install browser copies the exact frozen v3 presentation and direct-token tables', async () => {
   const source = await readFile(asset, 'utf8');
   const presentations = frozenObject(source, 'PRESENTATIONS');
-  assert.equal(Object.keys(presentations).length, 112);
-  assert.equal(digest(presentations), 'bb452cf6d3cf29deb0a0b0fad0180258cd534ab8ab9d727db6eb373f5a39d3b3');
+  assert.equal(Object.keys(presentations).length, 114);
+  assert.equal(digest(presentations), 'a03ea51ae259d4813b724ce246f7e70941eb575f54d5015bcc9a4ebf5c4828bc');
   assert.equal(digest(frozenObject(source, 'COMPONENT_STATUS')), '73563afe880f7bccf8b8c31d582a29405b8a498724a97cda7b54686a56f9530e');
   assert.equal(digest(frozenObject(source, 'APK_STATUS')), '2849cf9486f18979fe79465df4c9c76e11c558ef03ae3e98faa1f013b34f9cd8');
   assert.equal(digest(frozenObject(source, 'RESTORE_OUTCOME')), '69226bae3ec367703099c6136b4ff7b7ef264d8ad6efe6a02428bb155e7662b1');
