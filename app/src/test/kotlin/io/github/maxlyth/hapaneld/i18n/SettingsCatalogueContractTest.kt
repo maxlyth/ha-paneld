@@ -20,8 +20,8 @@ class SettingsCatalogueContractTest {
             if (spec.help.isNotEmpty()) expected[spec.helpKey] = spec.help
         }
 
-        assertEquals(88, SettingsRegistry.SPECS.size)
-        assertEquals(175, expected.size)
+        assertEquals(89, SettingsRegistry.SPECS.size)
+        assertEquals(177, expected.size)
         val settings = catalogue.strings.filterKeys { it.startsWith("settings.") }
         assertEquals("Settings must remain an exact independently-owned subset", expected.keys, settings.keys)
         expected.forEach { (key, text) ->

@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.config
 
 import io.github.maxlyth.hapaneld.audio.MicrophoneGain
+import io.github.maxlyth.hapaneld.parseKioskCompanionPackages
 import io.github.maxlyth.hapaneld.i18n.AppLocale
 import io.github.maxlyth.hapaneld.util.AndroidInput
 import io.github.maxlyth.hapaneld.util.BrokerEndpoint
@@ -298,6 +299,21 @@ object SettingsRegistry {
             label = "App watchdog", default = "false", scope = Scope.PORTABLE,
             liveApply = true,
             help = "Self-heal the dashboard app: relaunch if it dies, return if backgrounded too long.",
+        ),
+        SettingSpec(
+            key = "kiosk_companion_packages", type = SettingType.STRING, group = "Behaviour",
+            label = "Apps the lock allows", default = "", scope = Scope.DEVICE,
+            maxChars = 512,
+            // Not liveApply: there is no side effect to route. The return loop reads this value on
+            // every poll, so a saved change is in force within one poll without a rebuild or restart.
+            help = "Android package names, separated by commas, that the dashboard lock leaves in front " +
+                "instead of returning to the dashboard. Use it to reach a companion app's own screens. " +
+                "Needs root.",
+            validate = { value ->
+                val bad = parseKioskCompanionPackages(value).filterNot(AndroidInput::isPackage)
+                if (bad.isEmpty()) Validation.Ok(value)
+                else Validation.Bad("kiosk_companion_packages: not Android package names: ${bad.joinToString(", ")}")
+            },
         ),
         SettingSpec(
             key = "touch_sound", type = SettingType.BOOL, group = "Behaviour",

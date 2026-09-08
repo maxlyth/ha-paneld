@@ -31922,6 +31922,36 @@
       "softMaxChars": 32,
       "hardMaxChars": 38
     },
+    "settings.kiosk_companion_packages.help": {
+      "text": "Android package names, separated by commas, that the dashboard lock leaves in front instead of returning to the dashboard. Use it to reach a companion app's own screens. Needs root.",
+      "sourceHash": "384f4e706ef32a15c7d6abab7bc1ed63e84cde0f5278f637b0a774f0ed07661b",
+      "surface": "settings",
+      "context": "Configure > Behaviour > Apps the lock allows: supporting help for the kiosk_companion_packages setting.",
+      "risk": "ordinary",
+      "siblings": [
+        "settings.kiosk_companion_packages.label"
+      ],
+      "placeholders": [],
+      "frozen": [
+        "Android"
+      ],
+      "softMaxChars": 246,
+      "hardMaxChars": 329
+    },
+    "settings.kiosk_companion_packages.label": {
+      "text": "Apps the lock allows",
+      "sourceHash": "d10363e328d4b092471a2bfeac18f6095a19876a6fd26b85a86675181efaec18",
+      "surface": "settings",
+      "context": "Configure > Behaviour: label for the kiosk_companion_packages setting.",
+      "risk": "ordinary",
+      "siblings": [
+        "settings.kiosk_companion_packages.help"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 32,
+      "hardMaxChars": 36
+    },
     "settings.kiosk_lock.help": {
       "text": "Root-only casual-use lock. Hides Android system bars and returns to the selected dashboard within about 3 seconds when another app or Recents opens. It does not hide Home Assistant navigation. Release it here, from Home Assistant, through adb, with 7 rapid top-left taps, or during the 60-second unlocked window after reboot.",
       "sourceHash": "cb15071d31c33a73f5da36aef5a30c385125f3429136e556131067a9cdebd2a8",

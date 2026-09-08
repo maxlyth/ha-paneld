@@ -922,6 +922,11 @@ class Config private constructor(
         edit { putString("launcher_package", pkg) }
     }
 
+    /** Store the raw list as typed; [kioskCompanionPackages] owns parsing so both sides agree. */
+    fun setKioskCompanionPackages(raw: String) {
+        edit { putString("kiosk_companion_packages", raw.trim()) }
+    }
+
     /**
      * Opt-in blocklist of intrusive vendor packages to **tame** on boot (force-stop + disable the
      * boot-relaunch + strip the floating-overlay permission). The non-empty list IS the opt-in — nothing
