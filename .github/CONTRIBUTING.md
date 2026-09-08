@@ -14,7 +14,7 @@ Thank you for contributing to ha-paneld. Bug reports, hardware findings, documen
 - Keep each pull request focused on one problem. Put unrelated refactoring, dependency updates and CI repairs in separate pull requests.
 - Explain the problem, the intended behaviour and how the change was tested.
 - Add or update tests where practical. Hardware-specific changes should name the device, firmware and Android version used for testing, including any limitations that remain unverified.
-- Follow the existing style and avoid reformatting unrelated code. See [Building ha-paneld from source](docs/building.md) for the supported build environment.
+- Follow the existing style and avoid reformatting unrelated code. See [Building ha-paneld from source](../docs/building.md) for the supported build environment.
 - Be prepared to discuss and revise the change during review. Reviews aim to make contributions safe to merge across the range of supported panels.
 
 ## AI-assisted contributions
@@ -25,11 +25,11 @@ AI tools and models must not be listed as authors or co-authors. Do not include 
 
 ## Licensing
 
-By submitting a contribution, you agree that it may be distributed under the project's [Apache License 2.0](LICENSE), and you confirm that you have the right to submit it under those terms.
+By submitting a contribution, you agree that it may be distributed under the project's [Apache License 2.0](../LICENSE), and you confirm that you have the right to submit it under those terms.
 
 Clearly identify any third-party code or assets and their licence. Do not submit proprietary firmware, applications, credentials, private diagnostic archives or other material that you do not have permission to redistribute.
 
-Images have their own rules, because most documentation imagery is not committed to this repository at all — see [`docs/img/README.md`](docs/img/README.md). Photographs you took yourself are welcome and are the best answer for hardware the project does not own; please do not submit images taken from a vendor's site or a marketplace listing.
+Images have their own rules, because most documentation imagery is not committed to this repository at all — see [`docs/img/README.md`](../docs/img/README.md). Photographs you took yourself are welcome and are the best answer for hardware the project does not own; please do not submit images taken from a vendor's site or a marketplace listing.
 
 ## Community
 

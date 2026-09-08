@@ -218,7 +218,7 @@ Das Ergebnis ist immer offen: Dein Panel wird zu einem Profil, das alle verwende
 
 ## Entwicklung
 
-Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](../api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
+Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](../api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
 
 Ich habe bewusst genügend Informationen bereitgestellt, um den mitgelieferten Entwicklungscontainer zu verwenden und eine lokale Testversion zu erstellen. Reiche computergenerierte Pull Requests oder Issues nicht unverändert ein: Lies und verstehe jeden Teil des vorgeschlagenen Textes und Codes und formuliere ihn anschließend in deinen eigenen Worten neu. Dies ist ein Ein-Personen-Projekt, und ich habe keine Zeit, ungefilterte computergenerierte Ausgaben zu prüfen. Fasse dich kurz und schreibe für Menschen; wenn du dir bei etwas unsicher bist, frage zuerst nach.
 
@@ -232,7 +232,7 @@ Ich habe bewusst genügend Informationen bereitgestellt, um den mitgelieferten E
 - **Laufzeitprofile:** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) für YAML 1.2 sowie [CodeMirror](https://codemirror.net/) und dessen [YAML-Sprachpaket](https://github.com/codemirror/lang-yaml) im Profileditor.
 - **QR und Protokollierung:** [ZXing](https://github.com/zxing/zxing) für Einrichtungs-QR-Codes und [SLF4J](https://github.com/qos-ch/slf4j) für die Ktor- und HiveMQ-Protokollierung über Logcat.
 
-Die Auswahl und Aktualisierung von Abhängigkeiten folgen der [Abhängigkeits- und Lieferkettenrichtlinie](../../SECURITY.md#dependency-and-supply-chain-policy) des Projekts.
+Die Auswahl und Aktualisierung von Abhängigkeiten folgen der [Abhängigkeits- und Lieferkettenrichtlinie](../../.github/SECURITY.md#dependency-and-supply-chain-policy) des Projekts.
 
 </details>
 

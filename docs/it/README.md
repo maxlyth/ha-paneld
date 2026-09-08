@@ -218,7 +218,7 @@ Il risultato è sempre aperto: il tuo pannello diventa un profilo utilizzabile d
 
 ## Sviluppo
 
-Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../test/README.md) e il [processo di rilascio](../RELEASING.md).
+Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../test/README.md) e il [processo di rilascio](../RELEASING.md).
 
 Ho fornito deliberatamente informazioni sufficienti per usare il container di sviluppo incluso e creare una versione di test locale. Non inviare pull request o issue generate automaticamente senza modificarle: leggi e comprendi ogni parte del testo e del codice proposti, quindi riscrivili con parole tue. Questo progetto è gestito da una sola persona e non ho tempo di esaminare contenuti generati automaticamente e non filtrati. Sii conciso e scrivi per le persone; se hai dubbi su qualcosa, chiedi prima.
 
@@ -232,7 +232,7 @@ Ho fornito deliberatamente informazioni sufficienti per usare il container di sv
 - **Profili di runtime:** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) per YAML 1.2, con [CodeMirror](https://codemirror.net/) e il relativo [pacchetto del linguaggio YAML](https://github.com/codemirror/lang-yaml) nell'editor dei profili.
 - **QR e logging:** [ZXing](https://github.com/zxing/zxing) per i codici QR di configurazione e [SLF4J](https://github.com/qos-ch/slf4j) per il logging di Ktor e HiveMQ tramite Logcat.
 
-La selezione e gli aggiornamenti delle dipendenze seguono la [politica del progetto relativa alle dipendenze e alla catena di fornitura](../../SECURITY.md#dependency-and-supply-chain-policy).
+La selezione e gli aggiornamenti delle dipendenze seguono la [politica del progetto relativa alle dipendenze e alla catena di fornitura](../../.github/SECURITY.md#dependency-and-supply-chain-policy).
 
 </details>
 

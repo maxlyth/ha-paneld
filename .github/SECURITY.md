@@ -21,7 +21,7 @@ Please include the panel hardware, the ha-paneld version, and the panel's `/diag
 
 ha-paneld is designed as a **LAN-trust appliance**: the panel and Home Assistant are assumed to share a trusted network. Some behaviour is therefore **by design, not a vulnerability**:
 
-- The HTTP API on `:8888` is **unauthenticated** — restricting who can reach it is delegated to the network layer (VLAN / firewall). See the full threat model and decisions in [docs/architecture/security.md](docs/architecture/security.md).
+- The HTTP API on `:8888` is **unauthenticated** — restricting who can reach it is delegated to the network layer (VLAN / firewall). See the full threat model and decisions in [docs/architecture/security.md](../docs/architecture/security.md).
 - A root/file-level attacker already on the panel is out of scope (they own the device).
 
 Reports of genuine issues *within* that model are very welcome — e.g. an unauthenticated path that escapes the LAN-trust boundary, a command injection, a credential leak off-device, or anything that affects a panel from outside its LAN.

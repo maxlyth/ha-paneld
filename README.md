@@ -215,7 +215,7 @@ The result is always open: your panel becomes a profile everyone can use. That's
 
 ## Development
 
-If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and development-container builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [panel-profile development](docs/profiles/README.md), the [browser test harness](test/README.md), and the [release process](docs/RELEASING.md).
+If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](.github/CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and development-container builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [panel-profile development](docs/profiles/README.md), the [browser test harness](test/README.md), and the [release process](docs/RELEASING.md).
 
 I have deliberately provided enough information to use the supplied development container and build a local test version. Do not submit computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first.
 
@@ -229,7 +229,7 @@ I have deliberately provided enough information to use the supplied development 
 - **Runtime profiles:** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) for YAML 1.2, with [CodeMirror](https://codemirror.net/) and its [YAML language package](https://github.com/codemirror/lang-yaml) in the profile editor.
 - **QR and logging:** [ZXing](https://github.com/zxing/zxing) for setup QR codes and [SLF4J](https://github.com/qos-ch/slf4j) for Ktor and HiveMQ logging through Logcat.
 
-Dependency selection and updates follow the project's [dependency and supply-chain policy](SECURITY.md#dependency-and-supply-chain-policy).
+Dependency selection and updates follow the project's [dependency and supply-chain policy](.github/SECURITY.md#dependency-and-supply-chain-policy).
 
 </details>
 

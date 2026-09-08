@@ -218,7 +218,7 @@ ha-paneld 没有捐赠按钮。它是免费的，而真正能推动项目发展�
 
 ## 开发
 
-如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](../api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../test/README.md)以及[发布流程](../RELEASING.md)。
+如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](../api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../test/README.md)以及[发布流程](../RELEASING.md)。
 
 我特意提供了足够的信息，以便使用随附的开发容器并构建本地测试版本。请勿原样提交计算机生成的拉取请求或议题：请阅读并理解建议文本和代码的每个部分，然后用自己的语言重写。这是一个由我独自维护的项目，我没有时间审查未经筛选的计算机生成内容。请简明扼要，并以人类读者为对象；如果对某件事没有把握，请先询问。
 
@@ -232,7 +232,7 @@ ha-paneld 没有捐赠按钮。它是免费的，而真正能推动项目发展�
 - **运行时配置文件：** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) 处理 YAML 1.2，并在配置文件编辑器中使用 [CodeMirror](https://codemirror.net/) 及其 [YAML 语言包](https://github.com/codemirror/lang-yaml)。
 - **二维码和日志：** [ZXing](https://github.com/zxing/zxing) 用于设置流程的二维码，[SLF4J](https://github.com/qos-ch/slf4j) 用于通过 Logcat 记录 Ktor 和 HiveMQ 日志。
 
-依赖项的选择和更新遵循项目的[依赖项和供应链政策](../../SECURITY.md#dependency-and-supply-chain-policy)。
+依赖项的选择和更新遵循项目的[依赖项和供应链政策](../../.github/SECURITY.md#dependency-and-supply-chain-policy)。
 
 </details>
 

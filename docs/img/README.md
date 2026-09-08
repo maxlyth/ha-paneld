@@ -25,7 +25,7 @@ Record where each image came from. For your own photographs that is nothing more
 
 Published objects are permanent: once an image's URL appears in a commit it must keep working, so a new image is published beside the old one rather than replacing it.
 
-Contributed photographs are welcome and are the best answer for hardware the project does not own. A photograph you took yourself is your own work and can be submitted under the repository licence like any other contribution, described in [`CONTRIBUTING.md`](../../CONTRIBUTING.md). Please do not submit images taken from a vendor's site or a marketplace listing.
+Contributed photographs are welcome and are the best answer for hardware the project does not own. A photograph you took yourself is your own work and can be submitted under the repository licence like any other contribution, described in [`CONTRIBUTING.md`](../../.github/CONTRIBUTING.md). Please do not submit images taken from a vendor's site or a marketplace listing.
 
 ## Licensing
 

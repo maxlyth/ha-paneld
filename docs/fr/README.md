@@ -218,7 +218,7 @@ Le résultat est toujours ouvert : votre panneau devient un profil que tout le m
 
 ## Développement
 
-Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](../api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../test/README.md) et le [processus de publication](../RELEASING.md).
+Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](../api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../test/README.md) et le [processus de publication](../RELEASING.md).
 
 J’ai délibérément fourni suffisamment d’informations pour utiliser le conteneur de développement fourni et créer une version de test locale. Ne soumettez pas sans les modifier des pull requests ou des tickets générés par ordinateur : lisez et comprenez chaque partie du texte et du code proposés, puis reformulez-les avec vos propres mots. Ce projet est géré par une seule personne et je n’ai pas le temps d’examiner des contenus générés par ordinateur sans aucun filtrage. Soyez concis et écrivez pour des humains ; si vous avez un doute, demandez d’abord.
 
@@ -232,7 +232,7 @@ J’ai délibérément fourni suffisamment d’informations pour utiliser le con
 - **Profils d’exécution :** [SnakeYAML Engine](https://github.com/snakeyaml/snakeyaml-engine) pour YAML 1.2, avec [CodeMirror](https://codemirror.net/) et son [paquet de prise en charge du langage YAML](https://github.com/codemirror/lang-yaml) dans l’éditeur de profils.
 - **QR et journalisation :** [ZXing](https://github.com/zxing/zxing) pour les codes QR de configuration et [SLF4J](https://github.com/qos-ch/slf4j) pour la journalisation de Ktor et HiveMQ via Logcat.
 
-La sélection et la mise à jour des dépendances suivent la [politique du projet relative aux dépendances et à la chaîne d’approvisionnement](../../SECURITY.md#dependency-and-supply-chain-policy).
+La sélection et la mise à jour des dépendances suivent la [politique du projet relative aux dépendances et à la chaîne d’approvisionnement](../../.github/SECURITY.md#dependency-and-supply-chain-policy).
 
 </details>
 
