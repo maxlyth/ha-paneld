@@ -196,6 +196,9 @@ internal class ProximityCalibrationRuntime(
             else -> "ready"
         }
         val mode = (state.mode ?: observedSourceMode)?.name?.lowercase(Locale.ROOT) ?: "unknown"
+        val message = failureMessage.ifEmpty {
+            if (state.stage == null) summary() else state.message.ifEmpty { summary() }
+        }
         return JSONObject().apply {
             put("present", true)
             put("phase", phase)
@@ -203,8 +206,8 @@ internal class ProximityCalibrationRuntime(
             put("stage", if (saving) "saving" else state.stage?.name?.lowercase(Locale.ROOT) ?: "")
             put("sessionId", sessionId)
             put("sessionActive", state.active)
-            put("session", JSONObject().put("active", state.active).put("kind", "calibration").put("message", state.message))
-            put("message", failureMessage.ifEmpty { state.message.ifEmpty { summary() } })
+            put("session", JSONObject().put("active", state.active).put("kind", "calibration").put("message", message))
+            put("message", message)
             put("mode", mode)
             put("signalMode", mode)
             put("rangedEligible", (state.mode ?: observedSourceMode) == ProximityCalibrationEngine.Mode.RANGED)
@@ -260,7 +263,6 @@ internal class ProximityCalibrationRuntime(
 
     private fun decision(now: Long, sparseReporting: Boolean): Decision {
         val state = view
-        if (state.active && sourceProven && state.available) return Decision(ProximityReportGate.NONE, null, null, false)
         val near = state.near.takeIf { sourceProven && state.available && state.presenceSupported && !state.active }
         val level = state.level.takeIf { near != null }?.let { if (near == false) 0 else it }
         val gesture = state.gesture && sourceProven && !saving

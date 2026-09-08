@@ -12077,6 +12077,41 @@
       "text": "Questo backup non contiene alcuno stato del pannello: il pannello da cui proviene non è riuscito a leggere il proprio database. Ripristinarlo non riporterà indietro lo stato del pannello.",
       "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
       "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.panel_setup_help": {
+      "text": "Usa il rilevamento di presenza calibrato di questo pannello. Configura prima la prossimità; la sospensione automatica si interrompe se il sensore non è disponibile.",
+      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.setup_proximity": {
+      "text": "Configura la prossimità sul pannello",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.source_ha": {
+      "text": "Dispositivi dell’area Home Assistant",
+      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.source_panel": {
+      "text": "Sensore di prossimità di questo pannello",
+      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.sensors.raw": {
+      "text": "valore grezzo {value}",
+      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
+      "state": "machine-cross-checked"
+    },
+    "settings.auto_sleep_source.help": {
+      "text": "Usa il sensore di prossimità calibrato del pannello o scegli i dispositivi dell’area Home Assistant. Se la fonte selezionata non è disponibile, la sospensione automatica si interrompe e il controllo touch resta disponibile.",
+      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
+      "state": "machine-cross-checked"
+    },
+    "settings.auto_sleep_source.label": {
+      "text": "Fonte di presenza per la sospensione automatica",
+      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
+      "state": "machine-cross-checked"
     }
   }
 }

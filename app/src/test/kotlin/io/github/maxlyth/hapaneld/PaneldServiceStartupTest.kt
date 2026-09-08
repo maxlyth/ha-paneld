@@ -38,6 +38,7 @@ class PaneldServiceStartupTest {
             configOwnerRefreshPlan(setOf("log_ship_host", "keep_awake")),
         )
         assertTrue(configOwnerRefreshPlan(setOf("panel_id")).autoSleep)
+        assertTrue(configOwnerRefreshPlan(setOf("auto_sleep_source")).autoSleep)
         assertTrue(configOwnerRefreshPlan(setOf("dashboard_package")).rendererTarget)
     }
 

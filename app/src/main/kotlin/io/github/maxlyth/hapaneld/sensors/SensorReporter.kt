@@ -327,7 +327,9 @@ class SensorReporter(
 
     fun proximityReady(): Boolean = proximityRuntime?.isWaveReady() == true
 
-    fun proximityPresenceReady(): Boolean = proximityRuntime?.isPresenceNear() == true
+    fun proximityPresenceReady(): Boolean = proximityRuntime?.isPresenceReady() == true
+
+    fun proximityPresenceNear(): Boolean = proximityRuntime?.isPresenceNear() == true
 
     /** Notify the service only when empirical signal-shape eligibility changes. Notifications carry no
      *  truth: every active consumer re-reads this service-owned reporter before acting. */

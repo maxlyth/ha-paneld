@@ -36929,6 +36929,92 @@
       ],
       "softMaxChars": 135,
       "hardMaxChars": 192
+    },
+    "configure.auto_sleep.panel_setup_help": {
+      "text": "Uses calibrated presence at this panel. Set up proximity first; automatic sleep pauses if the sensor is unavailable.",
+      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 232,
+      "hardMaxChars": 348
+    },
+    "configure.auto_sleep.setup_proximity": {
+      "text": "Set up proximity on panel",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 50,
+      "hardMaxChars": 80
+    },
+    "configure.auto_sleep.source_ha": {
+      "text": "Home Assistant Area devices",
+      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 54,
+      "hardMaxChars": 81
+    },
+    "configure.auto_sleep.source_panel": {
+      "text": "This panel’s proximity sensor",
+      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 58,
+      "hardMaxChars": 87
+    },
+    "dashboard.sensors.raw": {
+      "text": "raw {value}",
+      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
+      "surface": "dashboard",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{value}"
+      ],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 80
+    },
+    "settings.auto_sleep_source.help": {
+      "text": "Use the panel’s calibrated proximity sensor, or choose Home Assistant Area devices. If the selected source is unavailable, automatic sleep pauses and touch remains available.",
+      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
+      "surface": "settings",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 348,
+      "hardMaxChars": 522
+    },
+    "settings.auto_sleep_source.label": {
+      "text": "Auto-sleep presence source",
+      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
+      "surface": "settings",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 52,
+      "hardMaxChars": 80
     }
   }
 }

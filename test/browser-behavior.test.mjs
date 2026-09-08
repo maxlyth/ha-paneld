@@ -4970,3 +4970,43 @@ browserTest('Configure stops promising a value is about to apply once the panel 
     await page.locator('#cfg-silence_boot_chime [role=switch]').getAttribute('aria-checked'), 'true',
     'a stalled value is still the saved desired value');
 });
+
+browserTest('Panel proximity Auto-sleep works without HA prerequisites or an HA history chart', async (t) => {
+  let prerequisiteGets = 0, historyGets = 0;
+  const schema = [
+    { key: 'auto_sleep_source', label: 'Auto-sleep presence source', group: 'Behaviour', type: 'ENUM', available: true, options: ['panel', 'home_assistant'] },
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { auto_sleep: true, auto_sleep_source: 'panel' }, ha_expose: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio' || path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/auto-sleep/prerequisite') { prerequisiteGets++; return json({ eligible: false, phase: 'unassigned' }); }
+    if (path === '/api/v1/auto-sleep/history') { historyGets++; return json({ available: false }); }
+    if (path === '/api/v1/auto-sleep') return json({ enabled: true, source: 'panel', phase: 'source_unavailable', reason: 'all_sources_unavailable' });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  const source = page.locator('#cfg-auto_sleep_source select');
+  await source.waitFor();
+  assert.deepEqual(await source.locator('option').allTextContents(), ['This panel’s proximity sensor', 'Home Assistant Area devices']);
+  const toggle = page.locator('#cfg-auto_sleep [role=switch]');
+  assert.equal(await toggle.getAttribute('aria-disabled'), 'false');
+  await toggle.click();
+  assert.equal(await toggle.getAttribute('aria-disabled'), 'false');
+  await toggle.click();
+  await page.locator('#auto-sleep-status').waitFor();
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(await page.locator('#auto-sleep-chart').count(), 0);
+  assert.equal(await page.locator('#auto-sleep-status a').getAttribute('href'), '#cfg-proximity-learning');
+  assert.equal(prerequisiteGets, 0);
+  assert.equal(historyGets, 0);
+  await source.selectOption('home_assistant');
+  await page.waitForFunction(() => document.querySelector('#cfg-auto_sleep [role=switch]').getAttribute('aria-checked') === 'false');
+  assert.equal(await page.locator('#cfg-auto_sleep [role=switch]').getAttribute('aria-disabled'), 'true');
+  assert.ok(prerequisiteGets > 0);
+});

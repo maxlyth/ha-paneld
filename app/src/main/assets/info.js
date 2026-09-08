@@ -227,6 +227,16 @@ function proximityPhase(value){var normalized=String(value||'waiting').replace(/
  waiting:i18nText('dashboard.sensors.phase_waiting','waiting'),learning:i18nText('dashboard.sensors.phase_learning','learning'),
  learned:i18nText('dashboard.sensors.phase_learned','learned'),calibrating:i18nText('dashboard.sensors.phase_calibrating','calibrating')
  })[normalized]||normalized;}
+function proximityReading(p){
+ var phase=proximityPhase(p.learning||p.phase||'waiting');
+ if(p.health==='source_unavailable')return {val:i18nText('dashboard.common.unavailable','· unavailable'),suf:''};
+ var state=p.near==null?phase:(p.near?i18nText('dashboard.sensors.near','near'):i18nText('dashboard.sensors.far','far'));
+ var raw=typeof p.raw==='number'&&isFinite(p.raw)?i18nText('dashboard.sensors.raw','raw {value}',{value:p.raw}):'';
+ var level=p.level;
+ var calibrated=p.presenceReady===true&&!p.sessionActive&&typeof level==='number'&&isFinite(level);
+ if(p.mode==='ranged')return {val:calibrated?Math.round(Math.max(0,Math.min(100,level)))+'%':(raw||state),suf:(calibrated&&raw?raw+' · ':'')+state};
+ return {val:state,suf:raw};
+}
 function sensorsCard(tbl,age){
  function fA(a){return a==null?'':(a<90?i18nText('dashboard.sensors.seconds_ago','· {count}s ago',{count:a}):(a<5400?i18nText('dashboard.sensors.minutes_ago','· {count}m ago',{count:Math.round(a/60)}):i18nText('dashboard.sensors.hours_ago','· {count}h ago',{count:Math.round(a/3600)})));}
  async function s(){
@@ -234,8 +244,8 @@ function sensorsCard(tbl,age){
   try{
    var d=await (await fetch('/api/v1/sensors')).json(),rows=[];
    if(d.light&&d.light.present)rows.push({label:i18nText('dashboard.sensors.ambient_light','Ambient light'),val:d.light.lux!=null?d.light.lux+' lx':i18nText('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.light.age_s)});
-   if(d.proximity&&d.proximity.present){var p=d.proximity,phase=proximityPhase(p.learning||p.phase||'waiting');
-    rows.push({label:i18nText('dashboard.sensors.proximity','Proximity'),val:p.near==null?phase:(p.near?i18nText('dashboard.sensors.near','near'):i18nText('dashboard.sensors.far','far')),suf:p.normalizedLevel==null?'· '+phase:i18nText('dashboard.sensors.normalized','· {percent}% normalized · {phase}',{percent:p.normalizedLevel,phase:phase})});}
+   if(d.proximity&&d.proximity.present){var p=d.proximity,reading=proximityReading(p);
+    rows.push({label:i18nText('dashboard.sensors.proximity','Proximity'),val:reading.val,suf:[reading.suf,fA(p.age_s)].filter(Boolean).join(' ')});}
    if(d.temperature&&d.temperature.present)rows.push({label:i18nText('dashboard.performance.temperature','Temperature'),val:d.temperature.c!=null?d.temperature.c+' °C':i18nText('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.temperature.age_s)});
    if(d.humidity&&d.humidity.present)rows.push({label:i18nText('dashboard.sensors.humidity','Humidity'),val:d.humidity.pct!=null?d.humidity.pct+' %':i18nText('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.humidity.age_s)});
    if(d.volume_pct!=null&&d.volume_pct>=0)rows.push({label:i18nText('dashboard.sensors.volume','Volume'),val:d.volume_pct+' %'});

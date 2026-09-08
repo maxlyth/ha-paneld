@@ -713,7 +713,7 @@ internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefres
     val ha = setOf("ha_url", "ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id")
     return ConfigOwnerRefreshPlan(
         adaptiveBrightness = changedKeys.any(ha::contains),
-        autoSleep = changedKeys.any((ha + "panel_id")::contains),
+        autoSleep = changedKeys.any((ha + setOf("panel_id", "auto_sleep_source"))::contains),
         logShipping = changedKeys.any(setOf(
             "log_ship_enabled", "log_ship_host", "log_ship_port", "log_ship_protocol",
         )::contains),
@@ -1043,6 +1043,7 @@ class PaneldService : Service() {
         // Must run BEFORE ensurePanelId and before any renderer starts: it decides, once, whether this panel
         // predates the entity-filter question, and a panel that predates it must never be held to answer it.
         config.migrateLogShipTcpDefault()
+        config.migrateAutoSleepSource()
         config.migrateSetupQuestionsForExistingInstall()
         config.ensurePanelId()      // materialize the generated identity before MQTT/mDNS snapshot it
         updateForegroundStatus(nativeString(R.string.starting))
@@ -1427,7 +1428,7 @@ class PaneldService : Service() {
                                     on = false,
                                 )
                             },
-                            refreshController = { autoSleep.refresh() },
+                            refreshController = { refreshAutoSleepPresence() },
                             applyBridge = {
                                 runtime.observe()?.value?.mqtt?.convergeAutoSleep(
                                     expectedGeneration = expectedSettingGeneration + 1L,
@@ -1617,7 +1618,7 @@ class PaneldService : Service() {
                 override fun setSourceIncluded(areaKey: String, sourceKey: String, included: Boolean) =
                     autoSleep.setSourceIncluded(areaKey, sourceKey, included)
                 override fun noteAreaChanged() {
-                    autoSleep.refresh()
+                    refreshAutoSleepPresence()
                 }
             },
             companionDataOperationState = companionDataOperationState,
@@ -1664,6 +1665,16 @@ class PaneldService : Service() {
         // had already settled, so a service restart behind a live renderer is not left waiting. Held as
         // a field so teardown can clear exactly this identity.
         BuiltinDashboard.setRendererSettledListener(rendererSettledForLifecycle)
+    }
+
+    private fun refreshAutoSleepPresence(): Boolean {
+        val accepted = autoSleep.refresh()
+        if (accepted && ::sensors.isInitialized) {
+            autoSleep.noteProximityState(
+                sensors.proximityPresenceNear().takeIf { sensors.proximityPresenceReady() },
+            )
+        }
+        return accepted
     }
 
     private fun buildMqtt(
@@ -1751,7 +1762,7 @@ class PaneldService : Service() {
             wifiOutages = { wifiOutageTracker.counts() },
             learnedProximityEligibility = sensors::hasLearnedProximity,
             onAutoSleepConfigChanged = {
-                acceptCommittedAutoSleepSetting(liveSettingAuthority) { autoSleep.refresh() }
+                acceptCommittedAutoSleepSetting(liveSettingAuthority) { refreshAutoSleepPresence() }
             },
             // This bridge generation's lease, registered with the runtime as the live broker channel
             // just below. A bridge that outlives its service OR its own replacement cannot report.
@@ -1818,7 +1829,7 @@ class PaneldService : Service() {
             persistOff = { generation ->
                 config.setAutoSleepIf(expected = true, expectedGeneration = generation, on = false)
             },
-            refreshController = { autoSleep.refresh() },
+            refreshController = { refreshAutoSleepPresence() },
             applyBridge = { bridge.convergeAutoSleep(expectedGeneration = fence, expectedValue = false) },
         ))
     }
@@ -2392,7 +2403,7 @@ class PaneldService : Service() {
         appliedNetworkConfiguration = desired
         if (ownerRefresh.logShipping) runCatching { logShipper.reconfigure() }
         if (ownerRefresh.keepAwake) runCatching { power.apply(config.keepAwake) }
-        if (ownerRefresh.autoSleep) runCatching { autoSleep.refresh() }
+        if (ownerRefresh.autoSleep) runCatching { refreshAutoSleepPresence() }
         if (ownerRefresh.rendererTarget) {
             io.github.maxlyth.hapaneld.http.PerfReader.updateRendererTarget(rendererTargetSnapshot())
         }
@@ -3298,14 +3309,16 @@ class PaneldService : Service() {
                 onLuxRaw = autoBright::submitLux,
                 onProximity = { near, level, reportMask ->
                     mqtt.publishProximity(near, level, reportMask)
-                    if (!sensors.proximityCalibrationActive()) autoSleep.noteProximityState(near)
+                    autoSleep.noteProximityState(near.takeIf {
+                        !sensors.proximityCalibrationActive() && sensors.proximityPresenceReady()
+                    })
                 },
                 onPresenceApproach = {
                     val proximityGeneration = sensors.proximityGeneration()
                     val observedAt = android.os.SystemClock.elapsedRealtime()
                     wakeOnWaveWorker.execute {
                         screen.brightenForPresence {
-                            !teardownBoundary.isStopping && sensors.proximityPresenceReady() &&
+                            !teardownBoundary.isStopping && sensors.proximityPresenceNear() &&
                                 sensors.proximityGeneration() == proximityGeneration &&
                                 android.os.SystemClock.elapsedRealtime() - observedAt in 0L..750L
                         }

@@ -13,6 +13,37 @@ import org.junit.Test
 
 /** Drives the production runtime, sparse live edges and its injected atomic model-store boundary. */
 class ProximityCalibrationRuntimeTest {
+    @Test fun recoveredIdleSourceDoesNotKeepReportingConnectionLoss() {
+        val fixture = Fixture()
+        fixture.runtime.sourceUnavailable(fixture.now)
+        assertEquals("Proximity source unavailable", fixture.status().getString("message"))
+        fixture.advance(100, 100f)
+        assertEquals("healthy", fixture.status().getString("health"))
+        assertEquals("Calibrated proximity · ranged", fixture.status().getString("message"))
+        assertEquals(fixture.status().getString("message"), fixture.status().getJSONObject("session").getString("message"))
+        assertEquals(0, fixture.backing.writes)
+    }
+
+    @Test fun setupRevokesOperationalPresenceOnceAndCancelRestoresIt() {
+        val fixture = Fixture()
+        fixture.sample(100f)
+        fixture.advance(200, 100f)
+        assertTrue(fixture.runtime.isPresenceReady())
+        assertTrue(fixture.runtime.start())
+        val during = fixture.advance(100, 100f)
+        assertEquals(ProximityReportGate.BOTH, during.reportMask)
+        assertNull(during.near)
+        assertFalse(during.presenceApproach)
+        assertFalse(during.deliberateGesture)
+        assertEquals(ProximityReportGate.NONE, fixture.advance(100, 100f).reportMask)
+        assertTrue(fixture.runtime.cancel(fixture.status().getString("sessionId")))
+        fixture.advance(100, 100f)
+        val restored = fixture.advance(200, 100f)
+        assertTrue(fixture.runtime.isPresenceReady())
+        assertEquals(false, restored.near)
+        assertEquals(0, fixture.backing.writes)
+    }
+
     @Test fun ambientSamplesGesturesTickAndCloseNeverWriteCalibration() {
         val fixture = Fixture()
         repeat(10) { fixture.operationalWave(legacy().effectiveWave()!!) }
@@ -239,7 +270,7 @@ class ProximityCalibrationRuntimeTest {
         val fixture = Fixture()
         fixture.begin(100f)
         fixture.sample(100f, live = false, capture = false)
-        fixture.advance(4_000)
+        fixture.advance(ProximityCalibrationEngine.COUNTDOWN_MS + 1_000)
         assertEquals("clear", fixture.stage())
         fixture.sample(100f, live = false, capture = true)
         fixture.advance(ProximityCalibrationEngine.CAPTURE_HOLD_MS)

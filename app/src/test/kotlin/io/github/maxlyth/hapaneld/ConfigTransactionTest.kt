@@ -139,6 +139,41 @@ class ConfigTransactionTest {
         assertTrue(config.autoSleepGeneration > enabledGeneration)
     }
 
+    @Test fun localPresenceIsTheFreshDefaultAndSurvivesEnablingAndRestart() {
+        val prefs = fakePreferences()
+        val config = Config(prefs.instance)
+        assertEquals("panel", config.autoSleepSource)
+        assertEquals(AutoSleepWriteResult.COMMITTED, config.setAutoSleep(true))
+        assertEquals("panel", Config(prefs.instance).autoSleepSource)
+    }
+
+    @Test fun legacyEnabledAutoSleepPreservesHaThroughDisableAndRestart() {
+        val prefs = fakePreferences(initial = mapOf("auto_sleep" to true))
+        val config = Config(prefs.instance)
+        assertEquals("home_assistant", config.autoSleepSource)
+        assertEquals(AutoSleepWriteResult.COMMITTED, config.setAutoSleep(false))
+        assertEquals("home_assistant", Config(prefs.instance).autoSleepSource)
+        assertEquals("home_assistant", config.getRaw(SettingsRegistry.spec("auto_sleep_source")!!))
+    }
+
+    @Test fun legacyDisabledAutoSleepRetainsHaWhileFreshMigrationChoosesPanel() {
+        val old = fakePreferences(initial = mapOf("auto_sleep" to false))
+        assertTrue(Config(old.instance).migrateAutoSleepSource())
+        assertEquals("home_assistant", Config(old.instance).autoSleepSource)
+        val fresh = fakePreferences()
+        assertTrue(Config(fresh.instance).migrateAutoSleepSource())
+        assertEquals("panel", Config(fresh.instance).autoSleepSource)
+    }
+
+    @Test fun explicitPresenceSourceChangeFencesOutstandingAutoSleepWrites() {
+        val prefs = fakePreferences(initial = mapOf("auto_sleep" to true))
+        val config = Config(prefs.instance)
+        val generation = config.autoSleepGeneration
+        assertTrue(config.commitRaw(SettingsRegistry.spec("auto_sleep_source")!!, "panel"))
+        assertEquals("panel", Config(prefs.instance).autoSleepSource)
+        assertNull(config.setAutoSleepIf(true, generation, false))
+    }
+
     @Test fun autoSleepSourceExclusionsPersistByHaInstallationAreaAndEntityId() {
         val prefs = fakePreferences(initial = mapOf("ha_url" to "https://ha.example"))
         val config = Config(prefs.instance)

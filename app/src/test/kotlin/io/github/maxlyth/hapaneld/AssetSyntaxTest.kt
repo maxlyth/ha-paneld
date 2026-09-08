@@ -136,6 +136,7 @@ class AssetSyntaxTest {
               throw new Error('unterminated '+name);
             }
             vm.runInThisContext([
+              'autoSleepUsesPanel','autoSleepSummaryModel','autoSleepHuman',
               'autoSleepAreaMatchesName','autoSleepAreaMatches','autoSleepAreaTransitioning','autoSleepHistoryReady','autoSleepHistoryPreparing','autoSleepStatusRetryable','autoSleepHistoryTerminalMessage',
               'scheduleAutoSleepReadiness','loadAutoSleepHistory','invalidateAutoSleepHistory',
               'invalidateAutoSleepData','autoSleepDisplayedHours','loadAutoSleepData'
@@ -144,7 +145,7 @@ class AssetSyntaxTest {
             // exercises their English behavior without loading the complete Configure document.
             global.i18nText=(key,fallback,values)=>String(fallback).replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g,
               (placeholder,name)=>values&&Object.prototype.hasOwnProperty.call(values,name)?String(values[name]):placeholder);
-            global.values={auto_sleep:'true'};
+            global.values={auto_sleep:'true',auto_sleep_source:'home_assistant'};
             global.autoSleepStatus=null;global.autoSleepLoading=false;global.autoSleepRequest=0;
             global.autoSleepHistory=null;global.autoSleepHistoryLoading=false;global.autoSleepHistoryError='';
             global.autoSleepHistoryRequest=0;global.autoSleepHistoryHours=6;global.autoSleepHistoryWaiting=false;
@@ -233,6 +234,16 @@ class AssetSyntaxTest {
               if(historyCalls!==beforeTransportRecovery+1)process.exit(18);
               if(!autoSleepHistory)process.exit(19);
               if(timers.some(timer=>!timer.cancelled))process.exit(20);
+              const haSummary=autoSleepSummaryModel({...live,area_name:'Office'});
+              if(haSummary.lines[0]!=='Home Assistant Area: Office')process.exit(22);
+              // Panel presence observes its own live status without requesting HA history.
+              values.auto_sleep_source='panel';
+              const beforePanelHistory=historyCalls;
+              statuses=[{enabled:true,source:'panel',phase:'source_unavailable',reason:'all_sources_unavailable'}];
+              invalidateAutoSleepData();loadAutoSleepData();await flush();
+              if(historyCalls!==beforePanelHistory||!timers.some(timer=>!timer.cancelled))process.exit(23);
+              const panelSummary=autoSleepSummaryModel(autoSleepStatus);
+              if(panelSummary.lines[0]!=='This panel’s proximity sensor'||panelSummary.accessible.includes('Home Assistant Area:'))process.exit(24);
             })().catch(error=>{console.error(error);process.exit(21)});
         """.trimIndent()
         val (code, out) = run(listOf("node", "-e", script, File(dir, "configure.js").absolutePath))

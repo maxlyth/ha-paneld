@@ -3,12 +3,15 @@ package io.github.maxlyth.hapaneld
 import android.graphics.Color
 import android.content.Intent
 import android.graphics.Typeface
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
+import android.widget.FrameLayout
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
-import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.LinearLayout
@@ -37,6 +40,10 @@ class ProximityWizardActivity : AppCompatActivity() {
     private lateinit var cadence: TextView
     private lateinit var cadenceLabel: TextView
     private lateinit var visualRow: LinearLayout
+    private lateinit var countdownRing: ProximityCountdownView
+    private val backgroundColor = Color.rgb(14, 23, 37)
+    private val bodyColor = Color.rgb(243, 247, 255)
+    private val accentColor = Color.rgb(133, 186, 255)
 
     private val poll = object : Runnable {
         override fun run() {
@@ -59,67 +66,117 @@ class ProximityWizardActivity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
-        val palette = statusPalette(StatusSurface.darkFor(this, Config(this)))
+        val landscape = resources.configuration.screenWidthDp > resources.configuration.screenHeightDp
+        val compact = resources.configuration.screenHeightDp < 520
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(16), dp(12), dp(16), dp(12))
-            setBackgroundColor(Color.parseColor(palette.background))
+            setPadding(dp(24), dp(if (compact) 16 else 28), dp(24), dp(20))
+            setBackgroundColor(backgroundColor)
         }
         fun label(size: Float, bold: Boolean = false) = TextView(this).apply {
             textSize = size
-            gravity = Gravity.CENTER
-            setTextColor(Color.parseColor(palette.body))
-            if (bold) setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.START
+            setTextColor(bodyColor)
+            typeface = Typeface.create(if (bold) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+            includeFontPadding = false
+            setLineSpacing(dp(3).toFloat(), 1f)
             setPadding(0, dp(6), 0, dp(6))
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
+            gravity = Gravity.CENTER_VERTICAL
         }
-        instruction = label(34f, true).apply {
+        instruction = label(if (compact) 34f else 40f, true).apply {
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+            letterSpacing = -0.025f
         }
-        detail = label(24f)
-        mode = label(24f)
-        progress = label(24f, true)
-        indicator = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
-        content.addView(instruction)
+        detail = label(26f)
+        mode = label(24f).apply { setTextColor(Color.rgb(179, 200, 228)) }
+        progress = label(24f, true).apply { setTextColor(accentColor) }
+        indicator = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            progressTintList = ColorStateList.valueOf(accentColor)
+            indeterminateTintList = ColorStateList.valueOf(accentColor)
+        }
         pictogram = ProximityPictogramView(this)
-        cadence = label(56f, true)
-        cadenceLabel = label(24f)
+        cadence = label(56f, true).apply { gravity = Gravity.CENTER }
+        cadenceLabel = label(24f).apply {
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(169, 190, 219))
+        }
+        countdownRing = ProximityCountdownView(this)
+        val clock = FrameLayout(this).apply {
+            addView(countdownRing, FrameLayout.LayoutParams(-1, -1))
+            addView(cadence, FrameLayout.LayoutParams(-1, -1))
+        }
+        val clockSize = if (compact) 116 else 144
         val cadenceColumn = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            addView(cadence)
-            addView(cadenceLabel)
+            addView(clock, LinearLayout.LayoutParams(dp(clockSize), dp(clockSize)))
+            addView(cadenceLabel, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         }
         visualRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
-            addView(pictogram, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1.4f))
-            addView(cadenceColumn, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            setPadding(0, dp(12), 0, dp(12))
+            addView(pictogram, LinearLayout.LayoutParams(0, -1, 1.5f))
+            addView(cadenceColumn, LinearLayout.LayoutParams(0, -2, 1f))
         }
-        val visualHeight = (resources.configuration.screenHeightDp * 0.3f).toInt().coerceIn(104, 176)
-        content.addView(visualRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(visualHeight)))
-        content.addView(detail)
-        content.addView(mode)
-        content.addView(progress)
-        content.addView(indicator, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(8)))
+        val copy = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(instruction)
+            addView(detail, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(mode)
+            addView(progress)
+        }
+        if (landscape) {
+            content.orientation = LinearLayout.HORIZONTAL
+            content.addView(copy, LinearLayout.LayoutParams(0, -2, 1.1f))
+            content.addView(visualRow, LinearLayout.LayoutParams(0, dp(216), 1f).apply { leftMargin = dp(20) })
+        } else {
+            // The instruction precedes the motion, with the supporting copy below it as in the preview.
+            copy.removeView(instruction)
+            content.addView(instruction)
+            content.addView(visualRow, LinearLayout.LayoutParams(-1, dp(if (compact) 188 else 248)))
+            content.addView(copy)
+        }
         root.addView(ScrollView(this).apply {
             isFillViewport = true
+            isVerticalScrollBarEnabled = false
             addView(content)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        fun button() = Button(this).apply {
+        }, LinearLayout.LayoutParams(-1, 0, 1f))
+        root.addView(indicator, LinearLayout.LayoutParams(-1, dp(4)))
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(16), 0, 0)
+        }
+        fun button(filled: Boolean) = Button(this).apply {
             isAllCaps = false
             textSize = 24f
-            minimumHeight = dp(56)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            minimumHeight = dp(60)
+            minHeight = dp(60)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            stateListAnimator = null
+            elevation = 0f
+            val shape = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(if (filled) accentColor else Color.TRANSPARENT)
+                setStroke(dp(1), if (filled) accentColor else Color.rgb(97, 120, 147))
+            }
+            backgroundTintList = null
+            background = RippleDrawable(ColorStateList.valueOf(Color.argb(50, 243, 247, 255)), shape, null)
+            setTextColor(ColorStateList(
+                arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+                intArrayOf(Color.rgb(104, 124, 151), if (filled) Color.rgb(8, 33, 67) else bodyColor),
+            ))
         }
-        cancel = button().apply {
+        cancel = button(false).apply {
             setText(R.string.proximity_wizard_cancel)
             setOnClickListener { cancelAndFinish() }
         }
-        primary = button().apply {
+        primary = button(true).apply {
             setOnClickListener {
                 when (stage) {
                     "intro" -> perform("begin")
@@ -129,8 +186,8 @@ class ProximityWizardActivity : AppCompatActivity() {
                 }
             }
         }
-        actions.addView(cancel, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        actions.addView(primary, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        actions.addView(cancel, LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(primary, LinearLayout.LayoutParams(0, -2, 1.8f).apply { leftMargin = dp(12) })
         root.addView(actions)
         setContentView(root)
     }
@@ -261,11 +318,11 @@ class ProximityWizardActivity : AppCompatActivity() {
             progress.text = getString(R.string.proximity_wizard_progress, accepted, required)
             progress.visibility = if (cue == ProximityWizardCue.WAVE || (stage == "review" && snapshot.optBoolean("waveSupported"))) View.VISIBLE else View.GONE
             detail.visibility = View.VISIBLE
-            visualRow.visibility = if (collecting || awaitingReading) View.VISIBLE else View.GONE
-            val palette = statusPalette(StatusSurface.darkFor(this, Config(this)))
+            visualRow.visibility = if (collecting || stage == "intro") View.VISIBLE else View.GONE
+            visualRow.getChildAt(1).visibility = if (stage == "intro" && !awaitingReading) View.GONE else View.VISIBLE
             pictogram.present(
                 if (awaitingReading) ProximityWizardCue.WAVE else cue,
-                usesHand || awaitingReading, Color.parseColor(palette.body), Color.parseColor(palette.accent),
+                usesHand || awaitingReading, bodyColor, accentColor,
                 requestedWaveCount = waveCount,
                 holdNearPanel = proximityWizardHoldsNearPanel(stage, snapshot.optString("wavePattern")),
             )
@@ -291,6 +348,11 @@ class ProximityWizardActivity : AppCompatActivity() {
         val countdown = proximityWizardCountdownSeconds(
             snapshot.optLong("cueRemainingMs"), snapshot.optLong("cueDurationMs"),
         )
+        countdownRing.present(
+            snapshot.optLong("cueRemainingMs"), snapshot.optLong("cueDurationMs"),
+            if (cue == ProximityWizardCue.WAVE) Color.rgb(200, 173, 255) else accentColor,
+        )
+        cadence.setTextColor(if (cue == ProximityWizardCue.WAVE) Color.rgb(227, 213, 255) else bodyColor)
         cadence.text = countdown?.toString() ?: getString(R.string.proximity_wizard_waiting_symbol)
         cadenceLabel.setText(when {
             countdown == null -> R.string.proximity_wizard_observing

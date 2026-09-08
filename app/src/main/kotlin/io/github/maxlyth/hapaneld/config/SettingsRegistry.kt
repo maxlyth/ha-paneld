@@ -236,6 +236,13 @@ object SettingsRegistry {
 
         // ---- Behaviour ---------------------------------------------------------------------------
         SettingSpec(
+            key = "auto_sleep_source", type = SettingType.ENUM, group = "Behaviour",
+            label = "Auto-sleep presence source", default = "panel", tier = Tier.BASIC, scope = Scope.DEVICE,
+            liveApply = true, options = listOf("panel", "home_assistant"),
+            help = "Use the panel’s calibrated proximity sensor, or choose Home Assistant Area devices. " +
+                "If the selected source is unavailable, automatic sleep pauses and touch remains available.",
+        ),
+        SettingSpec(
             key = "auto_sleep", type = SettingType.BOOL, group = "Behaviour",
             label = "Auto sleep", default = "false", tier = Tier.BASIC, scope = Scope.DEVICE,
             liveApply = true,

@@ -94,9 +94,19 @@ internal class ProximityPictogramView(context: Context) : View(context) {
         canvas.translate((width - 240f * scale) / 2f, (height - 160f * scale) / 2f)
         canvas.scale(scale, scale)
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 5f
-        paint.color = foreground
+        paint.strokeWidth = 2f
+        paint.color = Color.rgb(64, 86, 113)
+        canvas.drawLine(8f, 146f, 232f, 146f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(23, 43, 67)
         canvas.drawRoundRect(185f, 20f, 222f, 142f, 7f, 7f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = accent
+        canvas.drawRoundRect(185f, 20f, 222f, 142f, 7f, 7f, paint)
+        paint.color = Color.rgb(72, 124, 184)
+        canvas.drawLine(191f, 49f, 216f, 49f, paint)
+        canvas.drawLine(191f, 120f, 216f, 120f, paint)
         paint.color = accent
         canvas.drawCircle(203f, 34f, 3f, paint)
         // A double gesture is two short excursions followed by a clear pause, not continuous waving.
@@ -115,6 +125,7 @@ internal class ProximityPictogramView(context: Context) : View(context) {
             else -> 0f
         }
         val x = 50f + movement * 72f
+        paint.strokeWidth = 5f
         paint.color = foreground
         if (hand) drawHand(canvas, x, 82f) else drawPerson(canvas, x)
         when (cue) {
@@ -135,7 +146,9 @@ internal class ProximityPictogramView(context: Context) : View(context) {
     }
 
     private fun drawPerson(canvas: Canvas, x: Float) {
+        paint.style = Paint.Style.FILL
         canvas.drawCircle(x, 32f, 13f, paint)
+        paint.style = Paint.Style.STROKE
         canvas.drawLine(x, 48f, x, 98f, paint)
         canvas.drawLine(x, 59f, x - 20f, 82f, paint)
         canvas.drawLine(x, 59f, x + 20f, 82f, paint)
@@ -165,6 +178,13 @@ internal class ProximityPictogramView(context: Context) : View(context) {
             quadTo(x + 27f, y + 25f, x + 17f, y + 29f)
             lineTo(x + 17f, y + 42f)
         }
+        outline.close()
+        paint.style = Paint.Style.FILL
+        paint.color = Color.rgb(197, 222, 254)
+        canvas.drawPath(outline, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        paint.color = foreground
         canvas.drawPath(outline, paint)
     }
 
@@ -176,5 +196,63 @@ internal class ProximityPictogramView(context: Context) : View(context) {
         canvas.drawLine(to, y, to - direction * 9f, y - 6f, paint)
         canvas.drawLine(to, y, to - direction * 9f, y + 6f, paint)
         paint.strokeWidth = 5f
+    }
+}
+
+/** A countdown arc uses the engine's remaining time; it never advances the calibration itself. */
+internal class ProximityCountdownView(context: Context) : View(context) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private var fraction = 0f
+    private var targetFraction = 0f
+    private var accent = Color.rgb(113, 173, 255)
+    private var animator: ValueAnimator? = null
+
+    init {
+        importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    fun present(remainingMs: Long, durationMs: Long, color: Int) {
+        accent = color
+        val next = if (durationMs > 0) (remainingMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+        if (next != targetFraction) {
+            targetFraction = next
+            animator?.cancel()
+            val animate = runCatching {
+                Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) > 0f
+            }.getOrDefault(true)
+            if (!animate || next > fraction || !isAttachedToWindow) {
+                fraction = next
+            } else {
+                animator = ValueAnimator.ofFloat(fraction, next).apply {
+                    duration = 200
+                    interpolator = LinearInterpolator()
+                    addUpdateListener { fraction = it.animatedValue as Float; invalidate() }
+                    start()
+                }
+            }
+        }
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val stroke = 6f * resources.displayMetrics.density
+        val diameter = minOf(width, height).toFloat() - stroke
+        val left = (width - diameter) / 2f
+        val top = (height - diameter) / 2f
+        paint.strokeWidth = stroke
+        paint.color = Color.rgb(39, 59, 84)
+        canvas.drawOval(left, top, left + diameter, top + diameter, paint)
+        paint.color = accent
+        canvas.drawArc(left, top, left + diameter, top + diameter, -90f, 360f * fraction, false, paint)
+    }
+
+    override fun onDetachedFromWindow() {
+        animator?.cancel()
+        animator = null
+        super.onDetachedFromWindow()
     }
 }

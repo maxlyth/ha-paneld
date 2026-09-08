@@ -652,6 +652,14 @@ internal fun autoSleepHistoryHours(hours: String?): Int {
     return parsed
 }
 
+internal fun autoSleepRequiresHaAdmission(
+    currentEnabled: Boolean,
+    currentSource: String,
+    requestedEnabled: Boolean,
+    requestedSource: String,
+): Boolean = requestedEnabled && requestedSource == "home_assistant" &&
+    (!currentEnabled || currentSource != "home_assistant")
+
 internal fun autoSleepConfigErrorJson(error: String, message: String): String = JSONObject()
     .put("ok", false)
     .put("error", error)
@@ -6903,7 +6911,11 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
         // this complete effective snapshot before persistence, so a concurrent save cannot bypass an
         // Area prerequisite or hardened approval by changing the value while this request waits.
         val admissionBaselineHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues())
-        val enablingAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) == true && !config.autoSleep
+        val requestedAutoSleepSource = p["auto_sleep_source"] ?: config.autoSleepSource
+        val requestedAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) ?: config.autoSleep
+        val enablingAutoSleep = autoSleepRequiresHaAdmission(
+            config.autoSleep, config.autoSleepSource, requestedAutoSleep, requestedAutoSleepSource,
+        )
         var autoSleepPrerequisiteOwner: HaAuthOwner? = null
         var prerequisiteAndroidId: String? = null
         val prerequisitePanelId = config.panelId
@@ -7184,7 +7196,7 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                     if (autoSleepPrerequisiteOwner != null &&
                         (config.haAuthSnapshot().stableOwner() != autoSleepPrerequisiteOwner ||
                             config.androidId != prerequisiteAndroidId || config.panelId != prerequisitePanelId ||
-                            config.autoSleep)
+                            (config.autoSleep && config.autoSleepSource == "home_assistant"))
                     ) {
                         autoSleepPrerequisiteStale = true
                         return@synchronizedTransaction false
