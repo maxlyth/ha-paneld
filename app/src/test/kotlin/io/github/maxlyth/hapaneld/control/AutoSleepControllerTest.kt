@@ -42,7 +42,7 @@ class AutoSleepControllerTest {
             h.await { h.status().getBoolean("available") }
             h.now.set(MIN_AUTO_SLEEP_LEASE_MS)
             h.controller.advanceToForTest(h.now.get())
-            h.await { h.screen.isIntendedOff() }
+            h.await { h.screenChanges.contains(false) }
             h.now.addAndGet(MINUTE)
             h.wakeTap.fireTap()
             h.await { learning.corrections.size == 1 }
@@ -777,6 +777,7 @@ class AutoSleepControllerTest {
             wakeTap, ScreenOff.DAEMON_BLPOWER,
         )
         val requests = CopyOnWriteArrayList<HaPresenceRequest>()
+        val screenChanges = CopyOnWriteArrayList<Boolean>()
         val managerClosed = AtomicBoolean()
         val managerRefreshes = AtomicLong()
         private val enabledState = AtomicBoolean(enabled)
@@ -787,6 +788,7 @@ class AutoSleepControllerTest {
             configuration = { AutoSleepRuntimeConfig(enabledState.get(), "android", "panel", "https://ha", source = source) },
             learning = learning,
             onNoArea = onNoArea,
+            onScreenChanged = screenChanges::add,
             elapsedRealtime = now::get,
             epochMillis = wallNow::get,
             workerDispatcher = workerDispatcher,
