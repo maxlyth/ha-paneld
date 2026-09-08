@@ -83,21 +83,29 @@ class BootstrapTest(unittest.TestCase):
         with self.assertRaises(BOOTSTRAP.catalogue.CatalogueError):
             BOOTSTRAP.validate_plan(plan, self.source_path)
 
-    def test_empty_xml_placeholders_round_trip_frozen_text(self):
+    def test_protected_literals_never_enter_provider_text(self):
         record = {
             "key": "settings.example.label",
             "english": "Use Home Assistant with {name}",
+            "context": "Example setting.",
             "placeholders": ["{name}"],
             "frozen": ["Home Assistant"],
+            "maximumBilledCharacters": len("Use  with "),
         }
-        protected, values = BOOTSTRAP._protected_xml(record)
-        self.assertEqual(protected, 'Use <x id="0"/> with <x id="1"/>')
-        self.assertEqual(
-            BOOTSTRAP._restore_xml('Gebruik <x id="0"/> met <x id="1"/>', values, record["key"]),
-            "Gebruik Home Assistant met {name}",
-        )
-        with self.assertRaisesRegex(BOOTSTRAP.deepl.DeepLError, "missing protected token"):
-            BOOTSTRAP._restore_xml('Gebruik <x id="0"/>', values, record["key"])
+        parts, texts = BOOTSTRAP._split_record(record)
+        self.assertEqual(parts, [("text", 0), ("literal", "{name}")])
+        self.assertEqual(texts, ["Use Home Assistant with "])
+        fake = FakeHttp(["Gebruik Home Assistant met"])
+        translated, _ = BOOTSTRAP._translate_batch("nl", [record], "key:fx", fake)
+        self.assertEqual(translated, ["Gebruik Home Assistant met {name}"])
+        body = json.loads(fake.requests[0].data)
+        self.assertEqual(body["text"], ["Use Home Assistant with "])
+        self.assertIn("Home Assistant", body["text"][0])
+        self.assertNotIn("{name}", body["text"])
+        with self.assertRaisesRegex(BOOTSTRAP.deepl.DeepLError, "changed frozen literal"):
+            BOOTSTRAP._translate_batch(
+                "nl", [record], "key:fx", FakeHttp(["Gebruik Thuisassistent met"]),
+            )
 
     def test_generate_batches_and_emits_review_only_artifact(self):
         plan = BOOTSTRAP.build_plan(self.source_path, ["uk"], REVISION)
@@ -119,6 +127,7 @@ class BootstrapTest(unittest.TestCase):
         self.assertEqual(first_body["model_type"], "prefer_quality_optimized")
         self.assertEqual(first_body["formality"], "prefer_less")
         self.assertNotIn("ignore_tags", first_body)
+        self.assertNotIn("tag_handling", first_body)
         self.assertNotIn("custom_instructions", first_body)
 
     def test_quota_preflight_prevents_translation(self):

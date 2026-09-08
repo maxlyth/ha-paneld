@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import hashlib
-import html
 import json
 import os
 from pathlib import Path
@@ -14,7 +13,6 @@ import re
 import shutil
 import tempfile
 from typing import Any
-import xml.etree.ElementTree as ElementTree
 
 import i18n_catalogue as catalogue
 import i18n_deepl as deepl
@@ -39,51 +37,63 @@ def _records(source: dict[str, Any]) -> list[dict[str, Any]]:
     records = []
     for key, value in source["strings"].items():
         record = deepl._selected_record(key, value, source)
-        record["maximumBilledCharacters"] = len(_protected_xml(record)[0])
+        record["maximumBilledCharacters"] = sum(len(text) for text in _split_record(record)[1])
         records.append(record)
     return records
 
 
-def _protected_xml(record: dict[str, Any]) -> tuple[str, dict[str, str]]:
-    """Replace immutable text with empty XML placeholders DeepL can move but not rewrite."""
-    tokens = list(record["placeholders"]) + list(record["frozen"])
+def _split_record(record: dict[str, Any]) -> tuple[list[tuple[str, str | int]], list[str]]:
+    """Separate provider text from immutable literals for local-only reassembly."""
+    tokens = list(record["placeholders"])
     if not tokens:
-        return html.escape(record["english"], quote=False), {}
+        return [("text", 0)], [record["english"]]
     if any(token not in record["english"] for token in set(tokens)):
         raise deepl.DeepLError(f"{record['key']}: protected-token metadata does not match English")
     alternatives = "|".join(re.escape(token) for token in sorted(set(tokens), key=len, reverse=True))
-    protected: dict[str, str] = {}
-    chunks: list[str] = []
+    parts: list[tuple[str, str | int]] = []
+    texts: list[str] = []
     cursor = 0
     for match in re.finditer(alternatives, record["english"]):
-        chunks.append(html.escape(record["english"][cursor:match.start()], quote=False))
-        identifier = str(len(protected))
-        protected[identifier] = match.group(0)
-        chunks.append(f'<x id="{identifier}"/>')
+        prefix = record["english"][cursor:match.start()]
+        if prefix.strip():
+            parts.append(("text", len(texts)))
+            texts.append(prefix)
+        elif prefix:
+            parts.append(("literal", prefix))
+        parts.append(("literal", match.group(0)))
         cursor = match.end()
-    chunks.append(html.escape(record["english"][cursor:], quote=False))
-    return "".join(chunks), protected
+    suffix = record["english"][cursor:]
+    if suffix.strip():
+        parts.append(("text", len(texts)))
+        texts.append(suffix)
+    elif suffix:
+        parts.append(("literal", suffix))
+    return parts, texts
 
 
-def _restore_xml(value: str, protected: dict[str, str], key: str) -> str:
-    try:
-        root = ElementTree.fromstring(f"<root>{value}</root>")
-    except ElementTree.ParseError as error:
-        raise deepl.DeepLError(f"{key}: malformed translated XML") from error
-    result = root.text or ""
-    seen: set[str] = set()
-    for child in root:
-        if child.tag != "x" or set(child.attrib) != {"id"} or list(child) or child.text:
-            raise deepl.DeepLError(f"{key}: unexpected translated XML structure")
-        identifier = child.attrib["id"]
-        if identifier not in protected or identifier in seen:
-            raise deepl.DeepLError(f"{key}: changed protected token")
-        seen.add(identifier)
-        result += protected[identifier]
-        result += child.tail or ""
-    if seen != set(protected):
-        raise deepl.DeepLError(f"{key}: missing protected token")
-    return result
+def _restore_boundary_whitespace(source: str, translated: str) -> str:
+    leading = source[:len(source) - len(source.lstrip())]
+    trailing = source[len(source.rstrip()):]
+    return leading + translated.strip() + trailing
+
+
+def _record_batches(records: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    batches: list[list[dict[str, Any]]] = []
+    batch: list[dict[str, Any]] = []
+    text_count = 0
+    for record in records:
+        record_text_count = len(_split_record(record)[1])
+        if record_text_count > MAX_TEXTS_PER_REQUEST:
+            raise deepl.DeepLError(f"{record['key']}: too many independently translated segments")
+        if batch and text_count + record_text_count > MAX_TEXTS_PER_REQUEST:
+            batches.append(batch)
+            batch = []
+            text_count = 0
+        batch.append(record)
+        text_count += record_text_count
+    if batch:
+        batches.append(batch)
+    return batches
 
 
 def build_plan(source_path: Path, locales: list[str], base_revision: str) -> dict[str, Any]:
@@ -165,7 +175,7 @@ def _capabilities(locales: list[str], api_key: str, http: deepl.HTTP) -> None:
 
 def _context(records: list[dict[str, Any]]) -> str:
     meanings = "\n".join(
-        f"{record['key']}: {record['context']}"
+        f"{record['key']}: {record['context']} English: {record['english']}"
         for record in records
     )
     return (
@@ -186,8 +196,6 @@ def _request_body(locale: str, records: list[dict[str, Any]], texts: list[str]) 
         "show_billed_characters": True,
         "formality": formality,
         "model_type": "prefer_quality_optimized",
-        "tag_handling": "xml",
-        "tag_handling_version": "v2",
         "preserve_formatting": True,
     }
 
@@ -198,19 +206,28 @@ def _translate_batch(
     api_key: str,
     http: deepl.HTTP,
 ) -> tuple[list[str], int]:
-    protected = [_protected_xml(record) for record in records]
+    layouts: list[list[tuple[str, str | int]]] = []
+    texts: list[str] = []
+    for record in records:
+        parts, record_texts = _split_record(record)
+        offset = len(texts)
+        layouts.append([
+            (kind, value + offset if kind == "text" else value)
+            for kind, value in parts
+        ])
+        texts.extend(record_texts)
     response = deepl._request_json(
         "/v2/translate", api_key, http,
-        _request_body(locale, records, [item[0] for item in protected]),
+        _request_body(locale, records, texts),
     )
     translations = response.get("translations") if isinstance(response, dict) else None
-    if not isinstance(translations, list) or len(translations) != len(records):
+    if not isinstance(translations, list) or len(translations) != len(texts):
         raise deepl.DeepLError("translation response does not match bootstrap batch")
-    output: list[str] = []
+    translated_texts: list[str] = []
     billed_total = 0
-    for record, protection, translated in zip(records, protected, translations, strict=True):
+    for source_text, translated in zip(texts, translations, strict=True):
         if not isinstance(translated, dict):
-            raise deepl.DeepLError(f"{record['key']}: malformed translation response")
+            raise deepl.DeepLError("malformed translation response")
         text, billed = translated.get("text"), translated.get("billed_characters")
         if (
             not isinstance(text, str)
@@ -218,10 +235,18 @@ def _translate_batch(
             or isinstance(billed, bool)
             or not isinstance(billed, int)
             or billed < 0
-            or billed > record["maximumBilledCharacters"]
+            or billed > len(source_text)
         ):
-            raise deepl.DeepLError(f"{record['key']}: malformed translation result")
-        restored = _restore_xml(text, protection[1], record["key"])
+            raise deepl.DeepLError("malformed translation result")
+        translated_texts.append(_restore_boundary_whitespace(source_text, text))
+        billed_total += billed
+
+    output: list[str] = []
+    for record, layout in zip(records, layouts, strict=True):
+        restored = "".join(
+            translated_texts[value] if kind == "text" else value
+            for kind, value in layout
+        )
         source_record = record
         if len(restored) > catalogue.MAX_TARGET_TEXT_CHARS:
             raise deepl.DeepLError(f"{record['key']}: translated text is unreasonably large")
@@ -231,7 +256,6 @@ def _translate_batch(
             raise deepl.DeepLError(f"{record['key']}: changed frozen literal")
         catalogue.validate_target_text_hygiene(record["key"], restored)
         output.append(restored)
-        billed_total += billed
     return output, billed_total
 
 
@@ -260,8 +284,7 @@ def generate(
     try:
         for locale in plan["locales"]:
             translated: list[dict[str, str]] = []
-            for offset in range(0, len(records), MAX_TEXTS_PER_REQUEST):
-                batch = records[offset:offset + MAX_TEXTS_PER_REQUEST]
+            for batch in _record_batches(records):
                 texts, billed = _translate_batch(locale, batch, api_key, http)
                 billed_total += billed
                 translated.extend(
