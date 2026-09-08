@@ -2029,13 +2029,13 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.action": {
-      "text": "Voir la progression ou enregistrer un geste",
-      "sourceHash": "57564a7788a6a1a13cab9ef247bb024ce97fb9745f0e767eb0ff40e47674a4af",
+      "text": "Ouvrir la configuration de proximité",
+      "sourceHash": "f9d5be8cab3ce30fbc94c115eb102ec4df35d57cb57e2f8d3b070f303e79de2f",
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.title": {
-      "text": "Réveil au geste : apprentissage",
-      "sourceHash": "c344400e0be09185e362531c8c91287fc095b1303c78d556a83b4a323c738010",
+      "text": "Réveil par geste indisponible",
+      "sourceHash": "13fee9fb24fd087f47f147bc51dec39d5c598dd73006d3c8417b837a5128ca7f",
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.touch_available": {

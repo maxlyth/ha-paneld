@@ -2029,14 +2029,14 @@
       "text": "MQTT está configurado. Siguiente: elige un renderizador de panel de control."
     },
     "dashboard.banner.proximity_learning.action": {
-      "sourceHash": "57564a7788a6a1a13cab9ef247bb024ce97fb9745f0e767eb0ff40e47674a4af",
+      "sourceHash": "f9d5be8cab3ce30fbc94c115eb102ec4df35d57cb57e2f8d3b070f303e79de2f",
       "state": "machine-cross-checked",
-      "text": "Ver progreso o enseñar el gesto de activación"
+      "text": "Abrir configuración de proximidad"
     },
     "dashboard.banner.proximity_learning.title": {
-      "sourceHash": "c344400e0be09185e362531c8c91287fc095b1303c78d556a83b4a323c738010",
+      "sourceHash": "13fee9fb24fd087f47f147bc51dec39d5c598dd73006d3c8417b837a5128ca7f",
       "state": "machine-cross-checked",
-      "text": "Aprendiendo a activar al pasar la mano"
+      "text": "Activación con la mano no disponible"
     },
     "dashboard.banner.proximity_learning.touch_available": {
       "sourceHash": "903915dd8ee56238ac39ddd50edf407ff66796e29173afbeb3da700f6838c234",

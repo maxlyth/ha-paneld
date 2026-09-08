@@ -5800,10 +5800,18 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             }.orEmpty()
         }
         val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner(strings) else ""
-        val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
-            """<div class="setup">👋 <b>${esc(strings.get("dashboard.banner.proximity_learning.title"))}</b> — ${esc(localizedProximitySummary(sensors.proximitySummary(), strings))}. """ +
+        val proximityState = JSONObject(sensors.proximityJson())
+        val proximityLearning = ProximityStatusBanner.titleKey(
+            enabled = config.wakeOnWave,
+            present = proximityState.optBoolean("present", false),
+            phase = proximityState.optString("phase"),
+            health = proximityState.optString("health"),
+            active = proximityState.optBoolean("sessionActive", false),
+            wakeReady = proximityState.optBoolean("wakeReady", false),
+        )?.let { title ->
+            """<div class="setup">👋 <b>${esc(strings.get(title))}</b>. """ +
                 """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("/configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
-        } else ""
+        }.orEmpty()
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
         // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
         // The WebView verdict is from the REAL engine version (WebView UA), not the stamped package version
