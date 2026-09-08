@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const source = await readFile(process.argv[2] || new URL('../app/src/main/assets/info.js', import.meta.url), 'utf8');
+const source = await readFile(process.argv[2] || new URL('../../app/src/main/assets/info.js', import.meta.url), 'utf8');
 const context = vm.createContext({ i18nText: (_key, text, args = {}) => text.replace(/\{(\w+)\}/g, (_, key) => String(args[key])) });
 vm.runInContext(source.slice(source.indexOf('function proximityPhase('), source.indexOf('function sensorsCard(')), context);
 const reading = value => JSON.parse(JSON.stringify(context.proximityReading(value)));

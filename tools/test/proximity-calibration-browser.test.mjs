@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const asset = await readFile(new URL('../app/src/main/assets/proximity-learning.js', import.meta.url), 'utf8');
-const stylesheet = await readFile(process.argv[2] || new URL('../app/src/main/assets/info.css', import.meta.url), 'utf8');
+const asset = await readFile(new URL('../../app/src/main/assets/proximity-learning.js', import.meta.url), 'utf8');
+const stylesheet = await readFile(process.argv[2] || new URL('../../app/src/main/assets/info.css', import.meta.url), 'utf8');
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 

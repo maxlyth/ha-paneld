@@ -400,7 +400,7 @@ This release also strengthens dependency and release verification, updates the s
 ### Added
 
 - **Panel support can be added or refined through validated YAML profiles** — the new Profile page can inspect the active bundled profile, edit or import a profile, preview validation, activate a revision, return to automatic selection and roll back to the last working revision. Profiles select bounded drivers and curated artifacts supported by ha-paneld; they cannot introduce shell commands, arbitrary paths, credentials or executable code. An unknown panel can also create a conservative draft from passive diagnostics for refinement and sharing, while bundled profiles include comments explaining how important values were established.
-- **Optional [Shizuku enhanced access](docs/provisioning.md#shizuku-fallback-for-unrooted-panels) is available for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots, key and tap input, and signer-verified ha-paneld or minimal Home Assistant Companion installs. It does not provide root or the root-only hardware, system and private-data capabilities. The approval cannot be enabled remotely, and a service started through ADB normally needs rearming after a reboot.
+- **Optional [Shizuku enhanced access](provisioning.md#shizuku-fallback-for-unrooted-panels) is available for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots, key and tap input, and signer-verified ha-paneld or minimal Home Assistant Companion installs. It does not provide root or the root-only hardware, system and private-data capabilities. The approval cannot be enabled remotely, and a service started through ADB normally needs rearming after a reboot.
 - **Provisioning can prepare the optional Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and points to the local approval screen. A trusted same or newer manager is retained on a repeated run.
 
 ### Changed
@@ -447,7 +447,7 @@ This release also strengthens dependency and release verification, updates the s
 ### Added
 
 - **Panel support can be added or refined through validated YAML profiles** — the new Profile page can inspect the active bundled profile, edit or import a profile, preview validation, activate a revision, return to automatic selection and roll back to the last working revision. Profiles select bounded drivers and curated artifacts compiled into ha-paneld; they cannot introduce shell commands, arbitrary paths, credentials or executable code. An unknown panel can also create a conservative draft from passive diagnostics for refinement and sharing.
-- **Optional [Shizuku enhanced access](docs/provisioning.md#shizuku-fallback-for-unrooted-panels) for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots and key/tap input, and signer-verified ha-paneld / minimal Home Assistant Companion installs. It does not provide root, arbitrary APK uploads, System WebView replacement, private Companion data, system logs, reboot, backlight hard-off, LED/relay access, CPU governor, kiosk lock or vendor taming. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
+- **Optional [Shizuku enhanced access](provisioning.md#shizuku-fallback-for-unrooted-panels) for genuinely unrooted panels** — after the checksum-pinned Shizuku manager is installed and its service started, the user can approve ha-paneld locally to gain display sizing, screenshots and key/tap input, and signer-verified ha-paneld / minimal Home Assistant Companion installs. It does not provide root, arbitrary APK uploads, System WebView replacement, private Companion data, system logs, reboot, backlight hard-off, LED/relay access, CPU governor, kiosk lock or vendor taming. The approval cannot be enabled by MQTT, the web API, a restored backup or a fleet push. A service started through ADB normally needs rearming after a reboot.
 - **Provisioning can prepare the Shizuku path without hiding the remaining on-panel step** — `provision.sh --shizuku` verifies or installs the pinned manager, starts its ADB service and then points to the exact local approval screen. A trusted same or newer manager is retained on a repeated run. Automatic manager replacement is deliberately not part of this release candidate because an update can stop the Shizuku service and require rearming.
 
 ### Changed
@@ -1080,7 +1080,7 @@ Highlights since 0.8.3: a hardened privileged helper, the full control surface o
 
 ### Docs
 
-- **F-Droid install guide** — [docs/fdroid.md](docs/fdroid.md): add the ha-paneld F-Droid repository and install / auto-update straight on the panel, no PC.
+- **F-Droid install guide** — [docs/fdroid.md](fdroid.md): add the ha-paneld F-Droid repository and install / auto-update straight on the panel, no PC.
 
 ## v0.8.2 - 2026-06-16
 
@@ -1163,7 +1163,7 @@ Hardware buttons, CPU/display controls, and per-panel identity.
 - **Display sizing** *(experimental / R&D)* — set display **density** and **text size** to match an HA
   dashboard to a desktop browser (Android panels often ship these mismatched to the physical screen).
   Root panels only; the right per-panel values aren't dialled in yet — see
-  [docs/display-sizing.md](docs/display-sizing.md).
+  [docs/display-sizing.md](display-sizing.md).
 - **Per-panel HA device identity** — manufacturer/model defaults per panel (Sonoff / NSPanel Pro,
   Tuya / TPA10, Electron / WF1589T, Smatek / S9E; inferred from `Build.*` on unknown panels). The
   default model carries a " (ha-paneld)" suffix so the device is distinguishable from a co-installed
@@ -1185,12 +1185,12 @@ Architecture-focused release (no new entities).
   active profile (detected once at startup) instead of hardcoding device specifics, while still
   runtime-probing to confirm. An unrecognised panel falls back to a Generic profile and works for
   whatever it physically has. The detected platform is shown on the info page. No change to the HA
-  entities. Design: [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md).
+  entities. Design: [docs/architecture/device-profiles.md](architecture/device-profiles.md).
 - **Security hardening** — the Zigbee role-switch is allowlisted before any shell interpolation; the
   security posture (LAN-trust, network-layer access control, HA-auth as the future path) is documented
-  in [docs/architecture/security.md](docs/architecture/security.md).
+  in [docs/architecture/security.md](architecture/security.md).
 - **Docs** — a "Why not Fully Kiosk?" section; releases are now cut as contenders (tagged only on
-  approval), per [docs/RELEASING.md](docs/RELEASING.md).
+  approval), per [docs/RELEASING.md](RELEASING.md).
 
 ## v0.6.3 - 2026-06-05
 
@@ -1201,7 +1201,7 @@ Small fixes and polish; documents the 0.7.0 roadmap.
 - **Fleet update fix** — `scripts/update-fleet.sh` no longer reads panels from a non-tty stdin when they
   were given as args (a pipeline/CI stdin had clobbered the panel list).
 - **Roadmap** — documents the **0.7.0 device-profile architecture refactor** (architecture only, no new
-  features): [docs/architecture/device-profiles.md](docs/architecture/device-profiles.md). DLNA renderer
+  features): [docs/architecture/device-profiles.md](architecture/device-profiles.md). DLNA renderer
   reframed as under-consideration (it would be a separate HA device; the TTS recipe already covers announce).
 
 ## v0.6.2 - 2026-06-05
@@ -1256,7 +1256,7 @@ Zigbee router control for the Sonoff NSPanel Pro (the only panel with a Zigbee r
   (`/sys/class/st_relay`, gated on presence), and the four buttons reported as `event.<panel>_button`
   (`KEYCODE_F1`–`F4`). Derived from vendor paths in seaky#98; no S9E was available to validate, and the
   relays switch mains loads — treat as experimental. Button LEDs + proximity radar documented, not yet
-  wired. See [docs/hardware/s9e.md](docs/hardware/s9e.md).
+  wired. See [docs/hardware/s9e.md](hardware/s9e.md).
 
 ## v0.6.0 - 2026-06-05
 
@@ -1341,7 +1341,7 @@ Self-diagnostics, so you can tell what works on *your* panel — and get help wh
   firmware.
 - **`/diag` dump** — one-click hardware / firmware / SELinux / sensor report to paste into a bug
   report, so a panel can be diagnosed without the maintainer owning that hardware.
-- New **[performance tuning guide](docs/performance.md)** — why HA wall panels get slow (the
+- New **[performance tuning guide](performance.md)** — why HA wall panels get slow (the
   WebSocket event firehose) and how to fix it.
 
 ## v0.4.1 - 2026-06-04

@@ -39,7 +39,7 @@ docs/icon-preview.png
 /.docs-assets/
 
 # UI layout-test deps (playwright-core)
-test/node_modules/
+tools/test/node_modules/
 
 # Documentation localization tool dependencies
 /tools/docs-i18n/node_modules/

@@ -171,7 +171,7 @@ Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweitert
 - [Panelprofile](../profiles/): Unterstützung für ein weiteres Panel erstellen, testen und teilen, ohne die App neu zu bauen.
 - [Hardware-Referenzen](../hardware/): modellspezifische Einrichtung, Sensoren, Bedienelemente, Firmware und Hinweise zum Reverse Engineering.
 - [Aus dem Quellcode bauen](../building.md) und [lokale Entwicklung](../local-builds.md): mit Docker, dem Entwicklungscontainer oder einer lokalen Android-Toolchain bauen.
-- [Roadmap](../roadmap.md): geplante Arbeiten. Abgeschlossene Arbeiten sind im [Änderungsprotokoll](../../CHANGELOG.md) dokumentiert.
+- [Roadmap](../roadmap.md): geplante Arbeiten. Abgeschlossene Arbeiten sind im [Änderungsprotokoll](../CHANGELOG.md) dokumentiert.
 
 Die Seite `GET /diag` des Panels erstellt für Fehlerberichte einen Bericht über Hardware, Firmware und Funktionen. Prüfe und schwärze ihn, bevor du ihn öffentlich teilst.
 
@@ -218,7 +218,7 @@ Das Ergebnis ist immer offen: Dein Panel wird zu einem Profil, das alle verwende
 
 ## Entwicklung
 
-Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](../api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
+Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](../api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../tools/test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
 
 Ich habe bewusst genügend Informationen bereitgestellt, um den mitgelieferten Entwicklungscontainer zu verwenden und eine lokale Testversion zu erstellen. Reiche computergenerierte Pull Requests oder Issues nicht unverändert ein: Lies und verstehe jeden Teil des vorgeschlagenen Textes und Codes und formuliere ihn anschließend in deinen eigenen Worten neu. Dies ist ein Ein-Personen-Projekt, und ich habe keine Zeit, ungefilterte computergenerierte Ausgaben zu prüfen. Fasse dich kurz und schreibe für Menschen; wenn du dir bei etwas unsicher bist, frage zuerst nach.
 

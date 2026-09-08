@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const htmlAsset = fileURLToPath(new URL('../app/src/main/assets/api.html', import.meta.url));
-const apiAsset = fileURLToPath(new URL('../app/src/main/assets/api.js', import.meta.url));
-const helperAsset = fileURLToPath(new URL('../app/src/main/assets/i18n.js', import.meta.url));
-const englishCatalogue = fileURLToPath(new URL('../app/src/main/assets/i18n/en.json', import.meta.url));
+const htmlAsset = fileURLToPath(new URL('../../app/src/main/assets/api.html', import.meta.url));
+const apiAsset = fileURLToPath(new URL('../../app/src/main/assets/api.js', import.meta.url));
+const helperAsset = fileURLToPath(new URL('../../app/src/main/assets/i18n.js', import.meta.url));
+const englishCatalogue = fileURLToPath(new URL('../../app/src/main/assets/i18n/en.json', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 
 const newKeys = Object.freeze([

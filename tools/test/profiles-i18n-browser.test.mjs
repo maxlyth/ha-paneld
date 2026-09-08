@@ -6,10 +6,10 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const asset = fileURLToPath(new URL('../app/src/main/assets/profiles.js', import.meta.url));
-const editorBundle = fileURLToPath(new URL('../app/src/main/assets/vendor/profile-editor/codemirror.js', import.meta.url));
-const contracts = fileURLToPath(new URL('../app/src/main/kotlin/io/github/maxlyth/hapaneld/device/profile/ProfileContracts.kt', import.meta.url));
-const englishCatalogue = fileURLToPath(new URL('../app/src/main/assets/i18n/en.json', import.meta.url));
+const asset = fileURLToPath(new URL('../../app/src/main/assets/profiles.js', import.meta.url));
+const editorBundle = fileURLToPath(new URL('../../app/src/main/assets/vendor/profile-editor/codemirror.js', import.meta.url));
+const contracts = fileURLToPath(new URL('../../app/src/main/kotlin/io/github/maxlyth/hapaneld/device/profile/ProfileContracts.kt', import.meta.url));
+const englishCatalogue = fileURLToPath(new URL('../../app/src/main/assets/i18n/en.json', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 
@@ -142,7 +142,7 @@ browserTest('The real bundled editor renders localized search and go-to-line chr
     'zh-Hans': ['查找', '替换', '下一个', '上一个', '全选', '区分大小写', '正则表达式', '全字匹配', '替换', '全部替换', '关闭', '转到行', '转到'],
   };
   const catalogues = Object.fromEntries(await Promise.all(Object.keys(expected).map(async (locale) => {
-    const document = JSON.parse(await readFile(new URL(`../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8'));
+    const document = JSON.parse(await readFile(new URL(`../../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8'));
     return [locale, Object.fromEntries(Object.entries(document.strings).map(([key, record]) => [key, record.text]))];
   })));
 

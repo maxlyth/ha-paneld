@@ -21,7 +21,7 @@ not a gate.
 ## Run it
 
 ```bash
-cd test && npm ci                # exact playwright-core version from package-lock.json (no browser download)
+cd tools/test && npm ci                # exact playwright-core version from package-lock.json (no browser download)
 # needs a chromium: apk add chromium / apt-get install chromium ; or set CHROME=
 CHROME=/usr/bin/chromium node layout-matrix.mjs              # report
 CHROME=/usr/bin/chromium node layout-matrix.mjs --update-baseline   # rewrite baseline.json
@@ -31,7 +31,7 @@ Env: `CHROME` (chromium path), `SECS` (poll window per run), `RUNS` (odd page-lo
 
 ## CI
 
-[`.github/workflows/ui-layout.yml`](../.github/workflows/ui-layout.yml) runs the matrix on changes to
+[`.github/workflows/ui-layout.yml`](../../.github/workflows/ui-layout.yml) runs the matrix on changes to
 `app/src/main/assets/**` or `test/**` and writes the table to the job summary. The job is
 `continue-on-error` — **green regardless** of CLS.
 

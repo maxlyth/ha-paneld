@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const asset = process.argv[2] || new URL('../app/src/main/assets/logs.js', import.meta.url);
+const asset = process.argv[2] || new URL('../../app/src/main/assets/logs.js', import.meta.url);
 
 function element(id) {
   return {

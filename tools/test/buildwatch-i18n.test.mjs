@@ -3,8 +3,8 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const asset = new URL('../app/src/main/assets/buildwatch.js', import.meta.url);
-const englishCatalogueAsset = new URL('../app/src/main/assets/i18n/en.json', import.meta.url);
+const asset = new URL('../../app/src/main/assets/buildwatch.js', import.meta.url);
+const englishCatalogueAsset = new URL('../../app/src/main/assets/i18n/en.json', import.meta.url);
 const englishCatalogue = JSON.parse(await readFile(englishCatalogueAsset, 'utf8')).strings;
 
 function node(id = '') {

@@ -171,7 +171,7 @@ Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](p
 - [Profili dei pannelli](../profiles/): crea, testa e condividi il supporto per un altro pannello senza ricompilare l'app.
 - [Riferimenti hardware](../hardware/): configurazione specifica per modello, sensori, controlli, firmware e note sul reverse engineering.
 - [Compilazione dal codice sorgente](../building.md) e [sviluppo locale](../local-builds.md): compila con Docker, il container di sviluppo o una toolchain Android locale.
-- [Roadmap](../roadmap.md): attività pianificate. Le attività completate sono registrate nel [changelog](../../CHANGELOG.md).
+- [Roadmap](../roadmap.md): attività pianificate. Le attività completate sono registrate nel [changelog](../CHANGELOG.md).
 
 La pagina `GET /diag` del pannello genera un report su hardware, firmware e funzionalità da allegare alle segnalazioni di bug. Controllalo e oscura i dati sensibili prima di pubblicarlo.
 
@@ -218,7 +218,7 @@ Il risultato è sempre aperto: il tuo pannello diventa un profilo utilizzabile d
 
 ## Sviluppo
 
-Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../test/README.md) e il [processo di rilascio](../RELEASING.md).
+Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../tools/test/README.md) e il [processo di rilascio](../RELEASING.md).
 
 Ho fornito deliberatamente informazioni sufficienti per usare il container di sviluppo incluso e creare una versione di test locale. Non inviare pull request o issue generate automaticamente senza modificarle: leggi e comprendi ogni parte del testo e del codice proposti, quindi riscrivili con parole tue. Questo progetto è gestito da una sola persona e non ho tempo di esaminare contenuti generati automaticamente e non filtrati. Sii conciso e scrivi per le persone; se hai dubbi su qualcosa, chiedi prima.
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import vm from 'node:vm';
 
-const defaultAsset = fileURLToPath(new URL('../app/src/main/assets/switcher.js', import.meta.url));
+const defaultAsset = fileURLToPath(new URL('../../app/src/main/assets/switcher.js', import.meta.url));
 const switcherAsset = process.argv[2] ? resolve(process.argv[2]) : defaultAsset;
 const ENGLISH_TITLE = 'Switch to another ha-paneld panel (keeps the current view)';
 

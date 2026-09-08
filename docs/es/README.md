@@ -171,7 +171,7 @@ Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-p
 - [Perfiles de panel](../profiles/): crea, prueba y comparte compatibilidad con otro panel sin volver a compilar la aplicación.
 - [Referencias de hardware](../hardware/): configuración específica de cada modelo, sensores, controles, firmware y notas de ingeniería inversa.
 - [Compilación desde el código fuente](../building.md) y [desarrollo local](../local-builds.md): compila con Docker, el contenedor de desarrollo o una cadena de herramientas de Android local.
-- [Hoja de ruta](../roadmap.md): trabajo previsto. El trabajo completado se registra en el [registro de cambios](../../CHANGELOG.md).
+- [Hoja de ruta](../roadmap.md): trabajo previsto. El trabajo completado se registra en el [registro de cambios](../CHANGELOG.md).
 
 La página `GET /diag` del panel genera un informe de hardware, firmware y capacidades para los informes de errores. Revísalo y elimina los datos confidenciales antes de publicarlo.
 
@@ -218,7 +218,7 @@ El resultado siempre es abierto: tu panel se convierte en un perfil que todo el 
 
 ## Desarrollo
 
-Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](../api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../test/README.md) y el [proceso de publicación](../RELEASING.md).
+Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](../api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../tools/test/README.md) y el [proceso de publicación](../RELEASING.md).
 
 He proporcionado deliberadamente suficiente información para usar el contenedor de desarrollo suministrado y compilar una versión de prueba local. No envíes solicitudes de cambios ni informes de problemas generados por ordenador sin modificarlos: lee y comprende cada parte del texto y del código propuestos y, después, reescríbelos con tus propias palabras. Este proyecto está a cargo de una sola persona y no tengo tiempo para revisar contenido generado por ordenador sin filtrar. Sé conciso y escribe para personas; si tienes dudas sobre algo, pregunta primero.
 

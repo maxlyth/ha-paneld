@@ -2,7 +2,7 @@ name: Release
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release dry run · {0}', inputs.release_tag) || format('Release {0}', github.ref_name) }}
 
 # Before tagging, run the pre-tag checklist in docs/RELEASING.md. Editorial release docs are manual:
-# write the CHANGELOG.md section, reconcile README claims, and move shipped items out of "Planned"
+# write the docs/CHANGELOG.md section, reconcile README claims, and move shipped items out of "Planned"
 # in docs/roadmap.md. The dynamic README release badge follows GitHub releases.
 
 on:
@@ -335,13 +335,13 @@ jobs:
           grep -Fq "PROVISION_COMMIT=\"$SOURCE_COMMIT\"" "$installer"
           grep -Fq "RELEASE_HELPER_BUILD_ID=\"$HELPER_BUILD_ID\"" "$provisioner"
 
-      # Human-readable notes come only from the matching CHANGELOG.md section, keeping the approved
+      # Human-readable notes come only from the matching docs/CHANGELOG.md section, keeping the approved
       # consumer-facing body exact for both prereleases and stable releases.
       #
       # Section lookup — exact match first, base-version fallback:
       #   v0.8.4-rc3  →  look for "## v0.8.4-rc3"  (per-RC incremental notes)
       #   v0.8.4      →  look for "## v0.8.4"       (cumulative stable notes)
-      # Each RC must have its own CHANGELOG section describing only what changed since
+      # Each RC must have its own docs/CHANGELOG.md section describing only what changed since
       # the previous RC — repeating the prior section causes identical release notes.
       - name: Extract release notes from CHANGELOG
         run: |
@@ -349,12 +349,12 @@ jobs:
           base="${tag%%-*}"     # v0.8.4-rc3 → v0.8.4 (used only as fallback for stable)
 
           extract() {
-            awk -v t="$1" '/^## /{ if(found) exit; if($2==t){ found=1; next } } found' CHANGELOG.md
+            awk -v t="$1" '/^## /{ if(found) exit; if($2==t){ found=1; next } } found' docs/CHANGELOG.md
           }
 
           extract "$tag" > release-input/release-body.md
           if [ ! -s release-input/release-body.md ] && [ "$tag" != "$base" ]; then
-            echo "::error::No CHANGELOG.md section for $tag — each RC needs its own ## $tag entry describing what changed since the previous RC. Add it before tagging."
+            echo "::error::No docs/CHANGELOG.md section for $tag — each RC needs its own ## $tag entry describing what changed since the previous RC. Add it before tagging."
             exit 1
           fi
           if [ ! -s release-input/release-body.md ]; then
@@ -362,10 +362,10 @@ jobs:
           fi
           if [ ! -s release-input/release-body.md ]; then
             if [ "$GITHUB_EVENT_NAME" = push ]; then
-              echo "::error::No CHANGELOG.md section for stable release $tag. Add an exact ## $tag entry before tagging."
+              echo "::error::No docs/CHANGELOG.md section for stable release $tag. Add an exact ## $tag entry before tagging."
               exit 1
             fi
-            echo "::warning::Dry run has no CHANGELOG.md section for stable candidate $tag."
+            echo "::warning::Dry run has no docs/CHANGELOG.md section for stable candidate $tag."
             echo "_No changelog entry for $RELEASE_TAG._" > release-input/release-body.md
           fi
           changelog_body="$(mktemp)"

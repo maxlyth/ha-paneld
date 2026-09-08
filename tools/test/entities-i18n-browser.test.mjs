@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import { chromium } from 'playwright-core';
 
 const chrome = process.env.CHROME || '/usr/bin/chromium';
-const entitiesSource = fs.readFileSync('../app/src/main/assets/entities.js', 'utf8');
-const i18nSource = fs.readFileSync('../app/src/main/assets/i18n.js', 'utf8');
+const entitiesSource = fs.readFileSync('../../app/src/main/assets/entities.js', 'utf8');
+const i18nSource = fs.readFileSync('../../app/src/main/assets/i18n.js', 'utf8');
 
 function table(id, filter) {
   return `<section class="entity-list" data-table="${id}" data-filter="${filter}">

@@ -171,7 +171,7 @@ Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-s
 - [Profils de panneau](../profiles/) : créez, testez et partagez la prise en charge d’un autre panneau sans recompiler l’application.
 - [Références matérielles](../hardware/) : configuration propre à chaque modèle, capteurs, commandes, micrologiciel et notes de rétro-ingénierie.
 - [Compilation à partir des sources](../building.md) et [développement local](../local-builds.md) : compilez avec Docker, le conteneur de développement ou une chaîne d’outils Android locale.
-- [Feuille de route](../roadmap.md) : travaux prévus. Les travaux terminés sont consignés dans le [journal des modifications](../../CHANGELOG.md).
+- [Feuille de route](../roadmap.md) : travaux prévus. Les travaux terminés sont consignés dans le [journal des modifications](../CHANGELOG.md).
 
 La page `GET /diag` du panneau génère un rapport sur le matériel, le micrologiciel et les capacités à joindre aux rapports de bogue. Vérifiez-le et masquez les informations sensibles avant toute publication.
 
@@ -218,7 +218,7 @@ Le résultat est toujours ouvert : votre panneau devient un profil que tout le m
 
 ## Développement
 
-Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](../api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../test/README.md) et le [processus de publication](../RELEASING.md).
+Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](../api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../tools/test/README.md) et le [processus de publication](../RELEASING.md).
 
 J’ai délibérément fourni suffisamment d’informations pour utiliser le conteneur de développement fourni et créer une version de test locale. Ne soumettez pas sans les modifier des pull requests ou des tickets générés par ordinateur : lisez et comprenez chaque partie du texte et du code proposés, puis reformulez-les avec vos propres mots. Ce projet est géré par une seule personne et je n’ai pas le temps d’examiner des contenus générés par ordinateur sans aucun filtrage. Soyez concis et écrivez pour des humains ; si vous avez un doute, demandez d’abord.
 

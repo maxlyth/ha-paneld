@@ -171,7 +171,7 @@ Web 界面会用锁标记不可用的控制项，并说明面板缺少什么。�
 - [面板配置文件](../profiles/)：无需重新构建应用，即可为其他面板创建、测试和共享支持。
 - [硬件参考资料](../hardware/)：特定型号的设置、传感器、控制项、固件和逆向工程说明。
 - [从源代码构建](../building.md)和[本地开发](../local-builds.md)：使用 Docker、开发容器或本地 Android 工具链进行构建。
-- [路线图](../roadmap.md)：计划中的工作。已完成的工作记录在[变更日志](../../CHANGELOG.md)中。
+- [路线图](../roadmap.md)：计划中的工作。已完成的工作记录在[变更日志](../CHANGELOG.md)中。
 
 面板的 `GET /diag` 页面会生成用于错误报告的硬件、固件和功能报告。公开发布前，请检查并隐去其中的敏感信息。
 
@@ -218,7 +218,7 @@ ha-paneld 没有捐赠按钮。它是免费的，而真正能推动项目发展�
 
 ## 开发
 
-如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](../api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../test/README.md)以及[发布流程](../RELEASING.md)。
+如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](../api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../tools/test/README.md)以及[发布流程](../RELEASING.md)。
 
 我特意提供了足够的信息，以便使用随附的开发容器并构建本地测试版本。请勿原样提交计算机生成的拉取请求或议题：请阅读并理解建议文本和代码的每个部分，然后用自己的语言重写。这是一个由我独自维护的项目，我没有时间审查未经筛选的计算机生成内容。请简明扼要，并以人类读者为对象；如果对某件事没有把握，请先询问。
 

@@ -7,9 +7,9 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const asset = fileURLToPath(new URL('../app/src/main/assets/install.js', import.meta.url));
-const powerAsset = fileURLToPath(new URL('../app/src/main/assets/power-safety.js', import.meta.url));
-const catalogueDir = fileURLToPath(new URL('../app/src/main/assets/i18n/', import.meta.url));
+const asset = fileURLToPath(new URL('../../app/src/main/assets/install.js', import.meta.url));
+const powerAsset = fileURLToPath(new URL('../../app/src/main/assets/power-safety.js', import.meta.url));
+const catalogueDir = fileURLToPath(new URL('../../app/src/main/assets/i18n/', import.meta.url));
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;
 

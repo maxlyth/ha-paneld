@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { chromium } from 'playwright-core';
 
-const defaultAsset = fileURLToPath(new URL('../app/src/main/assets/setup.js', import.meta.url));
+const defaultAsset = fileURLToPath(new URL('../../app/src/main/assets/setup.js', import.meta.url));
 const setupAsset = process.argv[2] ? resolve(process.argv[2]) : defaultAsset;
 const chrome = process.env.CHROME || '/usr/bin/chromium';
 const browserTest = existsSync(chrome) ? test : test.skip;

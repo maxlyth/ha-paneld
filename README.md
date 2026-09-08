@@ -168,7 +168,7 @@ A limited [advanced fallback](docs/provisioning.md#shizuku-fallback-for-unrooted
 - [Panel profiles](docs/profiles/): create, test and share support for another panel without rebuilding the app.
 - [Hardware references](docs/hardware/): model-specific setup, sensors, controls, firmware and reverse-engineering notes.
 - [Building from source](docs/building.md) and [local development](docs/local-builds.md): build with Docker, the development container or a local Android toolchain.
-- [Roadmap](docs/roadmap.md): planned work. Completed work is recorded in the [changelog](CHANGELOG.md).
+- [Roadmap](docs/roadmap.md): planned work. Completed work is recorded in the [changelog](docs/CHANGELOG.md).
 
 The panel's `GET /diag` page produces a hardware, firmware and capability report for bug reports. Check and redact it before posting it publicly.
 
@@ -215,7 +215,7 @@ The result is always open: your panel becomes a profile everyone can use. That's
 
 ## Development
 
-If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](.github/CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and development-container builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [panel-profile development](docs/profiles/README.md), the [browser test harness](test/README.md), and the [release process](docs/RELEASING.md).
+If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](.github/CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and development-container builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [panel-profile development](docs/profiles/README.md), the [browser test harness](tools/test/README.md), and the [release process](docs/RELEASING.md).
 
 I have deliberately provided enough information to use the supplied development container and build a local test version. Do not submit computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first.
 

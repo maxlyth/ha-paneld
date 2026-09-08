@@ -189,7 +189,7 @@ browserTest('Configure enum labels fit Hall width at large text in every release
   t.after(async () => browser.close());
 
   for (const locale of ['de', 'es', 'fr', 'it', 'zh-Hans']) {
-    const target = JSON.parse(await readFile(new URL(`../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8')).strings;
+    const target = JSON.parse(await readFile(new URL(`../../app/src/main/assets/i18n/${locale}.json`, import.meta.url), 'utf8')).strings;
     const translations = Object.fromEntries(Object.entries(target)
       .filter(([key]) => key.startsWith('configure.enum.')).map(([key, record]) => [key, record.text]));
     const harness = await startHarness((path) => {
