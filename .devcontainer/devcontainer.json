@@ -11,7 +11,14 @@
         "vscjava.vscode-java-pack",
         "fwcd.kotlin",
         "vscjava.vscode-gradle"
-      ]
+      ],
+      // The one non-personal setting from the .vscode/settings.json removed in this
+      // branch. Without it the Java pack above prompts to resync the Gradle build on
+      // every classpath change. Scoped to the container, so it configures the editor
+      // for contributors without a tracked .vscode directory in the repository root.
+      "settings": {
+        "java.configuration.updateBuildConfiguration": "automatic"
+      }
     }
   },
   // Warms the Gradle wrapper so the first build is faster; harmless offline.
