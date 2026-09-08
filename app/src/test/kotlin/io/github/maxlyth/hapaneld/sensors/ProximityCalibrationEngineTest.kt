@@ -40,6 +40,20 @@ class ProximityCalibrationEngineTest {
         }
     }
 
+    @Test fun verifiedRawContractRemainsRangedForZeroOneEndpointsAfterCancelAndRestart() {
+        val h = Journey(sourceMode = Mode.RANGED)
+        h.begin(0f)
+        h.engine.action("cancel", h.now)
+        h.presence(0f, 1f)
+        h.capture(1f)
+        h.tick(WAVE_PHASE_TIMEOUT_MS)
+        h.save()
+        assertEquals(Mode.RANGED, h.saved!!.mode)
+        val restarted = Journey(h.saved, sourceMode = Mode.RANGED)
+        assertTrue(restarted.observe(2f).available)
+        assertEquals(Mode.RANGED, restarted.state.calibration!!.mode)
+    }
+
     @Test fun binaryNormalApproachCanSavePresenceWithoutAnIndistinguishableSingleWave() {
         for ((clear, body) in listOf(0f to 1f, 1f to 0f)) {
             val h = Journey()
@@ -309,11 +323,11 @@ class ProximityCalibrationEngineTest {
         assertEquals(100, c.level(Float.MAX_VALUE))
     }
 
-    private class Journey(initial: Calibration? = null, pattern: WavePattern = WavePattern.SINGLE, failCommit: Boolean = false) {
+    private class Journey(initial: Calibration? = null, pattern: WavePattern = WavePattern.SINGLE, failCommit: Boolean = false, sourceMode: Mode? = null) {
         var now = 0L
         var writes = 0
         var saved: Calibration? = null
-        val engine = ProximityCalibrationEngine(initial, requestedWavePattern = pattern) {
+        val engine = ProximityCalibrationEngine(initial, requestedWavePattern = pattern, observedSourceMode = sourceMode) {
             writes++; if (failCommit) false else { saved = it; true }
         }
         val state get() = engine.current()

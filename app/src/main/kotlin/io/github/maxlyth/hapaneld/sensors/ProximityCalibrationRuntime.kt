@@ -19,6 +19,7 @@ internal class ProximityCalibrationRuntime(
     private val elapsed: () -> Long = SystemClock::elapsedRealtime,
     private val wall: () -> Long = System::currentTimeMillis,
     requestedWavePattern: ProximityCalibrationEngine.WavePattern = ProximityCalibrationEngine.WavePattern.SINGLE,
+    private val observedSourceMode: ProximityCalibrationEngine.Mode? = null,
 ) : AutoCloseable {
     data class Decision(val reportMask: Int, val near: Boolean?, val normalizedLevel: Int?, val deliberateGesture: Boolean, val presenceApproach: Boolean = false)
 
@@ -37,7 +38,7 @@ internal class ProximityCalibrationRuntime(
                 ), emptyList(), emptyList(), now,
             )
         }.isSuccess.also { if (it) { userOverride = true; readFailed = false } }
-    }, requestedWavePattern = requestedWavePattern)
+    }, requestedWavePattern = requestedWavePattern, observedSourceMode = observedSourceMode)
     @Volatile private var view = engine.current()
     @Volatile private var sessionId = ""
     @Volatile private var browserAt = 0L
@@ -51,10 +52,11 @@ internal class ProximityCalibrationRuntime(
     private var completedGestureToken = 0L
     private var processedAt = 0L
 
-    constructor(context: Context, sourceIdentity: String, profileIdentity: String, profile: ProfileProximityCalibration?) : this(
+    constructor(context: Context, sourceIdentity: String, profileIdentity: String, profile: ProfileProximityCalibration?, observedSourceMode: ProximityCalibrationEngine.Mode? = null) : this(
         sourceIdentity, profileIdentity, profile?.let(::fromProfile),
         SqliteProximityModelStore(EntityCatalogStore(context.applicationContext)),
         requestedWavePattern = profileWavePattern(profile),
+        observedSourceMode = observedSourceMode,
     )
 
     @Synchronized
@@ -193,7 +195,7 @@ internal class ProximityCalibrationRuntime(
             state.calibration == null -> "calibration_required"
             else -> "ready"
         }
-        val mode = state.mode?.name?.lowercase(Locale.ROOT) ?: "unknown"
+        val mode = (state.mode ?: observedSourceMode)?.name?.lowercase(Locale.ROOT) ?: "unknown"
         return JSONObject().apply {
             put("present", true)
             put("phase", phase)
@@ -205,7 +207,8 @@ internal class ProximityCalibrationRuntime(
             put("message", failureMessage.ifEmpty { state.message.ifEmpty { summary() } })
             put("mode", mode)
             put("signalMode", mode)
-            put("rangedEligible", state.mode == ProximityCalibrationEngine.Mode.RANGED)
+            put("rangedEligible", (state.mode ?: observedSourceMode) == ProximityCalibrationEngine.Mode.RANGED)
+            put("source", if (observedSourceMode == ProximityCalibrationEngine.Mode.RANGED) "driver_raw16" else "standard")
             put("health", if (sourceProven && state.available) "healthy" else "source_unavailable")
             put("polarity", state.calibration?.let { if (it.nearRaw > it.clearRaw) "near_is_higher" else "near_is_lower" } ?: "unknown")
             put("acceptedGestures", state.accepted)

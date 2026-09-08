@@ -74,6 +74,25 @@ class ProximityCalibrationRuntimeTest {
         }
     }
 
+    @Test fun rawSourceExcludesHalCalibrationAndReportsItsVerifiedRepresentationBeforeCalibration() {
+        val previous = row(binaryLegacy())
+        val backing = Backing(previous)
+        val runtime = ProximityCalibrationRuntime(StkRawProximityReader.SOURCE_IDENTITY, PROFILE,
+            null, Store(backing), elapsed = { 1_000L }, wall = { 1_800_000_000_000L },
+            observedSourceMode = Mode.RANGED)
+        val status = JSONObject(runtime.json())
+        assertEquals("driver_raw16", status.getString("source"))
+        assertEquals("ranged", status.getString("mode"))
+        assertTrue(status.getBoolean("rangedEligible"))
+        assertFalse(runtime.isPresenceReady())
+        assertFalse(runtime.isWaveReady())
+        runtime.observe(1300f, 1_000L, false, false, false)
+        runtime.close()
+        assertEquals(previous, backing.row)
+        assertEquals(0, backing.writes)
+        assertEquals(0, backing.clears)
+    }
+
     @Test fun passiveMalformedAndUnreadyRowsCannotOverrideProfileDefaults() {
         val good = row(binaryLegacy())
         val badRows = listOf(good.copy(algorithmVersion = 4), good.copy(snapshotJson = "not-json"),

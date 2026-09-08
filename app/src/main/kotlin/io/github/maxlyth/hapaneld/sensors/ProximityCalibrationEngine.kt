@@ -8,6 +8,7 @@ import kotlin.math.roundToInt
 internal class ProximityCalibrationEngine(
     initial: Calibration? = null,
     private val requestedWavePattern: WavePattern = WavePattern.SINGLE,
+    private val observedSourceMode: Mode? = null,
     private val commit: (Calibration) -> Boolean = { true },
 ) {
     enum class Mode { BINARY, RANGED }
@@ -121,7 +122,7 @@ internal class ProximityCalibrationEngine(
     private var returnClearSince: Long? = null
     private var wavePeak: Float? = null
     private var waveStarted: Long? = null
-    private var observedNonBinary = false
+    private var observedNonBinary = observedSourceMode == Mode.RANGED
     private var presenceStatus = CapabilityStatus.NOT_TESTED
     private var waveStatus = CapabilityStatus.NOT_TESTED
     private val clearSamples = Samples()
@@ -390,7 +391,7 @@ internal class ProximityCalibrationEngine(
         candidate = null; candidateWave = null; candidateWaveMode = null; candidateDetector = null; pendingCandidatePulse = null
         clearSamples.clear(); nearSamples.clear(); waveBaselineSamples.clear()
         captureStarted = null; returnClearSince = null; waveStarted = null; wavePeak = null
-        observedNonBinary = false; presenceStatus = CapabilityStatus.NOT_TESTED; waveStatus = CapabilityStatus.NOT_TESTED
+        observedNonBinary = observedSourceMode == Mode.RANGED; presenceStatus = CapabilityStatus.NOT_TESTED; waveStatus = CapabilityStatus.NOT_TESTED
     }
     private fun expire(now: Long) {
         if (active() && now - sessionStarted >= SESSION_TIMEOUT_MS) finish(Stage.TIMED_OUT, now, "Setup timed out. Your previous calibration is unchanged.")

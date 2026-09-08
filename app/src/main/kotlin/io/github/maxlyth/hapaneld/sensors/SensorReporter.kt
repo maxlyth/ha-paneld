@@ -34,6 +34,7 @@ internal enum class ProximityAcquisition {
     VI530X,
     GPIO,
     ANDROID_HAL,
+    STK_RAW,
     ABSENT,
 }
 
@@ -41,9 +42,11 @@ internal fun proximityAcquisition(
     hasVi530x: Boolean,
     proximityGpio: Int?,
     hasHal: Boolean,
+    hasStkRaw: Boolean = false,
 ): ProximityAcquisition = when {
     hasVi530x -> ProximityAcquisition.VI530X
     proximityGpio != null -> ProximityAcquisition.GPIO
+    hasHal && hasStkRaw -> ProximityAcquisition.STK_RAW
     hasHal -> ProximityAcquisition.ANDROID_HAL
     else -> ProximityAcquisition.ABSENT
 }
@@ -150,10 +153,15 @@ class SensorReporter(
     private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
     private val roomClimateMetrics: PanelMetrics? = if (hasCht8305) PanelMetrics() else null
     private val proximityGpio: Int? = profile.proximityGpio
+    private val stkRawReader = StkRawProximityReader()
+    private var stkRawExecutor: ScheduledExecutorService? = null
+    private var stkRawGate: StkRawProximityGate? = null
+    private var stkRawWatchdog: Runnable? = null
     private val proximityAcquisition = proximityAcquisition(
         hasVi530x = profile.hasVi530x,
         proximityGpio = proximityGpio,
         hasHal = proximitySensor != null,
+        hasStkRaw = stkRawReader.isPresent(),
     )
     private val proximityPolicy = proximitySourcePolicy(
         proximityAcquisition,
@@ -198,7 +206,9 @@ class SensorReporter(
             calibrationTickScheduled = false
             val run = activeRun ?: return
             if (!run.isOpen()) return
-            proximityRuntime?.tick(SystemClock.elapsedRealtime(), reportingSparse())?.let { deliverProximity(it, run) }
+            val now = SystemClock.elapsedRealtime()
+            if (stkRawGate?.expire(now) == true) deliverUnavailable(run)
+            proximityRuntime?.tick(now, reportingSparse())?.let { deliverProximity(it, run) }
             scheduleCalibrationTick()
         }
     }
@@ -296,7 +306,9 @@ class SensorReporter(
         if (proximityPrepared) return
         proximityPrepared = true
         proximityRuntime = ProximityCalibrationRuntime(
-            appContext, proximitySourceIdentity(), "${profile.id}|${profile.revision}", profile.proximityCalibration,
+            appContext, proximitySourceIdentity(), "${profile.id}|${profile.revision}",
+            profile.proximityCalibration.takeUnless { proximityAcquisition == ProximityAcquisition.STK_RAW },
+            observedSourceMode = if (proximityAcquisition == ProximityAcquisition.STK_RAW) ProximityCalibrationEngine.Mode.RANGED else null,
         )
         updateLearnedEligibility()
     }
@@ -444,7 +456,9 @@ class SensorReporter(
                         liveLuxAt = now
                         run.light(lux, now)
                     }
-                    Sensor.TYPE_PROXIMITY -> handleProximity(event.values[0], run, event.timestamp)
+                    Sensor.TYPE_PROXIMITY -> if (proximityAcquisition != ProximityAcquisition.STK_RAW) {
+                        handleProximity(event.values[0], run, event.timestamp)
+                    }
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
                         if (!environmentalSensorPublishes(tempUse)) return
                         val value = event.values[0]
@@ -500,6 +514,12 @@ class SensorReporter(
                     )
                     vi530xClient = client
                     client.start()
+                } else if (proximityAcquisition == ProximityAcquisition.STK_RAW) {
+                    // Registration activates the driver; its binary values are deliberately ignored.
+                    val registered = proximitySensor?.let {
+                        sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler)
+                    } == true
+                    if (registered) startStkRaw(run, handler) else deliverUnavailable(run)
                 } else if (proximityAcquisition == ProximityAcquisition.ANDROID_HAL) {
                     proximitySensor?.let {
                         if (proximityPolicy.onChangeHalLiveness) onChangeProbeAwaiting = true
@@ -543,6 +563,63 @@ class SensorReporter(
                 "temp=$tempUse humidity=$humidityUse)",
         )
     }
+
+    private fun startStkRaw(run: SensorRunCallbacks, handler: Handler) {
+        val gate = StkRawProximityGate()
+        stkRawGate = gate
+        val executor = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "ha-paneld-stk-raw").apply { isDaemon = true }
+        }
+        stkRawExecutor = executor
+        // A blocked sysfs read must not retain readiness. This handler watchdog is independent of
+        // both read completion and whether the calibration runtime currently needs gesture ticks.
+        val watchdog = object : Runnable {
+            override fun run() {
+                if (!run.isOpen() || activeRun !== run) return
+                if (gate.expire(SystemClock.elapsedRealtime())) deliverUnavailable(run)
+                handler.postDelayed(this, 100L)
+            }
+        }
+        stkRawWatchdog = watchdog
+        handler.postDelayed(watchdog, 100L)
+        // Schedule the next read only after delivery: at most one pending result, including when
+        // the sensor handler is delayed. All filesystem work stays off that handler.
+        fun scheduleRead() {
+            if (!run.isOpen() || activeRun !== run || executor.isShutdown) return
+            runCatching {
+                executor.schedule({
+                    val readStartedAt = SystemClock.elapsedRealtime()
+                    val raw = runCatching { stkRawReader.read() }.getOrNull()
+                    handler.post {
+                        if (!run.isOpen() || activeRun !== run) return@post
+                        val now = SystemClock.elapsedRealtime()
+                        val admitted = stkRawReadWithinDeadline(raw, readStartedAt, now)
+                        val sample = gate.observe(admitted, now) ?: return@post
+                        if (sample.becameUnavailable || sample.raw == null) deliverUnavailable(run)
+                        sample.raw?.let { value ->
+                            lastRaw = value.toFloat()
+                            // Diagnostic age follows real cache changes, not repeated reads.
+                            if (sample.fresh && lastStkRaw != value) liveProximityAt = now
+                            lastStkRaw = value
+                            if (!sample.fresh) {
+                                deliverUnavailable(run)
+                            } else proximityRuntime?.observe(
+                                value.toFloat(), now, sparseReporting = false,
+                                live = sample.wakeEligible, calibrationLive = sample.fresh,
+                            )?.let { deliverProximity(it, run) }
+                            updateLearnedEligibility()
+                            scheduleCalibrationTick()
+                        }
+                        scheduleRead()
+                    }
+                }, 100L, TimeUnit.MILLISECONDS)
+            }
+        }
+        lastStkRaw = null
+        scheduleRead()
+    }
+
+    private var lastStkRaw: Int? = null
 
     private fun registerEnvironmentalSensor(
         sensor: Sensor?,
@@ -677,6 +754,7 @@ class SensorReporter(
 
     private fun proximitySourceIdentity(): String {
         val acquisition = when (proximityAcquisition) {
+            ProximityAcquisition.STK_RAW -> StkRawProximityReader.SOURCE_IDENTITY
             ProximityAcquisition.VI530X -> "helper-vi530x"
             ProximityAcquisition.GPIO -> "helper-gpio:${checkNotNull(proximityGpio)}"
             ProximityAcquisition.ANDROID_HAL -> proximitySensor?.let { sensor ->
@@ -705,6 +783,12 @@ class SensorReporter(
     fun stop(): CompletableFuture<Unit> {
         activeRun?.close()
         activeRun = null
+        stkRawWatchdog?.let { sensorHandler?.removeCallbacks(it) }
+        stkRawWatchdog = null
+        stkRawGate?.close()
+        stkRawGate = null
+        stkRawExecutor?.shutdownNow()
+        stkRawExecutor = null
         roomClimateRefresh?.stop()
         roomClimateRefresh = null
         roomClimateExecutor?.shutdownNow()
