@@ -439,10 +439,10 @@ APP_LAUNCH_PROBE_SECONDS="${APP_LAUNCH_PROBE_SECONDS:-20}"
 APP_HEALTH_TIMEOUT_SECONDS="${APP_HEALTH_TIMEOUT_SECONDS:-180}"
 STORAGE_HEALTH_VERIFY_ATTEMPTS="${STORAGE_HEALTH_VERIFY_ATTEMPTS:-6}"
 STORAGE_HEALTH_VERIFY_POLL_SECONDS="${STORAGE_HEALTH_VERIFY_POLL_SECONDS:-2}"
-# Deadline for each package query taken while classifying an unreachable status endpoint. Kept short
-# and deliberately separate from the general adb deadline: this runs before anything is installed, so
-# a wedged package manager should refuse quickly rather than hold a first installation open.
-STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-5}"
+# Deadline for the two package queries taken while classifying an unreachable status endpoint. Kept
+# separate from the general adb deadline: this runs before anything is installed, so a wedged package
+# manager still refuses promptly. Older panels can need about nine seconds to return both answers.
+STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-15}"
 # Deadline for the package re-check taken immediately before an erasure, after a confirmation that
 # may have been held open indefinitely. Slightly longer than the pre-install probe because the panel
 # has been idle in the meantime, and short enough that a wedged panel cannot stall a confirmed reset.
