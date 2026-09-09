@@ -930,6 +930,18 @@
       "softMaxChars": 75,
       "hardMaxChars": 108
     },
+    "configure.auto_sleep.panel_setup_help": {
+      "text": "Uses calibrated presence at this panel. Set up proximity first; automatic sleep pauses if the sensor is unavailable.",
+      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 232,
+      "hardMaxChars": 348
+    },
     "configure.auto_sleep.phase": {
       "text": "Phase: {phase}",
       "sourceHash": "f369627c960bce7a3ca2e521cc0283fe777e141a358664722ed9188764e8fa11",
@@ -1000,6 +1012,32 @@
       "softMaxChars": 24,
       "hardMaxChars": 40
     },
+    "configure.auto_sleep.setup_proximity": {
+      "text": "Set up proximity on panel",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 50,
+      "hardMaxChars": 80
+    },
+    "configure.auto_sleep.source_ha": {
+      "text": "Home Assistant Area devices",
+      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 54,
+      "hardMaxChars": 81
+    },
     "configure.auto_sleep.source_lanes_shown": {
       "text": "{count} source lanes are shown.",
       "sourceHash": "68dd73e2ab2d2451b1e558679a30fb58facf18849797d8cf6188f0f7cf7ea52f",
@@ -1015,6 +1053,18 @@
       ],
       "softMaxChars": 39,
       "hardMaxChars": 56
+    },
+    "configure.auto_sleep.source_panel": {
+      "text": "This panel’s proximity sensor",
+      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
+      "surface": "configure",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 58,
+      "hardMaxChars": 87
     },
     "configure.auto_sleep.source_update_failed": {
       "text": "Could not update this activity source.",
@@ -4120,78 +4170,6 @@
       "softMaxChars": 76,
       "hardMaxChars": 114
     },
-    "configure.proximity.setup.ready_both": {
-      "text": "Presence and wave are ready",
-      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 54,
-      "hardMaxChars": 81
-    },
-    "configure.proximity.setup.ready_presence": {
-      "text": "Presence is ready; wave is unavailable",
-      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 76,
-      "hardMaxChars": 114
-    },
-    "configure.proximity.setup.ready_wave": {
-      "text": "Wave is ready; presence is unavailable",
-      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 76,
-      "hardMaxChars": 114
-    },
-    "configure.proximity.setup.ready_neither": {
-      "text": "Presence and wave are unavailable",
-      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 66,
-      "hardMaxChars": 99
-    },
-    "configure.proximity.setup.stage.wave_baseline": {
-      "text": "Checking the starting position for hand waves",
-      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 90,
-      "hardMaxChars": 135
-    },
-    "configure.proximity.setup.stage.wave_capture": {
-      "text": "Measuring a deliberate hand wave",
-      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
-      "surface": "configure",
-      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 64,
-      "hardMaxChars": 96
-    },
     "configure.proximity.setup.binary": {
       "text": "This sensor reports near or clear only. Its detection distance cannot be adjusted.",
       "sourceHash": "d30827a01bb255c475f6136c3deb16d36e314496ad3a5c24e053b08a4759f429",
@@ -4287,6 +4265,54 @@
       "frozen": [],
       "softMaxChars": 36,
       "hardMaxChars": 54
+    },
+    "configure.proximity.setup.ready_both": {
+      "text": "Presence and wave are ready",
+      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 54,
+      "hardMaxChars": 81
+    },
+    "configure.proximity.setup.ready_neither": {
+      "text": "Presence and wave are unavailable",
+      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 66,
+      "hardMaxChars": 99
+    },
+    "configure.proximity.setup.ready_presence": {
+      "text": "Presence is ready; wave is unavailable",
+      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 76,
+      "hardMaxChars": 114
+    },
+    "configure.proximity.setup.ready_wave": {
+      "text": "Wave is ready; presence is unavailable",
+      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 76,
+      "hardMaxChars": 114
     },
     "configure.proximity.setup.rejected": {
       "text": "The panel did not accept that action.",
@@ -4431,6 +4457,30 @@
       "frozen": [],
       "softMaxChars": 102,
       "hardMaxChars": 153
+    },
+    "configure.proximity.setup.stage.wave_baseline": {
+      "text": "Checking the starting position for hand waves",
+      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 90,
+      "hardMaxChars": 135
+    },
+    "configure.proximity.setup.stage.wave_capture": {
+      "text": "Measuring a deliberate hand wave",
+      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
+      "surface": "configure",
+      "context": "Proximity setup status: report presence and deliberate hand-wave capability separately. Physical instructions appear on the panel.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 64,
+      "hardMaxChars": 96
     },
     "configure.proximity.setup.stage.waves": {
       "text": "Validating waves: {seen}/{required}",
@@ -12666,6 +12716,20 @@
       "frozen": [],
       "softMaxChars": 13,
       "hardMaxChars": 18
+    },
+    "dashboard.sensors.raw": {
+      "text": "raw {value}",
+      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
+      "surface": "dashboard",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [
+        "{value}"
+      ],
+      "frozen": [],
+      "softMaxChars": 40,
+      "hardMaxChars": 80
     },
     "dashboard.sensors.seconds_ago": {
       "text": "· {count}s ago",
@@ -30554,6 +30618,32 @@
       "softMaxChars": 32,
       "hardMaxChars": 35
     },
+    "settings.auto_sleep_source.help": {
+      "text": "Use the panel’s calibrated proximity sensor, or choose Home Assistant Area devices. If the selected source is unavailable, automatic sleep pauses and touch remains available.",
+      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
+      "surface": "settings",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "Home Assistant"
+      ],
+      "softMaxChars": 348,
+      "hardMaxChars": 522
+    },
+    "settings.auto_sleep_source.label": {
+      "text": "Auto-sleep presence source",
+      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
+      "surface": "settings",
+      "context": "Panel proximity presence and Auto-sleep source selection.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 52,
+      "hardMaxChars": 80
+    },
     "settings.camera_enabled.help": {
       "text": "Off by default. Serves the panel's camera as a video-only RTSP stream and as a JPEG snapshot for Home Assistant to pull; no frames leave the panel unless a client is connected, and the panel shows a red light whenever the camera is open.",
       "sourceHash": "7cdea3db240f425db9be12ceb307b9cb3986e5466981f26156d853e842ab2c9f",
@@ -31413,7 +31503,8 @@
       "placeholders": [],
       "frozen": [
         "Wi-Fi",
-        "dBm"
+        "dBm",
+        "dB"
       ],
       "softMaxChars": 160,
       "hardMaxChars": 160
@@ -36985,92 +37076,6 @@
       ],
       "softMaxChars": 135,
       "hardMaxChars": 192
-    },
-    "configure.auto_sleep.panel_setup_help": {
-      "text": "Uses calibrated presence at this panel. Set up proximity first; automatic sleep pauses if the sensor is unavailable.",
-      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
-      "surface": "configure",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 232,
-      "hardMaxChars": 348
-    },
-    "configure.auto_sleep.setup_proximity": {
-      "text": "Set up proximity on panel",
-      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
-      "surface": "configure",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 50,
-      "hardMaxChars": 80
-    },
-    "configure.auto_sleep.source_ha": {
-      "text": "Home Assistant Area devices",
-      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
-      "surface": "configure",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 54,
-      "hardMaxChars": 81
-    },
-    "configure.auto_sleep.source_panel": {
-      "text": "This panel’s proximity sensor",
-      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
-      "surface": "configure",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 58,
-      "hardMaxChars": 87
-    },
-    "dashboard.sensors.raw": {
-      "text": "raw {value}",
-      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
-      "surface": "dashboard",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [
-        "{value}"
-      ],
-      "frozen": [],
-      "softMaxChars": 40,
-      "hardMaxChars": 80
-    },
-    "settings.auto_sleep_source.help": {
-      "text": "Use the panel’s calibrated proximity sensor, or choose Home Assistant Area devices. If the selected source is unavailable, automatic sleep pauses and touch remains available.",
-      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
-      "surface": "settings",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 348,
-      "hardMaxChars": 522
-    },
-    "settings.auto_sleep_source.label": {
-      "text": "Auto-sleep presence source",
-      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
-      "surface": "settings",
-      "context": "Panel proximity presence and Auto-sleep source selection.",
-      "risk": "ordinary",
-      "siblings": [],
-      "placeholders": [],
-      "frozen": [],
-      "softMaxChars": 52,
-      "hardMaxChars": 80
     }
   }
 }

@@ -343,6 +343,11 @@
       "state": "machine-cross-checked",
       "text": "Ha cambiado la conexión del panel. Reconectando el historial de actividad…"
     },
+    "configure.auto_sleep.panel_setup_help": {
+      "text": "Usa la detección de presencia calibrada de este panel. Configure primero la proximidad; el reposo automático se pausa si el sensor no está disponible.",
+      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
+      "state": "machine-cross-checked"
+    },
     "configure.auto_sleep.phase": {
       "sourceHash": "f369627c960bce7a3ca2e521cc0283fe777e141a358664722ed9188764e8fa11",
       "state": "machine-cross-checked",
@@ -368,10 +373,25 @@
       "state": "machine-cross-checked",
       "text": " resultado, "
     },
+    "configure.auto_sleep.setup_proximity": {
+      "text": "Configurar proximidad en el panel",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.source_ha": {
+      "text": "Dispositivos del área de Home Assistant",
+      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
+      "state": "machine-cross-checked"
+    },
     "configure.auto_sleep.source_lanes_shown": {
       "sourceHash": "68dd73e2ab2d2451b1e558679a30fb58facf18849797d8cf6188f0f7cf7ea52f",
       "state": "machine-cross-checked",
       "text": "Se muestran {count} carriles de fuentes."
+    },
+    "configure.auto_sleep.source_panel": {
+      "text": "Sensor de proximidad de este panel",
+      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
+      "state": "machine-cross-checked"
     },
     "configure.auto_sleep.source_update_failed": {
       "sourceHash": "20f147602e00214857ab0183b98da66b0977d11a22395d2052ac093f796c6050",
@@ -877,6 +897,141 @@
       "sourceHash": "98d6ce0ae7ddc3af8406b87feaba58535a5f45b9a47286fa83adcc6db2df7808",
       "state": "machine-cross-checked",
       "text": "No hay ajustes en esta vista."
+    },
+    "configure.enum.camera_resolution.1080p": {
+      "text": "1080p (Full HD)",
+      "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.480p": {
+      "text": "480p (SD)",
+      "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.camera_resolution.720p": {
+      "text": "720p (HD)",
+      "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.auto": {
+      "text": "Automático",
+      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.efficiency": {
+      "text": "Eficiencia",
+      "sourceHash": "87b180c8f2042d97ae03bb27b19b110a05c3bdff94ad48133633e73a5c82cc1e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.cpu_governor.performance": {
+      "text": "Rendimiento",
+      "sourceHash": "442aded87a55aa8c8f7d5ff0c30228150d4b1cb8756e4be138d615ca4708fc26",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.dark": {
+      "text": "Oscuro",
+      "sourceHash": "60acc53f13a5d1bf115878c4a785e9a43e8286c4139a8402a6ac7d23966f9153",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.follow_home_assistant": {
+      "text": "Seguir Home Assistant",
+      "sourceHash": "354c65fd389c33e3365c65df36b59f5d05509a6f1a8305920453ccf0cc3cd2e4",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.dashboard_theme.light": {
+      "text": "Claro",
+      "sourceHash": "dbcd5e7bb7a0f538810de44c3efbd813037ee3fa358747bb71fa58e157af45f7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.http": {
+      "text": "Protocolo HTTP",
+      "sourceHash": "cfaf50c20af6e519ca09653e2cb00d5453a3068c4d973d456b959a53b72e7718",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_tcp": {
+      "text": "Syslog por TCP",
+      "sourceHash": "91de40e260ce02c13911216393666f52c0a32e6d3b3dd7cfc5dd02711f58f2b5",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.log_ship_protocol.syslog_udp": {
+      "text": "Syslog por UDP",
+      "sourceHash": "cdd9bce57411aec9a0af3472b278942d976f8f616cb462feebc82082714b7df7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.automatic": {
+      "text": "Automático",
+      "sourceHash": "d461a493a3753877c9486cffa3444265a33370af8a7fff242fb119b71750839c",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.force_ipv4": {
+      "text": "Forzar IPv4",
+      "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.mqtt_address_family.prefer_ipv4": {
+      "text": "Preferir IPv4",
+      "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.always_on": {
+      "text": "Siempre activa",
+      "sourceHash": "044ba8a9ae43b296f0908d5f94c2ec616c7703ef71e1e3218393fad6c91a83b2",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.native": {
+      "text": "Nativa",
+      "sourceHash": "d509e493885298a23c55f83c133e5d725f24dd6cc67cf734baa2c11b220ab809",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.off": {
+      "text": "Desactivada",
+      "sourceHash": "ca7981b46ecf2c1787b6d76d81d9fd7fa0ca95842e2fcc2a452869891a9334d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.navbar_mode.swipe_reveal": {
+      "text": "Mostrar al deslizar",
+      "sourceHash": "09d51331b616bdd52b2e76eaec3d72b1f5906627266dd577ca0bcd49c29222d1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.prerelease": {
+      "text": "Versión preliminar",
+      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.update_channel.stable": {
+      "text": "Estable",
+      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.mic": {
+      "text": "Micrófono",
+      "sourceHash": "186352a881d0550e2da1f74e5c317770702bc2a0f9c3da69a10e27c14a217bac",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_communication": {
+      "text": "Comunicación por voz",
+      "sourceHash": "a0a89f70b4ad263bbb3c0c875bb0420a011ecfdf0d1eda50cc8f7bef7c5b664f",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_audio_source.voice_recognition": {
+      "text": "Reconocimiento de voz",
+      "sourceHash": "619742a53cee9ccd92bd7087ade07b7582fdfac6193a8c971491fe8a2a0e3e7e",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.high": {
+      "text": "Alta",
+      "sourceHash": "c4ebc6d4a5832cd9415f906ad03661110c705a72381c8b8b145761d02e2dd23a",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.low": {
+      "text": "Baja",
+      "sourceHash": "f793de205ead5ac302c4a1627829dea41f176b1068b993a32373fc869918374b",
+      "state": "machine-cross-checked"
+    },
+    "configure.enum.voice_sensitivity.normal": {
+      "text": "Normal",
+      "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
+      "state": "machine-cross-checked"
     },
     "configure.error.http": {
       "sourceHash": "0b638daf70a6ba80fcd9b50cd3327832e0aea06ac8468a918ebe019140e937ac",
@@ -1418,66 +1573,6 @@
       "sourceHash": "f1a509223c30161c772c1b1fa564ef00f55f2ec1c0aa02630e9eeed613bd1672",
       "state": "machine-cross-checked"
     },
-    "configure.proximity.status.unavailable": {
-      "text": "El estado del aprendizaje de proximidad no está disponible",
-      "sourceHash": "db261933ff311133bb00c4203464d98f6041b8fcd6014c9ee6a4facaed2cb8b9",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.status.waiting": {
-      "text": "Esperando el estado del sensor…",
-      "sourceHash": "9b41a512c3d01fe96fa05a91f39ba09c2c4ab0d6aad4a173879859801f1f2044",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.status.waiting_deliberate": {
-      "text": "Esperando un gesto deliberado…",
-      "sourceHash": "48d53c6f1fb366031c973bf2fd97eafca703f15f36169fa1b0bf83b5f9bdcf1a",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.status.waiting_one": {
-      "text": "Esperando un gesto…",
-      "sourceHash": "0f6151ff6e1a70b753564d84e87d83a3cc92ca37344925348e302b01d60d5f8b",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.status.working": {
-      "text": "Procesando…",
-      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.title": {
-      "text": "Presencia y activación",
-      "sourceHash": "285ddd52ae6ab42b287d85dbaa0dd509fece2d3cb53dbb3cde9c1c7915e5b4f8",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.ready_both": {
-      "text": "Presencia y gesto listos",
-      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.ready_presence": {
-      "text": "Presencia lista; gesto no disponible",
-      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.ready_wave": {
-      "text": "Gesto listo; presencia no disponible",
-      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.ready_neither": {
-      "text": "Presencia y gesto no disponibles",
-      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.stage.wave_baseline": {
-      "text": "Comprobando la posición inicial para los gestos",
-      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
-      "state": "machine-cross-checked"
-    },
-    "configure.proximity.setup.stage.wave_capture": {
-      "text": "Midiendo un gesto deliberado de la mano",
-      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
-      "state": "machine-cross-checked"
-    },
     "configure.proximity.setup.binary": {
       "sourceHash": "d30827a01bb255c475f6136c3deb16d36e314496ad3a5c24e053b08a4759f429",
       "state": "machine-cross-checked",
@@ -1517,6 +1612,26 @@
       "sourceHash": "04c0b7d2c142ac192b0217e7c7581ec1709282a8e6bd5548ff8606c955026d7a",
       "state": "machine-cross-checked",
       "text": "El sensor de proximidad está listo"
+    },
+    "configure.proximity.setup.ready_both": {
+      "text": "Presencia y gesto listos",
+      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_neither": {
+      "text": "Presencia y gesto no disponibles",
+      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_presence": {
+      "text": "Presencia lista; gesto no disponible",
+      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_wave": {
+      "text": "Gesto listo; presencia no disponible",
+      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
+      "state": "machine-cross-checked"
     },
     "configure.proximity.setup.rejected": {
       "sourceHash": "55ddb5d1f8e307a60e0209ba1f8c9082649275d810a70313b26e9f96db673413",
@@ -1578,6 +1693,16 @@
       "state": "machine-cross-checked",
       "text": "Se agotó el tiempo de configuración. La calibración existente no ha cambiado."
     },
+    "configure.proximity.setup.stage.wave_baseline": {
+      "text": "Comprobando la posición inicial para los gestos",
+      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.wave_capture": {
+      "text": "Midiendo un gesto deliberado de la mano",
+      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
+      "state": "machine-cross-checked"
+    },
     "configure.proximity.setup.stage.waves": {
       "sourceHash": "21908e1709cc9f665be87a42091b5515520a7c92ecb38dfb65e2c4ca1fc468e7",
       "state": "machine-cross-checked",
@@ -1607,6 +1732,36 @@
       "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
       "state": "machine-cross-checked",
       "text": "Procesando…"
+    },
+    "configure.proximity.status.unavailable": {
+      "text": "El estado del aprendizaje de proximidad no está disponible",
+      "sourceHash": "db261933ff311133bb00c4203464d98f6041b8fcd6014c9ee6a4facaed2cb8b9",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting": {
+      "text": "Esperando el estado del sensor…",
+      "sourceHash": "9b41a512c3d01fe96fa05a91f39ba09c2c4ab0d6aad4a173879859801f1f2044",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting_deliberate": {
+      "text": "Esperando un gesto deliberado…",
+      "sourceHash": "48d53c6f1fb366031c973bf2fd97eafca703f15f36169fa1b0bf83b5f9bdcf1a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.waiting_one": {
+      "text": "Esperando un gesto…",
+      "sourceHash": "0f6151ff6e1a70b753564d84e87d83a3cc92ca37344925348e302b01d60d5f8b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.status.working": {
+      "text": "Procesando…",
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.title": {
+      "text": "Presencia y activación",
+      "sourceHash": "285ddd52ae6ab42b287d85dbaa0dd509fece2d3cb53dbb3cde9c1c7915e5b4f8",
+      "state": "machine-cross-checked"
     },
     "configure.renderer.builtin": {
       "sourceHash": "838a46e057e83db8885d0761337db9d0f2a7ffb8bd723bfc33fcf495cde873a9",
@@ -3428,6 +3583,11 @@
       "state": "machine-cross-checked",
       "text": "Abrir en la pestaña Instalar"
     },
+    "dashboard.live.led": {
+      "sourceHash": "498785455dcb5a9e49d815731ead0399021427b333d2b29c79075525c12c2c17",
+      "state": "machine-cross-checked",
+      "text": "LED"
+    },
     "dashboard.live.navigate": {
       "sourceHash": "5ea5fbe811dbe99a3f3d0d79704d2f54194692b349f2d682bd6fb86a9cbf8f12",
       "state": "machine-cross-checked",
@@ -3938,6 +4098,36 @@
       "sourceHash": "9284011dde06ac10f4d06d1c6a7668da3f6dc951897ca3bd4ec48c080bb895f8",
       "state": "machine-cross-checked"
     },
+    "dashboard.runtime.ha_network_latency_severe": {
+      "text": "muy lenta",
+      "sourceHash": "82ce6837aa3b68844b31aa7c645d74dbecc376c957c349610ccb8a680856ca4b",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_slow": {
+      "text": "muy lenta; Home Assistant responde lentamente",
+      "sourceHash": "a5d9c7c7c5aaf6b8ce698004cd0b9f0b4b87d3e329712d572039aa2730520c25",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_severe_response_very_slow": {
+      "text": "muy lenta; Home Assistant responde muy lentamente",
+      "sourceHash": "611b01e6500fcdd6c176dfe3b6ef44c9221b1d0ced97fcd99dfad2cbc9eb5cca",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning": {
+      "text": "lenta",
+      "sourceHash": "5e0cf7bd1dfa3831788b0cf6dedcdd228fba6f34dc238d371e746567e80bc7b6",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_slow": {
+      "text": "lenta; Home Assistant responde lentamente",
+      "sourceHash": "056de773c4208b770839fdd87e4055ff7d09d8cb61df76abe340c9d6c5f8e164",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.runtime.ha_network_latency_warning_response_very_slow": {
+      "text": "lenta; Home Assistant responde muy lentamente",
+      "sourceHash": "f2b75a04d3d45878a4e623d21335863f509a6e7c279abfa60d96ebeeecd89072",
+      "state": "machine-cross-checked"
+    },
     "dashboard.runtime.ha_network_losing_probes": {
       "text": "se pierden sondeos; {evidence}",
       "sourceHash": "80879344403c1f1f32cefbcb1eb4604dfd85b99a366f1ac4a49b95d4fc4475ad",
@@ -4203,6 +4393,11 @@
       "state": "machine-cross-checked",
       "text": "No se aceptó el toque."
     },
+    "dashboard.screenshot.unavailable": {
+      "sourceHash": "93a81738c6e2f2cd474595a3c03c94a749a7927f173e9cbf420de1b54514205c",
+      "state": "machine-cross-checked",
+      "text": "⚠ captura de pantalla no disponible"
+    },
     "dashboard.screenshot.updated": {
       "sourceHash": "1c710725855d308099b76fe9e35300237c2df62e6739c4f30082bb2c2ede523e",
       "state": "machine-cross-checked",
@@ -4302,6 +4497,11 @@
       "sourceHash": "101194f3e33d01133851120bc7bab9967d2d8988266a7c07ae800f7127e7e3e2",
       "state": "machine-cross-checked",
       "text": "Proximidad"
+    },
+    "dashboard.sensors.raw": {
+      "text": "valor bruto {value}",
+      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
+      "state": "machine-cross-checked"
     },
     "dashboard.sensors.seconds_ago": {
       "sourceHash": "6d1bf0db15771f9872b90092501f0ef352fee951d8640840afdea80d985264e2",
@@ -5633,6 +5833,16 @@
       "state": "machine-cross-checked",
       "text": "Resumen de la flota"
     },
+    "install.apk.choose": {
+      "sourceHash": "93bc2050724e81c543daf449e7bac462859143e1c137bbc254b2660661e4d9dc",
+      "state": "machine-cross-checked",
+      "text": "Elegir APK…"
+    },
+    "install.apk.description": {
+      "sourceHash": "75dc85bc1ebe01d6dd6a1e7bd4ebefb3b58bbc75b27d134a7d1590f6a9a41055",
+      "state": "machine-cross-checked",
+      "text": "Instala una aplicación (p. ej., un visor de paneles) desde un archivo del dispositivo o desde un enlace https:// que el panel descargará por sí mismo. En ambos casos, verás el paquete, la versión y el firmante antes de instalarla."
+    },
     "install.apk.dynamic.cancel": {
       "sourceHash": "19766ed6ccb2f4a32778eed80d1928d2c87a18d7c275ccb163ec6709d3eb2e27",
       "state": "machine-cross-checked",
@@ -5758,10 +5968,50 @@
       "state": "machine-cross-checked",
       "text": "¿APK equivocado? Cancelar lo elimina del panel — o simplemente elige otro archivo o enlace, que lo sustituirá."
     },
+    "install.apk.enable": {
+      "sourceHash": "6db67e8e7579cb2db2500d86bf9c53f8189de1600b3e02868448d523a544e1a8",
+      "state": "machine-cross-checked",
+      "text": "Habilitar la instalación de APK en este panel"
+    },
     "install.apk.error.too_large": {
       "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
       "state": "machine-cross-checked",
       "text": "ese archivo supera el tamaño que acepta el panel"
+    },
+    "install.apk.fetch": {
+      "sourceHash": "685bc203ad7d639cb41009ca140de3141621f48313f21ddf72344e1b8a99656a",
+      "state": "machine-cross-checked",
+      "text": "Descargar e inspeccionar"
+    },
+    "install.apk.fetch_label": {
+      "sourceHash": "9d7e0624c25f4119df32f19d101ef651546302e05eda6f0015954e146e5348cc",
+      "state": "machine-cross-checked",
+      "text": "O descargar desde un enlace"
+    },
+    "install.apk.root_unavailable": {
+      "sourceHash": "12253abdd5c23f5aa5f4fab0e662da4ee9d6ac2716392c0e7e95b205a51a5f04",
+      "state": "machine-cross-checked",
+      "text": "La instalación de cualquier APK requiere acceso root o el daemon auxiliar, que no están disponibles en este panel."
+    },
+    "install.apk.security_future_auth": {
+      "sourceHash": "56e615ce71344c71a91105c99eb7f66925d8af8316ec1938f60eba17238be309",
+      "state": "machine-cross-checked",
+      "text": "Actualmente, el acceso al panel está limitado a la red LAN; se prevé añadir acceso autenticado en una versión posterior."
+    },
+    "install.apk.security_title": {
+      "sourceHash": "a1ac876477c082d29fe65395e2b030bc26158edf67a218cb4bc5e95e911fb92f",
+      "state": "machine-cross-checked",
+      "text": "Seguridad:"
+    },
+    "install.apk.security_warning": {
+      "sourceHash": "80705f000b7eea37fd3ac7d2a71bd56b067ab318ecef4b6eeff8af9f6b8bfdb3",
+      "state": "machine-cross-checked",
+      "text": "Esta función instala con acceso root cualquier APK que elijas mediante la interfaz web no autenticada del panel en la red LAN. Instala únicamente APK de confianza."
+    },
+    "install.apk.title": {
+      "sourceHash": "f2cca01cdf3f8a3350968f38c63fc602cd8aaddf08ac2f183f8f20f8380b9c55",
+      "state": "machine-cross-checked",
+      "text": "Instalar un APK"
     },
     "install.apk_status.busy": {
       "sourceHash": "c9bc072f4fa8189466c2a8f2c36a56a4ef1e60a2ffa4986ba2f155cd176c128b",
@@ -5852,6 +6102,81 @@
       "sourceHash": "9330e470a1af07012a9b663e321cab06805c4d91de958e17bc5031839359c297",
       "state": "machine-cross-checked",
       "text": "ese archivo supera el tamaño que acepta el panel"
+    },
+    "install.audit.description": {
+      "sourceHash": "1f0badfb07dade0f2e55b2e777f6b2f670f8fb38c5e9fa1445fed2f0fb5b800e",
+      "state": "machine-cross-checked",
+      "text": "Vuelve a comprobar si el panel presenta problemas que impidan mostrar el panel de control, como una versión antigua de WebView, la ausencia de una aplicación de panel de control o actualizaciones disponibles."
+    },
+    "install.audit.diagnostics": {
+      "sourceHash": "85529ca4d488e68a812c6db33828b13074ccd77bea93f820363dc3ef6060410a",
+      "state": "machine-cross-checked",
+      "text": "Volcado de diagnóstico"
+    },
+    "install.audit.diagnostics_help": {
+      "sourceHash": "452b079a22d763b46d9747981ceff3da73cb3f124d10597b03167b77fb0ce24b",
+      "state": "machine-cross-checked",
+      "text": "informe completo de hardware, firmware, SELinux y su para informes de errores."
+    },
+    "install.audit.run": {
+      "sourceHash": "8b5f0792883a565c24e85682e2696a76c9a4b17a5a3016fddfc5e898897bd8e9",
+      "state": "machine-cross-checked",
+      "text": "Ejecutar comprobación de estado"
+    },
+    "install.audit.title": {
+      "sourceHash": "3979e87d0cb5c365bc3a5cdd30579795fff19a7686b673bc7bd660b75544704e",
+      "state": "machine-cross-checked",
+      "text": "Comprobación de estado"
+    },
+    "install.backup.companion.helper_required": {
+      "sourceHash": "9655f8357363d49834901a88dc543b16cabe4a485846ff774b48cb707f91c315",
+      "state": "machine-cross-checked",
+      "text": "La copia de seguridad del inicio de sesión de HA Companion requiere la versión actual del auxiliar de ha-paneld. Actualiza o vuelve a aprovisionar este panel con acceso root para habilitarla."
+    },
+    "install.backup.companion.include_login": {
+      "sourceHash": "68a40664db6b16ee69214a3af245fb6e43dca89c26430278b7d88047bb5e1ff9",
+      "state": "machine-cross-checked",
+      "text": "Incluir el inicio de sesión de HA Companion"
+    },
+    "install.backup.config_bundle.description": {
+      "sourceHash": "35f454e577b5b356501fa24c7f754d8f5cdd8400c1ab232b4c77431548c645b1",
+      "state": "machine-cross-checked",
+      "text": "copia los ajustes entre paneles sin incluir los datos de las aplicaciones. Previsualiza una importación antes de aplicarla; se aplicarán las entradas válidas y se omitirán las no compatibles."
+    },
+    "install.backup.config_bundle.export": {
+      "sourceHash": "4431ea74c18455170de9138c781878cdeb6676ce31f2fadfde8a2e420ca2ad8b",
+      "state": "machine-cross-checked",
+      "text": "Exportar ajustes"
+    },
+    "install.backup.config_bundle.export_secrets": {
+      "sourceHash": "0fbd892f4202c8a5d0926759cc492df44e6839b4a86e5502b0bd86bfbd58b18d",
+      "state": "machine-cross-checked",
+      "text": "Exportar incluyendo secretos"
+    },
+    "install.backup.config_bundle.import": {
+      "sourceHash": "5fcef179fdaf94832ae2dff186e01e76209836234f15821fcd77bfafa24b1949",
+      "state": "machine-cross-checked",
+      "text": "Importar ajustes…"
+    },
+    "install.backup.config_bundle.title": {
+      "sourceHash": "350429652c723fbbcb5bd5b7526b4cc4626d1c15c8c5895ce3875e8767f08e69",
+      "state": "machine-cross-checked",
+      "text": "Paquete de configuración"
+    },
+    "install.backup.description.config_only": {
+      "sourceHash": "91a514241747f8e2e032ef08d16b87793106fb5e0cd5cd42fa464df36395aa45",
+      "state": "machine-cross-checked",
+      "text": "Un paquete con la configuración de ha-paneld de este panel. Las copias de seguridad contienen credenciales y se cifran de forma predeterminada con tu frase de contraseña; si la pierdes, no se puede recuperar."
+    },
+    "install.backup.description.with_companion": {
+      "sourceHash": "743a323157d7632cf19ecd46e2ac14e44c84ea19bf843eea8bc0a73a5ea7e142",
+      "state": "machine-cross-checked",
+      "text": "Un paquete con la configuración de ha-paneld de este panel y el inicio de sesión de HA Companion. Las copias de seguridad contienen credenciales y se cifran de forma predeterminada con tu frase de contraseña; si la pierdes, no se puede recuperar."
+    },
+    "install.backup.download": {
+      "sourceHash": "669211280b637c0855891124d3ac8c013d2de7d2a128402cf3a17ab0e6d7bd91",
+      "state": "machine-cross-checked",
+      "text": "Descargar copia de seguridad"
     },
     "install.backup.dynamic.accepted_without_archive": {
       "sourceHash": "dfeabb50516e6c317db6cb96c74c6bceab73a7fc964a6b627944cad2ca26ba38",
@@ -5973,6 +6298,11 @@
       "state": "machine-cross-checked",
       "text": "Panel de destino"
     },
+    "install.backup.dynamic.preview_state_unavailable": {
+      "text": "Esta copia de seguridad no contiene ningún estado del panel: el panel del que procede no pudo leer su propia base de datos. Restaurarla no recuperará el estado del panel.",
+      "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
+      "state": "machine-cross-checked"
+    },
     "install.backup.dynamic.request_failed": {
       "sourceHash": "fbbc1b5ba8644e5c54c2af5b1616eeb8644446465dfaae001bf9167a2ed30567",
       "state": "machine-cross-checked",
@@ -6013,6 +6343,16 @@
       "state": "machine-cross-checked",
       "text": "Restaurando…"
     },
+    "install.backup.passphrase.placeholder": {
+      "sourceHash": "45ac7ff5361e72d6f514d09a6907b1db92799ebce966aed20e5691e16e9695a0",
+      "state": "machine-cross-checked",
+      "text": "Frase de contraseña (obligatoria para una copia de seguridad cifrada)"
+    },
+    "install.backup.plaintext_zip": {
+      "sourceHash": "10683becdcd51177371bbb7dc6e59d3867fe28461c903e261c4258d7db617b34",
+      "state": "machine-cross-checked",
+      "text": "Crear en su lugar un archivo ZIP sin cifrar (contiene credenciales)"
+    },
     "install.backup.preview_files.one": {
       "sourceHash": "9ff7fb9b7b88fc94010ff7fd055dd1d1efd32b34a26f466917f9cfc447513a65",
       "state": "machine-cross-checked",
@@ -6022,6 +6362,36 @@
       "sourceHash": "007cdfe27ca4b2548adec165b46a9e8a92d243d21265a3dacabee99a8ddfda33",
       "state": "machine-cross-checked",
       "text": "{package} ({count} archivos)"
+    },
+    "install.backup.restore.choose": {
+      "sourceHash": "7ed32bfa384f70542e477b92902d8175f30a7db3c151c4cf734a94463c1e7942",
+      "state": "machine-cross-checked",
+      "text": "Elegir copia de seguridad (.hpb o .zip)…"
+    },
+    "install.backup.restore.description.config_only": {
+      "sourceHash": "179a9889a2016aaba29633013b5b7209063b1891b1614fee38ae14a28e916d1e",
+      "state": "machine-cross-checked",
+      "text": "sobrescribe la configuración de este panel; verás una vista previa del contenido del paquete antes de aplicarlo."
+    },
+    "install.backup.restore.description.with_companion": {
+      "sourceHash": "1dce4528d79e5fdae184cdef165a48dc161d5db5c0a3ec153bb70ac51e9df771",
+      "state": "machine-cross-checked",
+      "text": "sobrescribe la configuración de este panel y vuelve a escribir el inicio de sesión de HA Companion (forzando su detención); verás una vista previa del contenido del paquete antes de aplicarlo."
+    },
+    "install.backup.restore.passphrase_placeholder": {
+      "sourceHash": "241fdd0f0504918a81533d29614db8b5f7b92ffc5c19808ac11fdc94e37df064",
+      "state": "machine-cross-checked",
+      "text": "Frase de contraseña del paquete"
+    },
+    "install.backup.restore.title": {
+      "sourceHash": "a76e13b9839270eb73ed11417f7d8acca55df0ad52065799361631d0fff74f27",
+      "state": "machine-cross-checked",
+      "text": "Restaurar"
+    },
+    "install.backup.title": {
+      "sourceHash": "0076967a94f3290b2122017687a320ec7412aa0176f3fdfece9b0a0553e513b2",
+      "state": "machine-cross-checked",
+      "text": "Copia de seguridad y restauración"
     },
     "install.card.vendor_packages": {
       "sourceHash": "0af09e08ca5f84e613df530b47ad19993710e6110e46f0a601f743a4f0b3cc0b",
@@ -6088,10 +6458,90 @@
       "state": "machine-cross-checked",
       "text": "no se pueden comparar las versiones"
     },
+    "install.components.channel": {
+      "sourceHash": "ce4683e7013a18cdf3d224bfcb4e9594ea8f559e946a837c633defe7d3c32172",
+      "state": "machine-cross-checked",
+      "text": "Canal"
+    },
+    "install.components.channel_prefix": {
+      "sourceHash": "30d6848424f391846957a9495afa1f13e3bf40f325aca8e47b0ead771fb8287a",
+      "state": "machine-cross-checked",
+      "text": "El canal predeterminado se configura en la pestaña"
+    },
+    "install.components.channel_suffix": {
+      "sourceHash": "8b7d827c3ce2ad662c8c8d9306b48e692d582b6399c5935ec3944baee29c987e",
+      "state": "machine-cross-checked",
+      "text": "; cambiarlo aquí solo afecta a este selector."
+    },
+    "install.components.download_apk": {
+      "sourceHash": "3182bf9f023a412f0dd6d9e422436aa2fe66e5d93dbce33f1cc76a1f265fba72",
+      "state": "machine-cross-checked",
+      "text": "Descargar APK"
+    },
+    "install.components.download_apk_help": {
+      "sourceHash": "19393a12c42c93a084c32c1d815cf5f654f4611413757b29b2ae0d9d5f0969fa",
+      "state": "machine-cross-checked",
+      "text": "Este panel no dispone de un instalador con privilegios, por lo que ha-paneld no puede instalar APK por sí mismo. Descarga el APK e instálalo desde tu equipo de administración: adb install -r <file>"
+    },
+    "install.components.google_play_managed": {
+      "sourceHash": "9dc31793c17a510887425b5313c313480f05dde4694dd3113b02e1eb38b364f6",
+      "state": "machine-cross-checked",
+      "text": "Gestionado por Google Play: las actualizaciones se realizan desde Play Store"
+    },
     "install.components.install": {
       "sourceHash": "569ca49f4aaf7846e952c1d4aeca72febd0b79fa1c4f9db08fd3127551218572",
       "state": "machine-cross-checked",
       "text": "Instalar"
+    },
+    "install.components.no_known_build": {
+      "sourceHash": "81ea415d8bdb2fb5ec23f053de58c6ca10d217d15c0c3e962a59d938ae8044fb",
+      "state": "machine-cross-checked",
+      "text": "no hay ninguna compilación fiable conocida para este panel"
+    },
+    "install.components.play_managed": {
+      "sourceHash": "9914a6bf26bd266b5e3e76c4d16283698ba10c6774ed7cca99a27e32ebd9df6e",
+      "state": "machine-cross-checked",
+      "text": "Gestionado por Play: las actualizaciones se realizan desde Play Store"
+    },
+    "install.components.prerelease": {
+      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
+      "state": "machine-cross-checked",
+      "text": "Versión preliminar"
+    },
+    "install.components.privileged_unavailable": {
+      "sourceHash": "c580f4004f76a4e5ba9b1d0efa0c7c6717c74299399f703ecb017e83bf90282d",
+      "state": "machine-cross-checked",
+      "text": "La instalación o actualización requiere acceso privilegiado compatible, que no está disponible en este panel."
+    },
+    "install.components.release_notes": {
+      "sourceHash": "2d3813e25ffaf552dffc724814881a1e40138bab741d700e95ffc5cac29e726d",
+      "state": "machine-cross-checked",
+      "text": "Notas de la versión en GitHub"
+    },
+    "install.components.root_update_required": {
+      "sourceHash": "eb5c65ee970f6d856220974f20da3feb9c55907fb04590447fc75d0ce3d99d2f",
+      "state": "machine-cross-checked",
+      "text": "requiere root o el daemon para actualizarse"
+    },
+    "install.components.stable": {
+      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
+      "state": "machine-cross-checked",
+      "text": "Estable"
+    },
+    "install.components.title": {
+      "sourceHash": "e07e232bf8cd226074afb4dfd24b3bbb453dc406667505ac39beeb7f716c4516",
+      "state": "machine-cross-checked",
+      "text": "Componentes gestionados"
+    },
+    "install.components.up_to_date": {
+      "sourceHash": "bef6a4bb30a9d489f3b5dbb5d2e43b64a72e4ec04109629d0a158d33aba64c59",
+      "state": "machine-cross-checked",
+      "text": "actualizado"
+    },
+    "install.components.update_webview": {
+      "sourceHash": "76b51b5359e778d9a937a60808678b07dfe6270b8641f40a04a79e211d5123a2",
+      "state": "machine-cross-checked",
+      "text": "Actualizar WebView"
     },
     "install.config_import_status.applied": {
       "sourceHash": "b4267ce93cbba4e415504feb895f662dcced5d7aa406f27e8447c8fd5f0d48c8",
@@ -6163,6 +6613,96 @@
       "state": "machine-cross-checked",
       "text": "tipo o esquema de paquete incorrecto"
     },
+    "install.display.apply": {
+      "sourceHash": "31e392d1c0378beca611de66c0f4c71cba29159905cc54242d9bddee5b23d851",
+      "state": "machine-cross-checked",
+      "text": "Aplicar"
+    },
+    "install.display.approval": {
+      "sourceHash": "815c1f48a68f28f90917791a55c702e08b9b4acf37701d75caaa925a6a29ae73",
+      "state": "machine-cross-checked",
+      "text": "Cambiar de forma persistente la densidad de pantalla o el tamaño del texto"
+    },
+    "install.display.badge.experimental": {
+      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
+      "state": "machine-cross-checked",
+      "text": "fase experimental"
+    },
+    "install.display.default_scale": {
+      "sourceHash": "0c38c1867edacb328ec3f26ead7251ce282076b4533f6f4ae5dc503b88bd2d11",
+      "state": "machine-cross-checked",
+      "text": "valor predeterminado: 1,0"
+    },
+    "install.display.description": {
+      "sourceHash": "1eb292dfc02940bac236c1e68132d3a14997fb03b39eba6a834066faa93eb703",
+      "state": "machine-cross-checked",
+      "text": "Experimental / I+D: aún no se han determinado los valores ideales; experimenta a tu ritmo. Ajusta el tamaño de un panel de control de HA al de un navegador de escritorio. La densidad escala todo el diseño (menos dpi = cabe más contenido); el tamaño del texto escala el texto de WebView. El firmware del panel suele incluir valores que no se corresponden con la pantalla física. Se aplica al instante y se conserva tras reiniciar; requiere acceso privilegiado compatible."
+    },
+    "install.display.firmware_default": {
+      "sourceHash": "49268b9bbeb39f9441dc4a28b46199dcb9f20572b8ca02a97c714be9e6396311",
+      "state": "machine-cross-checked",
+      "text": "valor predeterminado del firmware: {value}"
+    },
+    "install.display.ha_optimised": {
+      "sourceHash": "b7e6604e3f9a20e7206aa2d138082c7e37748631dede8593e14d0d98d861e905",
+      "state": "machine-cross-checked",
+      "text": "Optimizado para HA"
+    },
+    "install.display.logical_density": {
+      "sourceHash": "1ebfed81e0867af6750370593a59267815680875953941984c9cf299ff46b0f8",
+      "state": "machine-cross-checked",
+      "text": "Densidad lógica (dpi)"
+    },
+    "install.display.profile_recommendation": {
+      "sourceHash": "32ae5b2bf824b2bcdc68ddcdaad7dc1523ec559822b261fa16f65d185a1cea1f",
+      "state": "machine-cross-checked",
+      "text": "recomendación del perfil: {value}"
+    },
+    "install.display.reset": {
+      "sourceHash": "daee7606b339f3c339076fe2c9f372a3ff40c8ee896005d829c7481b64ca5303",
+      "state": "machine-cross-checked",
+      "text": "Restablecer"
+    },
+    "install.display.reset_default": {
+      "sourceHash": "bdc8427cd16cd5932c90aff5d95b8e465317301a54f61f708ebdda27e4a4b983",
+      "state": "machine-cross-checked",
+      "text": "Restablecer al valor predeterminado del firmware"
+    },
+    "install.display.reset_default_with_dpi": {
+      "sourceHash": "9136f210c5e7bf3807712f1a8b94b0ad6d79df441d1df63a2e3de6d0b9e91565",
+      "state": "machine-cross-checked",
+      "text": "Restablecer al valor predeterminado del firmware ({value} dpi)"
+    },
+    "install.display.result.applied": {
+      "sourceHash": "93dad308df29648911ed2dd92ca7ada3b01217b778c0b7364ab3c4d2e14bae39",
+      "state": "machine-cross-checked",
+      "text": "Se ha aplicado el ajuste de tamaño de pantalla."
+    },
+    "install.display.result.failed": {
+      "sourceHash": "9085a4a51781ac21a82a34b13505d3e35804e0f4f70796c3f7a3dac6db41224a",
+      "state": "machine-cross-checked",
+      "text": "No se ha aplicado el ajuste de tamaño de pantalla; el comando de pantalla con privilegios ha fallado o no se ha solicitado ningún cambio válido."
+    },
+    "install.display.return": {
+      "sourceHash": "88aa2e92a88a0d5331f35eb6ce94045526e6806b2cd908dbb316c3807c8b631b",
+      "state": "machine-cross-checked",
+      "text": "Volver a Ajuste de tamaño de pantalla"
+    },
+    "install.display.root_required": {
+      "sourceHash": "4b9f694dd446966b410427033f5855e75c853c22cb7c3d083e7b095fbfa094b9",
+      "state": "machine-cross-checked",
+      "text": "Con acceso privilegiado compatible, ha-paneld puede adaptar la densidad y el tamaño del texto del panel de control a la pantalla física."
+    },
+    "install.display.text_size": {
+      "sourceHash": "d68761cc1eb296478531e007ff1fda9252fb7be5d24429a97eb05765211dafe5",
+      "state": "machine-cross-checked",
+      "text": "Tamaño del texto"
+    },
+    "install.display.title": {
+      "sourceHash": "75aebbbcd5f71341cc126ea916a97a7a1ece8578d4c559f53039d4228fec6d57",
+      "state": "machine-cross-checked",
+      "text": "Ajuste de tamaño de pantalla"
+    },
     "install.import.apply_question": {
       "sourceHash": "3681133a75776a670ae87e94396cd9789687fd91aab68352223285603b6cdf3e",
       "state": "machine-cross-checked",
@@ -6217,6 +6757,11 @@
       "sourceHash": "ef14eeec6bfca04b0f3fb1a9788521edc9411618116b69c7434c5f133534da93",
       "state": "machine-cross-checked",
       "text": "copia de seguridad lista"
+    },
+    "install.presentation.backup_ready_state_unavailable": {
+      "text": "copia de seguridad lista, sin estado del panel",
+      "sourceHash": "df783634b6ab429676f0459ad7279d1a349b3ba3c6b7857b34df5e2fcc443119",
+      "state": "machine-cross-checked"
     },
     "install.presentation.backup_restore_rejected_before_mutation": {
       "sourceHash": "b80876accead761400633dffbe6c55e0dbe94e01678dabf741467ad8b18c7f3d",
@@ -6487,6 +7032,11 @@
       "sourceHash": "d054b6105189ae7b6f3f87b3a6ce564bc8c3d3c2ebe6a441b23c46f071ce4030",
       "state": "machine-cross-checked",
       "text": "Restauración completada"
+    },
+    "install.presentation.restore_completed_state_unavailable": {
+      "text": "Restauración completada; esta copia de seguridad no contenía ningún estado del panel",
+      "sourceHash": "634e79faec27e14712a5c81b756955e808723baecd2c66159561ef8722a138fb",
+      "state": "machine-cross-checked"
     },
     "install.presentation.restore_config_invalid": {
       "sourceHash": "dcd891bdf459f53bf7457d82777ce818c15000e0a4b0e3cce1be201fc5e0484c",
@@ -6798,6 +7348,36 @@
       "state": "machine-cross-checked",
       "text": "{component}: procesando…"
     },
+    "install.radio.configure_join": {
+      "sourceHash": "843846f36311ad7aba87d1c8536aa89c973a28e63d593e45550d9b1c83f175d2",
+      "state": "machine-cross-checked",
+      "text": "Configurar → Unirse a la red Zigbee"
+    },
+    "install.radio.efr32": {
+      "sourceHash": "dde87983949635a3374006302e8fcaf3acba9420496567a0810f4f699f9e679c",
+      "state": "machine-cross-checked",
+      "text": "Módulo de radio EFR32"
+    },
+    "install.radio.gateway_health": {
+      "sourceHash": "596df1c31c28dc7246e5800d5e578b4c428528f03e73441ce8f5e2c49ef7db47",
+      "state": "machine-cross-checked",
+      "text": "Estado de la puerta de enlace"
+    },
+    "install.radio.note_prefix": {
+      "sourceHash": "9826954ce0ab47870f4e5026c43631c629d449185c859ca06e12bdab31d2b929",
+      "state": "machine-cross-checked",
+      "text": "Puerta de enlace Zigbee en el dispositivo Silicon Labs EFR32 de este panel. Habilita o vuelve a intentar la conexión desde"
+    },
+    "install.radio.thread_planned": {
+      "sourceHash": "7891edb2cba374dfaf02489aff727159d6ab084079c75383abaccf4b0cad8192",
+      "state": "machine-cross-checked",
+      "text": "Está prevista la programación de Thread NCP (experimental), pero aún no está disponible."
+    },
+    "install.radio.title": {
+      "sourceHash": "6117cf43d34093b4f6a3d4a7a6f1a085790200d929b26deb6da34afc5060b20a",
+      "state": "machine-cross-checked",
+      "text": "Firmware de radio"
+    },
     "install.radio_state.contained": {
       "sourceHash": "8a935a27dcc2a56a25459a31cdeb129213c65465ec2391afef3d5f9e763d3a25",
       "state": "machine-cross-checked",
@@ -6843,6 +7423,11 @@
       "state": "machine-cross-checked",
       "text": "desconocido"
     },
+    "install.ready": {
+      "sourceHash": "dc58e98e6af15e943f469a0545cdc4eebe7a6d6e3a38ab96d11f60ffccbf1eac",
+      "state": "machine-cross-checked",
+      "text": "No se han detectado problemas de configuración: este panel parece estar listo."
+    },
     "install.restore.state_values.one": {
       "sourceHash": "706097a0c28ba85557497af9ba9f404cf40d5f38c7e2511c977c0ff3c9e6bf53",
       "state": "machine-cross-checked",
@@ -6883,6 +7468,16 @@
       "state": "machine-cross-checked",
       "text": "correcta"
     },
+    "install.shared.close": {
+      "sourceHash": "7d9eb7acb13e24625c404401d8e88b2350e32162455885f18276cf802f7701ed",
+      "state": "machine-cross-checked",
+      "text": "Cerrar"
+    },
+    "install.shared.installed": {
+      "sourceHash": "a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c",
+      "state": "machine-cross-checked",
+      "text": "instalado"
+    },
     "install.shared.loading": {
       "sourceHash": "fbc6d752fe528706966cdcf8fce5d3d46999313ffd6098308efb6306972d6b44",
       "state": "machine-cross-checked",
@@ -6913,6 +7508,216 @@
       "state": "machine-cross-checked",
       "text": "⚠ Home Assistant Companion no tiene URL interna para {count} servidores — el panel de control puede fallar con “Missing 'Host' header”. Repáralas en la pestaña Instalar."
     },
+    "install.tame.action.reenable": {
+      "sourceHash": "63de421725fe824d9997872b1130d48e684b08da4b2784054049002f95684303",
+      "state": "machine-cross-checked",
+      "text": "Volver a habilitar"
+    },
+    "install.tame.action.tame": {
+      "sourceHash": "c85a15907c0bd6abe4808730c7d422f32a57b8247f11402e47f72ef842b049ed",
+      "state": "machine-cross-checked",
+      "text": "Controlar"
+    },
+    "install.tame.approval.package": {
+      "sourceHash": "699fa472f4a1b392599fc62e2cbbd912a7658ef16b5276c0d156da5090153d15",
+      "state": "machine-cross-checked",
+      "text": "{action} el paquete del fabricante {package}"
+    },
+    "install.tame.approval.recommended": {
+      "sourceHash": "3a77da60cbcfc809f72b7fd8d18d38f88119734d8ec517da65b2653c1bdcc833",
+      "state": "machine-cross-checked",
+      "text": "Controlar los paquetes del fabricante recomendados por el perfil"
+    },
+    "install.tame.badge.recommended": {
+      "sourceHash": "dd6d876548037ec722252b45795206575e7040eba1ca076cf1732a4a903cadba",
+      "state": "machine-cross-checked",
+      "text": "recomendado"
+    },
+    "install.tame.description": {
+      "sourceHash": "c8e1bf9423f5c649f86cfd13f5ebc7febeb598ec77ded15e361f3ec478710626",
+      "state": "machine-cross-checked",
+      "text": "Controlar una aplicación fuerza su detención, impide que vuelva a iniciarse durante el arranque y evita que se muestre sobre el panel de control; se aplica inmediatamente y en cada arranque. «Volver a habilitar» deshace estos cambios. Nunca se ofrecen aplicaciones esenciales del sistema y nada cambia hasta que pulses un botón."
+    },
+    "install.tame.dialog.description": {
+      "sourceHash": "90509ec5716b821b042c4dec4152d4a11a6b254973eda945231926b965d1d16b",
+      "state": "machine-cross-checked",
+      "text": "Aplicaciones de este panel que quizá quieras controlar; elige una para actuar sobre ella. No todas las entradas son indeseadas: controla solo las que reconozcas."
+    },
+    "install.tame.dialog.list_failed": {
+      "sourceHash": "531a8caebdccc2a084ce37e0f045e2c12b7480dae2317d72077feabb318da5e0",
+      "state": "machine-cross-checked",
+      "text": "No se pudo obtener la lista de paquetes."
+    },
+    "install.tame.dialog.title": {
+      "sourceHash": "87c2554fbf6da43ccc5c371f7162f0c2e7ec33b029107f27e868f6c2ac003827",
+      "state": "machine-cross-checked",
+      "text": "Buscar un paquete para controlar"
+    },
+    "install.tame.empty": {
+      "sourceHash": "a981e300306491f64f11d63e52e6717d9f2fc3b9b8504f73e980ed3de78a031c",
+      "state": "machine-cross-checked",
+      "text": "Todavía no se ha controlado nada. Pulsa «Buscar un paquete…» para ver qué hay en este panel."
+    },
+    "install.tame.error.invalid_or_protected": {
+      "sourceHash": "90087905ff9c9f3a0c2a97476a419ae53497edf6984f94172b9ef5e95a100d9c",
+      "state": "machine-cross-checked",
+      "text": "paquete no válido o protegido"
+    },
+    "install.tame.error.reenable_failed": {
+      "sourceHash": "174308fa4d6223b8b7392e54304ee3f79ae604e0a36370c6b1c8187f9cc4a9d4",
+      "state": "machine-cross-checked",
+      "text": "no se pudo volver a habilitar el paquete"
+    },
+    "install.tame.error.selection_commit": {
+      "sourceHash": "6d59b2bd714654f51c7eaba2f074088b469cb849da87ba2cd9215737c34348c4",
+      "state": "machine-cross-checked",
+      "text": "no se pudo guardar la selección del fabricante"
+    },
+    "install.tame.find": {
+      "sourceHash": "1420c824157d194bfb0f0d4ba2a38feb1696d652b95e1236b069ff902b2f56a4",
+      "state": "machine-cross-checked",
+      "text": "Buscar un paquete…"
+    },
+    "install.tame.group.cpu": {
+      "sourceHash": "09d727b8c92dd8bb86d1eb56ae3a7c034a180c1d4b5cf46dc2efedf9e6106348",
+      "state": "machine-cross-checked",
+      "text": "Mayor uso de CPU"
+    },
+    "install.tame.group.cpu_hint": {
+      "sourceHash": "b746ca190d1092c50a674ab3602eec2b56d98bc37bbb69654b6a3083f5734130",
+      "state": "machine-cross-checked",
+      "text": "Aplicaciones que más CPU usan ahora. Las esenciales o del sistema se muestran como contexto, pero no se pueden deshabilitar; controla únicamente una aplicación del fabricante que reconozcas."
+    },
+    "install.tame.group.other": {
+      "sourceHash": "2f4115e8b1a8e81958230c00ffc44d18d364797bd3307d564851d500cfa50d00",
+      "state": "machine-cross-checked",
+      "text": "Otras aplicaciones"
+    },
+    "install.tame.group.other_hint": {
+      "sourceHash": "439ed72206442cb714a94d01902328530ff10143627594fba65f514686f881cf",
+      "state": "machine-cross-checked",
+      "text": "Aplicaciones de este panel que no forman parte del sistema Android básico."
+    },
+    "install.tame.group.recommended": {
+      "sourceHash": "176620bd60cea2ffd0525c344fdcff9db0b5189442bf8ab90f5dedd57aa2cae6",
+      "state": "machine-cross-checked",
+      "text": "Recomendadas para este panel"
+    },
+    "install.tame.group.recommended_hint": {
+      "sourceHash": "ec79e0601b3e0d3e9f7717f6804c7d573c31063d5b87aa073ff074cf96e94cff",
+      "state": "machine-cross-checked",
+      "text": "Aplicaciones intrusivas conocidas del firmware de tu dispositivo: opciones iniciales seguras."
+    },
+    "install.tame.locked_empty": {
+      "sourceHash": "f638c4792f18277b2fda27370331e5e442a456222176012a8fedcf1b0cb20b46",
+      "state": "machine-cross-checked",
+      "text": "Aquí se mostrarían las aplicaciones del fabricante que este panel podría ocultar."
+    },
+    "install.tame.package_hint": {
+      "sourceHash": "e6fdbaa3a572da4f8b627fcb2e82fe254256874683df190fca4bf589cf6605da",
+      "state": "machine-cross-checked",
+      "text": "Usa el ID de paquete de Android, por ejemplo, io.example.app."
+    },
+    "install.tame.package_name": {
+      "sourceHash": "b2435d15ef23feed93deb1f778db35b57a28affcfbc1f87a3ca70ca9958aff12",
+      "state": "machine-cross-checked",
+      "text": "Nombre del paquete de Android"
+    },
+    "install.tame.result.applying_recommended": {
+      "sourceHash": "44dd56a6ca5fd07d13f582f357846894e053f0d14f5805a9650f9cc4b7e7a6e1",
+      "state": "machine-cross-checked",
+      "text": "Aplicando el control recomendado de paquetes del fabricante."
+    },
+    "install.tame.result.applying_recommended_progress": {
+      "sourceHash": "9218e52c42743c2c02acee7eb6dc8e11e6873f7dd0ba056a126fb8e5175d48fb",
+      "state": "machine-cross-checked",
+      "text": "aplicando el control recomendado de aplicaciones del fabricante…"
+    },
+    "install.tame.result.reenabling": {
+      "sourceHash": "82a18262ec1179153502829ef003b92634511def6476def26a4a15383eaa478c",
+      "state": "machine-cross-checked",
+      "text": "Volviendo a habilitar {package}."
+    },
+    "install.tame.result.taming": {
+      "sourceHash": "db713bae3f079b8dca46e450c757bb590ce42f5b5b9a305bb031ef56876d20e6",
+      "state": "machine-cross-checked",
+      "text": "Controlando {package}."
+    },
+    "install.tame.root_required": {
+      "sourceHash": "ecd0efd425027a2ac33a1659039be693c803ee8cace28a907789aa48dd2f2b0c",
+      "state": "machine-cross-checked",
+      "text": "Con acceso root, ha-paneld puede ocultar elementos no deseados del fabricante (herramientas de prueba, el lanzador del fabricante) para que solo se muestre tu panel de control."
+    },
+    "install.tame.state.active": {
+      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
+      "state": "machine-cross-checked",
+      "text": "activo"
+    },
+    "install.tame.state.disabled": {
+      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
+      "state": "machine-cross-checked",
+      "text": "deshabilitado"
+    },
+    "install.tame.state.protected": {
+      "sourceHash": "9b2bbce6c72dd9bbd9c7a9976d5d76d1fcc2bb9832dec246375bb92006beccc3",
+      "state": "machine-cross-checked",
+      "text": "protegido"
+    },
+    "install.tame.suggest.all_recommended": {
+      "sourceHash": "0790cffb17e5594b9161338a945622906deb76441ef1a6c46b0c71edd9f43df7",
+      "state": "machine-cross-checked",
+      "text": "Controlar todas las recomendadas"
+    },
+    "install.tame.suggest.none": {
+      "sourceHash": "13915b13d9ae64ddbe741da3fea94afbf3f422848a695f74accf6c6fabee2f9f",
+      "state": "machine-cross-checked",
+      "text": "— ninguna —"
+    },
+    "install.tame.suggest.none_found": {
+      "sourceHash": "f9d4b4c3489e6a81c635863cd0de78db7c49ef9e1b07f920ccbd0116e1fd0776",
+      "state": "machine-cross-checked",
+      "text": "No se han encontrado otros paquetes; aun así, puedes controlar uno por su nombre."
+    },
+    "install.tame.suggest.recommended_hint": {
+      "sourceHash": "96398f11d6dabc58ca6aac668c85c5c3f3a416028ba47b64f36c865068c54f0a",
+      "state": "machine-cross-checked",
+      "text": "las opciones iniciales con distintivo que aparecen abajo, en un solo paso"
+    },
+    "install.tame.tag.core": {
+      "sourceHash": "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c",
+      "state": "machine-cross-checked",
+      "text": "esencial"
+    },
+    "install.tame.tag.overlay": {
+      "sourceHash": "b4b33d2441645d4dd0a0694b5989a0a14a5cc22fe9865e6b7b7eae966e0de36c",
+      "state": "machine-cross-checked",
+      "text": "superposición"
+    },
+    "install.tame.tag.user": {
+      "sourceHash": "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
+      "state": "machine-cross-checked",
+      "text": "usuario"
+    },
+    "install.tame.tag.vendor": {
+      "sourceHash": "630ba09448af522154f38ef7685ef1f44b0f3e9430f80829a03ce24f400f3754",
+      "state": "machine-cross-checked",
+      "text": "fabricante"
+    },
+    "install.uninstall.action": {
+      "sourceHash": "fe199528850a4e24c14d9ece87a07b40bdcfa5fe504c175c117b997c29259ca6",
+      "state": "machine-cross-checked",
+      "text": "Desinstalar"
+    },
+    "install.uninstall.description_prefix": {
+      "sourceHash": "45d78d103a3468d3c099df705abfae73165f5ce0923ebcde6f8b06b96890a510",
+      "state": "machine-cross-checked",
+      "text": "Elimina una aplicación instalada. Solo se muestran las aplicaciones extraíbles (de terceros o actualizadas); se excluyen ha-paneld y las aplicaciones del sistema incluidas de fábrica. Si solo quieres ocultar una aplicación del fabricante,"
+    },
+    "install.uninstall.description_suffix": {
+      "sourceHash": "1462a8fa2c5b0daa167e77a39e18f19c323d99aab25200867a59af48ea5b344b",
+      "state": "machine-cross-checked",
+      "text": " en su lugar."
+    },
     "install.uninstall.dynamic.confirm": {
       "sourceHash": "7a0a791ef3c4ca2a78a7daadfbc80fb864e90f34ddd590d076f7100f6f122e77",
       "state": "machine-cross-checked",
@@ -6937,6 +7742,86 @@
       "sourceHash": "d90138c373e0ee5a8b1249c57bcc66f76217a346e162667b8751646c6ea16a3c",
       "state": "machine-cross-checked",
       "text": "Desinstalando {package}…"
+    },
+    "install.uninstall.root_unavailable": {
+      "sourceHash": "7137e48e950d350e4fa1f3662dbc28ae2eeae9cdcfeb44667641d13fc08ea053",
+      "state": "machine-cross-checked",
+      "text": "La desinstalación de una aplicación requiere acceso root, que no está disponible en este panel."
+    },
+    "install.uninstall.tame_link": {
+      "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
+      "state": "machine-cross-checked",
+      "text": "contrólala"
+    },
+    "install.uninstall.title": {
+      "sourceHash": "d1eb4f43f07eaf3e5808ba989b8fa77fadf5bf6898af4321c2e808e669c111f9",
+      "state": "machine-cross-checked",
+      "text": "Desinstalar una aplicación"
+    },
+    "install.warning.no_renderer.install_companion": {
+      "sourceHash": "0117aa1b31dd5f775fd4a3a105fbed38418eb5f679289dfc65c49ca56fa99084",
+      "state": "machine-cross-checked",
+      "text": "Instalar HA Companion"
+    },
+    "install.warning.no_renderer.prefix": {
+      "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
+      "state": "machine-cross-checked",
+      "text": "Selecciona el visor integrado de ha-paneld en"
+    },
+    "install.warning.no_renderer.progress": {
+      "sourceHash": "e44a9bcadf0eb8b464b5dcb387834d5eade7ed452fc4ce9b161eb4e41ca6ee6a",
+      "state": "machine-cross-checked",
+      "text": "el progreso se muestra más abajo, en Componentes gestionados."
+    },
+    "install.warning.no_renderer.suffix": {
+      "sourceHash": "b549f0661d976d7f7a491c492571e2459a614d197633e47ce821e2b5e984afd9",
+      "state": "machine-cross-checked",
+      "text": ", instala la aplicación Home Assistant Companion o configura allí otro paquete de panel de control."
+    },
+    "install.warning.no_renderer.title": {
+      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
+      "state": "machine-cross-checked",
+      "text": "MQTT está configurado. Siguiente paso: elige un visor de panel de control."
+    },
+    "install.warning.schema_rollback.prefix": {
+      "sourceHash": "1060ef4b650f103ab5b7f1f76eace082786393841e8bc926a034ab8e3a1cf0f6",
+      "state": "machine-cross-checked",
+      "text": "Esta compilación ha abierto un almacén de estado nuevo porque su esquema es más antiguo. Es posible que algunos ajustes se hayan restablecido. La base de datos anterior se conserva en el panel para poder recuperarla. Consulta"
+    },
+    "install.warning.schema_rollback.suffix": {
+      "sourceHash": "909f755050e1a23e3aa37bc3c74d6b3ebce0486db888b50b66519a83d11dbe3a",
+      "state": "machine-cross-checked",
+      "text": ", o restaura una copia de seguridad más abajo."
+    },
+    "install.warning.schema_rollback.title": {
+      "sourceHash": "c6b434eb6d5f96ee9185ae968a89e7a1039ba9b2aad65bde00e6555a02b7fc78",
+      "state": "machine-cross-checked",
+      "text": "La base de datos más reciente se ha conservado tras instalar una versión anterior"
+    },
+    "install.warning.webview_old.body": {
+      "sourceHash": "cdaa9385ecdff69e20e8fbe71c147fe127a7a896c85f157fd9ac902fb995ebe4",
+      "state": "machine-cross-checked",
+      "text": "Es posible que el panel de control de Home Assistant aparezca en blanco o no funcione correctamente."
+    },
+    "install.warning.webview_old.help": {
+      "sourceHash": "e47c274a443c3dfb22bfdfa0a49f6908e720d8b1518a6ba71e5d5014f52daea8",
+      "state": "machine-cross-checked",
+      "text": "Cómo y por qué actualizar"
+    },
+    "install.warning.webview_old.target": {
+      "sourceHash": "db38fba435a5055d846977c64682f2d278a25417425662847e351907db7d38a7",
+      "state": "machine-cross-checked",
+      "text": "objetivo: Chromium {version}+"
+    },
+    "install.warning.webview_old.title": {
+      "sourceHash": "32f9602603cf386e8accd721782721ab0c29ff77a86e739370a819d2c2ae5d59",
+      "state": "machine-cross-checked",
+      "text": "La versión de WebView del sistema es demasiado antigua"
+    },
+    "install.warning.webview_old.update": {
+      "sourceHash": "71d8ebe0fdc7922d4dc02071672fdd8aee2e27c8af3694a32166ff337dbd52eb",
+      "state": "machine-cross-checked",
+      "text": "Actualizar WebView ahora"
     },
     "logs.action.clear": {
       "sourceHash": "83b12c2216efb4fdc924e1deb5182e905e4926ed0c1c324d467107f46d5a26a9",
@@ -9028,10 +9913,50 @@
       "state": "machine-cross-checked",
       "text": "No se pudo guardar la confirmación; la precaución sigue visible."
     },
+    "runtime.power_safety.ack.not_hidden": {
+      "text": "La precaución no se ocultó.",
+      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
+      "state": "machine-cross-checked"
+    },
     "runtime.power_safety.ack.saving": {
       "sourceHash": "05360a57b87a18b1c7fc61b5d81158ccbfc3f953c2e8c6f3f353c003eff79499",
       "state": "machine-cross-checked",
       "text": "Guardando confirmación…"
+    },
+    "runtime.power_safety.action.acknowledgeable": {
+      "text": "Los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito están activos, pero mantener activo y Doze de Android no pueden cambiarse mediante la ruta actual de este panel. Puedes ocultar esta precaución exacta; volverá si cambian las pruebas o la capacidad.",
+      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.acknowledged": {
+      "text": "Esta precaución sin cambios está reconocida en las páginas web del panel; la API, los diagnósticos y las comprobaciones del instalador siguen informando de ella.",
+      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.manual": {
+      "text": "La reparación automática no está disponible mediante la ruta actual de este panel. Revisa manualmente las sondas informadas; esta advertencia no puede ocultarse mientras el riesgo sea desconocido o elevado.",
+      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_degraded": {
+      "text": "Usa «Reparar seguridad de alimentación» para verificar las protecciones de la aplicación y volver a probar la ruta de acceso root directo actualmente degradada de este panel. La reparación nunca reinicia el panel.",
+      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_direct": {
+      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar las protecciones de alimentación de la aplicación y de Android. La reparación nunca reinicia el panel.",
+      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.repair_limited": {
+      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito. Los cambios de mantener activo y Doze de Android no están disponibles mediante la ruta actual de este panel.",
+      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.action.review": {
+      "text": "Revisa las protecciones de alimentación observadas. Los cambios de mantener activo y Doze de Android requieren acceso root directo; las acciones de seguridad de alimentación nunca reinician el panel.",
+      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
+      "state": "machine-cross-checked"
     },
     "runtime.power_safety.button.hide": {
       "sourceHash": "65150e117bf29d5f27999ac819fbee19c26f1709364a6873d7a8519e4c4fe04c",
@@ -9043,20 +9968,125 @@
       "state": "machine-cross-checked",
       "text": "Oculta esta precaución sin cambios en las páginas web del panel; el modo Hardened requiere aprobación física"
     },
+    "runtime.power_safety.button.repair": {
+      "text": "Reparar seguridad de alimentación",
+      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.button.repair_title": {
+      "text": "La reparación es explícita, se verifica mediante una nueva lectura y nunca reinicia el panel",
+      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.at_risk": {
+      "text": "Seguridad de alimentación del panel: en riesgo",
+      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.caution": {
+      "text": "Seguridad de alimentación del panel: precaución",
+      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.level.unknown": {
+      "text": "Seguridad de alimentación del panel: desconocida",
+      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
+      "state": "machine-cross-checked"
+    },
     "runtime.power_safety.repair.applying": {
       "sourceHash": "0a4d00786291e3748e44cb8c56ceb349eda167603ba5e2bc79779a6c46ee8447",
       "state": "machine-cross-checked",
       "text": "Aplicando y verificando…"
+    },
+    "runtime.power_safety.repair.approval": {
+      "text": "Aprueba esta solicitud físicamente en el panel y vuelve a pulsar «Reparar seguridad de alimentación».",
+      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
+      "state": "machine-cross-checked"
     },
     "runtime.power_safety.repair.endpoint_failed": {
       "sourceHash": "00806a21056ce5e3b5faab1e9e31ac1d324b0fef358891ee76b07f9dbfca386c",
       "state": "machine-cross-checked",
       "text": "No se pudo contactar con el punto de reparación; no se confirmó ninguna reparación."
     },
+    "runtime.power_safety.repair.failed_no_reboot": {
+      "text": "La reparación de la seguridad de alimentación falló; no se intentó reiniciar.",
+      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.repair.partial": {
+      "text": "La reparación de la seguridad de alimentación fue parcial. No se intentó reiniciar.",
+      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
+      "state": "machine-cross-checked"
+    },
     "runtime.power_safety.repair.refreshing": {
       "sourceHash": "1c0def7be0607b966b89e4974da38090472d8ada625f5b4c89f25b09d39683bd",
       "state": "machine-cross-checked",
       "text": "Actualizando…"
+    },
+    "runtime.power_safety.repair.repaired": {
+      "text": "La seguridad de alimentación se reparó y verificó.",
+      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.at_risk": {
+      "text": "El panel puede suspenderse o entrar en Doze al apagarse la pantalla, dejando inaccesibles HTTP, MQTT y el trabajo en segundo plano.",
+      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.caution": {
+      "text": "La conectividad del panel depende actualmente de una sola protección de alimentación observada.",
+      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
+      "state": "machine-cross-checked"
+    },
+    "runtime.power_safety.summary.unknown": {
+      "text": "No se pudo establecer la seguridad de alimentación porque una o más sondas de alimentación de Android no estaban disponibles o fueron ambiguas.",
+      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
+      "state": "machine-cross-checked"
+    },
+    "runtime.renderer_recovery.builtin": {
+      "text": "El renderizador integrado dejó de reintentar tras fallos repetidos de WebView. Actualiza o repara System WebView y luego usa Recargar panel de control desde la barra de navegación del panel o la pestaña Panel de control.",
+      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
+      "state": "machine-cross-checked"
+    },
+    "runtime.renderer_recovery.external": {
+      "text": "La aplicación del panel de control está en un bucle de fallos — el watchdog dejó de relanzarla para evitar una tormenta de reinicios. Reinstala o cambia a una versión anterior de la aplicación del panel de control/Companion, o reinicia el panel.",
+      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.contained": {
+      "text": "Se contuvo el descontrol de la puerta de enlace Zigbee — el interruptor del router se puso en OFF tras un uso alto y sostenido de CPU mientras no estaba unido, o tras reinicios repetidos.",
+      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.containment_failed": {
+      "text": "La contención de la puerta de enlace Zigbee fue incompleta — el relanzador se detuvo donde fue posible y el trabajo restante se degradó. Revisa los diagnósticos antes de reintentar.",
+      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_high_cpu": {
+      "text": "La puerta de enlace Zigbee unida mantiene un uso alto de CPU — sigue en ejecución porque los routers unidos solo generan advertencias.",
+      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.degraded_unjoined": {
+      "text": "El router Zigbee está activado pero no unido — los reintentos de unión repetidos pueden consumir mucha CPU. Une este panel a tu coordinador Zigbee o pon el interruptor del router Zigbee en OFF.",
+      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.legacy_watchdog": {
+      "text": "Se detectó el defecto del watchdog Zigbee antiguo — está presente la asignación recursiva exacta de LD_LIBRARY_PATH. ha-paneld no editará el script del fabricante automáticamente.",
+      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.resolve": {
+      "text": "Resolver la configuración Zigbee →",
+      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
+      "state": "machine-cross-checked"
+    },
+    "runtime.zigbee.warning.runaway": {
+      "text": "La puerta de enlace Zigbee está descontrolada — la contención automática está en curso.",
+      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
+      "state": "machine-cross-checked"
     },
     "settings.auto_brightness.help": {
       "sourceHash": "5073ca9b58a1e1351998c43b8ef589b1952549e47a6db902e9f155176eaccea7",
@@ -9117,6 +10147,16 @@
       "sourceHash": "2881db2f92f7c139d4f0856ff75de63b3784b62c7b8c629a23de3943f1b77111",
       "state": "machine-cross-checked",
       "text": "Actividad de suspensión automática"
+    },
+    "settings.auto_sleep_source.help": {
+      "text": "Use el sensor de proximidad calibrado del panel o elija dispositivos del área de Home Assistant. Si la fuente seleccionada no está disponible, el reposo automático se pausa y el control táctil sigue disponible.",
+      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
+      "state": "machine-cross-checked"
+    },
+    "settings.auto_sleep_source.label": {
+      "text": "Fuente de presencia para reposo automático",
+      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
+      "state": "machine-cross-checked"
     },
     "settings.camera_enabled.help": {
       "sourceHash": "7cdea3db240f425db9be12ceb307b9cb3986e5466981f26156d853e842ab2c9f",
@@ -11023,6 +12063,16 @@
       "sourceHash": "5ba1d019d11a080f325c121c03788d2dd20c17c6e87dae9d6261af2a07233ce3",
       "state": "machine-cross-checked"
     },
+    "shell.runtime.ha_network.banner_latency_severe": {
+      "text": "La ruta de red a Home Assistant es muy lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
+      "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
+      "state": "machine-cross-checked"
+    },
+    "shell.runtime.ha_network.banner_latency_warning": {
+      "text": "La ruta de red a Home Assistant es lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
+      "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
+      "state": "machine-cross-checked"
+    },
     "shell.runtime.ha_network.banner_severe": {
       "text": "La ruta de red a Home Assistant está fallando: {evidence}. Los paquetes no están llegando. Comprueba la ruta Wi-Fi entre este panel y Home Assistant antes de atribuir el problema al panel.",
       "sourceHash": "a0604e58e3dc82e450c3d696c5cae33f4449228cf6246c592677dd3743c9e1dc",
@@ -11082,1056 +12132,6 @@
       "sourceHash": "da508a88ecafb04836ca28a2c351d7f5dfb5864cdad65f7d8fbce4f59e9eb82b",
       "state": "machine-cross-checked",
       "text": "Configuración de MQTT guardada: verificando la conexión con el bróker. Esto puede tardar un poco después de guardar."
-    },
-    "runtime.renderer_recovery.builtin": {
-      "text": "El renderizador integrado dejó de reintentar tras fallos repetidos de WebView. Actualiza o repara System WebView y luego usa Recargar panel de control desde la barra de navegación del panel o la pestaña Panel de control.",
-      "sourceHash": "20f93e06aeff7310a8f77b8fa3242cd484ebedb2b1a6242e5aaba65209c4b428",
-      "state": "machine-cross-checked"
-    },
-    "runtime.renderer_recovery.external": {
-      "text": "La aplicación del panel de control está en un bucle de fallos — el watchdog dejó de relanzarla para evitar una tormenta de reinicios. Reinstala o cambia a una versión anterior de la aplicación del panel de control/Companion, o reinicia el panel.",
-      "sourceHash": "065bba7b903c3f1072e1c3d3008b809f3147884454fd6a7cfc657adf334d3f0e",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.contained": {
-      "text": "Se contuvo el descontrol de la puerta de enlace Zigbee — el interruptor del router se puso en OFF tras un uso alto y sostenido de CPU mientras no estaba unido, o tras reinicios repetidos.",
-      "sourceHash": "6e8de43c99e2ed60105331fec9dabd1b895b543b5f6d0cc7c8104d179f3baa46",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.containment_failed": {
-      "text": "La contención de la puerta de enlace Zigbee fue incompleta — el relanzador se detuvo donde fue posible y el trabajo restante se degradó. Revisa los diagnósticos antes de reintentar.",
-      "sourceHash": "88cf537529fee87a4b905a65852ef15cc37dfae417d97c8947252bc92fc972ec",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.runaway": {
-      "text": "La puerta de enlace Zigbee está descontrolada — la contención automática está en curso.",
-      "sourceHash": "0853c48982725c3ca3cd938cf0d637ddcde721f725b0d344a6d601989e00e89f",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.degraded_high_cpu": {
-      "text": "La puerta de enlace Zigbee unida mantiene un uso alto de CPU — sigue en ejecución porque los routers unidos solo generan advertencias.",
-      "sourceHash": "53a2652fe79d1c63c6d65c8a486a25f656878dace5b7c7c8b213300618542d71",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.degraded_unjoined": {
-      "text": "El router Zigbee está activado pero no unido — los reintentos de unión repetidos pueden consumir mucha CPU. Une este panel a tu coordinador Zigbee o pon el interruptor del router Zigbee en OFF.",
-      "sourceHash": "fa2fc190bf321a66d390babada6cd7a8c84433a8d4f7ca71d098d6641b799e07",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.legacy_watchdog": {
-      "text": "Se detectó el defecto del watchdog Zigbee antiguo — está presente la asignación recursiva exacta de LD_LIBRARY_PATH. ha-paneld no editará el script del fabricante automáticamente.",
-      "sourceHash": "cb9f47756c7492c12f1ef735915723ec820b711f086df460a42eeb72302a0719",
-      "state": "machine-cross-checked"
-    },
-    "runtime.zigbee.warning.resolve": {
-      "text": "Resolver la configuración Zigbee →",
-      "sourceHash": "a3e1ee4e02fb8ad443c2e66c6d6331a19f727ceab84dd5abf4cd216241261573",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.level.at_risk": {
-      "text": "Seguridad de alimentación del panel: en riesgo",
-      "sourceHash": "842fd08f4027cba9a129fea89e2be31a821bf016a5d307c35bd20212bb9cca2b",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.level.caution": {
-      "text": "Seguridad de alimentación del panel: precaución",
-      "sourceHash": "1b4a977ac895145657b74b05e3d7b4be0f28479237055bcf2abd21e047ffd802",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.level.unknown": {
-      "text": "Seguridad de alimentación del panel: desconocida",
-      "sourceHash": "67ee8951bafa1e1eac7dfc24b25a8700a3f0d9124472cf3d84a7fa167a1e2519",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.summary.at_risk": {
-      "text": "El panel puede suspenderse o entrar en Doze al apagarse la pantalla, dejando inaccesibles HTTP, MQTT y el trabajo en segundo plano.",
-      "sourceHash": "c3985d94deae2c90693d7b57b50bd842fa613cf16e2c8d34ca8a9aad579d9c13",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.summary.caution": {
-      "text": "La conectividad del panel depende actualmente de una sola protección de alimentación observada.",
-      "sourceHash": "f542740e25ab3bcbc4d751bf69c2afc0a98ba6522b8e62b8890e3a077f4d1640",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.summary.unknown": {
-      "text": "No se pudo establecer la seguridad de alimentación porque una o más sondas de alimentación de Android no estaban disponibles o fueron ambiguas.",
-      "sourceHash": "482ba8367efe4f0a16e888518f0570245fb2ef01f6ef68415d3c6e315b3e76be",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.review": {
-      "text": "Revisa las protecciones de alimentación observadas. Los cambios de mantener activo y Doze de Android requieren acceso root directo; las acciones de seguridad de alimentación nunca reinician el panel.",
-      "sourceHash": "a449f72ec34777c6f2723e91a028c388bdfb91e3b06585275c0d95ad37139dbb",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.repair_direct": {
-      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar las protecciones de alimentación de la aplicación y de Android. La reparación nunca reinicia el panel.",
-      "sourceHash": "859f3c8f143b1312e483dad2877843a088142206381cb2164b6027605c0d7ff0",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.repair_degraded": {
-      "text": "Usa «Reparar seguridad de alimentación» para verificar las protecciones de la aplicación y volver a probar la ruta de acceso root directo actualmente degradada de este panel. La reparación nunca reinicia el panel.",
-      "sourceHash": "acb7d2bc475d897202962a44cc3c84ebffcdb1e55369edeadd13ab130dbf0735",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.repair_limited": {
-      "text": "Usa «Reparar seguridad de alimentación» para activar y verificar los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito. Los cambios de mantener activo y Doze de Android no están disponibles mediante la ruta actual de este panel.",
-      "sourceHash": "4524b3525e8bddcd709de253886b1737e2e5afd6d19c89b90d3b0fddd7dd842a",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.acknowledged": {
-      "text": "Esta precaución sin cambios está reconocida en las páginas web del panel; la API, los diagnósticos y las comprobaciones del instalador siguen informando de ella.",
-      "sourceHash": "4f5c25820fd583ab50f8057662be99abef99e2a3ed6af5e21cc96a817e31316f",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.acknowledgeable": {
-      "text": "Los bloqueos de CPU/Wi-Fi de la aplicación y el tiempo de espera infinito están activos, pero mantener activo y Doze de Android no pueden cambiarse mediante la ruta actual de este panel. Puedes ocultar esta precaución exacta; volverá si cambian las pruebas o la capacidad.",
-      "sourceHash": "54602ea6c3a55fe72a8109d82bb47beaad03647a29f9a4e04449c1d2b8e223fa",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.action.manual": {
-      "text": "La reparación automática no está disponible mediante la ruta actual de este panel. Revisa manualmente las sondas informadas; esta advertencia no puede ocultarse mientras el riesgo sea desconocido o elevado.",
-      "sourceHash": "003bbaf7c91e43da61ab521f3a42f52c8decd91ff9d4e49ac20216be0f8ad91b",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.button.repair": {
-      "text": "Reparar seguridad de alimentación",
-      "sourceHash": "78117082fe884a581b10c60db104c3165410016e0970ffad2e7ea68bd0ed29c8",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.button.repair_title": {
-      "text": "La reparación es explícita, se verifica mediante una nueva lectura y nunca reinicia el panel",
-      "sourceHash": "e8af7e6d7a717d25be060e60abb34f970a5534d9836423a0972de0690e5ecb34",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.ack.not_hidden": {
-      "text": "La precaución no se ocultó.",
-      "sourceHash": "22efebad2c925ed794bc9f7c1e8a8b7153b125aa6d3e4386dfa0cbdf4b50d4d6",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.repair.approval": {
-      "text": "Aprueba esta solicitud físicamente en el panel y vuelve a pulsar «Reparar seguridad de alimentación».",
-      "sourceHash": "9854df3fa47cffaa031f533eca3ae94ef3a434487c78482f5810ca91afbbac8b",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.repair.repaired": {
-      "text": "La seguridad de alimentación se reparó y verificó.",
-      "sourceHash": "e96151cbf938def9ee3a9b159eb38a398799e3eb0291c17382549d06407373c1",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.repair.partial": {
-      "text": "La reparación de la seguridad de alimentación fue parcial. No se intentó reiniciar.",
-      "sourceHash": "bb01ca3de49cb0c0aaa0b86eda7c04f16fe98dddeceaefaea5934fe75b07d374",
-      "state": "machine-cross-checked"
-    },
-    "runtime.power_safety.repair.failed_no_reboot": {
-      "text": "La reparación de la seguridad de alimentación falló; no se intentó reiniciar.",
-      "sourceHash": "4f9550b9a3f819c26ddf0f94f0c843cc6f752c35deec4dba4831c46ade784a16",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.live.led": {
-      "sourceHash": "498785455dcb5a9e49d815731ead0399021427b333d2b29c79075525c12c2c17",
-      "state": "machine-cross-checked",
-      "text": "LED"
-    },
-    "dashboard.screenshot.unavailable": {
-      "sourceHash": "93a81738c6e2f2cd474595a3c03c94a749a7927f173e9cbf420de1b54514205c",
-      "state": "machine-cross-checked",
-      "text": "⚠ captura de pantalla no disponible"
-    },
-    "install.apk.choose": {
-      "sourceHash": "93bc2050724e81c543daf449e7bac462859143e1c137bbc254b2660661e4d9dc",
-      "state": "machine-cross-checked",
-      "text": "Elegir APK…"
-    },
-    "install.apk.description": {
-      "sourceHash": "75dc85bc1ebe01d6dd6a1e7bd4ebefb3b58bbc75b27d134a7d1590f6a9a41055",
-      "state": "machine-cross-checked",
-      "text": "Instala una aplicación (p. ej., un visor de paneles) desde un archivo del dispositivo o desde un enlace https:// que el panel descargará por sí mismo. En ambos casos, verás el paquete, la versión y el firmante antes de instalarla."
-    },
-    "install.apk.enable": {
-      "sourceHash": "6db67e8e7579cb2db2500d86bf9c53f8189de1600b3e02868448d523a544e1a8",
-      "state": "machine-cross-checked",
-      "text": "Habilitar la instalación de APK en este panel"
-    },
-    "install.apk.fetch": {
-      "sourceHash": "685bc203ad7d639cb41009ca140de3141621f48313f21ddf72344e1b8a99656a",
-      "state": "machine-cross-checked",
-      "text": "Descargar e inspeccionar"
-    },
-    "install.apk.fetch_label": {
-      "sourceHash": "9d7e0624c25f4119df32f19d101ef651546302e05eda6f0015954e146e5348cc",
-      "state": "machine-cross-checked",
-      "text": "O descargar desde un enlace"
-    },
-    "install.apk.root_unavailable": {
-      "sourceHash": "12253abdd5c23f5aa5f4fab0e662da4ee9d6ac2716392c0e7e95b205a51a5f04",
-      "state": "machine-cross-checked",
-      "text": "La instalación de cualquier APK requiere acceso root o el daemon auxiliar, que no están disponibles en este panel."
-    },
-    "install.apk.security_future_auth": {
-      "sourceHash": "56e615ce71344c71a91105c99eb7f66925d8af8316ec1938f60eba17238be309",
-      "state": "machine-cross-checked",
-      "text": "Actualmente, el acceso al panel está limitado a la red LAN; se prevé añadir acceso autenticado en una versión posterior."
-    },
-    "install.apk.security_title": {
-      "sourceHash": "a1ac876477c082d29fe65395e2b030bc26158edf67a218cb4bc5e95e911fb92f",
-      "state": "machine-cross-checked",
-      "text": "Seguridad:"
-    },
-    "install.apk.security_warning": {
-      "sourceHash": "80705f000b7eea37fd3ac7d2a71bd56b067ab318ecef4b6eeff8af9f6b8bfdb3",
-      "state": "machine-cross-checked",
-      "text": "Esta función instala con acceso root cualquier APK que elijas mediante la interfaz web no autenticada del panel en la red LAN. Instala únicamente APK de confianza."
-    },
-    "install.apk.title": {
-      "sourceHash": "f2cca01cdf3f8a3350968f38c63fc602cd8aaddf08ac2f183f8f20f8380b9c55",
-      "state": "machine-cross-checked",
-      "text": "Instalar un APK"
-    },
-    "install.audit.description": {
-      "sourceHash": "1f0badfb07dade0f2e55b2e777f6b2f670f8fb38c5e9fa1445fed2f0fb5b800e",
-      "state": "machine-cross-checked",
-      "text": "Vuelve a comprobar si el panel presenta problemas que impidan mostrar el panel de control, como una versión antigua de WebView, la ausencia de una aplicación de panel de control o actualizaciones disponibles."
-    },
-    "install.audit.diagnostics": {
-      "sourceHash": "85529ca4d488e68a812c6db33828b13074ccd77bea93f820363dc3ef6060410a",
-      "state": "machine-cross-checked",
-      "text": "Volcado de diagnóstico"
-    },
-    "install.audit.diagnostics_help": {
-      "sourceHash": "452b079a22d763b46d9747981ceff3da73cb3f124d10597b03167b77fb0ce24b",
-      "state": "machine-cross-checked",
-      "text": "informe completo de hardware, firmware, SELinux y su para informes de errores."
-    },
-    "install.audit.run": {
-      "sourceHash": "8b5f0792883a565c24e85682e2696a76c9a4b17a5a3016fddfc5e898897bd8e9",
-      "state": "machine-cross-checked",
-      "text": "Ejecutar comprobación de estado"
-    },
-    "install.audit.title": {
-      "sourceHash": "3979e87d0cb5c365bc3a5cdd30579795fff19a7686b673bc7bd660b75544704e",
-      "state": "machine-cross-checked",
-      "text": "Comprobación de estado"
-    },
-    "install.backup.companion.helper_required": {
-      "sourceHash": "9655f8357363d49834901a88dc543b16cabe4a485846ff774b48cb707f91c315",
-      "state": "machine-cross-checked",
-      "text": "La copia de seguridad del inicio de sesión de HA Companion requiere la versión actual del auxiliar de ha-paneld. Actualiza o vuelve a aprovisionar este panel con acceso root para habilitarla."
-    },
-    "install.backup.companion.include_login": {
-      "sourceHash": "68a40664db6b16ee69214a3af245fb6e43dca89c26430278b7d88047bb5e1ff9",
-      "state": "machine-cross-checked",
-      "text": "Incluir el inicio de sesión de HA Companion"
-    },
-    "install.backup.config_bundle.description": {
-      "sourceHash": "35f454e577b5b356501fa24c7f754d8f5cdd8400c1ab232b4c77431548c645b1",
-      "state": "machine-cross-checked",
-      "text": "copia los ajustes entre paneles sin incluir los datos de las aplicaciones. Previsualiza una importación antes de aplicarla; se aplicarán las entradas válidas y se omitirán las no compatibles."
-    },
-    "install.backup.config_bundle.export": {
-      "sourceHash": "4431ea74c18455170de9138c781878cdeb6676ce31f2fadfde8a2e420ca2ad8b",
-      "state": "machine-cross-checked",
-      "text": "Exportar ajustes"
-    },
-    "install.backup.config_bundle.export_secrets": {
-      "sourceHash": "0fbd892f4202c8a5d0926759cc492df44e6839b4a86e5502b0bd86bfbd58b18d",
-      "state": "machine-cross-checked",
-      "text": "Exportar incluyendo secretos"
-    },
-    "install.backup.config_bundle.import": {
-      "sourceHash": "5fcef179fdaf94832ae2dff186e01e76209836234f15821fcd77bfafa24b1949",
-      "state": "machine-cross-checked",
-      "text": "Importar ajustes…"
-    },
-    "install.backup.config_bundle.title": {
-      "sourceHash": "350429652c723fbbcb5bd5b7526b4cc4626d1c15c8c5895ce3875e8767f08e69",
-      "state": "machine-cross-checked",
-      "text": "Paquete de configuración"
-    },
-    "install.backup.description.config_only": {
-      "sourceHash": "91a514241747f8e2e032ef08d16b87793106fb5e0cd5cd42fa464df36395aa45",
-      "state": "machine-cross-checked",
-      "text": "Un paquete con la configuración de ha-paneld de este panel. Las copias de seguridad contienen credenciales y se cifran de forma predeterminada con tu frase de contraseña; si la pierdes, no se puede recuperar."
-    },
-    "install.backup.description.with_companion": {
-      "sourceHash": "743a323157d7632cf19ecd46e2ac14e44c84ea19bf843eea8bc0a73a5ea7e142",
-      "state": "machine-cross-checked",
-      "text": "Un paquete con la configuración de ha-paneld de este panel y el inicio de sesión de HA Companion. Las copias de seguridad contienen credenciales y se cifran de forma predeterminada con tu frase de contraseña; si la pierdes, no se puede recuperar."
-    },
-    "install.backup.download": {
-      "sourceHash": "669211280b637c0855891124d3ac8c013d2de7d2a128402cf3a17ab0e6d7bd91",
-      "state": "machine-cross-checked",
-      "text": "Descargar copia de seguridad"
-    },
-    "install.backup.passphrase.placeholder": {
-      "sourceHash": "45ac7ff5361e72d6f514d09a6907b1db92799ebce966aed20e5691e16e9695a0",
-      "state": "machine-cross-checked",
-      "text": "Frase de contraseña (obligatoria para una copia de seguridad cifrada)"
-    },
-    "install.backup.plaintext_zip": {
-      "sourceHash": "10683becdcd51177371bbb7dc6e59d3867fe28461c903e261c4258d7db617b34",
-      "state": "machine-cross-checked",
-      "text": "Crear en su lugar un archivo ZIP sin cifrar (contiene credenciales)"
-    },
-    "install.backup.restore.choose": {
-      "sourceHash": "7ed32bfa384f70542e477b92902d8175f30a7db3c151c4cf734a94463c1e7942",
-      "state": "machine-cross-checked",
-      "text": "Elegir copia de seguridad (.hpb o .zip)…"
-    },
-    "install.backup.restore.description.config_only": {
-      "sourceHash": "179a9889a2016aaba29633013b5b7209063b1891b1614fee38ae14a28e916d1e",
-      "state": "machine-cross-checked",
-      "text": "sobrescribe la configuración de este panel; verás una vista previa del contenido del paquete antes de aplicarlo."
-    },
-    "install.backup.restore.description.with_companion": {
-      "sourceHash": "1dce4528d79e5fdae184cdef165a48dc161d5db5c0a3ec153bb70ac51e9df771",
-      "state": "machine-cross-checked",
-      "text": "sobrescribe la configuración de este panel y vuelve a escribir el inicio de sesión de HA Companion (forzando su detención); verás una vista previa del contenido del paquete antes de aplicarlo."
-    },
-    "install.backup.restore.passphrase_placeholder": {
-      "sourceHash": "241fdd0f0504918a81533d29614db8b5f7b92ffc5c19808ac11fdc94e37df064",
-      "state": "machine-cross-checked",
-      "text": "Frase de contraseña del paquete"
-    },
-    "install.backup.restore.title": {
-      "sourceHash": "a76e13b9839270eb73ed11417f7d8acca55df0ad52065799361631d0fff74f27",
-      "state": "machine-cross-checked",
-      "text": "Restaurar"
-    },
-    "install.backup.title": {
-      "sourceHash": "0076967a94f3290b2122017687a320ec7412aa0176f3fdfece9b0a0553e513b2",
-      "state": "machine-cross-checked",
-      "text": "Copia de seguridad y restauración"
-    },
-    "install.components.channel": {
-      "sourceHash": "ce4683e7013a18cdf3d224bfcb4e9594ea8f559e946a837c633defe7d3c32172",
-      "state": "machine-cross-checked",
-      "text": "Canal"
-    },
-    "install.components.channel_prefix": {
-      "sourceHash": "30d6848424f391846957a9495afa1f13e3bf40f325aca8e47b0ead771fb8287a",
-      "state": "machine-cross-checked",
-      "text": "El canal predeterminado se configura en la pestaña"
-    },
-    "install.components.channel_suffix": {
-      "sourceHash": "8b7d827c3ce2ad662c8c8d9306b48e692d582b6399c5935ec3944baee29c987e",
-      "state": "machine-cross-checked",
-      "text": "; cambiarlo aquí solo afecta a este selector."
-    },
-    "install.components.download_apk": {
-      "sourceHash": "3182bf9f023a412f0dd6d9e422436aa2fe66e5d93dbce33f1cc76a1f265fba72",
-      "state": "machine-cross-checked",
-      "text": "Descargar APK"
-    },
-    "install.components.download_apk_help": {
-      "sourceHash": "19393a12c42c93a084c32c1d815cf5f654f4611413757b29b2ae0d9d5f0969fa",
-      "state": "machine-cross-checked",
-      "text": "Este panel no dispone de un instalador con privilegios, por lo que ha-paneld no puede instalar APK por sí mismo. Descarga el APK e instálalo desde tu equipo de administración: adb install -r <file>"
-    },
-    "install.components.google_play_managed": {
-      "sourceHash": "9dc31793c17a510887425b5313c313480f05dde4694dd3113b02e1eb38b364f6",
-      "state": "machine-cross-checked",
-      "text": "Gestionado por Google Play: las actualizaciones se realizan desde Play Store"
-    },
-    "install.components.no_known_build": {
-      "sourceHash": "81ea415d8bdb2fb5ec23f053de58c6ca10d217d15c0c3e962a59d938ae8044fb",
-      "state": "machine-cross-checked",
-      "text": "no hay ninguna compilación fiable conocida para este panel"
-    },
-    "install.components.play_managed": {
-      "sourceHash": "9914a6bf26bd266b5e3e76c4d16283698ba10c6774ed7cca99a27e32ebd9df6e",
-      "state": "machine-cross-checked",
-      "text": "Gestionado por Play: las actualizaciones se realizan desde Play Store"
-    },
-    "install.components.prerelease": {
-      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
-      "state": "machine-cross-checked",
-      "text": "Versión preliminar"
-    },
-    "install.components.privileged_unavailable": {
-      "sourceHash": "c580f4004f76a4e5ba9b1d0efa0c7c6717c74299399f703ecb017e83bf90282d",
-      "state": "machine-cross-checked",
-      "text": "La instalación o actualización requiere acceso privilegiado compatible, que no está disponible en este panel."
-    },
-    "install.components.release_notes": {
-      "sourceHash": "2d3813e25ffaf552dffc724814881a1e40138bab741d700e95ffc5cac29e726d",
-      "state": "machine-cross-checked",
-      "text": "Notas de la versión en GitHub"
-    },
-    "install.components.root_update_required": {
-      "sourceHash": "eb5c65ee970f6d856220974f20da3feb9c55907fb04590447fc75d0ce3d99d2f",
-      "state": "machine-cross-checked",
-      "text": "requiere root o el daemon para actualizarse"
-    },
-    "install.components.stable": {
-      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
-      "state": "machine-cross-checked",
-      "text": "Estable"
-    },
-    "install.components.title": {
-      "sourceHash": "e07e232bf8cd226074afb4dfd24b3bbb453dc406667505ac39beeb7f716c4516",
-      "state": "machine-cross-checked",
-      "text": "Componentes gestionados"
-    },
-    "install.components.up_to_date": {
-      "sourceHash": "bef6a4bb30a9d489f3b5dbb5d2e43b64a72e4ec04109629d0a158d33aba64c59",
-      "state": "machine-cross-checked",
-      "text": "actualizado"
-    },
-    "install.components.update_webview": {
-      "sourceHash": "76b51b5359e778d9a937a60808678b07dfe6270b8641f40a04a79e211d5123a2",
-      "state": "machine-cross-checked",
-      "text": "Actualizar WebView"
-    },
-    "install.display.apply": {
-      "sourceHash": "31e392d1c0378beca611de66c0f4c71cba29159905cc54242d9bddee5b23d851",
-      "state": "machine-cross-checked",
-      "text": "Aplicar"
-    },
-    "install.display.approval": {
-      "sourceHash": "815c1f48a68f28f90917791a55c702e08b9b4acf37701d75caaa925a6a29ae73",
-      "state": "machine-cross-checked",
-      "text": "Cambiar de forma persistente la densidad de pantalla o el tamaño del texto"
-    },
-    "install.display.badge.experimental": {
-      "sourceHash": "748be63c87c9fad252fbd0a2e16d0bdd446d2f7acb456b820ed417e9b1f451df",
-      "state": "machine-cross-checked",
-      "text": "fase experimental"
-    },
-    "install.display.default_scale": {
-      "sourceHash": "0c38c1867edacb328ec3f26ead7251ce282076b4533f6f4ae5dc503b88bd2d11",
-      "state": "machine-cross-checked",
-      "text": "valor predeterminado: 1,0"
-    },
-    "install.display.description": {
-      "sourceHash": "1eb292dfc02940bac236c1e68132d3a14997fb03b39eba6a834066faa93eb703",
-      "state": "machine-cross-checked",
-      "text": "Experimental / I+D: aún no se han determinado los valores ideales; experimenta a tu ritmo. Ajusta el tamaño de un panel de control de HA al de un navegador de escritorio. La densidad escala todo el diseño (menos dpi = cabe más contenido); el tamaño del texto escala el texto de WebView. El firmware del panel suele incluir valores que no se corresponden con la pantalla física. Se aplica al instante y se conserva tras reiniciar; requiere acceso privilegiado compatible."
-    },
-    "install.display.firmware_default": {
-      "sourceHash": "49268b9bbeb39f9441dc4a28b46199dcb9f20572b8ca02a97c714be9e6396311",
-      "state": "machine-cross-checked",
-      "text": "valor predeterminado del firmware: {value}"
-    },
-    "install.display.ha_optimised": {
-      "sourceHash": "b7e6604e3f9a20e7206aa2d138082c7e37748631dede8593e14d0d98d861e905",
-      "state": "machine-cross-checked",
-      "text": "Optimizado para HA"
-    },
-    "install.display.logical_density": {
-      "sourceHash": "1ebfed81e0867af6750370593a59267815680875953941984c9cf299ff46b0f8",
-      "state": "machine-cross-checked",
-      "text": "Densidad lógica (dpi)"
-    },
-    "install.display.profile_recommendation": {
-      "sourceHash": "32ae5b2bf824b2bcdc68ddcdaad7dc1523ec559822b261fa16f65d185a1cea1f",
-      "state": "machine-cross-checked",
-      "text": "recomendación del perfil: {value}"
-    },
-    "install.display.reset": {
-      "sourceHash": "daee7606b339f3c339076fe2c9f372a3ff40c8ee896005d829c7481b64ca5303",
-      "state": "machine-cross-checked",
-      "text": "Restablecer"
-    },
-    "install.display.reset_default": {
-      "sourceHash": "bdc8427cd16cd5932c90aff5d95b8e465317301a54f61f708ebdda27e4a4b983",
-      "state": "machine-cross-checked",
-      "text": "Restablecer al valor predeterminado del firmware"
-    },
-    "install.display.reset_default_with_dpi": {
-      "sourceHash": "9136f210c5e7bf3807712f1a8b94b0ad6d79df441d1df63a2e3de6d0b9e91565",
-      "state": "machine-cross-checked",
-      "text": "Restablecer al valor predeterminado del firmware ({value} dpi)"
-    },
-    "install.display.result.applied": {
-      "sourceHash": "93dad308df29648911ed2dd92ca7ada3b01217b778c0b7364ab3c4d2e14bae39",
-      "state": "machine-cross-checked",
-      "text": "Se ha aplicado el ajuste de tamaño de pantalla."
-    },
-    "install.display.result.failed": {
-      "sourceHash": "9085a4a51781ac21a82a34b13505d3e35804e0f4f70796c3f7a3dac6db41224a",
-      "state": "machine-cross-checked",
-      "text": "No se ha aplicado el ajuste de tamaño de pantalla; el comando de pantalla con privilegios ha fallado o no se ha solicitado ningún cambio válido."
-    },
-    "install.display.return": {
-      "sourceHash": "88aa2e92a88a0d5331f35eb6ce94045526e6806b2cd908dbb316c3807c8b631b",
-      "state": "machine-cross-checked",
-      "text": "Volver a Ajuste de tamaño de pantalla"
-    },
-    "install.display.root_required": {
-      "sourceHash": "4b9f694dd446966b410427033f5855e75c853c22cb7c3d083e7b095fbfa094b9",
-      "state": "machine-cross-checked",
-      "text": "Con acceso privilegiado compatible, ha-paneld puede adaptar la densidad y el tamaño del texto del panel de control a la pantalla física."
-    },
-    "install.display.text_size": {
-      "sourceHash": "d68761cc1eb296478531e007ff1fda9252fb7be5d24429a97eb05765211dafe5",
-      "state": "machine-cross-checked",
-      "text": "Tamaño del texto"
-    },
-    "install.display.title": {
-      "sourceHash": "75aebbbcd5f71341cc126ea916a97a7a1ece8578d4c559f53039d4228fec6d57",
-      "state": "machine-cross-checked",
-      "text": "Ajuste de tamaño de pantalla"
-    },
-    "install.radio.configure_join": {
-      "sourceHash": "843846f36311ad7aba87d1c8536aa89c973a28e63d593e45550d9b1c83f175d2",
-      "state": "machine-cross-checked",
-      "text": "Configurar → Unirse a la red Zigbee"
-    },
-    "install.radio.efr32": {
-      "sourceHash": "dde87983949635a3374006302e8fcaf3acba9420496567a0810f4f699f9e679c",
-      "state": "machine-cross-checked",
-      "text": "Módulo de radio EFR32"
-    },
-    "install.radio.gateway_health": {
-      "sourceHash": "596df1c31c28dc7246e5800d5e578b4c428528f03e73441ce8f5e2c49ef7db47",
-      "state": "machine-cross-checked",
-      "text": "Estado de la puerta de enlace"
-    },
-    "install.radio.note_prefix": {
-      "sourceHash": "9826954ce0ab47870f4e5026c43631c629d449185c859ca06e12bdab31d2b929",
-      "state": "machine-cross-checked",
-      "text": "Puerta de enlace Zigbee en el dispositivo Silicon Labs EFR32 de este panel. Habilita o vuelve a intentar la conexión desde"
-    },
-    "install.radio.thread_planned": {
-      "sourceHash": "7891edb2cba374dfaf02489aff727159d6ab084079c75383abaccf4b0cad8192",
-      "state": "machine-cross-checked",
-      "text": "Está prevista la programación de Thread NCP (experimental), pero aún no está disponible."
-    },
-    "install.radio.title": {
-      "sourceHash": "6117cf43d34093b4f6a3d4a7a6f1a085790200d929b26deb6da34afc5060b20a",
-      "state": "machine-cross-checked",
-      "text": "Firmware de radio"
-    },
-    "install.ready": {
-      "sourceHash": "dc58e98e6af15e943f469a0545cdc4eebe7a6d6e3a38ab96d11f60ffccbf1eac",
-      "state": "machine-cross-checked",
-      "text": "No se han detectado problemas de configuración: este panel parece estar listo."
-    },
-    "install.shared.close": {
-      "sourceHash": "7d9eb7acb13e24625c404401d8e88b2350e32162455885f18276cf802f7701ed",
-      "state": "machine-cross-checked",
-      "text": "Cerrar"
-    },
-    "install.shared.installed": {
-      "sourceHash": "a51a6c19a1ffc7416827e89adf20749d23ad42452c396cf7e627409f2896922c",
-      "state": "machine-cross-checked",
-      "text": "instalado"
-    },
-    "install.tame.action.reenable": {
-      "sourceHash": "63de421725fe824d9997872b1130d48e684b08da4b2784054049002f95684303",
-      "state": "machine-cross-checked",
-      "text": "Volver a habilitar"
-    },
-    "install.tame.action.tame": {
-      "sourceHash": "c85a15907c0bd6abe4808730c7d422f32a57b8247f11402e47f72ef842b049ed",
-      "state": "machine-cross-checked",
-      "text": "Controlar"
-    },
-    "install.tame.approval.package": {
-      "sourceHash": "699fa472f4a1b392599fc62e2cbbd912a7658ef16b5276c0d156da5090153d15",
-      "state": "machine-cross-checked",
-      "text": "{action} el paquete del fabricante {package}"
-    },
-    "install.tame.approval.recommended": {
-      "sourceHash": "3a77da60cbcfc809f72b7fd8d18d38f88119734d8ec517da65b2653c1bdcc833",
-      "state": "machine-cross-checked",
-      "text": "Controlar los paquetes del fabricante recomendados por el perfil"
-    },
-    "install.tame.badge.recommended": {
-      "sourceHash": "dd6d876548037ec722252b45795206575e7040eba1ca076cf1732a4a903cadba",
-      "state": "machine-cross-checked",
-      "text": "recomendado"
-    },
-    "install.tame.description": {
-      "sourceHash": "c8e1bf9423f5c649f86cfd13f5ebc7febeb598ec77ded15e361f3ec478710626",
-      "state": "machine-cross-checked",
-      "text": "Controlar una aplicación fuerza su detención, impide que vuelva a iniciarse durante el arranque y evita que se muestre sobre el panel de control; se aplica inmediatamente y en cada arranque. «Volver a habilitar» deshace estos cambios. Nunca se ofrecen aplicaciones esenciales del sistema y nada cambia hasta que pulses un botón."
-    },
-    "install.tame.dialog.description": {
-      "sourceHash": "90509ec5716b821b042c4dec4152d4a11a6b254973eda945231926b965d1d16b",
-      "state": "machine-cross-checked",
-      "text": "Aplicaciones de este panel que quizá quieras controlar; elige una para actuar sobre ella. No todas las entradas son indeseadas: controla solo las que reconozcas."
-    },
-    "install.tame.dialog.list_failed": {
-      "sourceHash": "531a8caebdccc2a084ce37e0f045e2c12b7480dae2317d72077feabb318da5e0",
-      "state": "machine-cross-checked",
-      "text": "No se pudo obtener la lista de paquetes."
-    },
-    "install.tame.dialog.title": {
-      "sourceHash": "87c2554fbf6da43ccc5c371f7162f0c2e7ec33b029107f27e868f6c2ac003827",
-      "state": "machine-cross-checked",
-      "text": "Buscar un paquete para controlar"
-    },
-    "install.tame.empty": {
-      "sourceHash": "a981e300306491f64f11d63e52e6717d9f2fc3b9b8504f73e980ed3de78a031c",
-      "state": "machine-cross-checked",
-      "text": "Todavía no se ha controlado nada. Pulsa «Buscar un paquete…» para ver qué hay en este panel."
-    },
-    "install.tame.error.invalid_or_protected": {
-      "sourceHash": "90087905ff9c9f3a0c2a97476a419ae53497edf6984f94172b9ef5e95a100d9c",
-      "state": "machine-cross-checked",
-      "text": "paquete no válido o protegido"
-    },
-    "install.tame.error.reenable_failed": {
-      "sourceHash": "174308fa4d6223b8b7392e54304ee3f79ae604e0a36370c6b1c8187f9cc4a9d4",
-      "state": "machine-cross-checked",
-      "text": "no se pudo volver a habilitar el paquete"
-    },
-    "install.tame.error.selection_commit": {
-      "sourceHash": "6d59b2bd714654f51c7eaba2f074088b469cb849da87ba2cd9215737c34348c4",
-      "state": "machine-cross-checked",
-      "text": "no se pudo guardar la selección del fabricante"
-    },
-    "install.tame.find": {
-      "sourceHash": "1420c824157d194bfb0f0d4ba2a38feb1696d652b95e1236b069ff902b2f56a4",
-      "state": "machine-cross-checked",
-      "text": "Buscar un paquete…"
-    },
-    "install.tame.group.cpu": {
-      "sourceHash": "09d727b8c92dd8bb86d1eb56ae3a7c034a180c1d4b5cf46dc2efedf9e6106348",
-      "state": "machine-cross-checked",
-      "text": "Mayor uso de CPU"
-    },
-    "install.tame.group.cpu_hint": {
-      "sourceHash": "b746ca190d1092c50a674ab3602eec2b56d98bc37bbb69654b6a3083f5734130",
-      "state": "machine-cross-checked",
-      "text": "Aplicaciones que más CPU usan ahora. Las esenciales o del sistema se muestran como contexto, pero no se pueden deshabilitar; controla únicamente una aplicación del fabricante que reconozcas."
-    },
-    "install.tame.group.other": {
-      "sourceHash": "2f4115e8b1a8e81958230c00ffc44d18d364797bd3307d564851d500cfa50d00",
-      "state": "machine-cross-checked",
-      "text": "Otras aplicaciones"
-    },
-    "install.tame.group.other_hint": {
-      "sourceHash": "439ed72206442cb714a94d01902328530ff10143627594fba65f514686f881cf",
-      "state": "machine-cross-checked",
-      "text": "Aplicaciones de este panel que no forman parte del sistema Android básico."
-    },
-    "install.tame.group.recommended": {
-      "sourceHash": "176620bd60cea2ffd0525c344fdcff9db0b5189442bf8ab90f5dedd57aa2cae6",
-      "state": "machine-cross-checked",
-      "text": "Recomendadas para este panel"
-    },
-    "install.tame.group.recommended_hint": {
-      "sourceHash": "ec79e0601b3e0d3e9f7717f6804c7d573c31063d5b87aa073ff074cf96e94cff",
-      "state": "machine-cross-checked",
-      "text": "Aplicaciones intrusivas conocidas del firmware de tu dispositivo: opciones iniciales seguras."
-    },
-    "install.tame.locked_empty": {
-      "sourceHash": "f638c4792f18277b2fda27370331e5e442a456222176012a8fedcf1b0cb20b46",
-      "state": "machine-cross-checked",
-      "text": "Aquí se mostrarían las aplicaciones del fabricante que este panel podría ocultar."
-    },
-    "install.tame.package_hint": {
-      "sourceHash": "e6fdbaa3a572da4f8b627fcb2e82fe254256874683df190fca4bf589cf6605da",
-      "state": "machine-cross-checked",
-      "text": "Usa el ID de paquete de Android, por ejemplo, io.example.app."
-    },
-    "install.tame.package_name": {
-      "sourceHash": "b2435d15ef23feed93deb1f778db35b57a28affcfbc1f87a3ca70ca9958aff12",
-      "state": "machine-cross-checked",
-      "text": "Nombre del paquete de Android"
-    },
-    "install.tame.result.applying_recommended": {
-      "sourceHash": "44dd56a6ca5fd07d13f582f357846894e053f0d14f5805a9650f9cc4b7e7a6e1",
-      "state": "machine-cross-checked",
-      "text": "Aplicando el control recomendado de paquetes del fabricante."
-    },
-    "install.tame.result.applying_recommended_progress": {
-      "sourceHash": "9218e52c42743c2c02acee7eb6dc8e11e6873f7dd0ba056a126fb8e5175d48fb",
-      "state": "machine-cross-checked",
-      "text": "aplicando el control recomendado de aplicaciones del fabricante…"
-    },
-    "install.tame.result.reenabling": {
-      "sourceHash": "82a18262ec1179153502829ef003b92634511def6476def26a4a15383eaa478c",
-      "state": "machine-cross-checked",
-      "text": "Volviendo a habilitar {package}."
-    },
-    "install.tame.result.taming": {
-      "sourceHash": "db713bae3f079b8dca46e450c757bb590ce42f5b5b9a305bb031ef56876d20e6",
-      "state": "machine-cross-checked",
-      "text": "Controlando {package}."
-    },
-    "install.tame.root_required": {
-      "sourceHash": "ecd0efd425027a2ac33a1659039be693c803ee8cace28a907789aa48dd2f2b0c",
-      "state": "machine-cross-checked",
-      "text": "Con acceso root, ha-paneld puede ocultar elementos no deseados del fabricante (herramientas de prueba, el lanzador del fabricante) para que solo se muestre tu panel de control."
-    },
-    "install.tame.state.active": {
-      "sourceHash": "96879611650f80a81392a52e0db9b0237669087c4518e1c130e541a505e0eeef",
-      "state": "machine-cross-checked",
-      "text": "activo"
-    },
-    "install.tame.state.disabled": {
-      "sourceHash": "17eb3c0168d0d7b21ede5481150f17233427d89833ec121b4dbc4fb96cfab71e",
-      "state": "machine-cross-checked",
-      "text": "deshabilitado"
-    },
-    "install.tame.state.protected": {
-      "sourceHash": "9b2bbce6c72dd9bbd9c7a9976d5d76d1fcc2bb9832dec246375bb92006beccc3",
-      "state": "machine-cross-checked",
-      "text": "protegido"
-    },
-    "install.tame.suggest.all_recommended": {
-      "sourceHash": "0790cffb17e5594b9161338a945622906deb76441ef1a6c46b0c71edd9f43df7",
-      "state": "machine-cross-checked",
-      "text": "Controlar todas las recomendadas"
-    },
-    "install.tame.suggest.none": {
-      "sourceHash": "13915b13d9ae64ddbe741da3fea94afbf3f422848a695f74accf6c6fabee2f9f",
-      "state": "machine-cross-checked",
-      "text": "— ninguna —"
-    },
-    "install.tame.suggest.none_found": {
-      "sourceHash": "f9d4b4c3489e6a81c635863cd0de78db7c49ef9e1b07f920ccbd0116e1fd0776",
-      "state": "machine-cross-checked",
-      "text": "No se han encontrado otros paquetes; aun así, puedes controlar uno por su nombre."
-    },
-    "install.tame.suggest.recommended_hint": {
-      "sourceHash": "96398f11d6dabc58ca6aac668c85c5c3f3a416028ba47b64f36c865068c54f0a",
-      "state": "machine-cross-checked",
-      "text": "las opciones iniciales con distintivo que aparecen abajo, en un solo paso"
-    },
-    "install.tame.tag.core": {
-      "sourceHash": "0d45f5fd462b8c70bffb10021ac1bcff3f58f29b1faf7568595095427d42812c",
-      "state": "machine-cross-checked",
-      "text": "esencial"
-    },
-    "install.tame.tag.overlay": {
-      "sourceHash": "b4b33d2441645d4dd0a0694b5989a0a14a5cc22fe9865e6b7b7eae966e0de36c",
-      "state": "machine-cross-checked",
-      "text": "superposición"
-    },
-    "install.tame.tag.user": {
-      "sourceHash": "04f8996da763b7a969b1028ee3007569eaf3a635486ddab211d512c85b9df8fb",
-      "state": "machine-cross-checked",
-      "text": "usuario"
-    },
-    "install.tame.tag.vendor": {
-      "sourceHash": "630ba09448af522154f38ef7685ef1f44b0f3e9430f80829a03ce24f400f3754",
-      "state": "machine-cross-checked",
-      "text": "fabricante"
-    },
-    "install.uninstall.action": {
-      "sourceHash": "fe199528850a4e24c14d9ece87a07b40bdcfa5fe504c175c117b997c29259ca6",
-      "state": "machine-cross-checked",
-      "text": "Desinstalar"
-    },
-    "install.uninstall.description_prefix": {
-      "sourceHash": "45d78d103a3468d3c099df705abfae73165f5ce0923ebcde6f8b06b96890a510",
-      "state": "machine-cross-checked",
-      "text": "Elimina una aplicación instalada. Solo se muestran las aplicaciones extraíbles (de terceros o actualizadas); se excluyen ha-paneld y las aplicaciones del sistema incluidas de fábrica. Si solo quieres ocultar una aplicación del fabricante,"
-    },
-    "install.uninstall.description_suffix": {
-      "sourceHash": "1462a8fa2c5b0daa167e77a39e18f19c323d99aab25200867a59af48ea5b344b",
-      "state": "machine-cross-checked",
-      "text": " en su lugar."
-    },
-    "install.uninstall.root_unavailable": {
-      "sourceHash": "7137e48e950d350e4fa1f3662dbc28ae2eeae9cdcfeb44667641d13fc08ea053",
-      "state": "machine-cross-checked",
-      "text": "La desinstalación de una aplicación requiere acceso root, que no está disponible en este panel."
-    },
-    "install.uninstall.tame_link": {
-      "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
-      "state": "machine-cross-checked",
-      "text": "contrólala"
-    },
-    "install.uninstall.title": {
-      "sourceHash": "d1eb4f43f07eaf3e5808ba989b8fa77fadf5bf6898af4321c2e808e669c111f9",
-      "state": "machine-cross-checked",
-      "text": "Desinstalar una aplicación"
-    },
-    "install.warning.no_renderer.install_companion": {
-      "sourceHash": "0117aa1b31dd5f775fd4a3a105fbed38418eb5f679289dfc65c49ca56fa99084",
-      "state": "machine-cross-checked",
-      "text": "Instalar HA Companion"
-    },
-    "install.warning.no_renderer.prefix": {
-      "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
-      "state": "machine-cross-checked",
-      "text": "Selecciona el visor integrado de ha-paneld en"
-    },
-    "install.warning.no_renderer.progress": {
-      "sourceHash": "e44a9bcadf0eb8b464b5dcb387834d5eade7ed452fc4ce9b161eb4e41ca6ee6a",
-      "state": "machine-cross-checked",
-      "text": "el progreso se muestra más abajo, en Componentes gestionados."
-    },
-    "install.warning.no_renderer.suffix": {
-      "sourceHash": "b549f0661d976d7f7a491c492571e2459a614d197633e47ce821e2b5e984afd9",
-      "state": "machine-cross-checked",
-      "text": ", instala la aplicación Home Assistant Companion o configura allí otro paquete de panel de control."
-    },
-    "install.warning.no_renderer.title": {
-      "sourceHash": "92a39c3ea0af40d258a4b3cf84fc30e00d5b0432fc9ac43c3eca809119cd18a6",
-      "state": "machine-cross-checked",
-      "text": "MQTT está configurado. Siguiente paso: elige un visor de panel de control."
-    },
-    "install.warning.schema_rollback.prefix": {
-      "sourceHash": "1060ef4b650f103ab5b7f1f76eace082786393841e8bc926a034ab8e3a1cf0f6",
-      "state": "machine-cross-checked",
-      "text": "Esta compilación ha abierto un almacén de estado nuevo porque su esquema es más antiguo. Es posible que algunos ajustes se hayan restablecido. La base de datos anterior se conserva en el panel para poder recuperarla. Consulta"
-    },
-    "install.warning.schema_rollback.suffix": {
-      "sourceHash": "909f755050e1a23e3aa37bc3c74d6b3ebce0486db888b50b66519a83d11dbe3a",
-      "state": "machine-cross-checked",
-      "text": ", o restaura una copia de seguridad más abajo."
-    },
-    "install.warning.schema_rollback.title": {
-      "sourceHash": "c6b434eb6d5f96ee9185ae968a89e7a1039ba9b2aad65bde00e6555a02b7fc78",
-      "state": "machine-cross-checked",
-      "text": "La base de datos más reciente se ha conservado tras instalar una versión anterior"
-    },
-    "install.warning.webview_old.body": {
-      "sourceHash": "cdaa9385ecdff69e20e8fbe71c147fe127a7a896c85f157fd9ac902fb995ebe4",
-      "state": "machine-cross-checked",
-      "text": "Es posible que el panel de control de Home Assistant aparezca en blanco o no funcione correctamente."
-    },
-    "install.warning.webview_old.help": {
-      "sourceHash": "e47c274a443c3dfb22bfdfa0a49f6908e720d8b1518a6ba71e5d5014f52daea8",
-      "state": "machine-cross-checked",
-      "text": "Cómo y por qué actualizar"
-    },
-    "install.warning.webview_old.target": {
-      "sourceHash": "db38fba435a5055d846977c64682f2d278a25417425662847e351907db7d38a7",
-      "state": "machine-cross-checked",
-      "text": "objetivo: Chromium {version}+"
-    },
-    "install.warning.webview_old.title": {
-      "sourceHash": "32f9602603cf386e8accd721782721ab0c29ff77a86e739370a819d2c2ae5d59",
-      "state": "machine-cross-checked",
-      "text": "La versión de WebView del sistema es demasiado antigua"
-    },
-    "install.warning.webview_old.update": {
-      "sourceHash": "71d8ebe0fdc7922d4dc02071672fdd8aee2e27c8af3694a32166ff337dbd52eb",
-      "state": "machine-cross-checked",
-      "text": "Actualizar WebView ahora"
-    },
-    "configure.enum.camera_resolution.1080p": {
-      "text": "1080p (Full HD)",
-      "sourceHash": "d646b89f5b435e75eabfdf35e0514535ba66e149ef010ff0808c113a72068d3b",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.camera_resolution.480p": {
-      "text": "480p (SD)",
-      "sourceHash": "356a7a851ca3b35c97d4ddcf2161f869008ff2b7eda09a60c10a1cd6d4ba5c50",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.camera_resolution.720p": {
-      "text": "720p (HD)",
-      "sourceHash": "36821b611055340a91edf9405a318ac8920065055326b9743c7d4f2b5b24a946",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.cpu_governor.auto": {
-      "text": "Automático",
-      "sourceHash": "0286249762f7c94349cdc0ba3bb2255baf9a80036e2193ead1d77696f888582f",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.cpu_governor.efficiency": {
-      "text": "Eficiencia",
-      "sourceHash": "87b180c8f2042d97ae03bb27b19b110a05c3bdff94ad48133633e73a5c82cc1e",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.cpu_governor.performance": {
-      "text": "Rendimiento",
-      "sourceHash": "442aded87a55aa8c8f7d5ff0c30228150d4b1cb8756e4be138d615ca4708fc26",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.dashboard_theme.dark": {
-      "text": "Oscuro",
-      "sourceHash": "60acc53f13a5d1bf115878c4a785e9a43e8286c4139a8402a6ac7d23966f9153",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.dashboard_theme.follow_home_assistant": {
-      "text": "Seguir Home Assistant",
-      "sourceHash": "354c65fd389c33e3365c65df36b59f5d05509a6f1a8305920453ccf0cc3cd2e4",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.dashboard_theme.light": {
-      "text": "Claro",
-      "sourceHash": "dbcd5e7bb7a0f538810de44c3efbd813037ee3fa358747bb71fa58e157af45f7",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.log_ship_protocol.http": {
-      "text": "Protocolo HTTP",
-      "sourceHash": "cfaf50c20af6e519ca09653e2cb00d5453a3068c4d973d456b959a53b72e7718",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.log_ship_protocol.syslog_tcp": {
-      "text": "Syslog por TCP",
-      "sourceHash": "91de40e260ce02c13911216393666f52c0a32e6d3b3dd7cfc5dd02711f58f2b5",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.log_ship_protocol.syslog_udp": {
-      "text": "Syslog por UDP",
-      "sourceHash": "cdd9bce57411aec9a0af3472b278942d976f8f616cb462feebc82082714b7df7",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.mqtt_address_family.automatic": {
-      "text": "Automático",
-      "sourceHash": "d461a493a3753877c9486cffa3444265a33370af8a7fff242fb119b71750839c",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.mqtt_address_family.force_ipv4": {
-      "text": "Forzar IPv4",
-      "sourceHash": "e4194f462f23b9aaa2a7a012aa6777724da24e9803959e7733be55448d99afb7",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.mqtt_address_family.prefer_ipv4": {
-      "text": "Preferir IPv4",
-      "sourceHash": "8ae39c17c14dfdfa362d47698eb755f56e43a1ea98df0626f30a90a2c67172a9",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.navbar_mode.always_on": {
-      "text": "Siempre activa",
-      "sourceHash": "044ba8a9ae43b296f0908d5f94c2ec616c7703ef71e1e3218393fad6c91a83b2",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.navbar_mode.native": {
-      "text": "Nativa",
-      "sourceHash": "d509e493885298a23c55f83c133e5d725f24dd6cc67cf734baa2c11b220ab809",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.navbar_mode.off": {
-      "text": "Desactivada",
-      "sourceHash": "ca7981b46ecf2c1787b6d76d81d9fd7fa0ca95842e2fcc2a452869891a9334d1",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.navbar_mode.swipe_reveal": {
-      "text": "Mostrar al deslizar",
-      "sourceHash": "09d51331b616bdd52b2e76eaec3d72b1f5906627266dd577ca0bcd49c29222d1",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.update_channel.prerelease": {
-      "text": "Versión preliminar",
-      "sourceHash": "c284b3eee860bb803c22ec02d974f6a1c587aac1b7f6f362823477328de40a04",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.update_channel.stable": {
-      "text": "Estable",
-      "sourceHash": "90ee305714d7103317705bfffd734c654b78807e5a0f51fcc61bc1d81105ebd1",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_audio_source.mic": {
-      "text": "Micrófono",
-      "sourceHash": "186352a881d0550e2da1f74e5c317770702bc2a0f9c3da69a10e27c14a217bac",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_audio_source.voice_communication": {
-      "text": "Comunicación por voz",
-      "sourceHash": "a0a89f70b4ad263bbb3c0c875bb0420a011ecfdf0d1eda50cc8f7bef7c5b664f",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_audio_source.voice_recognition": {
-      "text": "Reconocimiento de voz",
-      "sourceHash": "619742a53cee9ccd92bd7087ade07b7582fdfac6193a8c971491fe8a2a0e3e7e",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_sensitivity.high": {
-      "text": "Alta",
-      "sourceHash": "c4ebc6d4a5832cd9415f906ad03661110c705a72381c8b8b145761d02e2dd23a",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_sensitivity.low": {
-      "text": "Baja",
-      "sourceHash": "f793de205ead5ac302c4a1627829dea41f176b1068b993a32373fc869918374b",
-      "state": "machine-cross-checked"
-    },
-    "configure.enum.voice_sensitivity.normal": {
-      "text": "Normal",
-      "sourceHash": "a7248eeb45eb1ce247f81693283e22e8b39e8a50890cecd22d02e75025547d90",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_severe": {
-      "text": "muy lenta",
-      "sourceHash": "82ce6837aa3b68844b31aa7c645d74dbecc376c957c349610ccb8a680856ca4b",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_severe_response_slow": {
-      "text": "muy lenta; Home Assistant responde lentamente",
-      "sourceHash": "a5d9c7c7c5aaf6b8ce698004cd0b9f0b4b87d3e329712d572039aa2730520c25",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_severe_response_very_slow": {
-      "text": "muy lenta; Home Assistant responde muy lentamente",
-      "sourceHash": "611b01e6500fcdd6c176dfe3b6ef44c9221b1d0ced97fcd99dfad2cbc9eb5cca",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_warning": {
-      "text": "lenta",
-      "sourceHash": "5e0cf7bd1dfa3831788b0cf6dedcdd228fba6f34dc238d371e746567e80bc7b6",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_warning_response_slow": {
-      "text": "lenta; Home Assistant responde lentamente",
-      "sourceHash": "056de773c4208b770839fdd87e4055ff7d09d8cb61df76abe340c9d6c5f8e164",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.runtime.ha_network_latency_warning_response_very_slow": {
-      "text": "lenta; Home Assistant responde muy lentamente",
-      "sourceHash": "f2b75a04d3d45878a4e623d21335863f509a6e7c279abfa60d96ebeeecd89072",
-      "state": "machine-cross-checked"
-    },
-    "shell.runtime.ha_network.banner_latency_severe": {
-      "text": "La ruta de red a Home Assistant es muy lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
-      "sourceHash": "6a6d84abadf8da8dfe107a419223e113570115808c8b3cd7d21dc53d11c93d9a",
-      "state": "machine-cross-checked"
-    },
-    "shell.runtime.ha_network.banner_latency_warning": {
-      "text": "La ruta de red a Home Assistant es lenta. Cada acción está sujeta al tiempo de tránsito por esta ruta. La medición se realiza a nivel de red, por lo que no se trata de que el panel o Home Assistant funcionen con lentitud; comprueba la conexión Wi-Fi o el enlace entre ambos.",
-      "sourceHash": "fd5ccd80b1d2ac8253830913ea3dc551a4568be7f34de58807723b1cf9e6d733",
-      "state": "machine-cross-checked"
-    },
-    "install.presentation.backup_ready_state_unavailable": {
-      "text": "copia de seguridad lista, sin estado del panel",
-      "sourceHash": "df783634b6ab429676f0459ad7279d1a349b3ba3c6b7857b34df5e2fcc443119",
-      "state": "machine-cross-checked"
-    },
-    "install.presentation.restore_completed_state_unavailable": {
-      "text": "Restauración completada; esta copia de seguridad no contenía ningún estado del panel",
-      "sourceHash": "634e79faec27e14712a5c81b756955e808723baecd2c66159561ef8722a138fb",
-      "state": "machine-cross-checked"
-    },
-    "install.backup.dynamic.preview_state_unavailable": {
-      "text": "Esta copia de seguridad no contiene ningún estado del panel: el panel del que procede no pudo leer su propia base de datos. Restaurarla no recuperará el estado del panel.",
-      "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
-      "state": "machine-cross-checked"
-    },
-    "configure.auto_sleep.panel_setup_help": {
-      "text": "Usa la detección de presencia calibrada de este panel. Configure primero la proximidad; el reposo automático se pausa si el sensor no está disponible.",
-      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
-      "state": "machine-cross-checked"
-    },
-    "configure.auto_sleep.setup_proximity": {
-      "text": "Configurar proximidad en el panel",
-      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
-      "state": "machine-cross-checked"
-    },
-    "configure.auto_sleep.source_ha": {
-      "text": "Dispositivos del área de Home Assistant",
-      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
-      "state": "machine-cross-checked"
-    },
-    "configure.auto_sleep.source_panel": {
-      "text": "Sensor de proximidad de este panel",
-      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
-      "state": "machine-cross-checked"
-    },
-    "dashboard.sensors.raw": {
-      "text": "valor bruto {value}",
-      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
-      "state": "machine-cross-checked"
-    },
-    "settings.auto_sleep_source.help": {
-      "text": "Use el sensor de proximidad calibrado del panel o elija dispositivos del área de Home Assistant. Si la fuente seleccionada no está disponible, el reposo automático se pausa y el control táctil sigue disponible.",
-      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
-      "state": "machine-cross-checked"
-    },
-    "settings.auto_sleep_source.label": {
-      "text": "Fuente de presencia para reposo automático",
-      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
-      "state": "machine-cross-checked"
     }
   }
 }
