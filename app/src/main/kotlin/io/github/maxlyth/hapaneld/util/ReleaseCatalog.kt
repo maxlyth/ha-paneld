@@ -38,7 +38,12 @@ object ReleaseCatalog {
      * free to use a tag that is not simply `v<version>`; consumers that need to initiate an exact
      * installation must therefore keep the value GitHub supplied.
      */
-    data class ApkTarget(val version: String, val tag: String, val apkUrl: String)
+    data class ApkTarget(
+        val version: String,
+        val tag: String,
+        val apkUrl: String,
+        val prerelease: Boolean,
+    )
 
     /** A tag is only ever interpolated into a GitHub API path — restrict it to release-tag characters so
      *  a crafted value can't escape the path. */
@@ -114,7 +119,9 @@ object ReleaseCatalog {
 
     /** Pure tag-preserving shape used by [newestApkTarget]. */
     internal fun apkTarget(release: Raw?, normalize: (String) -> String): ApkTarget? =
-        release?.apkUrl?.let { apk -> ApkTarget(normalize(release.tag), release.tag, apk) }
+        release?.apkUrl?.let { apk ->
+            ApkTarget(normalize(release.tag), release.tag, apk, release.prerelease)
+        }
 
     private fun fetch(repo: String, limit: Int, apkMatch: (String) -> Boolean): List<Raw> {
         val json = get("https://api.github.com/repos/$repo/releases?per_page=$limit") ?: return emptyList()

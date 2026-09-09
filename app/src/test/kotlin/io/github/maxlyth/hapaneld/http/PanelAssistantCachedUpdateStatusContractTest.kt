@@ -36,11 +36,9 @@ class PanelAssistantCachedUpdateStatusContractTest {
 
     @Test fun cachedProjectionRetainsTheResolverIssuedTagInsteadOfReconstructingIt() {
         assertTrue(selfUpdater.contains("ReleaseCatalog.newestApkTarget(REPO, channel, APK_MATCH)"))
-        assertTrue(
-            selfUpdater.contains(
-                "ComponentUpdater.Target(target.version, target.apkUrl, RELEASES_URL, target.tag)",
-            ),
-        )
+        assertTrue(selfUpdater.contains("target.tag,"))
+        assertTrue(selfUpdater.contains("target.prerelease,"))
+        assertTrue(checker.contains("target.prerelease,"))
     }
 
     @Test fun openApiKeepsTheProjectionAdditiveAndBoundsBothShapes() {
@@ -54,11 +52,21 @@ class PanelAssistantCachedUpdateStatusContractTest {
         )
 
         val schema = openApi.getJSONObject("components").getJSONObject("schemas").getJSONObject("PanelAssistantUpdate")
-        assertEquals(setOf("none", "available"), schema.getJSONObject("properties").getJSONObject("state")
-            .getJSONArray("enum").let { values -> (0 until values.length()).map(values::getString).toSet() })
-        assertEquals(64, schema.getJSONObject("properties").getJSONObject("current_version").getInt("maxLength"))
-        assertEquals(64, schema.getJSONObject("properties").getJSONObject("target_version").getInt("maxLength"))
-        assertEquals(64, schema.getJSONObject("properties").getJSONObject("tag").getInt("maxLength"))
-        assertEquals(2, schema.getJSONArray("oneOf").length())
+        val alternatives = schema.getJSONArray("oneOf")
+        assertEquals(2, alternatives.length())
+        val none = alternatives.getJSONObject(0)
+        val available = alternatives.getJSONObject(1)
+        assertFalse(none.getBoolean("additionalProperties"))
+        assertFalse(available.getBoolean("additionalProperties"))
+        assertEquals("none", none.getJSONObject("properties").getJSONObject("state").getJSONArray("enum").getString(0))
+        assertEquals(
+            setOf("state", "current_version", "target_version", "tag"),
+            available.getJSONArray("required").let { values ->
+                (0 until values.length()).map(values::getString).toSet()
+            },
+        )
+        assertEquals(64, available.getJSONObject("properties").getJSONObject("current_version").getInt("maxLength"))
+        assertEquals(64, available.getJSONObject("properties").getJSONObject("target_version").getInt("maxLength"))
+        assertEquals(64, available.getJSONObject("properties").getJSONObject("tag").getInt("maxLength"))
     }
 }

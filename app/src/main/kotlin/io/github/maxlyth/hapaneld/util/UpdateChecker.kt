@@ -25,6 +25,8 @@ object UpdateChecker {
         val component: String,
         /** Exact release tag from the cached resolver when that resolver retains one. Never a URL. */
         val tag: String? = null,
+        /** Authoritative source-release classification; never infer stability from version text alone. */
+        val prerelease: Boolean = false,
     ) {
         constructor(
             label: String,
@@ -92,7 +94,15 @@ object UpdateChecker {
             val current = BuildConfig.VERSION_NAME
             val paneldResolution = ComponentUpdater.resolveUpdate(current) { SelfUpdater.resolveTarget(channel) }
                 .toResolution { target ->
-                    UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, "paneld", target.tag)
+                    UpdateInfo(
+                        PANELD_LABEL,
+                        current,
+                        target.version,
+                        target.releaseUrl,
+                        "paneld",
+                        target.tag,
+                        target.prerelease,
+                    )
                 }
 
             val companion = installedCompanion(context)
@@ -201,7 +211,8 @@ object UpdateChecker {
         val currentVersion = update.currentVersion
         val targetVersion = update.latestVersion
         val tag = update.tag ?: return null
-        if (!PANEL_ASSISTANT_CURRENT_VERSION.matches(currentVersion) ||
+        if (update.prerelease ||
+            !PANEL_ASSISTANT_CURRENT_VERSION.matches(currentVersion) ||
             !PANEL_ASSISTANT_STABLE_VERSION.matches(targetVersion) ||
             !ReleaseCatalog.validTag(tag) ||
             tag.removePrefix("v") != targetVersion ||

@@ -162,6 +162,21 @@ class UpdateCheckerCacheTest {
                 listOf(UpdateChecker.UpdateInfo("ha-paneld", "0.9.7", "0.9.8", "url", "paneld", "v0.9.9")),
             ),
         )
+        assertNull(
+            UpdateChecker.panelAssistantUpdate(
+                listOf(
+                    UpdateChecker.UpdateInfo(
+                        "ha-paneld",
+                        "0.9.7",
+                        "0.9.8",
+                        "url",
+                        "paneld",
+                        "v0.9.8",
+                        prerelease = true,
+                    ),
+                ),
+            ),
+        )
     }
 
     private fun reconcile(

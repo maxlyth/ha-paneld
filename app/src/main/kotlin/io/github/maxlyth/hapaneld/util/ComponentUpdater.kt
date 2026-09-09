@@ -18,6 +18,7 @@ object ComponentUpdater {
         val apkUrl: String,
         val releaseUrl: String,
         val tag: String? = null,
+        val prerelease: Boolean = false,
     )
 
     /** The verdict of one resolve -> compare -> decide pass. */

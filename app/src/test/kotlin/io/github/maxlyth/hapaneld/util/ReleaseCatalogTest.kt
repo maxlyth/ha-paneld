@@ -57,7 +57,14 @@ class ReleaseCatalogTest {
         assertEquals("0.8.6", target?.version)
         assertEquals("v0.8.6", target?.tag)
         assertEquals("u6", target?.apkUrl)
+        assertFalse(target?.prerelease ?: true)
         assertNull(ReleaseCatalog.apkTarget(Raw("v0.8.6", false, "n6", null), strip))
+    }
+
+    @Test fun apkTargetRetainsTheAuthoritativePrereleaseClassification() {
+        val target = ReleaseCatalog.apkTarget(Raw("v0.8.7", true, "n7", "u7"), strip)
+        assertEquals("0.8.7", target?.version)
+        assertTrue(target?.prerelease == true)
     }
 
     @Test fun newestDoesNotFallBackPastAReleaseWithoutAnApk() {

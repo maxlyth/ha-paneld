@@ -19,18 +19,25 @@
         }
       },
       "PanelAssistantUpdate": {
-        "type": "object",
         "description": "A bounded projection of the panel's already-cached stable ha-paneld update observation. Reading it never resolves a release, changes channel, or starts an install. state=none means no safe cached stable target is available; it does not claim the panel is up to date.",
-        "required": ["state"],
-        "properties": {
-          "state": { "type": "string", "enum": ["none", "available"] },
-          "current_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})(?:-(?:alpha|beta|rc)(?:0|[1-9][0-9]{0,7}))?$", "maxLength": 64, "description": "Present only when state=available. The installed ha-paneld version observed with the cached update." },
-          "target_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})$", "maxLength": 64, "description": "Present only when state=available. A newer stable target version." },
-          "tag": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$", "maxLength": 64, "description": "Present only when state=available. Exact source release tag for target_version; not a URL." }
-        },
         "oneOf": [
-          { "properties": { "state": { "enum": ["none"] } } },
-          { "required": ["current_version", "target_version", "tag"], "properties": { "state": { "enum": ["available"] } } }
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state"],
+            "properties": { "state": { "type": "string", "enum": ["none"] } }
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "current_version", "target_version", "tag"],
+            "properties": {
+              "state": { "type": "string", "enum": ["available"] },
+              "current_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})(?:-(?:alpha|beta|rc)(?:0|[1-9][0-9]{0,7}))?$", "maxLength": 64, "description": "The installed ha-paneld version observed with the cached update." },
+              "target_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})\\.(?:0|[1-9][0-9]{0,7})$", "maxLength": 64, "description": "A newer stable target version." },
+              "tag": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$", "maxLength": 64, "description": "Exact source release tag for target_version; not a URL." }
+            }
+          }
         ]
       },
       "HaPathProbe": {
