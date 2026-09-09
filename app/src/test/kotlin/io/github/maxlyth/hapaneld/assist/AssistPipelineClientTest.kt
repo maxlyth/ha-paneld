@@ -31,6 +31,130 @@ import java.util.concurrent.atomic.AtomicInteger
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class AssistPipelineClientTest {
 
+    @Test fun `matching preferred pipeline speech sends text and plays without attaching audio`() = runTest {
+        val catalogSocket = FakeAssistSocket()
+        val runSocket = FakeAssistSocket()
+        val played = mutableListOf<String>()
+        val client = speechClient(catalogSocket, runSocket)
+        val run = async {
+            client.speakText("  Keep one metre clear  ", "en-GB") { played += it }
+        }
+        runCurrent()
+
+        catalogSocket.deliver(
+            """{"id":1,"type":"result","success":true,"result":{"pipelines":[""" +
+                """{"id":"english","name":"English","tts_language":"en-GB","tts_voice":"Jenny"}],""" +
+                """"preferred_pipeline":"english"}}""",
+        )
+        runCurrent()
+
+        val request = org.json.JSONObject(runSocket.sentText.single())
+        assertEquals("tts", request.getString("start_stage"))
+        assertEquals("tts", request.getString("end_stage"))
+        assertEquals("Keep one metre clear", request.getJSONObject("input").getString("text"))
+        assertFalse(request.getJSONObject("input").has("sample_rate"))
+        assertEquals("english", request.getString("pipeline"))
+
+        runSocket.deliver(event("run-start", """{"runner_data":{}}"""))
+        runSocket.deliver(event("tts-end", """{"tts_output":{"url":"/api/tts_proxy/setup.mp3"}}"""))
+        runSocket.deliver(event("run-end"))
+        runCurrent()
+
+        assertTrue(run.isCompleted)
+        assertEquals(listOf("https://ha.example/api/tts_proxy/setup.mp3"), played)
+        assertEquals("https://ha.example/api/tts_proxy/setup.mp3", run.await().ttsUrl)
+        assertEquals(1, catalogSocket.closes)
+        assertEquals(1, runSocket.closes)
+    }
+
+    @Test fun `blank preferred pipeline speech fails before connecting`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(socket)
+
+        val outcome = harness.client.speakText("  ", "en-GB") { }
+
+        assertEquals(AssistPipelineClient.CODE_INVALID_TEXT, outcome.error?.code)
+        assertEquals(0, harness.connects.get())
+        assertEquals(0, harness.attachments.get())
+        assertTrue(socket.sentText.isEmpty())
+    }
+
+    @Test fun `speech chooses a matching pipeline when the preferred language differs`() = runTest {
+        val catalogSocket = FakeAssistSocket()
+        val runSocket = FakeAssistSocket()
+        val client = speechClient(catalogSocket, runSocket)
+        val run = async { client.speakText("Bitte zurücktreten", "de-DE") { } }
+        runCurrent()
+        catalogSocket.deliver(
+            """{"id":1,"type":"result","success":true,"result":{"pipelines":[""" +
+                """{"id":"english","name":"English","tts_language":"en-GB"},""" +
+                """{"id":"german","name":"Deutsch","tts_language":"de_DE","tts_voice":"Anna"}],""" +
+                """"preferred_pipeline":"english"}}""",
+        )
+        runCurrent()
+
+        assertEquals("german", org.json.JSONObject(runSocket.sentText.single()).getString("pipeline"))
+        runSocket.deliver(event("run-start", """{"runner_data":{}}"""))
+        runSocket.deliver(event("run-end"))
+        runCurrent()
+        assertNull(run.await().error)
+    }
+
+    @Test fun `speech fails closed when pipeline language metadata cannot match`() = runTest {
+        val catalogSocket = FakeAssistSocket()
+        val unusedRunSocket = FakeAssistSocket()
+        val client = speechClient(catalogSocket, unusedRunSocket)
+        val run = async { client.speakText("Bitte zurücktreten", "de-DE") { } }
+        runCurrent()
+        catalogSocket.deliver(
+            """{"id":1,"type":"result","success":true,"result":{"pipelines":[""" +
+                """{"id":"unknown","name":"No metadata"},{"id":"english","name":"English","tts_language":"en"}],""" +
+                """"preferred_pipeline":"unknown"}}""",
+        )
+        runCurrent()
+
+        assertEquals(AssistPipelineClient.CODE_TTS_LANGUAGE_UNAVAILABLE, run.await().error?.code)
+        assertEquals(1, catalogSocket.sentText.size)
+        assertTrue(unusedRunSocket.sentText.isEmpty())
+    }
+
+    @Test fun `intent text runs do not attach the microphone`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            attachFails = true,
+            request = AssistRunRequest(
+                inputText = "Turn on the lights",
+                startStage = AssistRunRequest.STAGE_INTENT,
+            ),
+        )
+        val run = harness.start(this)
+        runCurrent()
+
+        assertEquals(0, harness.attachments.get())
+        assertEquals("Turn on the lights", org.json.JSONObject(socket.sentText.single()).getJSONObject("input").getString("text"))
+        socket.deliver(event("run-start", """{"runner_data":{}}"""))
+        socket.deliver(event("run-end"))
+        runCurrent()
+        assertNull(run.await().error)
+    }
+
+    @Test fun `wake word runs still attach the microphone`() = runTest {
+        val socket = FakeAssistSocket()
+        val harness = harness(
+            socket,
+            request = AssistRunRequest(startStage = AssistRunRequest.STAGE_WAKE_WORD),
+        )
+        val run = harness.start(this)
+        runCurrent()
+
+        assertEquals(1, harness.attachments.get())
+        socket.deliver(runStart(7))
+        socket.deliver(event("run-end"))
+        runCurrent()
+        assertNull(run.await().error)
+    }
+
     @Test fun `audio captured before the handler id arrives is flushed in order behind it`() = runTest {
         val socket = FakeAssistSocket()
         val harness = harness(socket)
@@ -700,6 +824,15 @@ class AssistPipelineClientTest {
         playback,
         testScheduler,
     )
+
+    private fun TestScope.speechClient(vararg sockets: FakeAssistSocket): AssistPipelineClient {
+        val next = AtomicInteger()
+        return AssistPipelineClient(
+            auth = HaApiSessionProvider { HaApiSession("https://ha.example", "token") },
+            transport = AssistTransport { _, _ -> sockets[next.getAndIncrement()] },
+            dispatcher = StandardTestDispatcher(testScheduler),
+        )
+    }
 
     /** Ends a run a case left mid-utterance, so every test tears the driver down deterministically. */
     private fun TestScope.finish(socket: FakeAssistSocket, run: Deferred<AssistOutcome>) {

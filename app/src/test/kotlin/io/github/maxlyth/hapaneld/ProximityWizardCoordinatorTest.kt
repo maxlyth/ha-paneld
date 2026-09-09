@@ -4,9 +4,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
 
 class ProximityWizardCoordinatorTest {
-    private class Fixture {
+    private class Fixture(narrator: ProximityWizardNarrator? = null) {
         var active = false
         var startAccepted = true
         var launchAccepted = true
@@ -27,6 +29,7 @@ class ProximityWizardCoordinatorTest {
             acquireDisplay = { acquireAccepted },
             releaseDisplay = { releases++ },
             launch = { launches++; launchAccepted },
+            narrator = narrator,
         )
     }
 
@@ -75,5 +78,21 @@ class ProximityWizardCoordinatorTest {
             assertFalse(ProximityWizardHost.action("current", "save"))
             assertEquals(1, f.releases)
         } finally { f.coordinator.close() }
+    }
+
+    @Test fun hostNarrationIsServiceOwnedAndCancelSilencesIt() = runTest {
+        val spoken = mutableListOf<String>()
+        val narrator = ProximityWizardNarrator({ text, _, _ -> spoken += text }, dispatcher = StandardTestDispatcher(testScheduler))
+        val f = Fixture(narrator)
+        try {
+            assertTrue(ProximityWizardHost.narrate("current", "near|APPROACH", "Approach", "en-GB"))
+            testScheduler.runCurrent()
+            assertEquals(listOf("Approach"), spoken)
+            assertTrue(f.coordinator.remote("cancel", "current"))
+            assertTrue(ProximityWizardHost.narrate("current", "near|APPROACH", "Approach", "en-GB"))
+            testScheduler.runCurrent()
+            assertEquals(listOf("Approach", "Approach"), spoken)
+        } finally { f.coordinator.close() }
+        assertFalse(ProximityWizardHost.narrate("current", "waves|WAVE", "Wave", "en-GB"))
     }
 }

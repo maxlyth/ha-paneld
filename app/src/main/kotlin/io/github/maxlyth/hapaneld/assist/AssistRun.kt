@@ -1,7 +1,13 @@
 package io.github.maxlyth.hapaneld.assist
 
 /** One Assist pipeline as Home Assistant lists it to a non-admin client. */
-internal data class AssistPipeline(val id: String, val name: String)
+internal data class AssistPipeline(
+    val id: String,
+    val name: String,
+    val language: String? = null,
+    val ttsLanguage: String? = null,
+    val ttsVoice: String? = null,
+)
 
 /** The pipelines this instance offers, plus the one it prefers when the caller names none. */
 internal data class AssistPipelineCatalog(
@@ -15,6 +21,8 @@ internal data class AssistRunRequest(
     /** Continues an earlier exchange; supplied by the previous run's outcome. */
     val conversationId: String? = null,
     val wakeWordPhrase: String? = null,
+    /** Plain text consumed when the run begins at the intent or text-to-speech stage. */
+    val inputText: String? = null,
     val deviceId: String? = null,
     val sampleRate: Int = DEFAULT_SAMPLE_RATE,
     val startStage: String = STAGE_STT,
@@ -24,8 +32,12 @@ internal data class AssistRunRequest(
 ) {
     internal companion object {
         const val DEFAULT_SAMPLE_RATE = 16_000
+        const val STAGE_WAKE_WORD = "wake_word"
         const val STAGE_STT = "stt"
+        const val STAGE_INTENT = "intent"
         const val STAGE_TTS = "tts"
+
+        fun stageNeedsAudio(stage: String): Boolean = stage == STAGE_WAKE_WORD || stage == STAGE_STT
     }
 }
 

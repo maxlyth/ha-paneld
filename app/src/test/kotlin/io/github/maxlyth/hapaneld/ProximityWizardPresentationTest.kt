@@ -8,6 +8,16 @@ import org.junit.Test
 
 class ProximityWizardPresentationTest {
     @Test
+    fun liveRawValueAppearsThroughoutObservationButNotOnReviewOrTerminalScreens() {
+        for (stage in listOf("intro", "clear", "near", "return_clear", "wave_baseline", "wave_capture", "waves", "review")) {
+            assertTrue(stage, proximityWizardShowsRawValue(stage))
+        }
+        for (stage in listOf("saving", "saved", "cancelled", "timed_out", "failed", "unavailable")) {
+            assertFalse(stage, proximityWizardShowsRawValue(stage))
+        }
+    }
+
+    @Test
     fun clearCaptureKeepsPersonAwayWhileNearCaptureKeepsPersonAtPanel() {
         assertFalse(proximityWizardHoldsNearPanel("clear", "single"))
         assertFalse(proximityWizardHoldsNearPanel("return_clear", "single"))

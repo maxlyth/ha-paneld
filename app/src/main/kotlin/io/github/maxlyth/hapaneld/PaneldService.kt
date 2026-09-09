@@ -3244,6 +3244,16 @@ class PaneldService : Service() {
                 acquireDisplay = screen::acquireVisibleHold,
                 releaseDisplay = screen::releaseVisibleHold,
                 launch = system::launchProximityWizard,
+                narrator = ProximityWizardNarrator(speak = { text, localeTag, onGeneration ->
+                    io.github.maxlyth.hapaneld.assist.AssistPipelineClient(config).speakText(
+                        text,
+                        localeTag,
+                        io.github.maxlyth.hapaneld.assist.AnnouncementLanePlayback(
+                            audio,
+                            onGeneration = onGeneration,
+                        ),
+                    )
+                }, stopPlayback = { generation -> audio.cancelGeneration(generation) }),
             )
             when (BundledHelperInstaller.ensureCurrent(this@PaneldService)) {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")

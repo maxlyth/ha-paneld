@@ -27,10 +27,10 @@ class ProximityWizardHostTest {
 
     private fun attach(id: String, accepted: Boolean = true): Any = Any().also { owner ->
         owners.add(owner)
-        ProximityWizardHost.attach(owner, { """{"sessionId":"$id","stage":"intro"}""" }) {
+        ProximityWizardHost.attach(owner, { """{"sessionId":"$id","stage":"intro"}""" }, action = {
             actions.add(it)
             accepted
-        }
+        })
     }
 
     @Test
@@ -109,6 +109,26 @@ class ProximityWizardHostTest {
     }
 
     @Test
+    fun narrationUsesOnlyTheCurrentSessionAndCanBeStopped() {
+        val owner = Any().also(owners::add)
+        val spoken = mutableListOf<Pair<String, String>>()
+        var stops = 0
+        ProximityWizardHost.attach(
+            owner,
+            { """{"sessionId":"current"}""" },
+            { true },
+            narrate = { prompt, text, locale -> spoken += prompt to "$text@$locale"; true },
+            stopNarration = { stops++ },
+        )
+        assertFalse(ProximityWizardHost.narrate("stale", "near|APPROACH", "Approach", "en-GB"))
+        ProximityWizardHost.stopNarration("stale")
+        assertTrue(ProximityWizardHost.narrate("current", "near|APPROACH", "Approach", "fr-FR"))
+        ProximityWizardHost.stopNarration("current")
+        assertEquals(listOf("near|APPROACH" to "Approach@fr-FR"), spoken)
+        assertEquals(1, stops)
+    }
+
+    @Test
     fun onlyCompletedPresentationCanRebindToNewLaunch() {
         for (stage in listOf("intro", "clear", "near", "return_clear", "waves", "review", "saving")) {
             assertFalse(stage, proximityWizardMayRebind(stage))
@@ -139,7 +159,34 @@ class ProximityWizardHostTest {
         assertTrue(source.contains("proximityWizardMayRebind(stage)"))
         assertTrue(source.contains("FLAG_KEEP_SCREEN_ON"))
         assertTrue(source.contains("ProximityWizardHost.action(currentId, \"visible\")"))
+        assertTrue(source.contains("snapshot.getDouble(\"raw\")"))
+        assertTrue(source.contains("snapshot.optString(\"health\") == \"healthy\""))
+        assertTrue(source.contains("proximityWizardShowsRawValue(stage)"))
+        assertTrue(source.contains("R.string.proximity_wizard_raw_value"))
+        assertTrue(source.contains("ProximityWizardHost.narrate("))
+        assertTrue(source.contains("ProximityWizardHost::stopNarration"))
         assertFalse(source.contains("startService("))
+        assertFalse(source.contains("TextToSpeech"))
+        assertFalse(source.contains("android.speech.tts"))
         assertFalse(source.contains("ProximityWizardHost.attach("))
+    }
+
+    @Test
+    fun activityPassesResolvedLocaleAndServiceUsesOnlyHomeAssistantNarration() {
+        val activity = TestSources.kotlin("ProximityWizardActivity.kt").readText()
+        assertTrue(activity.contains("resources.configuration.locales[0].toLanguageTag()"))
+        val source = TestSources.kotlin("PaneldService.kt").readText()
+        val wiring = source.substring(
+            source.indexOf("narrator = ProximityWizardNarrator"),
+            source.indexOf("narrator = ProximityWizardNarrator") + 720,
+        )
+        assertTrue(wiring.contains("AssistPipelineClient(config).speakText("))
+        assertTrue(wiring.contains("text, localeTag, onGeneration"))
+        assertTrue(wiring.contains("localeTag"))
+        assertTrue(wiring.contains("AnnouncementLanePlayback("))
+        assertTrue(wiring.contains("onGeneration = onGeneration"))
+        assertTrue(wiring.contains("audio.cancelGeneration(generation)"))
+        assertFalse(wiring.contains("TextToSpeech"))
+        assertFalse(wiring.contains("Pico"))
     }
 }

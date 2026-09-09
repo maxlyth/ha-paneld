@@ -47,6 +47,39 @@ class AssistRunTest {
         assertEquals(12, json.optInt("timeout", -1))
     }
 
+    @Test fun `intent and tts runs carry text without audio input fields`() {
+        listOf(AssistRunRequest.STAGE_INTENT, AssistRunRequest.STAGE_TTS).forEach { stage ->
+            val json = JSONObject(
+                (AssistRun(
+                    AssistRunRequest(inputText = "Move away from the panel", startStage = stage),
+                ).start().single() as AssistCommand.SendText).json,
+            )
+
+            assertEquals(stage, json.getString("start_stage"))
+            assertEquals("Move away from the panel", json.getJSONObject("input").getString("text"))
+            assertFalse(json.getJSONObject("input").has("sample_rate"))
+            assertFalse(json.has("pipeline"))
+        }
+    }
+
+    @Test fun `speech runs do not send an irrelevant text input`() {
+        val json = JSONObject(
+            (AssistRun(AssistRunRequest(inputText = "ignored")).start().single() as AssistCommand.SendText).json,
+        )
+
+        assertFalse(json.getJSONObject("input").has("text"))
+    }
+
+    @Test fun `wake word runs retain their audio input metadata`() {
+        val json = JSONObject(
+            (AssistRun(
+                AssistRunRequest(startStage = AssistRunRequest.STAGE_WAKE_WORD),
+            ).start().single() as AssistCommand.SendText).json,
+        )
+
+        assertEquals(16_000, json.getJSONObject("input").getInt("sample_rate"))
+    }
+
     @Test fun `run-start reports the deadline Home Assistant set for the run`() {
         val run = AssistRun(AssistRunRequest())
         run.start()
@@ -359,13 +392,19 @@ class AssistRunTest {
     @Test fun `the pipeline catalog keeps the preferred pipeline`() {
         val message = AssistPipelineJson.parseMessage(
             """{"id":4,"type":"result","success":true,"result":{"pipelines":[""" +
-                """{"id":"01","name":"Home Assistant","language":"en"},{"id":"02","name":"Ollama"}],""" +
+                """{"id":"01","name":"Home Assistant","language":"en","tts_language":"en-GB","tts_voice":"Jenny"},{"id":"02","name":"Ollama"}],""" +
                 """"preferred_pipeline":"02"}}""",
         ) as AssistMessage.Result
 
         val catalog = AssistPipelineJson.parseCatalog(requireNotNull(message.result))
 
-        assertEquals(listOf(AssistPipeline("01", "Home Assistant"), AssistPipeline("02", "Ollama")), catalog.pipelines)
+        assertEquals(
+            listOf(
+                AssistPipeline("01", "Home Assistant", "en", "en-GB", "Jenny"),
+                AssistPipeline("02", "Ollama"),
+            ),
+            catalog.pipelines,
+        )
         assertEquals("02", catalog.preferredId)
         assertEquals("""{"id":4,"type":"assist_pipeline/pipeline/list"}""", AssistPipelineJson.listMessage(4))
     }

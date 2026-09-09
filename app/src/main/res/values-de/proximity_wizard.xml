@@ -63,4 +63,6 @@
     <string name="proximity_wizard_cancel">Abbrechen</string>
     <string name="proximity_wizard_done">Fertig</string>
     <string name="proximity_wizard_action_failed">Dieser Schritt konnte nicht abgeschlossen werden. Ihre bisherigen Einstellungen sind sicher.</string>
+    <string name="proximity_wizard_raw_value">Sensor-Rohwert: %1$s</string>
+    <string name="proximity_wizard_raw_waiting">Warten auf einen Messwert</string>
 </resources>

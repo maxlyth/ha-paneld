@@ -63,4 +63,6 @@
     <string name="proximity_wizard_cancel">Cancelar</string>
     <string name="proximity_wizard_done">Listo</string>
     <string name="proximity_wizard_action_failed">No se pudo completar este paso. Los ajustes anteriores están a salvo.</string>
+    <string name="proximity_wizard_raw_value">Valor bruto del sensor: %1$s</string>
+    <string name="proximity_wizard_raw_waiting">esperando una lectura</string>
 </resources>

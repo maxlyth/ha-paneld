@@ -5,6 +5,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProximityCalibrationEngineTest {
+    @Test fun guidedCadenceLeavesTimeToReadOrHearEachInstruction() {
+        assertEquals(8_000L, ProximityCalibrationEngine.COUNTDOWN_MS)
+        assertEquals(5_000L, ProximityCalibrationEngine.CAPTURE_HOLD_MS)
+        assertEquals(30_000L, ProximityCalibrationEngine.APPROACH_TIMEOUT_MS)
+        assertEquals(45_000L, ProximityCalibrationEngine.WAVE_PHASE_TIMEOUT_MS)
+    }
+
     @Test fun singleHandApproachWakesBeforeWithdrawalInRangedAndBothBinaryPolarities() {
         for ((clear, hand) in listOf(100f to 5f, 5f to 100f, 0f to 1f, 1f to 0f)) {
             val mode = if (clear in 0f..1f && hand in 0f..1f) Mode.BINARY else Mode.RANGED

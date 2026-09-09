@@ -47,6 +47,8 @@ internal class AnnouncementLanePlayback(
     private val pollMs: Long = POLL_MS,
     /** Called once the reply has been accepted for playback, so the panel can report that it is speaking. */
     private val onStarted: () -> Unit = {},
+    /** Reports the exact accepted generation to callers that may later cancel only their own audio. */
+    private val onGeneration: (Long) -> Unit = {},
 ) : AssistPlayback {
     override suspend fun play(url: String) {
         // The generation comes back from the submission itself. Reading the snapshot afterwards can
@@ -57,6 +59,7 @@ internal class AnnouncementLanePlayback(
                 AssistPipelineClient.CODE_PLAYBACK_FAILED,
                 "The announcement coordinator is no longer accepting playback",
             )
+        onGeneration(generation)
         onStarted()
         while (true) {
             val now = audio.snapshot()

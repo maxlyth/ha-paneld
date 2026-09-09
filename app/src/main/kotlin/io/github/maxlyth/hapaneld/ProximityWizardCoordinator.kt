@@ -19,6 +19,7 @@ internal class ProximityWizardCoordinator(
     private val acquireDisplay: (Any) -> Boolean,
     private val releaseDisplay: (Any) -> Unit,
     private val launch: () -> Boolean,
+    private val narrator: ProximityWizardNarrator? = null,
 ) : AutoCloseable {
     private val stopped = AtomicBoolean(false)
     private val pendingAction = AtomicBoolean(false)
@@ -29,7 +30,13 @@ internal class ProximityWizardCoordinator(
     private var watcher: ScheduledFuture<*>? = null
 
     init {
-        ProximityWizardHost.attach(this, status, ::onPanelAction)
+        ProximityWizardHost.attach(
+            this,
+            status,
+            ::onPanelAction,
+            narrate = { prompt, text, localeTag -> narrator?.narrate(prompt, text, localeTag) == true },
+            stopNarration = { narrator?.stop() },
+        )
     }
 
     /** Called by the same-origin UI route on an IO dispatcher. */
@@ -52,7 +59,10 @@ internal class ProximityWizardCoordinator(
                 true
             }
             "heartbeat" -> heartbeat(sessionId)
-            "cancel" -> cancel(sessionId, "").also { if (!active()) releaseDisplay(displayOwner) }
+            "cancel" -> {
+                narrator?.stop()
+                cancel(sessionId, "").also { if (!active()) releaseDisplay(displayOwner) }
+            }
             "reset" -> !active() && reset()
             else -> false
         }
@@ -62,6 +72,7 @@ internal class ProximityWizardCoordinator(
     private fun onPanelAction(action: String): Boolean {
         if (stopped.get()) return false
         if (action == "visible") return visible()
+        if (action == "cancel") narrator?.stop()
         if (!pendingAction.compareAndSet(false, true)) return false
         val expectedSession = runCatching { JSONObject(status()).optString("sessionId") }.getOrDefault("")
         return runCatching {
@@ -88,6 +99,7 @@ internal class ProximityWizardCoordinator(
         watcher = worker.scheduleWithFixedDelay({
             synchronized(this) {
                 if (!active()) {
+                    narrator?.stop()
                     releaseDisplay(displayOwner)
                     watcher?.cancel(false)
                     watcher = null
@@ -99,6 +111,7 @@ internal class ProximityWizardCoordinator(
     override fun close() {
         if (!stopped.compareAndSet(false, true)) return
         ProximityWizardHost.detach(this)
+        narrator?.close()
         worker.shutdownNow()
         // The service's screen admission closes independently; cancelling never writes calibration.
         releaseDisplay(displayOwner)

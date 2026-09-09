@@ -586,10 +586,11 @@ internal class ProximityCalibrationEngine(
     }
     companion object {
         const val SESSION_TIMEOUT_MS = 300_000L
-        const val COUNTDOWN_MS = 6_000L
-        const val CAPTURE_HOLD_MS = 4_000L
-        const val APPROACH_TIMEOUT_MS = 20_000L
-        const val WAVE_PHASE_TIMEOUT_MS = 30_000L
+        // Leave enough time to read or hear each instruction before observation begins.
+        const val COUNTDOWN_MS = 8_000L
+        const val CAPTURE_HOLD_MS = 5_000L
+        const val APPROACH_TIMEOUT_MS = 30_000L
+        const val WAVE_PHASE_TIMEOUT_MS = 45_000L
         const val REQUIRED_WAVES = 3
         private const val MINIMUM_NEAR_MS = 200L
         private const val MAXIMUM_NEAR_MS = 4_000L

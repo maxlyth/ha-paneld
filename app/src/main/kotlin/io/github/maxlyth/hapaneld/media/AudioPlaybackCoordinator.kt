@@ -47,7 +47,7 @@ internal class AudioPlaybackCoordinator(
     }
 
     private data class Request(val generation: Long, val url: String)
-    private class Active(val run: AudioPlaybackRun, val job: Job) {
+    private class Active(val generation: Long, val run: AudioPlaybackRun, val job: Job) {
         private val cancelled = AtomicBoolean(false)
         fun cancel() {
             if (cancelled.compareAndSet(false, true)) {
@@ -101,6 +101,25 @@ internal class AudioPlaybackCoordinator(
         active?.cancel()
     }
 
+    /** Cancel only the queued or active announcement that was assigned [expectedGeneration]. */
+    @Synchronized
+    fun cancelGeneration(expectedGeneration: Long): Boolean {
+        if (snapshot.generation != expectedGeneration) return false
+        return when (snapshot.state) {
+            State.QUEUED -> {
+                snapshot = Snapshot(State.IDLE, expectedGeneration)
+                true
+            }
+            State.ACTIVE -> {
+                val current = active?.takeIf { it.generation == expectedGeneration } ?: return false
+                snapshot = Snapshot(State.IDLE, expectedGeneration)
+                current.cancel()
+                true
+            }
+            State.IDLE, State.FAILED, State.CLOSED -> false
+        }
+    }
+
     /** Cancel the current run and wait up to [timeoutMs] for its owned resources to finish cleanup. */
     suspend fun close(timeoutMs: Long): Boolean {
         require(timeoutMs > 0L)
@@ -131,6 +150,7 @@ internal class AudioPlaybackCoordinator(
                     clearActive(previous)
                 }
                 if (isClosed()) break
+                if (!isPending(request.generation)) continue
 
                 val run = try {
                     factory.create(request.url)
@@ -148,11 +168,11 @@ internal class AudioPlaybackCoordinator(
                         fail(request.generation, error)
                     }
                 }
-                val current = Active(run, job)
+                val current = Active(request.generation, run, job)
                 if (!publishActive(request.generation, current)) {
                     current.cancel()
                     current.job.cancel()
-                    break
+                    if (isClosed()) break else continue
                 }
                 job.invokeOnCompletion {
                     clearActive(current)
@@ -176,8 +196,12 @@ internal class AudioPlaybackCoordinator(
     private fun isClosed(): Boolean = closed
 
     @Synchronized
+    private fun isPending(requestGeneration: Long): Boolean =
+        !closed && snapshot.generation == requestGeneration && snapshot.state == State.QUEUED
+
+    @Synchronized
     private fun publishActive(requestGeneration: Long, current: Active): Boolean {
-        if (closed || snapshot.generation != requestGeneration) return false
+        if (closed || snapshot.generation != requestGeneration || snapshot.state != State.QUEUED) return false
         active = current
         snapshot = Snapshot(State.ACTIVE, requestGeneration)
         return true

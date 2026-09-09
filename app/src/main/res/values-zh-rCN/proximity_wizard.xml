@@ -63,4 +63,6 @@
     <string name="proximity_wizard_cancel">取消</string>
     <string name="proximity_wizard_done">完成</string>
     <string name="proximity_wizard_action_failed">无法完成此步骤。之前的设置已安全保留。</string>
+    <string name="proximity_wizard_raw_value">传感器原始值：%1$s</string>
+    <string name="proximity_wizard_raw_waiting">等待读数</string>
 </resources>

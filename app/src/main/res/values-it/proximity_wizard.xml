@@ -63,4 +63,6 @@
     <string name="proximity_wizard_cancel">Annulla</string>
     <string name="proximity_wizard_done">Fine</string>
     <string name="proximity_wizard_action_failed">Impossibile completare questo passaggio. Le impostazioni precedenti sono al sicuro.</string>
+    <string name="proximity_wizard_raw_value">Valore grezzo del sensore: %1$s</string>
+    <string name="proximity_wizard_raw_waiting">in attesa di una lettura</string>
 </resources>

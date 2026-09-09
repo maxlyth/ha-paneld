@@ -94,6 +94,46 @@ class AudioPlaybackCoordinatorTest {
         assertTrue(coordinator.close(1_000L))
     }
 
+    @Test fun exactGenerationCancellationInvalidatesQueuedWorkBeforeFactoryCreation() = runTest {
+        val created = mutableListOf<String>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url ->
+                created += url
+                FakeRun(url, mutableListOf(), AtomicInteger(), AtomicInteger())
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+        val generation = coordinator.submitForGeneration("wizard")!!
+        assertTrue(coordinator.cancelGeneration(generation))
+        runCurrent()
+        assertTrue(created.isEmpty())
+        assertEquals(AudioPlaybackCoordinator.State.IDLE, coordinator.snapshot().state)
+        assertTrue(coordinator.close(1_000L))
+    }
+
+    @Test fun staleGenerationCancellationCannotStopAnewerAnnouncement() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        val runs = linkedMapOf<String, FakeRun>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url -> FakeRun(url, events, active, maximum).also { runs[url] = it } },
+            StandardTestDispatcher(testScheduler),
+        )
+        val wizard = coordinator.submitForGeneration("wizard")!!
+        runCurrent()
+        val newer = coordinator.submitForGeneration("newer")!!
+        runCurrent()
+        assertFalse(coordinator.cancelGeneration(wizard))
+        assertEquals(0, runs.getValue("newer").cancelCalls)
+        assertEquals(newer, coordinator.snapshot().generation)
+        assertEquals(AudioPlaybackCoordinator.State.ACTIVE, coordinator.snapshot().state)
+        assertTrue(coordinator.cancelGeneration(newer))
+        assertEquals(1, runs.getValue("newer").cancelCalls)
+        assertEquals(AudioPlaybackCoordinator.State.IDLE, coordinator.snapshot().state)
+        assertTrue(coordinator.close(1_000L))
+    }
+
     @Test fun cancelledRunReturningNormallyCannotOverwriteTheReplacementGeneration() = runTest {
         val firstStarted = CompletableDeferred<Unit>()
         val releaseFirst = CompletableDeferred<Unit>()

@@ -63,4 +63,6 @@
     <string name="proximity_wizard_cancel">Cancel</string>
     <string name="proximity_wizard_done">Done</string>
     <string name="proximity_wizard_action_failed">That step could not be completed. Your previous settings are safe.</string>
+    <string name="proximity_wizard_raw_value">Raw sensor value: %1$s</string>
+    <string name="proximity_wizard_raw_waiting">waiting for a reading</string>
 </resources>

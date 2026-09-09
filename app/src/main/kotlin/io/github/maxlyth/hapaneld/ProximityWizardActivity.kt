@@ -19,7 +19,16 @@ import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.text.NumberFormat
 import org.json.JSONObject
+
+internal fun proximityWizardNarrationPrompt(
+    stage: String,
+    cue: ProximityWizardCue,
+    awaitingReading: Boolean,
+    waveCount: Int,
+    capabilities: ProximityWizardCapabilities,
+): String = "$stage|${cue.name}|waiting=$awaitingReading|waves=$waveCount|capabilities=${capabilities.name}"
 
 /** The physical calibration journey stays on the panel, independently of its dashboard renderer. */
 class ProximityWizardActivity : AppCompatActivity() {
@@ -31,6 +40,7 @@ class ProximityWizardActivity : AppCompatActivity() {
     private var lastPresentation = ""
     private lateinit var instruction: TextView
     private lateinit var detail: TextView
+    private lateinit var rawValue: TextView
     private lateinit var mode: TextView
     private lateinit var progress: TextView
     private lateinit var indicator: ProgressBar
@@ -41,6 +51,7 @@ class ProximityWizardActivity : AppCompatActivity() {
     private lateinit var cadenceLabel: TextView
     private lateinit var visualRow: LinearLayout
     private lateinit var countdownRing: ProximityCountdownView
+    private lateinit var rawNumberFormat: NumberFormat
     private val backgroundColor = Color.rgb(14, 23, 37)
     private val bodyColor = Color.rgb(243, 247, 255)
     private val accentColor = Color.rgb(133, 186, 255)
@@ -60,6 +71,10 @@ class ProximityWizardActivity : AppCompatActivity() {
         supportActionBar?.hide()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sessionId = savedInstanceState?.getString(SESSION)
+        rawNumberFormat = NumberFormat.getNumberInstance(resources.configuration.locales[0]).apply {
+            isGroupingUsed = false
+            maximumFractionDigits = 4
+        }
         buildUi()
     }
 
@@ -96,6 +111,7 @@ class ProximityWizardActivity : AppCompatActivity() {
             letterSpacing = -0.025f
         }
         detail = label(26f)
+        rawValue = label(28f, true).apply { setTextColor(accentColor) }
         mode = label(24f).apply { setTextColor(Color.rgb(179, 200, 228)) }
         progress = label(24f, true).apply { setTextColor(accentColor) }
         indicator = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -132,6 +148,7 @@ class ProximityWizardActivity : AppCompatActivity() {
             gravity = Gravity.TOP
             addView(instruction)
             addView(detail, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            addView(rawValue, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(mode)
             addView(progress)
         }
@@ -219,6 +236,7 @@ class ProximityWizardActivity : AppCompatActivity() {
 
     override fun onStop() {
         visible = false
+        sessionId?.let(ProximityWizardHost::stopNarration)
         if (::pictogram.isInitialized) pictogram.setPresenting(false)
         handler.removeCallbacks(poll)
         // Rotation may reconnect to the same session. Leaving the wizard must not keep collecting.
@@ -306,14 +324,14 @@ class ProximityWizardActivity : AppCompatActivity() {
             "failed" -> R.string.proximity_wizard_failed to R.string.proximity_wizard_unchanged
             else -> R.string.proximity_wizard_unavailable to R.string.proximity_wizard_unavailable_hint
         }
+        val failureDetail = snapshot.optString("message").takeIf {
+            it.isNotBlank() && stage in setOf("failed", "cancelled", "timed_out")
+        }
         // Do not re-announce unchanged instructions four times per second to accessibility services.
         val presentation = "$stage|$cue|$waveCount|$capabilities|${snapshot.optBoolean("canSave")}|${snapshot.optString("health")}|${snapshot.optString("message")}|${snapshot.optString("mode")}|${snapshot.optInt("acceptedGestures")}|${snapshot.optInt("requiredGestures", 3)}"
         if (presentation != lastPresentation) {
             lastPresentation = presentation
             instruction.setText(title)
-            val failureDetail = snapshot.optString("message").takeIf {
-                it.isNotBlank() && stage in setOf("failed", "cancelled", "timed_out")
-            }
             detail.text = failureDetail ?: getString(hint)
             detail.textLocale = if (failureDetail != null) java.util.Locale.ENGLISH else resources.configuration.locales[0]
             mode.setText(R.string.proximity_wizard_binary)
@@ -349,6 +367,18 @@ class ProximityWizardActivity : AppCompatActivity() {
             })
             // Failed sessions offer a local exit as well as Retry.
             if (stage == "failed" || stage == "timed_out") cancel.visibility = View.VISIBLE
+            sessionId?.let { currentId ->
+                val spokenText = listOf(instruction.text, detail.text)
+                    .map(CharSequence::toString)
+                    .filter(String::isNotBlank)
+                    .joinToString(". ")
+                ProximityWizardHost.narrate(
+                    currentId,
+                    proximityWizardNarrationPrompt(stage, cue, awaitingReading, waveCount, capabilities),
+                    spokenText,
+                    resources.configuration.locales[0].toLanguageTag(),
+                )
+            }
         }
         val countdown = proximityWizardCountdownSeconds(
             snapshot.optLong("cueRemainingMs"), snapshot.optLong("cueDurationMs"),
@@ -366,6 +396,12 @@ class ProximityWizardActivity : AppCompatActivity() {
             cue == ProximityWizardCue.WAVE -> R.string.proximity_wizard_wave_window
             else -> R.string.proximity_wizard_preparing
         })
+        val raw = if (snapshot.optString("health") == "healthy") {
+            runCatching { snapshot.getDouble("raw") }.getOrNull()?.takeIf { it.isFinite() }
+        } else null
+        val formattedRaw = raw?.let(rawNumberFormat::format) ?: getString(R.string.proximity_wizard_raw_waiting)
+        rawValue.text = getString(R.string.proximity_wizard_raw_value, formattedRaw)
+        rawValue.visibility = if (proximityWizardShowsRawValue(stage)) View.VISIBLE else View.GONE
     }
 
     private fun perform(action: String) {
@@ -393,3 +429,8 @@ class ProximityWizardActivity : AppCompatActivity() {
         private val TERMINAL = setOf("saved", "cancelled", "timed_out", "failed", "unavailable")
     }
 }
+
+/** Raw readings are learning aids during setup, rather than a claim about saved calibration. */
+internal fun proximityWizardShowsRawValue(stage: String): Boolean = stage in setOf(
+    "intro", "clear", "near", "return_clear", "wave_baseline", "wave_capture", "waves", "review",
+)
