@@ -4,6 +4,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WRAPPER="$SCRIPT_DIR/provision_gate_parallel.sh"
+CI_WORKFLOW="${PROVISION_CI_WORKFLOW_UNDER_TEST:-$SCRIPT_DIR/../../.github/workflows/ci.yml}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -89,6 +90,23 @@ description="per-shard reports retain deterministic manifest order"; assert_true
 unique_tmp="$(grep -h '^tmpdir=' "$OUT"/*/tap.log | sort -u | wc -l | tr -d ' ')"
 description="every shard receives isolated temporary state"; assert_true test "$unique_tmp" -eq 14
 description="the jobs limit permits the requested concurrency"; assert_true test "$(cat "$STATE/maximum")" -eq 2
+
+AGGREGATE_ONLY_LOG="$TMP/aggregate-only.log"
+PROVISION_GATE_SHARD_RUNNER="$TMP/not-a-runner" PROVISION_GATE_EXPECTED_TOTAL=14 \
+  bash "$WRAPPER" --aggregate "$OUT" > "$AGGREGATE_ONLY_LOG" 2>&1
+status=$?
+description="retained results can be aggregated without a shard runner"; assert_true test "$status" -eq 0
+description="retained full-gate results preserve the canonical totals marker"; assert_true grep -qx 'PROVISION_GATE_TOTALS=shards=14/14;tests=14/14;failures=0' "$AGGREGATE_ONLY_LOG"
+
+MISSING_AGGREGATE="$TMP/missing-aggregate"
+cp -a "$OUT" "$MISSING_AGGREGATE"
+rm -rf "$MISSING_AGGREGATE/database-host"
+MISSING_AGGREGATE_LOG="$TMP/missing-aggregate.log"
+PROVISION_GATE_SHARD_RUNNER="$TMP/not-a-runner" PROVISION_GATE_EXPECTED_TOTAL=14 \
+  bash "$WRAPPER" --aggregate "$MISSING_AGGREGATE" > "$MISSING_AGGREGATE_LOG" 2>&1
+status=$?
+description="a retained full gate fails when one shard artifact is missing"; assert_true test "$status" -ne 0
+description="the missing retained shard is reported explicitly"; assert_true grep -q '^SHARD database-host FAIL cases=0 ' "$MISSING_AGGREGATE_LOG"
 
 DEFAULT_STATE="$TMP/default-state"; mkdir "$DEFAULT_STATE"
 DEFAULT_LOG="$TMP/default.log"
@@ -216,6 +234,48 @@ for retired_shard in shizuku helper-install device-sweep; do
   status=$?
   description="unsafe dependent shard $retired_shard is no longer selectable"; assert_true test "$status" -eq 2
 done
+
+provisioning_job="$(awk '/^  provisioning:$/ { in_job=1 } /^  provisioning-aggregate:$/ { exit } in_job' "$CI_WORKFLOW")"
+aggregate_job="$(awk '/^  provisioning-aggregate:$/ { in_job=1 } /^  dependency-integrity:$/ { exit } in_job' "$CI_WORKFLOW")"
+build_job="$(awk '/^  build:$/ { in_job=1 } /^  android-build:$/ { exit } in_job' "$CI_WORKFLOW")"
+android_build_job="$(awk '/^  android-build:$/ { in_job=1 } /^  host-contracts:$/ { exit } in_job' "$CI_WORKFLOW")"
+host_job="$(awk '/^  host-contracts:$/ { in_job=1 } /^  provisioning:$/ { exit } in_job' "$CI_WORKFLOW")"
+if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$results" "${{ matrix.shard }}"' <<<"$provisioning_job" &&
+   grep -Fq 'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' <<<"$provisioning_job" &&
+   grep -Fq 'name: provisioning-${{ matrix.shard }}' <<<"$provisioning_job" &&
+   grep -Fqx '    needs: [provisioning, host-contracts]' <<<"$aggregate_job" &&
+   grep -Fqx '    name: Host contracts' <<<"$aggregate_job" &&
+   grep -Fq 'uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' <<<"$aggregate_job" &&
+   grep -Fq 'pattern: provisioning-*' <<<"$aggregate_job" &&
+   grep -Fq 'merge-multiple: true' <<<"$aggregate_job" &&
+   grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --aggregate "$RUNNER_TEMP/provisioning-results"' <<<"$aggregate_job" &&
+   grep -Fq 'HOST_RESULT: ${{ needs.host-contracts.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'PROVISIONING_RESULT: ${{ needs.provisioning.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'test "$HOST_RESULT" = success' <<<"$aggregate_job" &&
+   grep -Fq 'test "$PROVISIONING_RESULT" = success' <<<"$aggregate_job" &&
+   grep -Fqx '    name: Host shell contracts' <<<"$host_job"; then
+  pass "CI retains every runner-level shard and preserves the Host contracts release gate"
+else
+  fail "CI retains every runner-level shard and preserves the Host contracts release gate"
+fi
+if awk '
+     /- name: Upload debug APK/ { in_step=1; next }
+     in_step && /if: matrix\.apks == '\''yes'\''/ { guarded=1 }
+     in_step && /uses: actions\/upload-artifact@/ { uploaded=1; exit }
+     END { exit !(guarded && uploaded) }
+   ' <<<"$build_job"; then
+  pass "CI uploads the debug APK only from the assemble split"
+else
+  fail "CI uploads the debug APK only from the assemble split"
+fi
+if grep -Fqx '    name: Android build' <<<"$android_build_job" &&
+   grep -Fqx '    needs: build' <<<"$android_build_job" &&
+   grep -Fq 'ANDROID_RESULT: ${{ needs.build.result }}' <<<"$android_build_job" &&
+   grep -Fq 'run: test "$ANDROID_RESULT" = success' <<<"$android_build_job"; then
+  pass "CI preserves the Android build release gate across all matrix splits"
+else
+  fail "CI preserves the Android build release gate across all matrix splits"
+fi
 
 printf '1..%d\n' "$((passes + failures))"
 [ "$failures" -eq 0 ]
