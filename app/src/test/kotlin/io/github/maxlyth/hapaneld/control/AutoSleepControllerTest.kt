@@ -34,6 +34,100 @@ import java.util.concurrent.atomic.AtomicLong
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AutoSleepControllerTest {
+    @Test fun `panel source restores touch correction after controller restart`() {
+        val learning = FakeLearning(persistCorrections = true)
+        Harness(source = "panel", learning = learning).use { h ->
+            h.start()
+            h.controller.noteProximityState(false)
+            h.await { h.status().getBoolean("available") }
+            h.now.set(MIN_AUTO_SLEEP_LEASE_MS)
+            h.controller.advanceToForTest(h.now.get())
+            h.await { h.screenChanges.contains(false) }
+            h.now.addAndGet(MINUTE)
+            h.wakeTap.fireTap()
+            h.await { learning.corrections.size == 1 }
+            assertEquals(MIN_AUTO_SLEEP_LEASE_MS + PREMATURE_TOUCH_CORRECTION_MS, learning.corrections.single())
+        }
+        Harness(source = "panel", learning = learning).use { h ->
+            h.start()
+            h.controller.noteProximityState(false)
+            h.await { h.status().getBoolean("available") }
+            assertEquals(learning.corrections.single(), h.status().getLong("learned_lease_ms"))
+            h.now.set(MIN_AUTO_SLEEP_LEASE_MS)
+            h.controller.advanceToForTest(h.now.get())
+            h.controller.noteProximityState(false)
+            h.await { h.controller.feedPositionForTest()?.revision == 3L }
+            assertFalse(h.screen.isIntendedOff())
+            h.now.set(learning.corrections.single())
+            h.controller.advanceToForTest(h.now.get())
+            h.await { h.screen.isIntendedOff() }
+        }
+    }
+
+    @Test fun `panel source operates without HA and holds for sustained presence`() {
+        Harness(source = "panel").use { h ->
+            assertFalse(h.start().enabled)
+            h.controller.noteProximityState(true)
+            h.await { h.status().getString("reason") == "source_active" }
+            assertEquals("panel", h.status().getString("source"))
+            assertTrue(h.status().getBoolean("available"))
+            h.now.set(2 * MIN_AUTO_SLEEP_LEASE_MS)
+            h.controller.advanceToForTest(h.now.get())
+            h.controller.noteProximityState(true)
+            h.await { h.controller.feedPositionForTest()?.revision == 3L }
+            assertFalse(h.screen.isIntendedOff())
+            h.controller.noteProximityState(false)
+            h.await { h.status().getString("reason") == "source_activity_lease" }
+            h.now.addAndGet(MIN_AUTO_SLEEP_LEASE_MS)
+            h.controller.advanceToForTest(h.now.get())
+            h.await { h.screen.isIntendedOff() }
+        }
+    }
+
+    @Test fun `panel presence cannot wake dark screen but source loss restores owned sleep`() {
+        Harness(source = "panel").use { h ->
+            h.start()
+            h.controller.noteProximityState(false)
+            h.await { h.status().getBoolean("available") }
+            h.now.set(MIN_AUTO_SLEEP_LEASE_MS)
+            h.controller.advanceToForTest(h.now.get())
+            h.await { h.screen.isIntendedOff() }
+            h.controller.noteProximityState(true)
+            h.await { h.status().getString("reason") == "source_active" }
+            assertTrue(h.screen.isIntendedOff())
+            h.controller.noteProximityState(null)
+            h.await { !h.screen.isIntendedOff() }
+            assertFalse(h.status().getBoolean("available"))
+            assertEquals("source_unavailable", h.status().getString("phase"))
+        }
+    }
+
+    @Test fun `panel source loss preserves a manually dark screen`() {
+        Harness(source = "panel").use { h ->
+            h.start()
+            h.controller.noteProximityState(true)
+            h.await { h.status().getBoolean("available") }
+            h.screen.sleep()
+            assertTrue(h.screen.isIntendedOff())
+            h.controller.noteProximityState(null)
+            h.await { h.status().getString("phase") == "source_unavailable" }
+            assertTrue(h.screen.isIntendedOff())
+        }
+    }
+
+    @Test fun `panel source ignores HA aggregates and never requests HA history`() {
+        Harness(source = "panel", history = { _, _ -> error("must not read HA") }).use { h ->
+            val request = h.start()
+            h.controller.noteProximityState(null)
+            h.offer(aggregate(request, 99L, HaPresenceValue.ON))
+            h.await { h.status().getString("phase") == "source_unavailable" }
+            assertFalse(h.status().getBoolean("available"))
+            val history = JSONObject(runBlocking { h.controller.historyJson(6) })
+            assertEquals("panel_proximity", history.getString("source_scope"))
+            assertEquals("local_history_unavailable", history.getString("detail"))
+        }
+    }
+
     @Test fun `history uses one hour warmup current lease and selected Area sources`() {
         val requested = CopyOnWriteArrayList<Pair<Long, Long>>()
         Harness(history = { start, end ->
@@ -405,14 +499,54 @@ class AutoSleepControllerTest {
         assertTrue(h.learning.corrections.isEmpty())
     }
 
-    @Test fun proximityWakeThenTouchNeverManufacturesTapProof() = Harness().use { h ->
-        h.prepareAutomaticSleep()
-        h.controller.noteProximityState(true)
-        h.await { !h.screen.isIntendedOff() }
+    @Test fun proximityCannotWakeAutomaticOrManualOffEvenWhenQueuedBeforeOff() = runTest {
+        for (automatic in listOf(false, true)) {
+            val h = Harness(this, StandardTestDispatcher(testScheduler))
+            assertTrue(h.controller.start())
+            runCurrent()
+            val request = h.requests.single()
+            h.offer(aggregate(request, 0L, HaPresenceValue.OFF))
+            runCurrent()
+            if (automatic) {
+                h.now.set(15 * MINUTE)
+                h.controller.advanceToForTest(h.now.get())
+                runCurrent()
+                assertTrue(h.screen.isIntendedOff())
+                assertTrue(h.controller.noteProximityState(true))
+            } else {
+                assertTrue(h.controller.noteProximityState(true))
+                h.screen.sleep()
+            }
+            val generation = h.screen.currentOffGeneration()
+            runCurrent()
+            assertEquals(generation, h.screen.currentOffGeneration())
+            assertTrue(h.learning.corrections.isEmpty())
+            assertFalse(h.learning.events.contains("gap"))
+            h.closeWithVirtualTime { runCurrent() }
+        }
+    }
 
-        h.controller.noteTouchForTest(h.now.incrementAndGet(), null)
-        Thread.sleep(30L)
-        assertTrue(h.learning.corrections.isEmpty())
+    @Test fun proximityOnlyExtendsLocalEvidenceWhileScreenIsProvenLit() = runTest {
+        val h = Harness(this, StandardTestDispatcher(testScheduler))
+        assertTrue(h.controller.start())
+        runCurrent()
+        val request = h.requests.single()
+        h.offer(aggregate(request, 0L, HaPresenceValue.OFF,
+            marker = HaPresenceActivityMarker(1L, SOURCE, h.now.get())))
+        runCurrent()
+        h.now.set(MINUTE)
+        h.backlight.level = 0
+        assertTrue(h.controller.noteProximityState(true))
+        runCurrent()
+        assertFalse(h.learning.events.contains("gap"))
+        assertTrue(h.controller.noteProximityState(false))
+        runCurrent()
+        h.backlight.level = 160
+        assertTrue(h.controller.noteProximityState(true))
+        runCurrent()
+        assertTrue(h.learning.events.contains("gap"))
+        assertFalse(h.screen.isIntendedOff())
+        h.closeWithVirtualTime { runCurrent() }
     }
 
     @Test fun genericScreenWakeThenTouchNeverManufacturesTapProof() = Harness().use { h ->
@@ -557,7 +691,7 @@ class AutoSleepControllerTest {
         h.now.incrementAndGet()
         assertTrue(h.offer(aggregate(request, 1L, HaPresenceValue.OFF,
             marker = HaPresenceActivityMarker(1L, SOURCE, h.now.get()))))
-        assertTrue(h.controller.noteProximityState(true))
+        assertTrue(h.controller.noteTouchForTest(h.now.get(), null))
 
         val closeResult = AtomicBoolean()
         val closer = Thread { closeResult.set(h.controller.closeAndJoin(2_000L)) }.apply { start() }
@@ -624,6 +758,8 @@ class AutoSleepControllerTest {
         scopeOverride: CoroutineScope? = null,
         workerDispatcher: CoroutineDispatcher = Dispatchers.Default,
         enabled: Boolean = true,
+        source: String = "home_assistant",
+        val learning: FakeLearning = FakeLearning(),
         wakeTapAvailable: Boolean = true,
         history: suspend (Long, Long) -> HaPresenceSelectedHistory = { _, _ ->
             error("history unavailable")
@@ -633,14 +769,15 @@ class AutoSleepControllerTest {
         val now = AtomicLong()
         val wallNow = AtomicLong()
         val scope = scopeOverride ?: CoroutineScope(SupervisorJob() + Dispatchers.Default)
-        val learning = FakeLearning()
         val wakeTap = FakeWakeTap(canArm = wakeTapAvailable)
+        val backlight = FakeBacklight()
         val screen = ScreenController(
-            FakeBacklight(), FakeScreenPower(), FakeRootShell(),
-            FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK")),
+            backlight, FakeScreenPower(), FakeRootShell(),
+            FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK", "BLPOWER" to "0")),
             wakeTap, ScreenOff.DAEMON_BLPOWER,
         )
         val requests = CopyOnWriteArrayList<HaPresenceRequest>()
+        val screenChanges = CopyOnWriteArrayList<Boolean>()
         val managerClosed = AtomicBoolean()
         val managerRefreshes = AtomicLong()
         private val enabledState = AtomicBoolean(enabled)
@@ -648,9 +785,10 @@ class AutoSleepControllerTest {
         val controller = AutoSleepController(
             scope = scope,
             screen = screen,
-            configuration = { AutoSleepRuntimeConfig(enabledState.get(), "android", "panel", "https://ha") },
+            configuration = { AutoSleepRuntimeConfig(enabledState.get(), "android", "panel", "https://ha", source = source) },
             learning = learning,
             onNoArea = onNoArea,
+            onScreenChanged = screenChanges::add,
             elapsedRealtime = now::get,
             epochMillis = wallNow::get,
             workerDispatcher = workerDispatcher,
@@ -728,15 +866,17 @@ class AutoSleepControllerTest {
         }
     }
 
-    private class FakeLearning : AutoSleepLearning {
+    private class FakeLearning(private val persistCorrections: Boolean = false) : AutoSleepLearning {
+        private var savedLeaseMs = MIN_AUTO_SLEEP_LEASE_MS
         val corrections = CopyOnWriteArrayList<Long>()
         val events = CopyOnWriteArrayList<String>()
         val flushed = AtomicBoolean()
         override fun learnedLease(partition: String, baseLeaseMs: Long) =
-            AutoSleepLearnedLease(baseLeaseMs.coerceAtLeast(MIN_AUTO_SLEEP_LEASE_MS), 0, 0, MIN_AUTO_SLEEP_LEASE_MS)
+            AutoSleepLearnedLease(baseLeaseMs.coerceAtLeast(savedLeaseMs), 0, 0, savedLeaseMs)
         override fun recordGap(partition: String, evidence: AutoSleepLocalEvidence, gapMs: Long) { events += "gap" }
         override fun recordCorrection(partition: String, floorMs: Long) {
             corrections += floorMs
+            if (persistCorrections) savedLeaseMs = floorMs
             events += "correction"
         }
         override fun flush() { events += "flush"; flushed.set(true) }

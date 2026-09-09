@@ -1433,6 +1433,166 @@
       "sourceHash": "285ddd52ae6ab42b287d85dbaa0dd509fece2d3cb53dbb3cde9c1c7915e5b4f8",
       "state": "machine-cross-checked"
     },
+    "configure.proximity.setup.ready_both": {
+      "text": "La présence et le geste sont prêts",
+      "sourceHash": "66f3f4a9d78e9e41753efd74293287788c11d5a96538b7b200fade234670eb5d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_presence": {
+      "text": "La présence est prête ; le geste est indisponible",
+      "sourceHash": "52bccfbc6ae895ba037a8a1f76c1564dcafa76b6f6502ec367d40b346d67cd6a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_wave": {
+      "text": "Le geste est prêt ; la présence est indisponible",
+      "sourceHash": "0ab86ef59c3f4fa088ce856bd4c012e7dc4e5d3403da57726008eca6a2a1bc68",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready_neither": {
+      "text": "La présence et le geste sont indisponibles",
+      "sourceHash": "2146a9427945a9bab0bf1b33b8d79376ea3b6b2553efdec2a321adeee115781b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.wave_baseline": {
+      "text": "Vérification de la position de départ pour les gestes",
+      "sourceHash": "bc102011a9555fb7aecd2fdbcc56a655fb997c54f50511acabac0c4580ec3e87",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.wave_capture": {
+      "text": "Mesure d’un geste volontaire de la main",
+      "sourceHash": "b70f805121486ffe239f322c8a73a9fcd4b5092d49a4851062bdee017d2da6e3",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.binary": {
+      "text": "Ce capteur indique uniquement « proche » ou « dégagé ». Sa distance de détection ne peut pas être réglée.",
+      "sourceHash": "d30827a01bb255c475f6136c3deb16d36e314496ad3a5c24e053b08a4759f429",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.calibrating": {
+      "text": "La configuration est en cours sur le panneau",
+      "sourceHash": "75d438381e9d85bdd584191775d18b2ae670fe38a94c2a18015ad1c56e779b36",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.cancel": {
+      "text": "Annuler la configuration",
+      "sourceHash": "c17bac18b5a6250d0f1b9919516de8d9f155d87af5e80d2ffd30d799bad0102e",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.confirm_reset": {
+      "text": "Remplacer l’étalonnage enregistré par les valeurs par défaut de ce profil de capteur ?",
+      "sourceHash": "9cf69941e7a3c4107ee5bdf75febc6366fcad8de242b409c94839ca7022b3379",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.follow": {
+      "text": "Suivez les instructions sur le panneau. Gardez l’onglet du navigateur ouvert jusqu’à la fin de la configuration ; il peut rester en arrière-plan.",
+      "sourceHash": "5617ef29cda6cf1af481ca3fdc7ef3c37b65981f0dcb67f0d58fd4e81e76eb18",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.local": {
+      "text": "La configuration facultative se déroule sur le panneau. Le réveil par toucher reste disponible.",
+      "sourceHash": "8f6597024bf8630ed4a363b1614be8f5feb965be8e1b86ff1b7b6569710454b7",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.no_source": {
+      "text": "Le réveil par geste est indisponible. Le réveil par toucher reste disponible.",
+      "sourceHash": "fc08b46c5f11c807063e836506b0e635d95aa83a292eb8c87246679f896717ce",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.ready": {
+      "text": "Le capteur de proximité est prêt",
+      "sourceHash": "04c0b7d2c142ac192b0217e7c7581ec1709282a8e6bd5548ff8606c955026d7a",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.rejected": {
+      "text": "Le panneau n’a pas accepté cette action.",
+      "sourceHash": "55ddb5d1f8e307a60e0209ba1f8c9082649275d810a70313b26e9f96db673413",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.required": {
+      "text": "La configuration de la proximité est disponible sur le panneau",
+      "sourceHash": "d7c9ca89745052a561f68460ddc4944cd627e8b215ae21b39679952552fc1118",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.reset": {
+      "text": "Rétablir les valeurs par défaut du profil",
+      "sourceHash": "8ce491fb3c0b3e323b74408d14bc079e230a7b02841006762c14803f7114f38b",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.cancelled": {
+      "text": "Configuration annulée. L’étalonnage existant reste inchangé.",
+      "sourceHash": "590249f7a9a3f6092e69a14cfb2109f2e107cf44cf8cf66e69855d15866030fc",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.clear": {
+      "text": "Mesure avec le capteur dégagé",
+      "sourceHash": "77216a626932a7d56d5f9dfd5df8be4b00fc808be9d4a55e14e3b67b7d915a5d",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.failed": {
+      "text": "La configuration n’a pas pu se terminer. L’étalonnage existant reste inchangé.",
+      "sourceHash": "65df06ff7addcf60e627a755d0edf4fc5aa65e598f1273cc179ef92e8f3aa970",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.intro": {
+      "text": "Prêt à commencer sur le panneau",
+      "sourceHash": "1350fdc0bc5d1afcc619e3b8531ed9f64b00046655e4fac6dbd7ecc485019aa5",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.near": {
+      "text": "Mesure avec la main proche",
+      "sourceHash": "3d445e91de250e07c3e2bb480250d41d19a4ee253372996790caff603ccdc3f8",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.return_clear": {
+      "text": "Vérification du retour à un capteur dégagé",
+      "sourceHash": "a37d8bc19b5cadab8282d536e5bc4c5e36510dd33bc8330bf0b817ab37faaec4",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.review": {
+      "text": "Prêt pour vérification et enregistrement sur le panneau",
+      "sourceHash": "fbbac7552bfee05473bf42fa6a4cf4a19ad22cd840756839a50697709516de91",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.saved": {
+      "text": "Étalonnage enregistré",
+      "sourceHash": "1ef5f6051f6a687c4507eb380df72ce1cef7103d1c01c11af432d09799bfe887",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.timed_out": {
+      "text": "Délai de configuration dépassé. L’étalonnage existant reste inchangé.",
+      "sourceHash": "b36d10e87fc49a07c07c328e46a4252351be2397aa65e7b365d2b2bfb89fb010",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.stage.waves": {
+      "text": "Validation des gestes : {seen}/{required}",
+      "sourceHash": "21908e1709cc9f665be87a42091b5515520a7c92ecb38dfb65e2c4ca1fc468e7",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.start": {
+      "text": "Configurer la proximité sur le panneau",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.status_unavailable": {
+      "text": "L’état de proximité est indisponible",
+      "sourceHash": "83f5d80d878c1e031fc49359618b20fe97392604a4c57e0e841938b9f7078347",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.unavailable": {
+      "text": "La source de proximité est indisponible",
+      "sourceHash": "a39446a3ec289ecf6c55b4f5e6cc9b28ee5985bd07dafd53cbfa33d6e3c5c60c",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.waiting": {
+      "text": "En attente de l’état du capteur…",
+      "sourceHash": "9b41a512c3d01fe96fa05a91f39ba09c2c4ab0d6aad4a173879859801f1f2044",
+      "state": "machine-cross-checked"
+    },
+    "configure.proximity.setup.working": {
+      "text": "En cours…",
+      "sourceHash": "5474eef8d0f179c707cf418e2bbb468c77cc24edc5e9f5f4e137e85e06a8eea0",
+      "state": "machine-cross-checked"
+    },
     "configure.renderer.builtin": {
       "text": "Moteur de rendu intégré (ha-paneld)",
       "sourceHash": "838a46e057e83db8885d0761337db9d0f2a7ffb8bd723bfc33fcf495cde873a9",
@@ -1869,13 +2029,13 @@
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.action": {
-      "text": "Voir la progression ou enregistrer un geste",
-      "sourceHash": "57564a7788a6a1a13cab9ef247bb024ce97fb9745f0e767eb0ff40e47674a4af",
+      "text": "Ouvrir la configuration de proximité",
+      "sourceHash": "f9d5be8cab3ce30fbc94c115eb102ec4df35d57cb57e2f8d3b070f303e79de2f",
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.title": {
-      "text": "Réveil au geste : apprentissage",
-      "sourceHash": "c344400e0be09185e362531c8c91287fc095b1303c78d556a83b4a323c738010",
+      "text": "Réveil par geste indisponible",
+      "sourceHash": "13fee9fb24fd087f47f147bc51dec39d5c598dd73006d3c8417b837a5128ca7f",
       "state": "machine-cross-checked"
     },
     "dashboard.banner.proximity_learning.touch_available": {
@@ -9704,9 +9864,9 @@
       "text": "Volume du panneau"
     },
     "settings.wake_on_wave.help": {
-      "sourceHash": "7c523659582e3e2fdc008f3b057c91c19f9e2abd2f3e70e3e8c5a20241c5a742",
-      "state": "machine-cross-checked",
-      "text": "Réveille localement le panneau après un geste volontaire appris allant de loin à près, puis à loin. Le réveil tactile reste disponible pendant l’apprentissage."
+      "text": "Réveil après un geste étalonné : dégagé → proche → dégagé. Configurez la proximité sur le panneau ; le réveil par toucher reste disponible.",
+      "sourceHash": "71dd28fb047a8aae73292b1975f5d7b6cbe3ccf7ec49d6c32bc992e4b7596bf7",
+      "state": "machine-cross-checked"
     },
     "settings.wake_on_wave.label": {
       "sourceHash": "ab0b6ed59096eb00a56a3f3a769132e280d380a9bf59b13e0ed4f6567f026a1a",
@@ -11916,6 +12076,41 @@
     "install.backup.dynamic.preview_state_unavailable": {
       "text": "Cette sauvegarde ne contient aucun état du panneau : le panneau dont elle provient n’a pas pu lire sa propre base de données. La restaurer ne rétablira pas l’état du panneau.",
       "sourceHash": "c557f33105dc8983e12e29fa0d11c15c0544145fa3e3808a48dd379b31fed10e",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.panel_setup_help": {
+      "text": "Utilise la détection de présence calibrée de ce panneau. Configurez d’abord la proximité ; la veille automatique est suspendue si le capteur est indisponible.",
+      "sourceHash": "ea85622f28796597982364529b4fd1ad3fdff8f7e2b5419a7f06105b99aed523",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.setup_proximity": {
+      "text": "Configurer la proximité sur le panneau",
+      "sourceHash": "e2e988d28e2af97b8efe9904775644d54099e54fd770cc808cd5b2f20a597c9c",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.source_ha": {
+      "text": "Appareils de la zone Home Assistant",
+      "sourceHash": "16b74be3e8e11ec69dd90f2975d97e8028a6a43cf1bf0381c1b3291c974b8c01",
+      "state": "machine-cross-checked"
+    },
+    "configure.auto_sleep.source_panel": {
+      "text": "Capteur de proximité de ce panneau",
+      "sourceHash": "38ed801329da3585b3aac7b8d59d2e6462881da0cf9826164c4ebd5c2c84312a",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.sensors.raw": {
+      "text": "valeur brute {value}",
+      "sourceHash": "b818f098d2cccce47f393e13bd85d08572283490fc17328fbc21ca55cf432338",
+      "state": "machine-cross-checked"
+    },
+    "settings.auto_sleep_source.help": {
+      "text": "Utilisez le capteur de proximité calibré du panneau ou les appareils de la zone Home Assistant. Si la source choisie est indisponible, la veille automatique est suspendue et le contrôle tactile reste disponible.",
+      "sourceHash": "0350776edee98aa7748c83872293309856544907f647121be111047fa868e50b",
+      "state": "machine-cross-checked"
+    },
+    "settings.auto_sleep_source.label": {
+      "text": "Source de présence pour la veille automatique",
+      "sourceHash": "9a054a7f24e839eacfc5c07281e98e4d5ddf2a0772fe4bc13838166a6eaca289",
       "state": "machine-cross-checked"
     }
   }

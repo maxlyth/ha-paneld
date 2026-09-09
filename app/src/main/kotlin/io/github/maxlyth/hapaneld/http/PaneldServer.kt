@@ -652,6 +652,14 @@ internal fun autoSleepHistoryHours(hours: String?): Int {
     return parsed
 }
 
+internal fun autoSleepRequiresHaAdmission(
+    currentEnabled: Boolean,
+    currentSource: String,
+    requestedEnabled: Boolean,
+    requestedSource: String,
+): Boolean = requestedEnabled && requestedSource == "home_assistant" &&
+    (!currentEnabled || currentSource != "home_assistant")
+
 internal fun autoSleepConfigErrorJson(error: String, message: String): String = JSONObject()
     .put("ok", false)
     .put("error", error)
@@ -1439,6 +1447,7 @@ class PaneldServer internal constructor(
     // hardware → publish HA state). Lets the config API set the formerly MQTT-only keys identically
     // to an HA command while preserving whether durable desired state is still waiting for actuation.
     private val applySetting: (String, String) -> LiveSettingRequestOutcome,
+    private val onProximityCalibration: (String, String) -> Boolean = { _, _ -> false },
     private val pendingLiveSettings: () -> Map<String, String> = { emptyMap() },
     // The subset of the above whose apply path independent boots have found absent. Still durable, still
     // replayed; reported separately only so the Configure page can stop promising it is about to apply.
@@ -3432,54 +3441,39 @@ class PaneldServer internal constructor(
                     get("/openapi.json") {
                         call.respondText(asset("openapi.json"), ContentType.Application.Json)
                     }
-                    post("/proximity/teach") {
-                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasProximity()) {
-                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                    post("/proximity/calibration") {
+                        if (!proximityUiRequestAllowed(
+                                call.request.headers["Origin"], call.request.headers["Referer"],
+                                call.request.headers["Host"], call.request.headers["Sec-Fetch-Site"],
+                                call.request.headers["X-Proximity-UI"],
+                            )) {
+                            call.respondText("Start proximity setup from this panel's HTML UI.\n", status = HttpStatusCode.Forbidden)
                             return@post
                         }
-                        val accepted = when (action) {
-                            "start" -> sensors.startProximityTeach()
-                            "cancel" -> sensors.cancelProximitySession()
-                            else -> false
-                        }
-                        call.respondText(
-                            sensors.proximityJson(), ContentType.Application.Json,
-                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
-                        )
-                    }
-                    post("/proximity/test") {
-                        val action = (receiveBoundedFormParameters(call) ?: return@post)["action"].orEmpty()
-                        if (action != "cancel" && !sensors.hasProximity()) {
-                            call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
+                        val parameters = receiveBoundedFormParameters(call) ?: return@post
+                        val action = parameters["action"].orEmpty()
+                        if (action !in setOf("start", "cancel", "reset", "heartbeat")) {
+                            call.respondText("Unsupported calibration action.\n", status = HttpStatusCode.BadRequest)
                             return@post
                         }
-                        val accepted = when (action) {
-                            "start" -> sensors.startProximityTest()
-                            "cancel" -> sensors.cancelProximitySession()
-                            else -> false
-                        }
-                        call.respondText(
-                            sensors.proximityJson(), ContentType.Application.Json,
-                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict,
-                        )
-                    }
-                    post("/proximity/relearn") {
                         if (!sensors.hasProximity()) {
                             call.respondText(PROXIMITY_SOURCE_REQUIRED, ContentType.Application.Json, HttpStatusCode.Conflict)
                             return@post
                         }
-                        val confirm = (receiveBoundedFormParameters(call) ?: return@post)["confirm"] == "true"
-                        if (!confirm) {
-                            call.respondText("confirmation-required\n", status = HttpStatusCode.Conflict)
-                        } else {
-                            val cleared = sensors.relearnProximity()
-                            call.respondText(
-                                sensors.proximityJson(),
-                                ContentType.Application.Json,
-                                if (cleared) HttpStatusCode.OK else HttpStatusCode.ServiceUnavailable,
-                            )
-                        }
+                        val id = parameters["sessionId"].orEmpty()
+                        val accepted = withContext(Dispatchers.IO) { onProximityCalibration(action, id) }
+                        call.response.headers.append("Cache-Control", "no-store")
+                        call.respondText(sensors.proximityJson(), ContentType.Application.Json,
+                            if (accepted) HttpStatusCode.Accepted else HttpStatusCode.Conflict)
+                    }
+                    post("/proximity/teach") {
+                        call.respondText("Use on-panel proximity setup from the HTML UI.\n", status = HttpStatusCode.Gone)
+                    }
+                    post("/proximity/test") {
+                        call.respondText("Use on-panel proximity setup from the HTML UI.\n", status = HttpStatusCode.Gone)
+                    }
+                    post("/proximity/relearn") {
+                        call.respondText("Use Reset to profile from the HTML UI.\n", status = HttpStatusCode.Gone)
                     }
                     post("/proximity/capture") {
                         call.respondText(RETIRED_PROXIMITY_OPERATION, ContentType.Application.Json, HttpStatusCode.Gone)
@@ -4296,7 +4290,7 @@ $approvalKeyAfter""",
 
     /** Configure tab — schema-driven, save-together settings only. */
     private fun configureBody(strings: AppStrings): String {
-        val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave
+        val proximityLearningEnabled = sensors.hasProximity()
         val proximityMount = if (proximityLearningEnabled) """<div id="proximity-learning-mount" hidden></div>""" else ""
         val proximityScript = if (proximityLearningEnabled) """<script src="/assets/proximity-learning.js"></script>""" else ""
         val setup = configureSetupBanners(strings)
@@ -5806,10 +5800,18 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             }.orEmpty()
         }
         val haSetup = if (haSignInNeededForEffectiveDashboard()) haSignInBanner(strings) else ""
-        val proximityLearning = if (config.wakeOnWave && sensors.hasProximity() && !sensors.proximityReady()) {
-            """<div class="setup">👋 <b>${esc(strings.get("dashboard.banner.proximity_learning.title"))}</b> — ${esc(localizedProximitySummary(sensors.proximitySummary(), strings))}. """ +
+        val proximityState = JSONObject(sensors.proximityJson())
+        val proximityLearning = ProximityStatusBanner.titleKey(
+            enabled = config.wakeOnWave,
+            present = proximityState.optBoolean("present", false),
+            phase = proximityState.optString("phase"),
+            health = proximityState.optString("health"),
+            active = proximityState.optBoolean("sessionActive", false),
+            wakeReady = proximityState.optBoolean("wakeReady", false),
+        )?.let { title ->
+            """<div class="setup">👋 <b>${esc(strings.get(title))}</b>. """ +
                 """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("/configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
-        } else ""
+        }.orEmpty()
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
         // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
         // The WebView verdict is from the REAL engine version (WebView UA), not the stamped package version
@@ -6917,7 +6919,11 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
         // this complete effective snapshot before persistence, so a concurrent save cannot bypass an
         // Area prerequisite or hardened approval by changing the value while this request waits.
         val admissionBaselineHash = io.github.maxlyth.hapaneld.config.ConfigHash.of(directMutationValues())
-        val enablingAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) == true && !config.autoSleep
+        val requestedAutoSleepSource = p["auto_sleep_source"] ?: config.autoSleepSource
+        val requestedAutoSleep = p["auto_sleep"]?.let(SettingValue::parseBool) ?: config.autoSleep
+        val enablingAutoSleep = autoSleepRequiresHaAdmission(
+            config.autoSleep, config.autoSleepSource, requestedAutoSleep, requestedAutoSleepSource,
+        )
         var autoSleepPrerequisiteOwner: HaAuthOwner? = null
         var prerequisiteAndroidId: String? = null
         val prerequisitePanelId = config.panelId
@@ -7198,7 +7204,7 @@ $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
                     if (autoSleepPrerequisiteOwner != null &&
                         (config.haAuthSnapshot().stableOwner() != autoSleepPrerequisiteOwner ||
                             config.androidId != prerequisiteAndroidId || config.panelId != prerequisitePanelId ||
-                            config.autoSleep)
+                            (config.autoSleep && config.autoSleepSource == "home_assistant"))
                     ) {
                         autoSleepPrerequisiteStale = true
                         return@synchronizedTransaction false

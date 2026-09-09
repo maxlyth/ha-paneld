@@ -192,6 +192,62 @@ internal class AssistPipelineClient(
         }
     }
 
+    /**
+     * Synthesises [text] with a Home Assistant Assist pipeline that speaks [localeTag], then plays
+     * the returned media through the same completion-aware playback used for Assist replies. The
+     * configured preferred pipeline wins when its TTS language matches; otherwise another matching
+     * configured pipeline supplies its own engine and voice. Missing language metadata fails closed
+     * so panel instructions are never narrated in a language the user did not select.
+     */
+    suspend fun speakText(
+        text: String,
+        localeTag: String,
+        playback: AssistPlayback,
+    ): AssistOutcome {
+        val spoken = text.trim()
+        if (spoken.isEmpty()) {
+            return AssistOutcome(error = AssistError(CODE_INVALID_TEXT, "There is no text to speak"))
+        }
+        val locale = localeTag.normalizedLanguageTag()
+        if (locale.isEmpty()) {
+            return AssistOutcome(error = AssistError(CODE_TTS_LANGUAGE_UNAVAILABLE, "No speech language was selected"))
+        }
+        val catalog = when (val listed = listPipelines()) {
+            is AssistCatalogResult.Catalog -> listed.catalog
+            is AssistCatalogResult.Failed -> return AssistOutcome(error = listed.error)
+        }
+        val preferred = catalog.pipelines.firstOrNull { it.id == catalog.preferredId }
+        val pipeline = preferred?.takeIf { it.ttsLanguage.matchesLanguage(locale) }
+            ?: catalog.pipelines.firstOrNull { it.ttsLanguage.matchesLanguage(locale) }
+            ?: return AssistOutcome(
+                error = AssistError(
+                    CODE_TTS_LANGUAGE_UNAVAILABLE,
+                    "Home Assistant has no text-to-speech pipeline for $locale",
+                ),
+            )
+        return run(
+            request = AssistRunRequest(
+                pipelineId = pipeline.id,
+                inputText = spoken,
+                startStage = AssistRunRequest.STAGE_TTS,
+                endStage = AssistRunRequest.STAGE_TTS,
+            ),
+            // Text-only runs never invoke this callback; keeping the guard makes an accidental
+            // regression fail closed instead of silently lighting the microphone indicator.
+            attachAudio = { throw IllegalStateException("A text-to-speech run requested microphone audio") },
+            playback = playback,
+        )
+    }
+
+    private fun String.normalizedLanguageTag(): String = trim().replace('_', '-').lowercase()
+
+    private fun String?.matchesLanguage(requested: String): Boolean {
+        val offered = this?.normalizedLanguageTag().orEmpty()
+        if (offered.isEmpty()) return false
+        if (offered == requested) return true
+        return offered.substringBefore('-') == requested.substringBefore('-')
+    }
+
     private fun AssistOutcome.withResolvedUrl(baseUrl: String): AssistOutcome {
         val url = ttsUrl ?: return this
         return copy(ttsUrl = AssistPipelineJson.resolveMediaUrl(baseUrl, url))
@@ -324,17 +380,22 @@ internal class AssistPipelineClient(
         }
 
         try {
-            attachment = try {
-                attachAudio(microphone(queue))
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                // Capture can be refused outright (no permission, hardware in use). There is nothing
-                // to say to a speech pipeline without audio, so the run ends here rather than
-                // sending a request that could only ever time out.
-                return@coroutineScope AssistOutcome(
-                    error = AssistError(CODE_MICROPHONE_UNAVAILABLE, error.javaClass.simpleName.take(MAX_DETAIL_CHARS)),
-                )
+            if (AssistRunRequest.stageNeedsAudio(request.startStage)) {
+                attachment = try {
+                    attachAudio(microphone(queue))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Throwable) {
+                    // Capture can be refused outright (no permission, hardware in use). There is nothing
+                    // to say to a speech pipeline without audio, so the run ends here rather than
+                    // sending a request that could only ever time out.
+                    return@coroutineScope AssistOutcome(
+                        error = AssistError(
+                            CODE_MICROPHONE_UNAVAILABLE,
+                            error.javaClass.simpleName.take(MAX_DETAIL_CHARS),
+                        ),
+                    )
+                }
             }
             outcome = execute(machine.start())
             armDeadline()
@@ -525,6 +586,8 @@ internal class AssistPipelineClient(
         const val CODE_CLOSED = "closed"
         const val CODE_LIST_FAILED = "list_failed"
         const val CODE_ALREADY_RUN = "run_already_used"
+        const val CODE_INVALID_TEXT = "invalid_text"
+        const val CODE_TTS_LANGUAGE_UNAVAILABLE = "tts_language_unavailable"
         const val CODE_MICROPHONE_UNAVAILABLE = "microphone_unavailable"
         const val CODE_PLAYBACK_FAILED = "playback_failed"
         const val CODE_PLAYBACK_TIMEOUT = "playback_timeout"

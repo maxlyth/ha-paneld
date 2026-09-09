@@ -15,6 +15,7 @@ class LiveSettingHandlerBindingTest {
 
         override fun handleWakeOnWave(payload: String) = record("handleWakeOnWave", payload)
         override fun handleAutoSleep(payload: String) = record("handleAutoSleep", payload)
+        override fun handleAutoSleepSource(payload: String) = record("handleAutoSleepSource", payload)
         override fun handlePreventIdleDim(payload: String, approvalRequired: Boolean) =
             record("handlePreventIdleDim", payload, approvalRequired)
         override fun handleWatchdog(payload: String) = record("handleWatchdog", payload)
@@ -67,6 +68,7 @@ class LiveSettingHandlerBindingTest {
         val cases = listOf(
             Case("wake_on_wave", "true", expected = invocation("handleWakeOnWave", "ON")),
             Case("auto_sleep", "true", expected = invocation("handleAutoSleep", "ON")),
+            Case("auto_sleep_source", "panel", expected = invocation("handleAutoSleepSource", "panel")),
             Case(
                 "prevent_idle_dim",
                 "true",
@@ -241,6 +243,7 @@ class LiveSettingHandlerBindingTest {
         val admitted = externalMqttLiveSettingOwners.values.toSet()
         val rejected = LiveSettingEffectOwner.settingKeys - admitted
         val expectedRejected = setOf(
+            "auto_sleep_source",
             "auto_brightness_minimum_percent",
             "auto_brightness_response_percent",
             "auto_brightness_ha_entity",

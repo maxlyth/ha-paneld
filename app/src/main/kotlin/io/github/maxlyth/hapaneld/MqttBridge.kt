@@ -89,6 +89,7 @@ import org.json.JSONObject
 internal enum class LiveSettingEffectOwner(val settingKey: String) {
     WAKE_ON_WAVE("wake_on_wave"),
     AUTO_SLEEP("auto_sleep"),
+    AUTO_SLEEP_SOURCE("auto_sleep_source"),
     PREVENT_IDLE_DIM("prevent_idle_dim"),
     WATCHDOG("watchdog_enabled"),
     KIOSK("kiosk_lock"),
@@ -182,6 +183,7 @@ internal fun externalLiveSettingKey(panel: String, topic: String): String? {
 internal interface LiveSettingHandlers {
     fun handleWakeOnWave(payload: String)
     fun handleAutoSleep(payload: String)
+    fun handleAutoSleepSource(payload: String)
     fun handlePreventIdleDim(payload: String, approvalRequired: Boolean = true)
     fun handleWatchdog(payload: String)
     fun handleKiosk(payload: String)
@@ -225,6 +227,7 @@ internal fun dispatchLiveSetting(
     when (LiveSettingEffectOwner.requireFor(key)) {
         LiveSettingEffectOwner.WAKE_ON_WAVE -> handlers.handleWakeOnWave(onOff)
         LiveSettingEffectOwner.AUTO_SLEEP -> handlers.handleAutoSleep(onOff)
+        LiveSettingEffectOwner.AUTO_SLEEP_SOURCE -> handlers.handleAutoSleepSource(value)
         LiveSettingEffectOwner.PREVENT_IDLE_DIM -> handlers.handlePreventIdleDim(
             if (sensitiveApprovalRequired) value else onOff,
             sensitiveApprovalRequired,
@@ -2845,6 +2848,12 @@ internal class MqttBridge(
     override fun handleAutoSleep(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         applyAutoSleepSetting(on, config::setAutoSleep, onAutoSleepConfigChanged)
+        stateConverger.reconcile("auto_sleep", force = true)
+    }
+
+    override fun handleAutoSleepSource(payload: String) {
+        config.setRaw(requireNotNull(SettingsRegistry.spec("auto_sleep_source")), payload)
+        onAutoSleepConfigChanged(config.autoSleep)
         stateConverger.reconcile("auto_sleep", force = true)
     }
 

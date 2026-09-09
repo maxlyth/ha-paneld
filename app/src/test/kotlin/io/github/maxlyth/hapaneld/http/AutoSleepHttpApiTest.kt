@@ -9,6 +9,15 @@ import kotlinx.coroutines.test.runTest
 import java.io.File
 
 class AutoSleepHttpApiTest {
+    @Test fun `panel source never requires an HA Area but switching an active policy to HA does`() {
+        assertFalse(autoSleepRequiresHaAdmission(false, "panel", true, "panel"))
+        assertFalse(autoSleepRequiresHaAdmission(true, "home_assistant", true, "panel"))
+        assertTrue(autoSleepRequiresHaAdmission(false, "home_assistant", true, "home_assistant"))
+        assertTrue(autoSleepRequiresHaAdmission(true, "panel", true, "home_assistant"))
+        assertFalse(autoSleepRequiresHaAdmission(true, "home_assistant", true, "home_assistant"))
+        assertFalse(autoSleepRequiresHaAdmission(true, "panel", false, "home_assistant"))
+    }
+
     @Test fun `config prerequisite rejections are structured JSON`() {
         val parsed = JSONObject(autoSleepConfigErrorJson(
             "auto-sleep-area-required",

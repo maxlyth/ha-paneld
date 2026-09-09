@@ -38,7 +38,13 @@ internal object AssistPipelineJson {
 
     fun runMessage(id: Int, request: AssistRunRequest): String {
         val input = JSONObject()
-        if (request.startStage == AssistRunRequest.STAGE_STT) input.put("sample_rate", request.sampleRate)
+        if (AssistRunRequest.stageNeedsAudio(request.startStage)) input.put("sample_rate", request.sampleRate)
+        if (
+            request.startStage == AssistRunRequest.STAGE_INTENT ||
+            request.startStage == AssistRunRequest.STAGE_TTS
+        ) {
+            request.inputText?.takeIf { it.isNotBlank() }?.let { input.put("text", it) }
+        }
         request.wakeWordPhrase?.takeIf { it.isNotBlank() }?.let { input.put("wake_word_phrase", it) }
         val message = JSONObject()
             .put("id", id)
@@ -59,7 +65,13 @@ internal object AssistPipelineJson {
         for (index in 0 until (array?.length() ?: 0)) {
             val entry = array?.optJSONObject(index) ?: continue
             val id = entry.stringOrNull("id") ?: continue
-            pipelines += AssistPipeline(id, entry.stringOrNull("name") ?: id)
+            pipelines += AssistPipeline(
+                id = id,
+                name = entry.stringOrNull("name") ?: id,
+                language = entry.stringOrNull("language"),
+                ttsLanguage = entry.stringOrNull("tts_language"),
+                ttsVoice = entry.stringOrNull("tts_voice"),
+            )
         }
         return AssistPipelineCatalog(pipelines, result.stringOrNull("preferred_pipeline"))
     }

@@ -26,11 +26,25 @@ class PaneldServerConfigWiringTest {
         assertTrue(configure.contains("Auto — no default set for this account"))
     }
 
+    @Test fun proximitySetupEntryRemainsAvailableWhenWakeOnWaveIsDisabled() {
+        val source = File("src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt").readText()
+        val configure = source.substringAfter("private fun configureBody(strings: AppStrings)")
+            .substringBefore("private fun configureSetupBanners")
+        val admission = configure.lineSequence().first { it.contains("val proximityLearningEnabled =") }
+        assertEquals("setup admission must depend on sensor availability alone",
+            "val proximityLearningEnabled = sensors.hasProximity()", admission.trim())
+        assertFalse("disabled wake must not hide the calibration entry", configure.contains("wakeOnWave"))
+        assertTrue(configure.contains("if (proximityLearningEnabled) \"\"\"<div id=\"proximity-learning-mount\""))
+        assertTrue(configure.contains("if (proximityLearningEnabled) \"\"\"<script src=\"/assets/proximity-learning.js\""))
+        assertTrue(configure.contains("${'$'}proximityMount</div>"))
+        assertTrue(configure.contains("${'$'}proximityScript"))
+    }
+
     @Test fun httpRoutesEveryApplicableLiveSettingThroughTheSharedDispatcher() {
         val registryKeys = SettingsRegistry.liveApplyKeys()
         val expectedKeys = setOf(
             "auto_brightness", "auto_brightness_ha_entity", "auto_brightness_minimum_percent",
-            "auto_brightness_response_percent", "auto_sleep", "companion_auto_update",
+            "auto_brightness_response_percent", "auto_sleep", "auto_sleep_source", "companion_auto_update",
             "companion_update_channel", "cpu_governor", "ha_area", "home_dashboard", "kiosk_lock",
             "navbar_mode", "network_adb", "prevent_idle_dim", "self_update", "silence_boot_chime",
             "touch_sound", "update_channel", "voice_enabled", "wake_on_wave", "watchdog_enabled",

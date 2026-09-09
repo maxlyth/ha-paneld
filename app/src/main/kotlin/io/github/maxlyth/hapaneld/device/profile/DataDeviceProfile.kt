@@ -61,6 +61,7 @@ class DataDeviceProfile internal constructor(
     override val relayBaseFallbacks = document.hardware.relayBaseFallbacks
     override val buttonLedGpioBase = document.hardware.buttonLedGpioBase
     override val proximityTech = document.sensors.proximityTechnology
+    override val proximityCalibration = document.sensors.proximityCalibration
     override val proximityGpio = document.sensors.proximityGpio
     override val lightTech = document.sensors.lightTechnology
     override val hasCht8305 = document.sensors.cht8305

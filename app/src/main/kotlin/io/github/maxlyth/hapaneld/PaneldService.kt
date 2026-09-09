@@ -715,7 +715,7 @@ internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefres
     val ha = setOf("ha_url", "ha_token", "ha_refresh_token", "ha_token_expiry", "ha_client_id")
     return ConfigOwnerRefreshPlan(
         adaptiveBrightness = changedKeys.any(ha::contains),
-        autoSleep = changedKeys.any((ha + "panel_id")::contains),
+        autoSleep = changedKeys.any((ha + setOf("panel_id", "auto_sleep_source"))::contains),
         logShipping = changedKeys.any(setOf(
             "log_ship_enabled", "log_ship_host", "log_ship_port", "log_ship_protocol",
         )::contains),
@@ -902,6 +902,7 @@ class PaneldService : Service() {
     // Adopting a wake nobody here performed must not depend on the broker being up, so it gets its own
     // worker rather than sharing the MQTT sync tick. Single-flight is right for it: the work is
     // idempotent and generation-guarded, so a dropped duplicate costs nothing.
+    private var proximityWizard: ProximityWizardCoordinator? = null
     private val screenWakeWorker = SingleFlightExecutor("ha-paneld-screen-reconcile")
     @Volatile private var screenOnReceiver: BroadcastReceiver? = null
     @Volatile private var webViewRebindReceiver: BroadcastReceiver? = null
@@ -1044,6 +1045,7 @@ class PaneldService : Service() {
         // Must run BEFORE ensurePanelId and before any renderer starts: it decides, once, whether this panel
         // predates the entity-filter question, and a panel that predates it must never be held to answer it.
         config.migrateLogShipTcpDefault()
+        config.migrateAutoSleepSource()
         config.migrateSetupQuestionsForExistingInstall()
         config.ensurePanelId()      // materialize the generated identity before MQTT/mDNS snapshot it
         updateForegroundStatus(nativeString(R.string.starting))
@@ -1428,7 +1430,7 @@ class PaneldService : Service() {
                                     on = false,
                                 )
                             },
-                            refreshController = { autoSleep.refresh() },
+                            refreshController = { refreshAutoSleepPresence() },
                             applyBridge = {
                                 runtime.observe()?.value?.mqtt?.convergeAutoSleep(
                                     expectedGeneration = expectedSettingGeneration + 1L,
@@ -1532,6 +1534,7 @@ class PaneldService : Service() {
                     ) { key, value, previous -> applyLiveSettingObserved(mqtt, key, value, previous) }
                 }
             },
+            onProximityCalibration = { action, id -> proximityWizard?.remote(action, id) == true },
             pendingLiveSettings = liveSettingAuthority::pendingSnapshot,
             stalledLiveSettings = liveSettingAuthority::pendingStalledSnapshot,
             assistPipelines = io.github.maxlyth.hapaneld.assist.HaAssistPipelineDirectory(config),
@@ -1617,7 +1620,7 @@ class PaneldService : Service() {
                 override fun setSourceIncluded(areaKey: String, sourceKey: String, included: Boolean) =
                     autoSleep.setSourceIncluded(areaKey, sourceKey, included)
                 override fun noteAreaChanged() {
-                    autoSleep.refresh()
+                    refreshAutoSleepPresence()
                 }
             },
             companionDataOperationState = companionDataOperationState,
@@ -1664,6 +1667,16 @@ class PaneldService : Service() {
         // had already settled, so a service restart behind a live renderer is not left waiting. Held as
         // a field so teardown can clear exactly this identity.
         BuiltinDashboard.setRendererSettledListener(rendererSettledForLifecycle)
+    }
+
+    private fun refreshAutoSleepPresence(): Boolean {
+        val accepted = autoSleep.refresh()
+        if (accepted && ::sensors.isInitialized) {
+            autoSleep.noteProximityState(
+                sensors.proximityPresenceNear().takeIf { sensors.proximityPresenceReady() },
+            )
+        }
+        return accepted
     }
 
     private fun buildMqtt(
@@ -1751,7 +1764,7 @@ class PaneldService : Service() {
             wifiOutages = { wifiOutageTracker.counts() },
             learnedProximityEligibility = sensors::hasLearnedProximity,
             onAutoSleepConfigChanged = {
-                acceptCommittedAutoSleepSetting(liveSettingAuthority) { autoSleep.refresh() }
+                acceptCommittedAutoSleepSetting(liveSettingAuthority) { refreshAutoSleepPresence() }
             },
             // This bridge generation's lease, registered with the runtime as the live broker channel
             // just below. A bridge that outlives its service OR its own replacement cannot report.
@@ -1850,7 +1863,7 @@ class PaneldService : Service() {
             persistOff = { generation ->
                 config.setAutoSleepIf(expected = true, expectedGeneration = generation, on = false)
             },
-            refreshController = { autoSleep.refresh() },
+            refreshController = { refreshAutoSleepPresence() },
             applyBridge = { bridge.convergeAutoSleep(expectedGeneration = fence, expectedValue = false) },
         ))
     }
@@ -2424,7 +2437,7 @@ class PaneldService : Service() {
         appliedNetworkConfiguration = desired
         if (ownerRefresh.logShipping) runCatching { logShipper.reconfigure() }
         if (ownerRefresh.keepAwake) runCatching { power.apply(config.keepAwake) }
-        if (ownerRefresh.autoSleep) runCatching { autoSleep.refresh() }
+        if (ownerRefresh.autoSleep) runCatching { refreshAutoSleepPresence() }
         if (ownerRefresh.rendererTarget) {
             io.github.maxlyth.hapaneld.http.PerfReader.updateRendererTarget(rendererTargetSnapshot())
         }
@@ -3219,6 +3232,29 @@ class PaneldService : Service() {
             }
             bootChime.applyPersisted()
             sensors.prepare()
+            proximityWizard = ProximityWizardCoordinator(
+                startSession = sensors::startProximityCalibration,
+                active = sensors::proximityCalibrationActive,
+                status = sensors::proximityJson,
+                visible = sensors::proximityCalibrationVisible,
+                localAction = sensors::proximityCalibrationAction,
+                cancel = sensors::cancelProximitySession,
+                heartbeat = sensors::proximityCalibrationHeartbeat,
+                reset = sensors::resetProximityToProfile,
+                acquireDisplay = screen::acquireVisibleHold,
+                releaseDisplay = screen::releaseVisibleHold,
+                launch = system::launchProximityWizard,
+                narrator = ProximityWizardNarrator(speak = { text, localeTag, onGeneration ->
+                    io.github.maxlyth.hapaneld.assist.AssistPipelineClient(config).speakText(
+                        text,
+                        localeTag,
+                        io.github.maxlyth.hapaneld.assist.AnnouncementLanePlayback(
+                            audio,
+                            onGeneration = onGeneration,
+                        ),
+                    )
+                }, stopPlayback = { generation -> audio.cancelGeneration(generation) }),
+            )
             when (BundledHelperInstaller.ensureCurrent(this@PaneldService)) {
                 BundledHelperInstaller.Result.INSTALLED -> Log.i(TAG, "migrated bundled root helper for this release")
                 BundledHelperInstaller.Result.FAILED ->
@@ -3326,25 +3362,51 @@ class PaneldService : Service() {
                 onLuxRaw = autoBright::submitLux,
                 onProximity = { near, level, reportMask ->
                     mqtt.publishProximity(near, level, reportMask)
-                    autoSleep.noteProximityState(near)
+                    autoSleep.noteProximityState(near.takeIf {
+                        !sensors.proximityCalibrationActive() && sensors.proximityPresenceReady()
+                    })
                 },
-                onGesture = gesture@{
-                    if (!config.wakeOnWave || !sensors.hasLearnedProximity()) return@gesture
-                    val generation = screen.currentOffGeneration() ?: return@gesture
-                    val settingGeneration = config.wakeOnWaveGeneration
+                onPresenceApproach = {
+                    val proximityGeneration = sensors.proximityGeneration()
+                    val observedAt = android.os.SystemClock.elapsedRealtime()
                     wakeOnWaveWorker.execute {
-                        if (
-                            teardownBoundary.isStopping || !config.wakeOnWave || !sensors.hasLearnedProximity() ||
-                            config.wakeOnWaveGeneration != settingGeneration
-                        ) return@execute
-                        if (screen.wakeIfStillDark(generation) {
-                                !teardownBoundary.isStopping && config.wakeOnWave && sensors.hasLearnedProximity() &&
-                                    config.wakeOnWaveGeneration == settingGeneration
-                            } == WakeOutcome.WOKEN && !teardownBoundary.isStopping
-                        ) {
-                            mqtt.publishScreenOn()
+                        screen.brightenForPresence {
+                            !teardownBoundary.isStopping && sensors.proximityPresenceNear() &&
+                                sensors.proximityGeneration() == proximityGeneration &&
+                                android.os.SystemClock.elapsedRealtime() - observedAt in 0L..750L
                         }
                     }
+                },
+                onGesture = gesture@{
+                    val token = sensors.proximityGestureToken()
+                    if (!config.wakeOnWave || !sensors.proximityReady()) {
+                        sensors.completeProximityGesture(token, false)
+                        return@gesture
+                    }
+                    val proximityGeneration = sensors.proximityGeneration()
+                    val generation = screen.currentOffGeneration()
+                    if (generation == null) {
+                        sensors.completeProximityGesture(token, false)
+                        return@gesture
+                    }
+                    val settingGeneration = config.wakeOnWaveGeneration
+                    val submitted = wakeOnWaveWorker.execute {
+                        var accepted = false
+                        try {
+                            if (
+                                teardownBoundary.isStopping || !config.wakeOnWave || !sensors.proximityReady() ||
+                                sensors.proximityGeneration() != proximityGeneration ||
+                                config.wakeOnWaveGeneration != settingGeneration
+                            ) return@execute
+                            accepted = screen.wakeIfStillDark(generation) {
+                                !teardownBoundary.isStopping && config.wakeOnWave && sensors.proximityReady() &&
+                                    sensors.proximityGeneration() == proximityGeneration &&
+                                    config.wakeOnWaveGeneration == settingGeneration
+                            } == WakeOutcome.WOKEN
+                            if (accepted && !teardownBoundary.isStopping) mqtt.publishScreenOn()
+                        } finally { sensors.completeProximityGesture(token, accepted) }
+                    }
+                    if (!submitted) sensors.completeProximityGesture(token, false)
                 },
                 onTemperature = { c -> mqtt.publishTemperature(c) },
                 onHumidity = { h -> mqtt.publishHumidity(h) },
@@ -4108,6 +4170,7 @@ class PaneldService : Service() {
      * every controller exists; normal destruction has already initialized all of them.
      */
     private fun closeServiceAdmissions() {
+        proximityWizard?.close()
         if (::audio.isInitialized) beginAudioTeardown(audio::closeAdmission, audio::cancelCurrent)
         if (::kiosk.isInitialized) kiosk.closeAdmission()
         if (::navbar.isInitialized) navbar.closeAdmission()

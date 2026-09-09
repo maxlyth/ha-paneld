@@ -89,6 +89,12 @@
             android:label="@string/config_activity_label" />
 
         <activity
+            android:name=".ProximityWizardActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:label="@string/proximity_wizard_title" />
+
+        <activity
             android:name=".GuardDbMaintenanceActivity"
             android:exported="false"
             android:label="@string/guard_db_activity_label" />

@@ -34,6 +34,7 @@ internal enum class ProximityAcquisition {
     VI530X,
     GPIO,
     ANDROID_HAL,
+    STK_RAW,
     ABSENT,
 }
 
@@ -41,9 +42,11 @@ internal fun proximityAcquisition(
     hasVi530x: Boolean,
     proximityGpio: Int?,
     hasHal: Boolean,
+    hasStkRaw: Boolean = false,
 ): ProximityAcquisition = when {
     hasVi530x -> ProximityAcquisition.VI530X
     proximityGpio != null -> ProximityAcquisition.GPIO
+    hasHal && hasStkRaw -> ProximityAcquisition.STK_RAW
     hasHal -> ProximityAcquisition.ANDROID_HAL
     else -> ProximityAcquisition.ABSENT
 }
@@ -131,8 +134,8 @@ internal fun environmentalEndpointJson(
 
 /**
  * Reports standard Android environmental sensors and feeds every proximity source through one
- * hardware-neutral learner. Device-native proximity values never become HA state: HA sees only a
- * learned binary and, when trustworthy, a fleet-normalized 0 (far) to 100 (near) level.
+ * hardware-neutral fixed calibration. Device-native proximity values never become HA state: HA sees only a
+ * calibrated binary and, when trustworthy, a fleet-normalized 0 (far) to 100 (near) level.
  */
 class SensorReporter(
     context: Context,
@@ -150,16 +153,21 @@ class SensorReporter(
     private val humidityUse = environmentalSensorUse(hasCht8305, humiditySensor != null)
     private val roomClimateMetrics: PanelMetrics? = if (hasCht8305) PanelMetrics() else null
     private val proximityGpio: Int? = profile.proximityGpio
+    private val stkRawReader = StkRawProximityReader()
+    private var stkRawExecutor: ScheduledExecutorService? = null
+    private var stkRawGate: StkRawProximityGate? = null
+    private var stkRawWatchdog: Runnable? = null
     private val proximityAcquisition = proximityAcquisition(
         hasVi530x = profile.hasVi530x,
         proximityGpio = proximityGpio,
         hasHal = proximitySensor != null,
+        hasStkRaw = stkRawReader.isPresent(),
     )
     private val proximityPolicy = proximitySourcePolicy(
         proximityAcquisition,
         proximitySensor?.reportingMode,
     )
-    @Volatile private var proximityRuntime: ProximityLearningRuntime? = null
+    @Volatile private var proximityRuntime: ProximityCalibrationRuntime? = null
     @Volatile private var learnedProximityListener: (() -> Unit)? = null
     @Volatile private var lastLearnedEligibility = false
     private var proximityPrepared = false
@@ -189,6 +197,28 @@ class SensorReporter(
     private var staleCheckScheduled = false
     private var onChangeProbeScheduled = false
     private var onChangeProbeAwaiting = false
+    private var calibrationTickScheduled = false
+    private var proximityReceived = false
+    private val proximityTimestampGate = ProximityTimestampGate()
+
+    private val calibrationTick = object : Runnable {
+        override fun run() {
+            calibrationTickScheduled = false
+            val run = activeRun ?: return
+            if (!run.isOpen()) return
+            val now = SystemClock.elapsedRealtime()
+            if (stkRawGate?.expire(now) == true) deliverUnavailable(run)
+            proximityRuntime?.tick(now, reportingSparse())?.let { deliverProximity(it, run) }
+            scheduleCalibrationTick()
+        }
+    }
+
+    private fun scheduleCalibrationTick() {
+        if (calibrationTickScheduled || proximityRuntime?.needsTick() != true) return
+        val handler = sensorHandler ?: return
+        calibrationTickScheduled = true
+        handler.postDelayed(calibrationTick, 100L)
+    }
 
     private val cadenceCheck = Runnable {
         cadenceCheckScheduled = false
@@ -221,7 +251,7 @@ class SensorReporter(
             scheduleStaleCheck(remaining + 1L)
             return@Runnable
         }
-        proximityRuntime?.tick(now, sparseReporting = reportingSparse())?.let { deliverProximity(it, run) }
+        proximityRuntime?.sourceUnavailable(now)?.let { deliverProximity(it, run) }
         val recovery = proximityCadenceAfterStale()
         cadenceClassified = recovery.cadenceClassified
         continuousCadenceConfirmed = recovery.continuousCadenceConfirmed
@@ -232,9 +262,10 @@ class SensorReporter(
     }
 
     private val onChangeProbeTimeout = Runnable {
+        if (!onChangeProbeAwaiting) return@Runnable
         onChangeProbeAwaiting = false
         val run = activeRun ?: return@Runnable
-        if (!run.isOpen() || !needsHalLivenessProbe()) return@Runnable
+        if (!run.isOpen()) return@Runnable
         deliverUnavailable(run)
         scheduleOnChangeProbe(ON_CHANGE_PROBE_INTERVAL_MS)
     }
@@ -269,17 +300,15 @@ class SensorReporter(
         }
     }
 
-    /** Construct the learner only after any predecessor service has finalized its model checkpoint. */
+    /** Construct fixed calibration after any predecessor service has closed its sensor store. */
     @Synchronized
     fun prepare() {
         if (proximityPrepared) return
         proximityPrepared = true
-        proximityRuntime = ProximityLearningRuntime(
-            appContext,
-            config,
-            proximitySourceIdentity(),
-            sparseLearningSource = proximityPolicy.sparseLearning,
-            legacySeedEligible = proximityPolicy.legacySeedEligible,
+        proximityRuntime = ProximityCalibrationRuntime(
+            appContext, proximitySourceIdentity(), "${profile.id}|${profile.revision}",
+            profile.proximityCalibration.takeUnless { proximityAcquisition == ProximityAcquisition.STK_RAW },
+            observedSourceMode = if (proximityAcquisition == ProximityAcquisition.STK_RAW) ProximityCalibrationEngine.Mode.RANGED else null,
         )
         updateLearnedEligibility()
     }
@@ -297,6 +326,10 @@ class SensorReporter(
     fun proximitySummary(): String = proximityRuntime?.summary() ?: "No proximity source"
 
     fun proximityReady(): Boolean = proximityRuntime?.isWaveReady() == true
+
+    fun proximityPresenceReady(): Boolean = proximityRuntime?.isPresenceReady() == true
+
+    fun proximityPresenceNear(): Boolean = proximityRuntime?.isPresenceNear() == true
 
     /** Notify the service only when empirical signal-shape eligibility changes. Notifications carry no
      *  truth: every active consumer re-reads this service-owned reporter before acting. */
@@ -333,14 +366,56 @@ class SensorReporter(
             ((SystemClock.elapsedRealtime() - liveProximityAt).coerceAtLeast(0L) / 1000L),
     ) ?: "{\"present\":false,\"learning\":\"unavailable\",\"phase\":\"unavailable\"}"
 
-    fun startProximityTeach(): Boolean = proximityRuntime?.startTeach() == true
+    fun proximityGestureToken(): Long = proximityRuntime?.gestureToken() ?: -1L
 
-    fun startProximityTest(): Boolean = proximityRuntime?.startTest() == true
+    fun completeProximityGesture(token: Long, accepted: Boolean) { proximityRuntime?.completeGesture(token, accepted) }
 
-    fun cancelProximitySession(): Boolean = proximityRuntime?.cancelSession() == true
+    fun proximityGeneration(): Long = proximityRuntime?.generation() ?: -1L
 
-    fun relearnProximity(): Boolean {
-        if (proximityRuntime?.relearn() != true) return false
+    fun proximityCalibrationActive(): Boolean = proximityRuntime?.active() == true
+
+    fun startProximityCalibration(): Boolean {
+        if (!hasProximity() || proximityRuntime?.start() != true) return false
+        probeCalibrationSource()
+        return true
+    }
+
+    private fun probeCalibrationSource() {
+        sensorHandler?.post {
+            // A fresh current-value probe verifies an on-change source before the local user begins.
+            // Its first callback may establish clear state, but must never actuate wake.
+            if (proximityAcquisition == ProximityAcquisition.ANDROID_HAL) {
+                val current = listener
+                val sensor = proximitySensor
+                if (current != null && sensor != null) {
+                    cancelOnChangeProbe()
+                    onChangeProbeAwaiting = true
+                    sm.unregisterListener(current, sensor)
+                    if (!sm.registerListener(current, sensor, SensorManager.SENSOR_DELAY_NORMAL, sensorHandler)) {
+                        activeRun?.let(::deliverUnavailable)
+                    } else sensorHandler?.postDelayed(onChangeProbeTimeout, ON_CHANGE_ACQUIRE_TIMEOUT_MS)
+                }
+            }
+            scheduleCalibrationTick()
+        }
+    }
+
+    fun proximityCalibrationHeartbeat(id: String): Boolean = proximityRuntime?.heartbeat(id) == true
+
+    fun proximityCalibrationVisible(): Boolean = proximityRuntime?.visible() == true
+
+    fun proximityCalibrationAction(action: String): Boolean {
+        val accepted = proximityRuntime?.localAction(action) == true
+        if (accepted && action == "retry") probeCalibrationSource()
+        sensorHandler?.post { scheduleCalibrationTick(); updateLearnedEligibility() }
+        return accepted
+    }
+
+    fun cancelProximitySession(id: String? = null, message: String = ""): Boolean =
+        proximityRuntime?.cancel(id, message) == true
+
+    fun resetProximityToProfile(): Boolean {
+        if (proximityRuntime?.resetToProfile() != true) return false
         updateLearnedEligibility()
         activeRun?.proximity(null, null)
         return true
@@ -354,12 +429,15 @@ class SensorReporter(
         onTemperature: (Float) -> Unit = {},
         onHumidity: (Float) -> Unit = {},
         onLuxRaw: (Float) -> Unit = {},
+        onPresenceApproach: () -> Unit = {},
     ) {
         if (!hasLight() && !hasProximity() && tempSensor == null && humiditySensor == null && !hasCht8305) return
         if (activeRun != null) return
-        val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity)
+        val run = SensorRunCallbacks(onLux, onLuxRaw, onProximity, onGesture, onTemperature, onHumidity, onPresenceApproach)
         activeRun = run
         proximitySampleCount = 0
+        proximityReceived = false
+        proximityTimestampGate.reset()
         cadenceClassified = proximityPolicy.sparseLearning
         continuousCadenceConfirmed = false
         cadenceCheckScheduled = false
@@ -380,7 +458,9 @@ class SensorReporter(
                         liveLuxAt = now
                         run.light(lux, now)
                     }
-                    Sensor.TYPE_PROXIMITY -> handleProximity(event.values[0], run)
+                    Sensor.TYPE_PROXIMITY -> if (proximityAcquisition != ProximityAcquisition.STK_RAW) {
+                        handleProximity(event.values[0], run, event.timestamp)
+                    }
                     Sensor.TYPE_AMBIENT_TEMPERATURE -> {
                         if (!environmentalSensorPublishes(tempUse)) return
                         val value = event.values[0]
@@ -436,6 +516,12 @@ class SensorReporter(
                     )
                     vi530xClient = client
                     client.start()
+                } else if (proximityAcquisition == ProximityAcquisition.STK_RAW) {
+                    // Registration activates the driver; its binary values are deliberately ignored.
+                    val registered = proximitySensor?.let {
+                        sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_NORMAL, handler)
+                    } == true
+                    if (registered) startStkRaw(run, handler) else deliverUnavailable(run)
                 } else if (proximityAcquisition == ProximityAcquisition.ANDROID_HAL) {
                     proximitySensor?.let {
                         if (proximityPolicy.onChangeHalLiveness) onChangeProbeAwaiting = true
@@ -480,6 +566,63 @@ class SensorReporter(
         )
     }
 
+    private fun startStkRaw(run: SensorRunCallbacks, handler: Handler) {
+        val gate = StkRawProximityGate()
+        stkRawGate = gate
+        val executor = Executors.newSingleThreadScheduledExecutor { task ->
+            Thread(task, "ha-paneld-stk-raw").apply { isDaemon = true }
+        }
+        stkRawExecutor = executor
+        // A blocked sysfs read must not retain readiness. This handler watchdog is independent of
+        // both read completion and whether the calibration runtime currently needs gesture ticks.
+        val watchdog = object : Runnable {
+            override fun run() {
+                if (!run.isOpen() || activeRun !== run) return
+                if (gate.expire(SystemClock.elapsedRealtime())) deliverUnavailable(run)
+                handler.postDelayed(this, 100L)
+            }
+        }
+        stkRawWatchdog = watchdog
+        handler.postDelayed(watchdog, 100L)
+        // Schedule the next read only after delivery: at most one pending result, including when
+        // the sensor handler is delayed. All filesystem work stays off that handler.
+        fun scheduleRead() {
+            if (!run.isOpen() || activeRun !== run || executor.isShutdown) return
+            runCatching {
+                executor.schedule({
+                    val readStartedAt = SystemClock.elapsedRealtime()
+                    val raw = runCatching { stkRawReader.read() }.getOrNull()
+                    handler.post {
+                        if (!run.isOpen() || activeRun !== run) return@post
+                        val now = SystemClock.elapsedRealtime()
+                        val admitted = stkRawReadWithinDeadline(raw, readStartedAt, now)
+                        val sample = gate.observe(admitted, now) ?: return@post
+                        if (sample.becameUnavailable || sample.raw == null) deliverUnavailable(run)
+                        sample.raw?.let { value ->
+                            lastRaw = value.toFloat()
+                            // Diagnostic age follows real cache changes, not repeated reads.
+                            if (sample.fresh && lastStkRaw != value) liveProximityAt = now
+                            lastStkRaw = value
+                            if (!sample.fresh) {
+                                deliverUnavailable(run)
+                            } else proximityRuntime?.observe(
+                                value.toFloat(), now, sparseReporting = false,
+                                live = sample.wakeEligible, calibrationLive = sample.fresh,
+                            )?.let { deliverProximity(it, run) }
+                            updateLearnedEligibility()
+                            scheduleCalibrationTick()
+                        }
+                        scheduleRead()
+                    }
+                }, 100L, TimeUnit.MILLISECONDS)
+            }
+        }
+        lastStkRaw = null
+        scheduleRead()
+    }
+
+    private var lastStkRaw: Int? = null
+
     private fun registerEnvironmentalSensor(
         sensor: Sensor?,
         use: EnvironmentalSensorUse,
@@ -508,15 +651,18 @@ class SensorReporter(
         ).also { it.start() }
     }
 
-    private fun handleProximity(raw: Float, run: SensorRunCallbacks) {
+    private fun handleProximity(raw: Float, run: SensorRunCallbacks, timestampNs: Long? = null) {
         if (!run.isOpen() || activeRun !== run) return
         val now = SystemClock.elapsedRealtime()
+        val fresh = timestampNs == null || proximityTimestampGate.accept(timestampNs, now, System.currentTimeMillis())
+        val wakeEligible = fresh && proximityReceived && !onChangeProbeAwaiting
+        proximityReceived = true
         // Preserve the admitted final edge, then immediately reopen empirical classification. A HAL
         // that resumes dense delivery after a quiet startup therefore gets at most that one sparse
         // report before returning to the numeric rate budget.
         val sparseForObservation = reportingSparse()
         lastRaw = raw
-        if (raw.isFinite()) {
+        if (raw.isFinite() && fresh) {
             liveProximityAt = now
             if (!proximityPolicy.sparseLearning && !continuousCadenceConfirmed) {
                 if (cadenceClassified) {
@@ -541,16 +687,18 @@ class SensorReporter(
                 scheduleOnChangeProbe(ON_CHANGE_PROBE_INTERVAL_MS)
             }
         }
-        val decision = proximityRuntime?.observe(raw, now, sparseReporting = sparseForObservation) ?: return
+        val decision = proximityRuntime?.observe(raw, now, sparseReporting = sparseForObservation, live = wakeEligible, calibrationLive = fresh) ?: return
         updateLearnedEligibility()
         deliverProximity(decision, run)
+        scheduleCalibrationTick()
     }
 
-    private fun deliverProximity(decision: ProximityLearningRuntime.Decision, run: SensorRunCallbacks) {
+    private fun deliverProximity(decision: ProximityCalibrationRuntime.Decision, run: SensorRunCallbacks) {
         SensorTrace.recordProx(lastRaw, decision.near)
         if (decision.reportMask != ProximityReportGate.NONE) {
             run.proximity(decision.near, decision.normalizedLevel, decision.reportMask)
         }
+        if (decision.presenceApproach) run.presenceApproach()
         if (decision.deliberateGesture) run.gesture()
     }
 
@@ -608,6 +756,7 @@ class SensorReporter(
 
     private fun proximitySourceIdentity(): String {
         val acquisition = when (proximityAcquisition) {
+            ProximityAcquisition.STK_RAW -> StkRawProximityReader.SOURCE_IDENTITY
             ProximityAcquisition.VI530X -> "helper-vi530x"
             ProximityAcquisition.GPIO -> "helper-gpio:${checkNotNull(proximityGpio)}"
             ProximityAcquisition.ANDROID_HAL -> proximitySensor?.let { sensor ->
@@ -636,6 +785,12 @@ class SensorReporter(
     fun stop(): CompletableFuture<Unit> {
         activeRun?.close()
         activeRun = null
+        stkRawWatchdog?.let { sensorHandler?.removeCallbacks(it) }
+        stkRawWatchdog = null
+        stkRawGate?.close()
+        stkRawGate = null
+        stkRawExecutor?.shutdownNow()
+        stkRawExecutor = null
         roomClimateRefresh?.stop()
         roomClimateRefresh = null
         roomClimateExecutor?.shutdownNow()
@@ -650,6 +805,8 @@ class SensorReporter(
         vi530xClient = null
         listener?.let { sm.unregisterListener(it) }
         listener = null
+        sensorHandler?.removeCallbacks(calibrationTick)
+        calibrationTickScheduled = false
         sensorHandler?.removeCallbacks(cadenceCheck)
         sensorHandler?.removeCallbacks(staleCheck)
         sensorHandler?.removeCallbacks(onChangeProbe)
@@ -666,5 +823,69 @@ class SensorReporter(
         const val PROXIMITY_STALE_MS = 60_000L
         const val ON_CHANGE_PROBE_INTERVAL_MS = 15L * 60_000L
         const val ON_CHANGE_ACQUIRE_TIMEOUT_MS = 5_000L
+    }
+}
+
+/** Some HALs mix a monotonic registration seed with wall-clock live edges in the same stream.
+ * Accept only samples contemporary with one unambiguous clock, then order both on elapsed time.
+ * Rejected observations never advance either timestamp highwater. Acquisition still decides whether
+ * an otherwise fresh registration/probe sample is allowed to actuate a wake.
+ */
+internal class ProximityTimestampGate {
+    private var elapsedTimestampNs = 0L
+    private var wallTimestampNs = 0L
+    private var normalizedSampleMs: Long? = null
+    private var lastReceivedElapsed: Long? = null
+    private var lastClockOffset: Long? = null
+    private var wallUncertainUntil = 0L
+
+    fun reset() {
+        elapsedTimestampNs = 0L
+        wallTimestampNs = 0L
+        normalizedSampleMs = null
+        lastReceivedElapsed = null
+        lastClockOffset = null
+        wallUncertainUntil = 0L
+    }
+
+    fun accept(timestampNs: Long, receivedElapsedMs: Long, receivedWallMs: Long): Boolean {
+        if (timestampNs <= 0L || receivedElapsedMs < 0L || receivedWallMs < 0L) return false
+        if (lastReceivedElapsed?.let { receivedElapsedMs < it } == true) return false
+        lastReceivedElapsed = receivedElapsedMs
+        val offset = receivedWallMs - receivedElapsedMs
+        val previousOffset = lastClockOffset
+        lastClockOffset = offset
+        if (previousOffset != null && kotlin.math.abs(offset.toDouble() - previousOffset.toDouble()) > CLOCK_PAIR_TOLERANCE_MS) {
+            wallUncertainUntil = receivedElapsedMs + FRESHNESS_MS
+            // Invalidate any in-flight wave at the first sign of a wall-clock discontinuity.
+            return false
+        }
+        val sampleMs = timestampNs / 1_000_000L
+        val elapsedContemporary = contemporary(sampleMs, receivedElapsedMs)
+        val wallContemporary = contemporary(sampleMs, receivedWallMs)
+        // A timestamp fitting both clocks is ambiguous; fitting neither is stale or malformed.
+        if (elapsedContemporary == wallContemporary) return false
+        val normalized: Long
+        if (elapsedContemporary) {
+            if (timestampNs <= elapsedTimestampNs) return false
+            normalized = sampleMs
+        } else {
+            if (receivedElapsedMs < wallUncertainUntil || timestampNs <= wallTimestampNs) return false
+            normalized = receivedElapsedMs - (receivedWallMs - sampleMs)
+            if (normalized < 0L) return false
+        }
+        if (normalizedSampleMs?.let { normalized <= it } == true) return false
+        if (elapsedContemporary) elapsedTimestampNs = timestampNs else wallTimestampNs = timestampNs
+        normalizedSampleMs = normalized
+        return true
+    }
+
+    private fun contemporary(sampleMs: Long, receivedMs: Long): Boolean =
+        sampleMs <= receivedMs && receivedMs - sampleMs <= FRESHNESS_MS
+
+    companion object {
+        private const val FRESHNESS_MS = 750L
+        // The clocks are read consecutively; tolerate their millisecond quantization, not clock steps.
+        private const val CLOCK_PAIR_TOLERANCE_MS = 5.0
     }
 }

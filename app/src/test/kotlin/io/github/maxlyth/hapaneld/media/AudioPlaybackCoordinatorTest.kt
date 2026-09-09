@@ -16,6 +16,25 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AudioPlaybackCoordinatorTest {
+    @Test fun onlyExplicitSpeechUsesPreparedPlayback() = runTest {
+        val selected = mutableListOf<String>()
+        val factory = object : AudioPlaybackRunFactory {
+            private fun run(kind: String) = object : AudioPlaybackRun {
+                override suspend fun execute() { selected += kind }
+                override fun cancel() {}
+            }
+            override fun create(url: String) = run("media:$url")
+            override fun createSpeech(url: String) = run("speech:$url")
+        }
+        val coordinator = AudioPlaybackCoordinator(factory, StandardTestDispatcher(testScheduler))
+        coordinator.submit("music")
+        runCurrent()
+        coordinator.submitForGeneration("instruction", speech = true)
+        runCurrent()
+        assertEquals(listOf("media:music", "speech:instruction"), selected)
+        assertTrue(coordinator.close(1_000L))
+    }
+
     private class FakeRun(
         private val name: String,
         private val events: MutableList<String>,
@@ -91,6 +110,46 @@ class AudioPlaybackCoordinatorTest {
 
         assertEquals(listOf("first", "newest"), created)
         assertEquals(3L, coordinator.snapshot().generation)
+        assertTrue(coordinator.close(1_000L))
+    }
+
+    @Test fun exactGenerationCancellationInvalidatesQueuedWorkBeforeFactoryCreation() = runTest {
+        val created = mutableListOf<String>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url ->
+                created += url
+                FakeRun(url, mutableListOf(), AtomicInteger(), AtomicInteger())
+            },
+            StandardTestDispatcher(testScheduler),
+        )
+        val generation = coordinator.submitForGeneration("wizard")!!
+        assertTrue(coordinator.cancelGeneration(generation))
+        runCurrent()
+        assertTrue(created.isEmpty())
+        assertEquals(AudioPlaybackCoordinator.State.IDLE, coordinator.snapshot().state)
+        assertTrue(coordinator.close(1_000L))
+    }
+
+    @Test fun staleGenerationCancellationCannotStopAnewerAnnouncement() = runTest {
+        val events = mutableListOf<String>()
+        val active = AtomicInteger()
+        val maximum = AtomicInteger()
+        val runs = linkedMapOf<String, FakeRun>()
+        val coordinator = AudioPlaybackCoordinator(
+            AudioPlaybackRunFactory { url -> FakeRun(url, events, active, maximum).also { runs[url] = it } },
+            StandardTestDispatcher(testScheduler),
+        )
+        val wizard = coordinator.submitForGeneration("wizard")!!
+        runCurrent()
+        val newer = coordinator.submitForGeneration("newer")!!
+        runCurrent()
+        assertFalse(coordinator.cancelGeneration(wizard))
+        assertEquals(0, runs.getValue("newer").cancelCalls)
+        assertEquals(newer, coordinator.snapshot().generation)
+        assertEquals(AudioPlaybackCoordinator.State.ACTIVE, coordinator.snapshot().state)
+        assertTrue(coordinator.cancelGeneration(newer))
+        assertEquals(1, runs.getValue("newer").cancelCalls)
+        assertEquals(AudioPlaybackCoordinator.State.IDLE, coordinator.snapshot().state)
         assertTrue(coordinator.close(1_000L))
     }
 

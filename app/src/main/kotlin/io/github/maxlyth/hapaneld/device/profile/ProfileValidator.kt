@@ -171,6 +171,71 @@ internal object ProfileValidator {
         document.sensors.proximityGpio?.let {
             if (it !in 0..4095) reject("sensors.proximity_gpio", "GPIO must be between 0 and 4095.", "gpio-range")
         }
+        document.sensors.proximityCalibration?.let { calibration ->
+            val path = "sensors.proximity_calibration"
+            if (!calibration.presenceSupported && (calibration.formatVersion != 2 || calibration.wave == null)) {
+                reject("$path.presence_supported", "Wave-only calibration requires format 2 and a verified wave capability.")
+            }
+            if (calibration.formatVersion !in 1..2) reject("$path.format_version", "Expected calibration format 1 or 2.")
+            if (calibration.formatVersion == 1 && calibration.wave != null) reject("$path.wave", "Separate wave calibration requires format 2.")
+            if (calibration.revision < 1) reject("$path.revision", "Calibration revision must be positive.")
+            if (calibration.mode !in setOf("binary", "ranged")) reject("$path.mode", "Expected binary or ranged.")
+            boundedText(calibration.verification, "$path.verification", 500)
+            if (!calibration.clearRaw.isFinite()) reject("$path.clear_raw", "Clear observation must be finite.")
+            if (!calibration.nearRaw.isFinite()) reject("$path.near_raw", "Near observation must be finite.")
+            if (calibration.clearRaw == calibration.nearRaw || !(calibration.nearRaw - calibration.clearRaw).isFinite()) {
+                reject(path, "Clear and near observations must have a finite, nonzero separation.")
+            }
+            if (calibration.mode == "binary" && setOf(calibration.clearRaw, calibration.nearRaw) != setOf(0f, 1f)) {
+                reject(path, "Binary observations must be zero and one, in either polarity.")
+            }
+            if (!calibration.clearExit.isFinite() || !calibration.nearEnter.isFinite() ||
+                calibration.clearExit <= 0f || calibration.nearEnter >= 1f || calibration.clearExit >= calibration.nearEnter) {
+                reject(path, "Thresholds must satisfy 0 < clear_exit < near_enter < 1.")
+            }
+            if (calibration.debounceMs !in 50..1000) reject("$path.debounce_ms", "Debounce must be 50-1000 ms.")
+            if (calibration.clearArmMs !in 200..10000 || calibration.clearArmMs < calibration.debounceMs) {
+                reject("$path.clear_arm_ms", "Clear arming must be 200-10000 ms and at least the debounce interval.")
+            }
+            if (calibration.minimumNearMs !in 50..2000 || calibration.minimumNearMs < calibration.debounceMs) {
+                reject("$path.minimum_near_ms", "Minimum near duration must be 50-2000 ms and at least the debounce interval.")
+            }
+            if (calibration.maximumNearMs !in 200..10000 || calibration.maximumNearMs <= calibration.minimumNearMs) {
+                reject("$path.maximum_near_ms", "Maximum near duration must be 200-10000 ms and exceed the minimum.")
+            }
+            if (calibration.cooldownMs !in 200..10000) reject("$path.cooldown_ms", "Cooldown must be 200-10000 ms.")
+            calibration.wave?.let { wave ->
+                val wavePath = "$path.wave"
+                if ((wave.nearRaw > wave.clearRaw) != (calibration.nearRaw > calibration.clearRaw)) {
+                    reject(wavePath, "Wave and presence observations must agree on the near direction.")
+                }
+                if (wave.pattern !in setOf("single", "double")) reject("$wavePath.pattern", "Expected single or double.")
+                if (!wave.clearRaw.isFinite()) reject("$wavePath.clear_raw", "Clear observation must be finite.")
+                if (!wave.nearRaw.isFinite()) reject("$wavePath.near_raw", "Near observation must be finite.")
+                if (wave.clearRaw == wave.nearRaw || !(wave.nearRaw - wave.clearRaw).isFinite()) {
+                    reject(wavePath, "Clear and near observations must have a finite, nonzero separation.")
+                }
+                if (calibration.mode == "binary" && setOf(wave.clearRaw, wave.nearRaw) != setOf(0f, 1f)) {
+                    reject(wavePath, "Binary observations must be zero and one, in either polarity.")
+                }
+                if (!wave.clearExit.isFinite() || !wave.nearEnter.isFinite() ||
+                    wave.clearExit <= 0f || wave.nearEnter >= 1f || wave.clearExit >= wave.nearEnter) {
+                    reject(wavePath, "Thresholds must satisfy 0 < clear_exit < near_enter < 1.")
+                }
+                if (wave.debounceMs !in 50..1000) reject("$wavePath.debounce_ms", "Debounce must be 50-1000 ms.")
+                if (wave.clearArmMs !in 200..10000 || wave.clearArmMs < wave.debounceMs) {
+                    reject("$wavePath.clear_arm_ms", "Clear arming must be 200-10000 ms and at least the debounce interval.")
+                }
+                if (wave.minimumNearMs !in 50..2000 || wave.minimumNearMs < wave.debounceMs) {
+                    reject("$wavePath.minimum_near_ms", "Minimum near duration must be 50-2000 ms and at least the debounce interval.")
+                }
+                if (wave.maximumNearMs !in 200..10000 || wave.maximumNearMs <= wave.minimumNearMs) {
+                    reject("$wavePath.maximum_near_ms", "Maximum near duration must be 200-10000 ms and exceed the minimum.")
+                }
+                if (wave.cooldownMs !in 200..10000) reject("$wavePath.cooldown_ms", "Cooldown must be 200-10000 ms.")
+                if (wave.maxInterWaveGapMs !in 300..10000) reject("$wavePath.max_inter_wave_gap_ms", "Inter-wave gap must be 300-10000 ms.")
+            }
+        }
         if (document.sensors.roomTempOffsetC !in -30f..30f) reject("sensors.room_temp_offset_c", "Offset must be between -30 and 30 °C.", "room-temperature-offset-range")
         boundedText(document.sensors.proximityTechnology, "sensors.proximity_technology")
         boundedText(document.sensors.lightTechnology, "sensors.light_technology")

@@ -159,6 +159,9 @@ class Config private constructor(
 ) {
     enum class SecurityMode { RELAXED, HARDENED }
 
+    // Preserve the previous HA policy for an upgraded enabled configuration. Materialise this
+    // choice with the next Auto-sleep write so disabling/restarting never changes its source.
+    private val absentAutoSleepSource = if (prefs.contains("auto_sleep")) "home_assistant" else "panel"
     private val wakeOnWaveEpoch = AtomicLong()
     private val haOAuthAttemptEpoch = AtomicLong()
     @Volatile private var logShipAbsentProtocolFallback: String? = null
@@ -953,6 +956,11 @@ class Config private constructor(
     /** Opt-in activity policy. Physical screen light state and explicit manual screen commands remain
      * separate authorities; this flag only admits the automatic policy runtime. */
     val autoSleep: Boolean get() = boolPref("auto_sleep")
+    internal fun migrateAutoSleepSource(): Boolean = synchronized(CONFIG_LOCK) {
+        prefs.contains("auto_sleep_source") || durableCommit { putString("auto_sleep_source", absentAutoSleepSource) }
+    }
+    val autoSleepSource: String get() = prefs.getString("auto_sleep_source", null)
+        ?.takeIf { it == "panel" || it == "home_assistant" } ?: absentAutoSleepSource
     internal val autoSleepGeneration: Long get() = synchronized(CONFIG_LOCK) {
         prefs.getLong(AUTO_SLEEP_GENERATION_PREF, 0L)
     }
@@ -961,6 +969,7 @@ class Config private constructor(
         // MQTT immediately asks the runtime to refresh, so durability must precede that refresh.
         val generation = nextAutoSleepGenerationLocked()
         if (durableCommit {
+                putString("auto_sleep_source", autoSleepSource)
                 putBoolean("auto_sleep", on)
                 putLong(AUTO_SLEEP_GENERATION_PREF, generation)
             }
@@ -2265,6 +2274,7 @@ class Config private constructor(
             (SettingValue.validate(spec, floatPref(spec.key).toString()) as Validation.Ok).normalized
         }
         else -> when (spec.key) {
+            "auto_sleep_source" -> autoSleepSource
             "navbar_mode" -> navbarMode
             // A pre-UDP panel has the retired "syslog" spelling on disk. Canonicalize here so the
             // Configure select, the export bundle and the revision diff all see a declared option.
@@ -2278,6 +2288,8 @@ class Config private constructor(
 
     /** Stage a typed write into [editor] (no commit) — used by the transactional bundle import. */
     fun stage(editor: SharedPreferences.Editor, spec: SettingSpec, normalized: String) {
+        if (spec.key == "auto_sleep_source" && normalized != autoSleepSource)
+            editor.putLong(AUTO_SLEEP_GENERATION_PREF, nextAutoSleepGenerationLocked())
         when (spec.type) {
             SettingType.BOOL -> editor.putBoolean(spec.key, normalized.toBoolean())
             SettingType.INT -> editor.putInt(spec.key, normalized.toIntOrNull() ?: 0)

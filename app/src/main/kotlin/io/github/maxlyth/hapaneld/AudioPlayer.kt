@@ -34,12 +34,15 @@ object AudioPlayer {
 
     internal fun factory(cacheDir: File): AudioPlaybackRunFactory {
         cleanupStale(cacheDir)
-        return AudioPlaybackRunFactory { url ->
-            DownloadedAudioRun(
+        return object : AudioPlaybackRunFactory {
+            override fun create(url: String) = createRun(url, false)
+            override fun createSpeech(url: String) = createRun(url, true)
+            private fun createRun(url: String, speech: Boolean) = DownloadedAudioRun(
                 url = url,
                 createTemp = { File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, cacheDir) },
                 transfer = HttpAudioTransfer(MAX_AUDIO_BYTES),
                 clip = AndroidAudioClip(),
+                preparation = if (speech) AndroidPcmAudioPreparation() else null,
             )
         }
     }
@@ -69,17 +72,28 @@ internal class DownloadedAudioRun(
     private val transfer: AudioTransfer,
     private val clip: AudioClip,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val preparation: AudioPlaybackPreparation? = null,
 ) : AudioPlaybackRun {
     override suspend fun execute() {
         val file = withContext(dispatcher) { createTemp() }
+        var prepared: File? = null
         try {
             withContext(dispatcher) { transfer.download(url, file) }
             coroutineContext.ensureActive()
-            clip.play(file)
+            if (preparation != null) {
+                withContext(dispatcher) {
+                    val destination = File.createTempFile(AudioPlayer.TEMP_PREFIX, AudioPlayer.TEMP_SUFFIX, file.parentFile)
+                    prepared = destination
+                    preparation.prepare(file, destination)
+                }
+            }
+            coroutineContext.ensureActive()
+            clip.play(prepared ?: file)
         } finally {
             withContext(NonCancellable + dispatcher) {
                 runCatching { transfer.close() }
                 runCatching { clip.close() }
+                prepared?.delete()
                 file.delete()
             }
         }
@@ -87,6 +101,7 @@ internal class DownloadedAudioRun(
 
     override fun cancel() {
         runCatching { transfer.cancel() }
+        runCatching { preparation?.cancel() }
         runCatching { clip.cancel() }
     }
 }
@@ -222,6 +237,8 @@ internal class AndroidAudioClip : AudioClip {
                     runCatching { prepared.start() }.onFailure(::finish)
                 }
             }
+            // Prepared audio contains silent frames after speech, keeping the output stream alive
+            // through the final syllable. Delaying release after EOS cannot keep that stream running.
             mediaPlayer.setOnCompletionListener { finish() }
             mediaPlayer.setOnErrorListener { _, what, extra ->
                 finish(IOException("MediaPlayer error what=$what extra=$extra"))
@@ -248,4 +265,5 @@ internal class AndroidAudioClip : AudioClip {
     private fun releaseCurrent() {
         runCatching { player.getAndSet(null)?.release() }
     }
+
 }

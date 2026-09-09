@@ -29,23 +29,30 @@ class AdaptiveProximitySurfaceContractTest {
         assertFalse(mqtt.contains("fun publishProximity(near: Boolean)"))
     }
 
-    @Test fun firstRunJourneyNamesWaitingAndRequiresDeliberateExamples() {
-        val runtime = source("sensors/ProximityLearningRuntime.kt")
+    @Test fun htmlLaunchesExplicitSetupAndPhysicalStepsRemainOnThePanel() {
+        val runtime = source("sensors/ProximityCalibrationRuntime.kt")
         val script = asset("proximity-learning.js")
+        val panel = source("ProximityWizardActivity.kt")
         val help = SettingsRegistry.spec("wake_on_wave")!!.help
 
-        assertTrue(runtime.contains("output.deliberateExample"))
-        assertTrue(runtime.contains("waiting_for_reading"))
-        assertTrue(runtime.contains("put(\"canTeach\""))
-        assertTrue(script.contains("Waiting for the sensor’s first reading"))
-        assertTrue(script.contains("\"configure.proximity.phase.waiting_for_reading\""))
-        assertTrue(script.contains("t(\"configure.proximity.experimental\", \"experimental\")"))
-        assertTrue(script.contains("t(\"configure.proximity.confirm.forget\""))
-        assertTrue(script.contains("data.error ? presented(String(data.error), false)"))
-        assertTrue(script.contains("teach.disabled"))
-        assertTrue(script.indexOf("active = !!") < script.indexOf("teach.hidden ="))
-        assertTrue(help.contains("far-to-near-to-far"))
-        assertFalse(help.contains("instant proximity"))
+        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration(),"))
+        assertTrue(runtime.contains("fun localAction(action: String)"))
+        assertTrue(runtime.contains("now - visibleAt > LOCAL_VISIBILITY_MS"))
+        assertTrue(runtime.contains("put(\"sessionActive\", state.active)"))
+        assertTrue(script.contains("Set up proximity on panel"))
+        assertTrue(script.contains("Follow the instructions on the panel"))
+        assertTrue(script.contains("Its detection distance cannot be adjusted"))
+        assertTrue(script.contains("/api/v1/proximity/calibration"))
+        assertTrue(script.contains("request(\"heartbeat\", id)"))
+        assertTrue(script.contains("if (error.opaque) result.setAttribute(\"lang\", \"en\")"))
+        assertTrue(script.contains("start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true)"))
+        assertTrue(script.indexOf("active = d.sessionActive") < script.indexOf("start.hidden = active"))
+        assertFalse(script.contains("post(\"save\")"))
+        assertFalse(script.contains("post(\"begin\")"))
+        assertTrue(panel.contains("\"intro\" -> perform(\"begin\")"))
+        assertTrue(panel.contains("\"review\" -> perform(\"save\")"))
+        assertTrue(help.contains("clear-to-near-to-clear"))
+        assertTrue(help.contains("touch-to-wake remains available"))
     }
 
     @Test fun independentReportMaskReachesTheMqttStateOwnerWithoutCollapsing() {
@@ -67,12 +74,11 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(mqtt.contains("admitted and ProximityReportGate.LEVEL != 0"))
     }
 
-    @Test fun continuousHotPathAvoidsFastPollingAndSnapshotAllocation() {
+    @Test fun fixedCalibrationUsesEventAcquisitionAndOnlySchedulesNeededConfirmationTimers() {
         val reporter = source("sensors/SensorReporter.kt")
-        val runtime = source("sensors/ProximityLearningRuntime.kt")
+        val runtime = source("sensors/ProximityCalibrationRuntime.kt")
         val reportGate = source("sensors/ProximityReportGate.kt")
         val observe = runtime.substring(runtime.indexOf("fun observe("), runtime.indexOf("fun sourceUnavailable("))
-        val copy = runtime.substring(runtime.indexOf("private fun copy("), runtime.indexOf("private fun result("))
         val handle = reporter.substring(
             reporter.indexOf("private fun handleProximity("),
             reporter.indexOf("private fun deliverProximity("),
@@ -80,13 +86,13 @@ class AdaptiveProximitySurfaceContractTest {
 
         assertTrue(reporter.contains("SensorManager.SENSOR_DELAY_NORMAL"))
         assertFalse(reporter.contains("SensorManager.SENSOR_DELAY_UI"))
-        assertTrue(reporter.contains("proximityRuntime?.tick(now, sparseReporting = reportingSparse())"))
+        assertTrue(reporter.contains("proximityRuntime = ProximityCalibrationRuntime("))
+        assertFalse(reporter.contains("ProximityLearningRuntime("))
+        assertTrue(reporter.contains("calibrationTickScheduled || proximityRuntime?.needsTick() != true"))
+        assertTrue(reporter.contains("proximityRuntime?.sourceUnavailable(now)"))
         assertTrue(reporter.contains("ON_CHANGE_PROBE_INTERVAL_MS"))
         assertTrue(reporter.contains("sm.unregisterListener(activeListener, sensor)"))
-        assertTrue(reporter.contains("handler.post {"))
-        assertTrue(runtime.contains("private val reportGate = ProximityReportGate()"))
         assertTrue(runtime.contains("reportGate.project("))
-        assertTrue(reportGate.contains("internal class ProximityReportGate("))
         assertTrue(reportGate.contains("private var pendingPresence"))
         assertTrue(reportGate.contains("private var lastLevelAt"))
         assertTrue(reportGate.contains("const val PRESENCE = 1"))
@@ -94,28 +100,25 @@ class AdaptiveProximitySurfaceContractTest {
         assertFalse(reportGate.contains("Thread("))
         assertFalse(reportGate.contains("Handler"))
         assertFalse(reportGate.contains("Timer"))
-        assertTrue(reporter.contains("sparseLearningSource = proximityPolicy.sparseLearning"))
         assertTrue(handle.contains("val sparseForObservation = reportingSparse()"))
         assertTrue(
             handle.indexOf("val sparseForObservation = reportingSparse()") <
                 handle.indexOf("cadenceClassified = false"),
         )
-        assertTrue(handle.contains("cadenceClassified = false"))
         assertTrue(handle.contains("proximitySampleCount = 1"))
         assertTrue(handle.contains("sparseReporting = sparseForObservation"))
+        assertTrue(handle.contains("live = wakeEligible, calibrationLive = fresh"))
         assertTrue(reporter.contains("proximityCadenceWindowIsContinuous(proximitySampleCount)"))
-        assertTrue(reporter.contains("sparseReporting = true"))
-        assertTrue(reporter.contains("proximityPolicy.onChangeHalLiveness"))
-        assertFalse(reporter.contains("sparseReportingHint"))
-        assertFalse(observe.contains("setOf("))
-        assertFalse(copy.contains("snapshot()"))
+        assertFalse(observe.contains("writeProximityBatch("))
+        assertFalse(observe.contains("snapshot()"))
     }
 
-    @Test fun vi530xCallbacksJoinTheSensorHandlerBeforeMutatingLearningState() {
+    @Test fun vi530xCallbacksJoinTheSensorHandlerBeforeMutatingCalibrationState() {
         val reporter = source("sensors/SensorReporter.kt")
+        val branchStart = reporter.indexOf("proximityAcquisition == ProximityAcquisition.VI530X")
         val vi530xBranch = reporter.substring(
-            reporter.indexOf("proximityAcquisition == ProximityAcquisition.VI530X"),
-            reporter.indexOf("proximityAcquisition == ProximityAcquisition.ANDROID_HAL"),
+            branchStart,
+            reporter.indexOf("proximityAcquisition == ProximityAcquisition.ANDROID_HAL", branchStart),
         )
 
         assertTrue(vi530xBranch.contains("onValue = { raw ->\n                            handler.post {"))
@@ -123,32 +126,36 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(reporter.contains("ProximityAcquisition.VI530X -> \"helper-vi530x\""))
     }
 
-    @Test fun persistenceAndWakeBoundariesFailClosed() {
-        val runtime = source("sensors/ProximityLearningRuntime.kt")
+    @Test fun explicitPersistenceAndWakeBoundariesFailClosed() {
+        val runtime = source("sensors/ProximityCalibrationRuntime.kt")
         val service = source("PaneldService.kt")
         val screen = source("control/ScreenController.kt")
         val server = source("http/PaneldServer.kt")
         val configure = asset("configure.js")
 
-        assertTrue(runtime.contains("restorePendingEvidence(evidence)"))
-        assertTrue(runtime.contains("withoutWakeEvidence(previous"))
-        assertTrue(runtime.contains("output.completedEpisode || modelChanged || wakeEvidenceInvalidated"))
-        assertFalse(runtime.contains("DiscardOldestPolicy"))
-        assertFalse(runtime.contains("shutdownNow()"))
+        assertTrue(runtime.contains("store.writeProximityBatch("))
+        assertTrue(runtime.contains("ProximityCalibrationEngine(readCalibration(), commit = { candidate ->"))
+        assertTrue(runtime.contains("encode(candidate)"))
+        assertFalse(runtime.contains("requestPersist("))
+        assertFalse(runtime.contains("ProximityLearningEngine"))
         assertTrue(service.contains("config.wakeOnWaveGeneration != settingGeneration"))
-        assertTrue(service.contains("!sensors.hasLearnedProximity()"))
+        assertTrue(service.contains("!sensors.proximityReady()"))
+        assertTrue(service.contains("sensors.proximityGeneration() != proximityGeneration"))
+        assertTrue(service.contains("finally { sensors.completeProximityGesture(token, accepted) }"))
         assertTrue(screen.contains("fun reconcileObservedLit(expectedGeneration"))
         assertTrue(screen.contains("observedDarkGeneration != expectedGeneration"))
-        assertTrue(server.contains("config.wakeOnWave && sensors.hasProximity()"))
         assertTrue(server.contains("PROXIMITY_SOURCE_REQUIRED"))
         assertTrue(server.contains("hasProximity = sensors.hasProximity()"))
         assertTrue(server.contains("hasLearnedProximity = sensors.hasLearnedProximity()"))
-        assertTrue(server.contains("action != \"cancel\" && !sensors.hasProximity()"))
-        assertTrue(server.contains("val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave"))
+        assertTrue(server.contains("action !in setOf(\"start\", \"cancel\", \"reset\", \"heartbeat\")"))
+        assertTrue(server.contains("proximityUiRequestAllowed("))
+        // Optional setup must be reachable before the user enables wave waking.
+        assertTrue(server.contains("val proximityLearningEnabled = sensors.hasProximity()\n"))
+        assertFalse(server.contains("val proximityLearningEnabled = sensors.hasProximity() && config.wakeOnWave"))
         assertTrue(server.contains("if (proximityLearningEnabled) \"\"\"<div id=\"proximity-learning-mount\""))
         assertTrue(configure.contains("submittedValues, \"wake_on_wave\""))
         assertTrue(configure.contains("window.location.reload();"))
-        assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = isLearnedMode(view.mode)"))
+        assertTrue(runtime.contains("fun isLearnedSignal(): Boolean = !closed && view.calibration?.presenceSupported == true"))
         assertTrue(mqttTombstonesAllPresenceSurfaces())
     }
 

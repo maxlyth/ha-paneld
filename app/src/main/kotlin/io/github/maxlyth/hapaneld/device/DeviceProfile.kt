@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.device
 
 import io.github.maxlyth.hapaneld.device.profile.ProfileArtifacts
+import io.github.maxlyth.hapaneld.device.profile.ProfileProximityCalibration
 import io.github.maxlyth.hapaneld.device.profile.ProfileLink
 import io.github.maxlyth.hapaneld.device.profile.ProfileSoc
 import io.github.maxlyth.hapaneld.device.profile.ShizukuRecommendation
@@ -150,9 +151,11 @@ interface DeviceProfile {
      *  — declare per profile where known. Optionally append a known chipset, e.g. "Infrared (STK3338)". */
     val proximityTech: String? get() = null
 
+    /** Versioned observed baseline; absent or incompatible baselines require explicit calibration. */
+    val proximityCalibration: ProfileProximityCalibration? get() = null
+
     /** GPIO number of a raw binary proximity line streamed by the root helper for panels whose Android
-     *  `SensorManager` proximity is absent or registers but never delivers events. Scale and polarity are
-     *  learned from the stream, never encoded here. Null selects the `SensorManager` source. */
+     *  `SensorManager` proximity is absent or registers but never delivers events. Scale and polarity require an explicit calibration or a corroborated profile baseline. Null selects the `SensorManager` source. */
     val proximityGpio: Int? get() = null
 
     /** Declared ambient-light-sensor technology (e.g. "Ambient light (ALS)"), or null if unknown. */

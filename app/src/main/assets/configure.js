@@ -139,6 +139,9 @@
     return value;
   }
   function localizedEnumOption(fieldKey, wireValue) {
+    if (fieldKey === "auto_sleep_source") return wireValue === "panel"
+      ? i18nText("configure.auto_sleep.source_panel", "This panel’s proximity sensor")
+      : i18nText("configure.auto_sleep.source_ha", "Home Assistant Area devices");
     if (fieldKey === "ui_language" && Object.prototype.hasOwnProperty.call(UI_LANGUAGE_LABELS, wireValue)) {
       return wireValue === "auto"
         ? i18nText("configure.language.automatic", "Automatic")
@@ -607,7 +610,7 @@
     var v = values[f.key];
     if (f.type === "BOOL") {
       var sourceBlocked = f.key === "auto_brightness" && !ambientLightSourceReady();
-      var prerequisiteBlocked = f.key === "auto_sleep" && v !== "true" && autoSleepPrerequisite.eligible !== true;
+      var prerequisiteBlocked = f.key === "auto_sleep" && !autoSleepUsesPanel() && v !== "true" && autoSleepPrerequisite.eligible !== true;
       var blocked = sourceBlocked || prerequisiteBlocked;
       var t = el("div", {
         class: "toggle" + (v === "true" && !sourceBlocked ? " on" : "") + (blocked ? " blocked" : ""),
@@ -618,7 +621,7 @@
       if (sourceBlocked) t.title = i18nText("configure.brightness.waiting_valid_reading", "Waiting for a valid ambient light reading.");
       function toggleValue() {
         if (f.key === "auto_brightness" && !ambientLightSourceReady()) return;
-        if (f.key === "auto_sleep" && values[f.key] !== "true" && autoSleepPrerequisite.eligible !== true) return;
+        if (f.key === "auto_sleep" && !autoSleepUsesPanel() && values[f.key] !== "true" && autoSleepPrerequisite.eligible !== true) return;
         v = (values[f.key] === "true") ? "false" : "true";
         values[f.key] = v;
         t.classList.toggle("on", v === "true");
@@ -642,6 +645,13 @@
       });
       s.addEventListener("change", function () {
         values[f.key] = s.value; setDirty(f.key);
+        if (f.key === "auto_sleep_source") {
+          autoSleepPrerequisiteRequest++;
+          invalidateAutoSleepData(true);
+          var previousPanel = document.getElementById("auto-sleep-status");
+          if (previousPanel) previousPanel.remove();
+          render(); loadAutoSleepPrerequisite();
+        }
       });
       return s;
     }
@@ -1838,6 +1848,15 @@
 
   function autoSleepSummaryModel(status) {
     status = status || {};
+    if (autoSleepUsesPanel()) {
+      var localLines = [
+        i18nText("configure.auto_sleep.source_panel", "This panel’s proximity sensor"),
+        i18nText("configure.auto_sleep.phase", "Phase: {phase}", { phase: autoSleepHuman(status.phase || "unknown") }),
+        i18nText("configure.auto_sleep.reason", "Reason: {reason}", { reason: autoSleepHuman(status.reason || "unknown") }),
+        i18nText("configure.auto_sleep.panel_setup_help", "Uses calibrated presence at this panel. Set up proximity first; automatic sleep pauses if the sensor is unavailable.")
+      ];
+      return { lines: localLines, accessible: localLines.join(" · ") };
+    }
     var areaName = status.area_name != null ? status.area_name : status.areaName;
     var area = String(areaName || "").trim() || i18nText("configure.auto_sleep.not_learned", "not learned");
     var leaseMs = status.learned_lease_ms != null ? status.learned_lease_ms : status.learnedLeaseMs;
@@ -1894,7 +1913,10 @@
     });
   }
 
+  function autoSleepUsesPanel() { return values.auto_sleep_source === "panel"; }
+
   function autoSleepPrerequisiteText() {
+    if (autoSleepUsesPanel()) return i18nText("configure.auto_sleep.panel_setup_help", "Uses calibrated presence at this panel. Set up proximity first; automatic sleep pauses if the sensor is unavailable.");
     var phase = String(autoSleepPrerequisite.phase || "unavailable").toLowerCase();
     var areaName = autoSleepPrerequisite.area_name != null ? autoSleepPrerequisite.area_name : autoSleepPrerequisite.areaName;
     if (phase === "checking") return i18nText("configure.auto_sleep.area_checking", "Checking this panel’s Home Assistant Area…");
@@ -1923,13 +1945,14 @@
     }
     var toggle = document.querySelector("#cfg-auto_sleep [role=switch]");
     if (!toggle) return;
-    var blocked = values.auto_sleep !== "true" && autoSleepPrerequisite.eligible !== true;
+    var blocked = !autoSleepUsesPanel() && values.auto_sleep !== "true" && autoSleepPrerequisite.eligible !== true;
     toggle.classList.toggle("blocked", blocked);
     toggle.setAttribute("aria-disabled", blocked ? "true" : "false");
     toggle.setAttribute("tabindex", "0");
   }
 
   function convergeAutoSleepOffForMissingArea() {
+    if (autoSleepUsesPanel()) return;
     if (values.auto_sleep !== "true") return;
     values.auto_sleep = "false";
     savedValues.auto_sleep = "false";
@@ -1946,6 +1969,7 @@
   }
 
   function loadAutoSleepPrerequisite() {
+    if (autoSleepUsesPanel()) { updateAutoSleepPrerequisiteUi(); return; }
     if (!schema.some(function (field) { return field.key === "auto_sleep" && field.available; })) return;
     if (autoSleepPrerequisiteTimer) { clearTimeout(autoSleepPrerequisiteTimer); autoSleepPrerequisiteTimer = null; }
     // Focus/visibility refreshes are background validation. Keep a settled Area verdict visible
@@ -2014,6 +2038,16 @@
   }
 
   function autoSleepPanel() {
+    if (autoSleepUsesPanel()) {
+      var localSummary = autoSleepSummaryNode();
+      var localAnnouncement = autoSleepSummaryAnnouncementNode();
+      setAutoSleepSummary(localSummary, localAnnouncement, autoSleepSummaryModel(autoSleepStatus));
+      return el("div", { class: "autobright-panel", id: "auto-sleep-status" }, [
+        el("strong", { text: i18nText("configure.auto_sleep.source_panel", "This panel’s proximity sensor") }),
+        localSummary, localAnnouncement,
+        el("a", { href: "#cfg-proximity-learning", class: "pbtn", text: i18nText("configure.auto_sleep.setup_proximity", "Set up proximity on panel") })
+      ]);
+    }
     if (!autoSleepStatus && !autoSleepLoading) {
       autoSleepHistoryWaiting = true;
       autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
@@ -2502,6 +2536,11 @@
       if (request !== autoSleepRequest) return;
       autoSleepLoading = false;
       updateAutoSleepSummary();
+      if (autoSleepUsesPanel()) {
+        autoSleepHistoryWaiting = false;
+        scheduleAutoSleepReadiness(false);
+        return;
+      }
       if (autoSleepHistoryReady(autoSleepStatus)) {
         autoSleepHistoryWaiting = false;
         autoSleepHistoryWaitingMessage = "";
@@ -3151,7 +3190,7 @@
         recomputeDirty();
         loadRadio();
         restampConfigWatchBaseline();
-        var autoSleepInputsChanged = ["auto_sleep", "ha_url", "ha_token"].some(function (key) {
+        var autoSleepInputsChanged = ["auto_sleep", "auto_sleep_source", "ha_url", "ha_token"].some(function (key) {
           return Object.prototype.hasOwnProperty.call(submittedValues, key);
         });
         var haConnectionInputsChanged = ["ha_url", "ha_token"].some(function (key) {

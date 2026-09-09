@@ -1,187 +1,172 @@
-// Zero-configuration proximity learning journey. Idle refresh is deliberately slow; only an active
-// guided/test session uses a one-second cadence, and every operation remains explicit and bounded.
+// The browser launches and monitors setup; all physical instructions and Save live on the panel.
 (function () {
   "use strict";
-  var mount = document.getElementById("proximity-learning-mount");
-  if (!mount) return;
+  if (!document.getElementById("proximity-learning-mount")) return;
   var cardRoot = document.getElementById("cfg-groups");
   if (!cardRoot) return;
-  var timer = null, active = false, cardSizeInvalid = false;
+  var timer = null, active = false, busy = false, cardSizeInvalid = false;
+  var ownedSession = null, currentSession = null, heartbeatTimer = null;
 
   function t(key, fallback, values) {
-    return window.HaI18n ? window.HaI18n.t(key, fallback, values) : fallback;
+    if (window.HaI18n) return window.HaI18n.t(key, fallback, values);
+    return fallback.replace(/\{([A-Za-z][A-Za-z0-9_]*)\}/g, function (match, name) {
+      return values && Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match;
+    });
   }
-
-  function presented(text, localized) { return { text: text, localized: localized !== false }; }
-
-  function paint(target, value) {
-    target.textContent = value.text;
-    if (value.localized) target.removeAttribute("lang");
-    else target.setAttribute("lang", "en");
-  }
-
+  function label(key, fallback, values) { return t("configure.proximity.setup." + key, fallback, values); }
   function node(tag, cls, text) {
     var n = document.createElement(tag);
     if (cls) n.className = cls;
     if (text != null) n.textContent = text;
     return n;
   }
-
   var card = node("section", "card prox-learning");
   card.id = "cfg-proximity-learning";
   card.setAttribute("data-layout-key", "configure-presence-wake");
   var heading = node("h2", "", t("configure.proximity.title", "Presence & wake"));
-  heading.appendChild(node("span", "cardbadge exp", t("configure.proximity.experimental", "experimental")));
-  var state = node("p", "prox-learning-state", t("configure.proximity.status.waiting", "Waiting for sensor status…"));
-  var detail = node("p", "note", t("configure.proximity.detail.local", "Learning runs locally. Touch-to-wake remains available while it learns."));
+  var state = node("p", "prox-learning-state", label("waiting", "Waiting for sensor status…"));
+  var detail = node("p", "note", label("local", "Optional setup runs on the panel. Touch-to-wake remains available."));
   var evidence = node("p", "muted prox-learning-evidence", "");
   var actions = node("div", "prox-learning-actions");
-  var teach = node("button", "pbtn", t("configure.proximity.action.teach", "Teach a wave")); teach.type = "button";
-  var test = node("button", "pbtn", t("configure.proximity.action.test", "Test a wave")); test.type = "button";
-  var relearn = node("button", "pbtn", t("configure.proximity.action.forget", "Forget learned proximity")); relearn.type = "button";
+  var start = node("button", "pbtn", label("start", "Set up proximity on panel"));
+  var cancel = node("button", "pbtn", label("cancel", "Cancel setup"));
+  var reset = node("button", "pbtn", label("reset", "Restore profile defaults"));
+  [start, cancel, reset].forEach(function (button) { button.type = "button"; actions.appendChild(button); });
+  start.disabled = reset.disabled = true;
+  cancel.hidden = true;
   var result = node("p", "note", "");
   result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite"); result.setAttribute("aria-atomic", "true");
-  actions.appendChild(teach); actions.appendChild(test); actions.appendChild(relearn);
-  card.appendChild(heading); card.appendChild(state); card.appendChild(detail); card.appendChild(evidence);
-  card.appendChild(actions); card.appendChild(result);
+  [heading, state, detail, evidence, actions, result].forEach(function (child) { card.appendChild(child); });
   cardRoot.insertBefore(card, cardRoot.querySelector('[data-config-group="Logging"]'));
 
-  function phaseText(d) {
-    var raw = String(d.learning || d.phase || "waiting_for_reading");
-    var p = raw.toLowerCase();
-    var labels = {
-      waiting_for_reading: ["configure.proximity.phase.waiting_for_reading", "Waiting for the sensor’s first reading"],
-      identifying: ["configure.proximity.phase.identifying", "Identifying how this sensor reports proximity"],
-      learning_baseline: ["configure.proximity.phase.learning_baseline", "Learning the room baseline"],
-      learning_gestures: ["configure.proximity.phase.learning_gestures", "Learning what a deliberate wave looks like"],
-      validating: ["configure.proximity.phase.validating", "Checking the learned pattern during normal use"],
-      ready: ["configure.proximity.phase.ready", "Ready — deliberate wave learned"],
-      rebasing: ["configure.proximity.phase.rebasing", "Adapting to a room or sensor change"],
-      degraded: ["configure.proximity.phase.degraded", "Paused — proximity signal needs attention"]
-    };
-    return labels[p] ? presented(t(labels[p][0], labels[p][1])) : presented(raw, false);
+  function stopHeartbeat() {
+    clearTimeout(heartbeatTimer); heartbeatTimer = null; ownedSession = null;
   }
-
-  function runtimeMessage(raw) {
-    var messages = {
-      "The proximity signal changed. Move clear briefly, then restart deliberate waves.": ["signal_changed_restart", "The proximity signal changed. Move clear briefly, then restart deliberate waves."],
-      "Teaching complete. Deliberate wake gestures are ready.": ["teaching_complete", "Teaching complete. Deliberate wake gestures are ready."],
-      "Movement seen, but it was partial, too quick, or held too long. Move clear, wait two seconds, then try again.": ["movement_partial", "Movement seen, but it was partial, too quick, or held too long. Move clear, wait two seconds, then try again."],
-      "Wave detected successfully.": ["wave_detected", "Wave detected successfully."],
-      "Movement seen, but it was not an armed deliberate wave. Move clear for two seconds, then try again.": ["movement_not_armed", "Movement seen, but it was not an armed deliberate wave. Move clear for two seconds, then try again."],
-      "Leave the area clear briefly, then make a deliberate wave and move clear again.": ["teach_instruction", "Leave the area clear briefly, then make a deliberate wave and move clear again."],
-      "Move clear for two seconds, then wave once and move clear again.": ["test_instruction", "Move clear for two seconds, then wave once and move clear again."],
-      "Teaching cancelled.": ["teaching_cancelled", "Teaching cancelled."],
-      "Wave test cancelled.": ["test_cancelled", "Wave test cancelled."],
-      "Could not safely clear proximity history; the existing model is unchanged.": ["clear_safely_failed", "Could not safely clear proximity history; the existing model is unchanged."],
-      "Could not clear proximity history; the existing model is unchanged.": ["clear_failed", "Could not clear proximity history; the existing model is unchanged."],
-      "Learned proximity history cleared. Learning has restarted.": ["cleared", "Learned proximity history cleared. Learning has restarted."],
-      "Wake gestures are disabled because their safety reset could not be saved.": ["safety_reset_failed", "Wake gestures are disabled because their safety reset could not be saved."],
-      "Waiting for a trustworthy reading from the panel's proximity source.": ["waiting_trustworthy", "Waiting for a trustworthy reading from the panel's proximity source."],
-      "No setup is required. Keep the area clear briefly so the panel can learn its baseline.": ["learning_clear_baseline", "No setup is required. Keep the area clear briefly so the panel can learn its baseline."],
-      "Use the panel normally, or choose Teach a wave to finish sooner.": ["use_normally", "Use the panel normally, or choose Teach a wave to finish sooner."],
-      "A previous range was found and is being checked against live clear-room readings.": ["checking_previous", "A previous range was found and is being checked against live clear-room readings."],
-      "The signal changed. HA reporting and wave wake are paused while a new safe range is learned.": ["signal_changed_paused", "The signal changed. HA reporting and wave wake are paused while a new safe range is learned."],
-      "Proximity is normalized for HA and wake requires a complete deliberate wave.": ["normalized_ready", "Proximity is normalized for HA and wake requires a complete deliberate wave."],
-      "Presence is normalized for HA. A few more complete gestures will enable wave wake.": ["normalized_learning", "Presence is normalized for HA. A few more complete gestures will enable wave wake."],
-      "Teaching timed out. Nothing unsafe was enabled; try again when convenient.": ["teaching_timed_out", "Teaching timed out. Nothing unsafe was enabled; try again when convenient."],
-      "No complete wave was detected during the test.": ["test_no_wave", "No complete wave was detected during the test."],
-      "No setup is required. Touch the screen to wake it until learning is ready.": ["touch_until_ready", "No setup is required. Touch the screen to wake it until learning is ready."]
-    };
-    var accepted = /^Wave accepted \((\d+)\/(\d+)\)\. Move clear, wait two seconds, then wave again\.$/.exec(raw || "");
-    if (accepted) return presented(t("configure.proximity.message.wave_accepted", "Wave accepted ({seen}/{required}). Move clear, wait two seconds, then wave again.", { seen: accepted[1], required: accepted[2] }));
-    var known = messages[raw];
-    return known ? presented(t("configure.proximity.message." + known[0], known[1])) : presented(raw || "", false);
-  }
-
-  function healthText(raw) {
-    var labels = {
-      no_data: ["no_data", "no data"], learning: ["learning", "learning"], stale: ["stale", "stale"],
-      invalid_sample: ["invalid_sample", "invalid sample"], clock_regression: ["clock_regression", "clock error"],
-      model_shift: ["model_shift", "signal changed"], source_unavailable: ["source_unavailable", "source unavailable"]
-    };
-    return labels[raw] ? presented(t("configure.proximity.health." + labels[raw][0], labels[raw][1])) : presented(String(raw), false);
-  }
-
-  function modeText(raw) {
-    var modes = { identifying: "identifying", unknown: "identifying", binary: "binary", graded: "graded" };
-    return modes[raw] ? presented(t("configure.proximity.mode." + modes[raw], modes[raw])) : presented(String(raw), false);
-  }
-
   function render(d) {
-    if (d.present === false) {
-      paint(state, presented(t("configure.proximity.no_source.title", "No proximity source is available on this panel")));
-      paint(detail, presented(t("configure.proximity.no_source.detail", "Wake on wave is unavailable; touch-to-wake is unchanged.")));
-      actions.hidden = true; return;
+    var phase = d.phase || d.learning || "calibration_required";
+    active = d.sessionActive === true || !!(d.session && d.session.active) || phase === "calibrating";
+    currentSession = d.sessionId || (d.session && d.session.id) || null;
+    var stage = d.stage || (d.session && d.session.stage);
+    if (ownedSession) {
+      if (stage === "saved" || stage === "cancelled" || (currentSession && currentSession !== ownedSession)) stopHeartbeat();
+      else if (!active) { clearTimeout(heartbeatTimer); heartbeatTimer = null; }
+      else if (!heartbeatTimer && currentSession === ownedSession) scheduleHeartbeat();
     }
-    actions.hidden = false;
-    paint(state, phaseText(d));
-    var health = d.health && d.health !== "healthy" ? healthText(d.health) : null;
-    var mode = d.signalMode || d.mode || "identifying";
-    var detailMessage = runtimeMessage(d.message || "No setup is required. Touch the screen to wake it until learning is ready.");
-    if (health) {
-      detailMessage = presented(t("configure.proximity.detail.with_health", "{detail} · {health}", { detail: detailMessage.text, health: health.text }), detailMessage.localized && health.localized);
+    var available = d.present !== false && phase !== "source_unavailable";
+    var phases = {
+      ready: ["ready", "Proximity is ready"],
+      calibration_required: ["required", "Proximity setup is available on the panel"],
+      calibrating: ["calibrating", "Setup is running on the panel"],
+      source_unavailable: ["unavailable", "Proximity source is unavailable"]
+    };
+    var status = phases[available ? phase : "source_unavailable"] || phases.calibration_required;
+    state.textContent = label(status[0], status[1]);
+    if (available && phase === "ready" && typeof d.presenceSupported === "boolean" && typeof d.waveSupported === "boolean") {
+      state.textContent = d.presenceSupported
+        ? (d.waveSupported ? label("ready_both", "Presence and wave are ready") : label("ready_presence", "Presence is ready; wave is unavailable"))
+        : (d.waveSupported ? label("ready_wave", "Wave is ready; presence is unavailable") : label("ready_neither", "Presence and wave are unavailable"));
     }
-    paint(detail, detailMessage);
-    var seen = d.acceptedGestures == null ? 0 : d.acceptedGestures;
-    var required = d.requiredGestures == null ? 3 : d.requiredGestures;
-    var localizedMode = modeText(mode);
-    var evidenceKey = d.normalizedLevel == null ? "configure.proximity.evidence" : "configure.proximity.evidence_level";
-    var evidenceFallback = d.normalizedLevel == null ? "Observed mode: {mode} · accepted waves {seen}/{required}" : "Observed mode: {mode} · accepted waves {seen}/{required} · current level {level}%";
-    paint(evidence, presented(t(evidenceKey, evidenceFallback, { mode: localizedMode.text, seen: seen, required: required, level: d.normalizedLevel }), localizedMode.localized));
-    active = !!(d.session && d.session.active);
-    var sessionKind = active ? d.session.kind : "";
-    var ready = (d.learning || d.phase) === "ready";
-    // The active operation always owns its cancel control, even if passive evidence makes the
-    // background learner ready while a guided session is still open.
-    teach.hidden = sessionKind === "test" || (!active && ready);
-    test.hidden = sessionKind === "teach" || (!active && !ready);
-    teach.disabled = d.canTeach === false && sessionKind !== "teach";
-    test.disabled = d.canTest === false && sessionKind !== "test";
-    if (active) {
-      var s = d.session;
-      paint(result, s.message ? runtimeMessage(s.message) : presented(s.kind === "teach" ? t("configure.proximity.status.waiting_deliberate", "Waiting for a deliberate wave…") : t("configure.proximity.status.waiting_one", "Waiting for one wave…")));
-      teach.textContent = s.kind === "teach" ? t("configure.proximity.action.cancel_teaching", "Cancel teaching") : t("configure.proximity.action.teach", "Teach a wave");
-      test.textContent = s.kind === "test" ? t("configure.proximity.action.cancel_test", "Cancel test") : t("configure.proximity.action.test", "Test a wave");
-    } else {
-      teach.textContent = t("configure.proximity.action.teach", "Teach a wave"); test.textContent = t("configure.proximity.action.test", "Test a wave");
-      if (d.lastSessionMessage) paint(result, runtimeMessage(d.lastSessionMessage));
-    }
+    var mode = d.signalMode || d.mode;
+    detail.textContent = active
+      ? label("follow", "Follow the instructions on the panel. Keep the browser tab open until setup finishes; you can leave it in the background.")
+      : label("local", "Optional setup runs on the panel. Touch-to-wake remains available.");
+    if (mode === "binary") detail.textContent += " " + label("binary", "This sensor reports near or clear only. Its detection distance cannot be adjusted.");
+    if (!available) detail.textContent = label("no_source", "Wake-to-wave is unavailable. Touch-to-wake remains available.");
+    var stages = {
+      intro: ["intro", "Ready to begin on the panel"], clear: ["clear", "Measuring the clear observation"],
+      near: ["near", "Measuring the near observation"], return_clear: ["return_clear", "Checking the return to clear"],
+      wave_baseline: ["wave_baseline", "Checking the starting position for hand waves"],
+      wave_capture: ["wave_capture", "Measuring a deliberate hand wave"],
+      waves: ["waves", "Validating waves: {seen}/{required}"], review: ["review", "Ready for review and Save on the panel"],
+      saved: ["saved", "Calibration saved"], cancelled: ["cancelled", "Setup cancelled. Existing calibration is unchanged."],
+      timed_out: ["timed_out", "Setup timed out. Existing calibration is unchanged."], failed: ["failed", "Setup could not complete. Existing calibration is unchanged."]
+    };
+    var progress = stages[stage];
+    evidence.textContent = active && stage === "intro" && d.health === "source_unavailable"
+      ? label("waiting", "Waiting for sensor status…")
+      : progress ? label("stage." + progress[0], progress[1], {
+      seen: d.acceptedGestures == null ? 0 : d.acceptedGestures,
+      required: d.requiredGestures == null ? 3 : d.requiredGestures
+    }) : "";
+    start.hidden = active;
+    start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true) || d.canCalibrate === false || (d.canCalibrate == null && d.canTeach === false);
+    cancel.hidden = !active;
+    cancel.disabled = busy || !currentSession;
+    reset.disabled = busy || active || !available;
   }
-
+  function changed() {
+    if (window.configCardSizeSourceReady) window.configCardSizeSourceReady("proximity");
+    if (cardSizeInvalid && window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
+    cardSizeInvalid = false;
+  }
   async function refresh() {
+    clearTimeout(timer);
     try {
-      var response = await fetch("/api/v1/proximity", { cache: "no-store" });
+      var response = await fetch("/api/v1/proximity", { cache: "no-store", mode: "same-origin" });
       if (!response.ok) throw new Error("status " + response.status);
-      render(await response.json());
-      if (window.configCardSizeSourceReady) window.configCardSizeSourceReady("proximity");
-      if (cardSizeInvalid && window.configCardSizeGeometryChanged) window.configCardSizeGeometryChanged();
-      cardSizeInvalid = false;
+      render(await response.json()); changed();
     } catch (_) {
-      paint(state, presented(t("configure.proximity.status.unavailable", "Proximity learning status is unavailable")));
+      state.textContent = label("status_unavailable", "Proximity status is unavailable");
+      start.disabled = reset.disabled = true;
       cardSizeInvalid = true;
       if (window.configCardSizeGeometryInvalid) window.configCardSizeGeometryInvalid();
     }
     clearTimeout(timer); timer = setTimeout(refresh, active ? 1000 : 5000);
   }
-
-  async function post(path, body) {
-    paint(result, presented(t("configure.proximity.status.working", "Working…")));
-    try {
-      var response = await fetch(path, {
-        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-        body: new URLSearchParams(body).toString()
-      });
-      var data = await response.json(); render(data);
-      if (!response.ok) paint(result, data.error ? presented(String(data.error), false) : presented(t("configure.proximity.error.not_available", "That action is not available yet.")));
-    } catch (_) { paint(result, presented(t("configure.proximity.error.rejected", "The panel did not accept that action."))); }
+  async function request(action, sessionId) {
+    var body = { action: action };
+    if (sessionId) body.sessionId = sessionId;
+    var response = await fetch("/api/v1/proximity/calibration", {
+      method: "POST", mode: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "X-Proximity-UI": "1" },
+      body: new URLSearchParams(body).toString()
+    });
+    var data = await response.json();
+    if (!response.ok) {
+      var error = new Error(data.error || label("rejected", "The panel did not accept that action."));
+      error.opaque = !!data.error;
+      throw error;
+    }
+    return data;
   }
-
-  teach.addEventListener("click", function () { post("/api/v1/proximity/teach", { action: active ? "cancel" : "start" }); });
-  test.addEventListener("click", function () { post("/api/v1/proximity/test", { action: active ? "cancel" : "start" }); });
-  relearn.addEventListener("click", function () {
-    if (!window.confirm(t("configure.proximity.confirm.forget", "Move clear of the panel, then delete learned proximity history for this sensor? Touch-to-wake remains available while it relearns."))) return;
-    post("/api/v1/proximity/relearn", { confirm: "true" });
+  function scheduleHeartbeat() {
+    clearTimeout(heartbeatTimer);
+    if (!ownedSession || !active) return;
+    heartbeatTimer = setTimeout(async function () {
+      var id = ownedSession;
+      try {
+        var data = await request("heartbeat", id);
+        if (ownedSession !== id) return;
+        render(data);
+      } catch (_) {
+        // Do not acquire ownership from status polling or restart an expired session.
+      }
+      heartbeatTimer = null; scheduleHeartbeat();
+    }, 5000);
+  }
+  async function post(action) {
+    if (busy) return;
+    busy = true;
+    start.disabled = cancel.disabled = reset.disabled = true;
+    result.removeAttribute("lang");
+    result.textContent = label("working", "Working…");
+    try {
+      var data = await request(action, active ? currentSession : null);
+      if (action === "start" && data.sessionId && (data.phase === "calibrating" || data.sessionActive === true)) {
+        ownedSession = data.sessionId;
+      }
+      busy = false; render(data); changed();
+      result.textContent = "";
+    } catch (error) {
+      if (error.opaque) result.setAttribute("lang", "en");
+      result.textContent = error.message || label("rejected", "The panel did not accept that action.");
+    } finally { busy = false; refresh(); }
+  }
+  start.addEventListener("click", function () { if (!active) post("start"); });
+  cancel.addEventListener("click", function () { if (active && currentSession) post("cancel"); });
+  reset.addEventListener("click", function () {
+    if (active || !window.confirm(label("confirm_reset", "Replace the saved calibration with this sensor profile’s defaults?"))) return;
+    post("reset");
   });
   document.addEventListener("visibilitychange", function () { if (!document.hidden) refresh(); });
   refresh();

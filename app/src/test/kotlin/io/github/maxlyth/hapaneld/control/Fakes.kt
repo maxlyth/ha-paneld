@@ -158,11 +158,17 @@ class FakeScreenPower(
     var deviceSecure: Boolean = false,
 ) : ScreenPower {
     var pulses = 0
+    var brightnessPulses = 0
     override fun isInteractive() = interactive
     // Deliberately does NOT flip [interactive]: the real ACQUIRE_CAUSES_WAKEUP does wake the device,
     // but tests here assert the pulse was issued rather than modelling the platform's response, and
     // the exit-safety contract relies on driving interactivity explicitly.
     override fun pulseWake() { pulses++ }
+    override fun brightenWhileOn(): Boolean {
+        if (!interactive) return false
+        brightnessPulses++
+        return true
+    }
     override fun isDeviceSecure() = deviceSecure
 }
 

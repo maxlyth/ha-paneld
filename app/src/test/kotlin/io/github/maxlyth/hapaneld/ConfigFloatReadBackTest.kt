@@ -72,6 +72,7 @@ class ConfigFloatReadBackTest {
         arrayOf(SharedPreferences::class.java),
     ) { _, method, args ->
         when (method.name) {
+            "contains" -> args!![0] == key
             "getFloat" -> if (args!![0] == key) value else args[1]
             "toString" -> "FloatReadBackPreferences"
             else -> error("unexpected SharedPreferences call: ${method.name}")

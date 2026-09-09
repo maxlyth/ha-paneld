@@ -60,6 +60,7 @@ internal data class AutoSleepRuntimeConfig(
     val haUrl: String,
     /** Locally configured area name (`ha_area`); presence sources come from here when it is set. */
     val haArea: String = "",
+    val source: String = "home_assistant",
 )
 
 internal interface AutoSleepLearning {
@@ -123,7 +124,7 @@ internal class AutoSleepController private constructor(
         scope = scope,
         screen = screen,
         configuration = {
-            AutoSleepRuntimeConfig(config.autoSleep, config.androidId, config.panelId, config.haUrl, config.haArea)
+            AutoSleepRuntimeConfig(config.autoSleep, config.androidId, config.panelId, config.haUrl, config.haArea, config.autoSleepSource)
         },
         learning = StoredAutoSleepLearning(context),
         subscribeToTouches = { callback -> PanelTouchObserver.shared(context).subscribeWithActivityFallback(callback) },
@@ -191,6 +192,8 @@ internal class AutoSleepController private constructor(
     private var rearmOffGeneration: Long? = null
     private var lastHaActivityAtMs: Long? = null
     private var lastProximityNear: Boolean? = null
+    private var localRevision = 0L
+    private val usesPanelPresence: Boolean get() = configured.source == "panel"
     private var deadlineToken = 0L
     private var deadlineJob: Job? = null
     private var rediscoveryToken = 0L
@@ -207,6 +210,7 @@ internal class AutoSleepController private constructor(
         return JSONObject()
             .put("available", current.available)
             .put("enabled", current.enabled)
+            .put("source", current.source)
             .put("phase", current.phase)
             .put("reason", current.reason)
             .put("learned_lease_ms", current.learnedLeaseMs ?: JSONObject.NULL)
@@ -259,6 +263,11 @@ internal class AutoSleepController private constructor(
         val historyStartEpochMs = (windowStartEpochMs - HISTORY_WARMUP_MS).coerceAtLeast(0L)
         val current = status
         val leaseMs = current.replayLeaseMs
+        if (current.source == "panel") {
+            return JSONObject(unavailableHistoryJson(
+                hours, windowStartEpochMs, endEpochMs, leaseMs, "local_history_unavailable",
+            )).put("source_scope", "panel_proximity").put("area_sources_only", false).toString()
+        }
         if (!current.enabled || leaseMs == null) {
             return unavailableHistoryJson(hours, windowStartEpochMs, endEpochMs, null, "runtime_unavailable")
         }
@@ -537,7 +546,15 @@ internal class AutoSleepController private constructor(
         rediscoveryJob?.cancel()
         rediscoveryToken++
         deadlineToken++
+        val sourceChanged = configured.source != next.value.source
         configured = next.value
+        if (sourceChanged) {
+            wakeOwnedScreen()
+            policy = null
+            decision = null
+            lastProximityNear = null
+            lastHaActivityAtMs = null
+        }
         acceptedManagerGeneration = -1L
         if (!next.value.enabled) {
             wakeOwnedScreen()
@@ -559,13 +576,22 @@ internal class AutoSleepController private constructor(
             }
         }
         manager.configure(HaPresenceRequest(
-            enabled = next.value.enabled,
+            enabled = next.value.enabled && !usesPanelPresence,
             androidId = next.value.androidId,
             panelId = next.value.panelId,
             controllerEpoch = next.epoch,
             preferredAreaName = next.value.haArea,
         ))
-        if (next.value.enabled) scheduleRediscovery(next.epoch, rediscoveryToken)
+        if (next.value.enabled && usesPanelPresence) {
+            partition = "panel_proximity|v1"
+            if (policy == null) {
+                val learned = learning.learnedLease(partition, MIN_AUTO_SLEEP_LEASE_MS)
+                policy = AutoSleepPolicyReducer.initial(
+                    setOf(LOCAL_SOURCE), AutoSleepPolicyConfig(learnedLeaseMs = learned.leaseMs),
+                )
+            }
+            applyPanelPresence(null, eventTime())
+        } else if (next.value.enabled) scheduleRediscovery(next.epoch, rediscoveryToken)
     }
 
     private fun scheduleRediscovery(epoch: Long, token: Long) {
@@ -577,6 +603,7 @@ internal class AutoSleepController private constructor(
     }
 
     private fun applyAggregate(next: HaPresenceAggregate) {
+        if (usesPanelPresence) return
         if (next.controllerEpoch != controllerEpoch.get()) return
         if (next.managerGeneration < acceptedManagerGeneration) return
         val currentFeed = policy?.feed
@@ -698,9 +725,41 @@ internal class AutoSleepController private constructor(
     private fun applyProximity(next: Proximity) {
         val previous = lastProximityNear
         lastProximityNear = next.near
-        if (next.near == true && previous != true) {
-            applyLocalEvidence(AutoSleepLocalEvidence.PROXIMITY, next.atMs, false)
+        if (usesPanelPresence) {
+            if (configured.enabled) applyPanelPresence(next.near, next.atMs)
+            return
         }
+        if (next.near == true && previous != true) {
+            // Presence may extend an already visible interaction, never override a dark screen.
+            // Keep the check and reduction with the screen transition monitor: a queued approach
+            // must not race a manual/automatic OFF and turn its lease extension into a wake.
+            synchronized(screen) {
+                if (screen.isIntendedOff() || !screen.isOn() || screen.observedLit() != true) return
+                applyLocalEvidence(AutoSleepLocalEvidence.PROXIMITY, next.atMs, false)
+            }
+        }
+    }
+
+    /** Local presence owns an independent source; it never borrows HA availability or history. */
+    private fun applyPanelPresence(near: Boolean?, atMs: Long) {
+        aggregate = HaPresenceAggregate(
+            phase = HaPresencePhase.LIVE,
+            controllerEpoch = controllerEpoch.get(),
+            selectedEntityIds = setOf(LOCAL_SOURCE),
+        )
+        val state = when (near) {
+            true -> AutoSleepSourceState.ON
+            false -> AutoSleepSourceState.OFF
+            null -> AutoSleepSourceState.UNAVAILABLE
+        }
+        // Hydration can hold a visible screen, but is never a wake gesture. Source loss restores only
+        // the screen epoch this controller put to sleep so touch remains a guaranteed fallback.
+        reduce(AutoSleepEvent.SourcesHydrated(
+            eventTime(atMs), mapOf(LOCAL_SOURCE to state),
+            AutoSleepFeedPosition(controllerEpoch.get(), ++localRevision),
+        ), actuate = false)
+        if (near == null) wakeOwnedScreen()
+        else decision?.let(::actuate)
     }
 
     private fun applyLocalEvidence(kind: AutoSleepLocalEvidence, atMs: Long, causalTapWake: Boolean) {
@@ -757,7 +816,7 @@ internal class AutoSleepController private constructor(
                     onScreenChanged(false)
                 }
             }
-            next.output != AutoSleepOutput.ALLOW_SLEEP && screen.isIntendedOff() -> {
+            next.output != AutoSleepOutput.ALLOW_SLEEP && screen.isIntendedOff() && !usesPanelPresence -> {
                 val epoch = automaticEpoch
                 if (epoch == null) {
                     val generation = rearmOffGeneration
@@ -815,6 +874,7 @@ internal class AutoSleepController private constructor(
             available = configured.enabled && aggregate.phase == HaPresencePhase.LIVE && current != null &&
                 current.output != AutoSleepOutput.INHIBITED,
             enabled = configured.enabled,
+            source = configured.source,
             reason = if (aggregate.phase == HaPresencePhase.LIVE) {
                 current?.reason?.name?.lowercase(Locale.ROOT) ?: "live"
             } else aggregate.phase.name.lowercase(Locale.ROOT),
@@ -824,9 +884,11 @@ internal class AutoSleepController private constructor(
             sourceCount = aggregate.selectedEntityIds.size,
             discoveredSourceCount = aggregate.discoveredEntityIds.size,
             areaName = aggregate.areaName,
-            phase = aggregate.phase.name.lowercase(Locale.ROOT),
+            phase = if (usesPanelPresence && configured.enabled && current?.output == AutoSleepOutput.INHIBITED)
+                "source_unavailable" else aggregate.phase.name.lowercase(Locale.ROOT),
             manualSuppression = manualSuppression,
-            detail = diagnosticDetail(aggregate),
+            detail = if (usesPanelPresence && configured.enabled && current?.output == AutoSleepOutput.INHIBITED)
+                "Calibrate panel proximity or wait for a trustworthy presence reading." else diagnosticDetail(aggregate),
             projectionRevision = revision,
         )
         runCatching(onProjectionChanged).onFailure {
@@ -856,6 +918,7 @@ internal class AutoSleepController private constructor(
 
     private companion object {
         const val TAG = "AutoSleep"
+        const val LOCAL_SOURCE = "panel_proximity"
         const val REDISCOVERY_INTERVAL_MS = 24L * 60L * 60_000L
         const val HOUR_MS = 60L * 60_000L
         const val HISTORY_WARMUP_MS = HOUR_MS
@@ -873,6 +936,7 @@ internal class AutoSleepController private constructor(
     private data class Status(
         val available: Boolean = false,
         val enabled: Boolean = false,
+        val source: String = "home_assistant",
         val phase: String = "disabled",
         val reason: String = "disabled",
         val learnedLeaseMs: Long? = null,

@@ -1807,7 +1807,7 @@ browserTest('OAuth, auto-brightness and proximity journeys use their bounded loc
     if (path === '/api/v1/auto-brightness') return json({ available: true, state: 'learning', source_label: 'panel sensor', sourceAvailable: true, latestLux: 42 });
     if (path.startsWith('/api/v1/auto-brightness/history')) return json({ points: [], bucket_minutes: 5 });
     if (path === '/api/v1/proximity') return json(proximity);
-    if (path === '/api/v1/proximity/test') { proximity = { ...proximity, session: { active: true, kind: 'test', message: 'Waiting for one wave…' } }; return json(proximity); }
+    if (path === '/api/v1/proximity/calibration') { proximity = { ...proximity, phase: 'calibrating', stage: 'intro', sessionActive: true, sessionId: 'test-session' }; return json(proximity); }
   });
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
@@ -1817,73 +1817,40 @@ browserTest('OAuth, auto-brightness and proximity journeys use their bounded loc
   await page.getByRole('button', { name: 'Connect' }).click();
   await assert.doesNotReject(page.getByText('Sign-in link ready. Open it normally or copy it into a private window.').waitFor());
   await assert.doesNotReject(page.getByRole('link', { name: 'Open sign-in' }).getAttribute('href').then((href) => assert.match(href, /state=opaque/)));
-  await page.getByRole('button', { name: 'Test a wave' }).click();
-  await assert.doesNotReject(page.getByText('Waiting for one wave…').waitFor());
+  await page.getByRole('button', { name: 'Set up proximity on panel' }).click();
+  await assert.doesNotReject(page.getByText('Ready to begin on the panel').waitFor());
   assert.ok(calls.includes('POST /api/v1/ha/oauth/start'));
   assert.ok(calls.includes('GET /api/v1/auto-brightness'));
   assert.ok(calls.includes('GET /api/v1/auto-brightness/history'));
-  assert.ok(calls.includes('POST /api/v1/proximity/test'));
+  assert.ok(calls.includes('POST /api/v1/proximity/calibration'));
 });
 
-browserTest('Proximity learning localizes controlled UI while preserving opaque evidence as safe English text', async (t) => {
-  const calls = [];
+browserTest('Proximity setup localizes browser controls and displays errors as safe text', async (t) => {
   const translations = {
     'configure.proximity.title': '存在与唤醒',
-    'configure.proximity.experimental': '实验性',
-    'configure.proximity.phase.ready': '就绪 — 已学习主动挥手动作',
-    'configure.proximity.message.normalized_ready': '已为 HA 规范化接近状态；唤醒需要一次完整的主动挥手动作。',
-    'configure.proximity.mode.graded': '分级',
-    'configure.proximity.evidence_level': '检测模式：{mode} · 已接受挥手 {seen}/{required} · 当前级别 {level}%',
-    'configure.proximity.action.test': '测试挥手动作',
-    'configure.proximity.action.forget': '清除已学习的接近数据',
-    'configure.proximity.confirm.forget': '请先远离面板，然后删除已学习的接近历史记录？',
-    'configure.proximity.status.working': '正在处理…',
+    'configure.proximity.setup.ready': '接近感应已就绪',
+    'configure.proximity.setup.local': '可选设置在面板上进行。触摸唤醒仍然可用。',
+    'configure.proximity.setup.start': '在面板上设置接近感应',
   };
-  const ready = {
-    present: true, phase: 'ready', health: 'healthy', signalMode: 'graded', normalizedLevel: 71,
-    requiredGestures: 3, acceptedGestures: 3,
-    message: 'Proximity is normalized for HA and wake requires a complete deliberate wave.',
-    session: { active: false },
-  };
-  const harness = await startHarness((path, request) => {
-    calls.push(`${request.method} ${path}`);
+  const harness = await startHarness((path) => {
     if (path === '/api/v1/config/schema') return json([]);
     if (path === '/api/v1/config') return json({ settings: {}, ha_expose: {}, ha_auth: {} });
     if (path === '/api/v1/apps') return json({ apps: [] });
     if (path === '/api/v1/radio') return json({ present: false });
-    if (path === '/api/v1/proximity') return json(ready);
-    if (path === '/api/v1/proximity/test') return json({
-      ...ready, session: { active: true, kind: 'test', message: '<opaque diagnostic & exact evidence>' },
-    });
-    if (path === '/api/v1/proximity/relearn') return json(ready);
+    if (path === '/api/v1/proximity') return json({ present: true, phase: 'ready' });
+    if (path === '/api/v1/proximity/calibration') return json({ error: '<opaque diagnostic & exact evidence>' }, 409);
   }, () => fixture(translations, 'zh-Hans'));
   const browser = await chromium.launch({ executablePath: chrome, headless: true });
   const page = await browser.newPage();
   page.setDefaultTimeout(2_000);
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
-
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
-  await page.getByText('就绪 — 已学习主动挥手动作').waitFor();
-  assert.equal(await page.locator('.prox-learning .note').first().textContent(), '已为 HA 规范化接近状态；唤醒需要一次完整的主动挥手动作。');
-  assert.equal(await page.locator('.prox-learning-evidence').textContent(), '检测模式：分级 · 已接受挥手 3/3 · 当前级别 71%');
-
-  await page.getByRole('button', { name: '测试挥手动作' }).click();
+  await page.getByText('接近感应已就绪').waitFor();
+  assert.equal(await page.locator('.prox-learning .note').first().textContent(), '可选设置在面板上进行。触摸唤醒仍然可用。');
+  await page.getByRole('button', { name: '在面板上设置接近感应' }).click();
   const result = page.locator('.prox-learning [role=status]');
   await result.getByText('<opaque diagnostic & exact evidence>', { exact: true }).waitFor();
-  assert.equal(await result.getAttribute('lang'), 'en');
   assert.equal(await result.locator('diagnostic').count(), 0);
-
-  page.once('dialog', async (dialog) => {
-    assert.equal(dialog.message(), '请先远离面板，然后删除已学习的接近历史记录？');
-    await dialog.dismiss();
-  });
-  await page.getByRole('button', { name: '清除已学习的接近数据' }).click();
-  assert.equal(calls.filter((call) => call === 'POST /api/v1/proximity/relearn').length, 0);
-
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.getByRole('button', { name: '清除已学习的接近数据' }).click();
-  await page.waitForFunction(() => true);
-  assert.equal(calls.filter((call) => call === 'POST /api/v1/proximity/relearn').length, 1);
 });
 
 browserTest('Loaded screenshot opens a fitted modal and one exact click replaces both images', async (t) => {
@@ -5002,4 +4969,44 @@ browserTest('Configure stops promising a value is about to apply once the panel 
   assert.equal(
     await page.locator('#cfg-silence_boot_chime [role=switch]').getAttribute('aria-checked'), 'true',
     'a stalled value is still the saved desired value');
+});
+
+browserTest('Panel proximity Auto-sleep works without HA prerequisites or an HA history chart', async (t) => {
+  let prerequisiteGets = 0, historyGets = 0;
+  const schema = [
+    { key: 'auto_sleep_source', label: 'Auto-sleep presence source', group: 'Behaviour', type: 'ENUM', available: true, options: ['panel', 'home_assistant'] },
+    { key: 'auto_sleep', label: 'Auto sleep', group: 'Behaviour', type: 'BOOL', available: true },
+  ];
+  const harness = await startHarness((path) => {
+    if (path === '/api/v1/config/schema') return json(schema);
+    if (path === '/api/v1/config') return json({ settings: { auto_sleep: true, auto_sleep_source: 'panel' }, ha_expose: {} });
+    if (path === '/api/v1/apps') return json({ apps: [] });
+    if (path === '/api/v1/radio' || path === '/api/v1/proximity') return json({ present: false });
+    if (path === '/api/v1/auto-sleep/prerequisite') { prerequisiteGets++; return json({ eligible: false, phase: 'unassigned' }); }
+    if (path === '/api/v1/auto-sleep/history') { historyGets++; return json({ available: false }); }
+    if (path === '/api/v1/auto-sleep') return json({ enabled: true, source: 'panel', phase: 'source_unavailable', reason: 'all_sources_unavailable' });
+  });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true });
+  const page = await browser.newPage();
+  page.setDefaultTimeout(2_000);
+  t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
+  await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
+  const source = page.locator('#cfg-auto_sleep_source select');
+  await source.waitFor();
+  assert.deepEqual(await source.locator('option').allTextContents(), ['This panel’s proximity sensor', 'Home Assistant Area devices']);
+  const toggle = page.locator('#cfg-auto_sleep [role=switch]');
+  assert.equal(await toggle.getAttribute('aria-disabled'), 'false');
+  await toggle.click();
+  assert.equal(await toggle.getAttribute('aria-disabled'), 'false');
+  await toggle.click();
+  await page.locator('#auto-sleep-status').waitFor();
+  assert.equal(await toggle.getAttribute('aria-checked'), 'true');
+  assert.equal(await page.locator('#auto-sleep-chart').count(), 0);
+  assert.equal(await page.locator('#auto-sleep-status a').getAttribute('href'), '#cfg-proximity-learning');
+  assert.equal(prerequisiteGets, 0);
+  assert.equal(historyGets, 0);
+  await source.selectOption('home_assistant');
+  await page.waitForFunction(() => document.querySelector('#cfg-auto_sleep [role=switch]').getAttribute('aria-checked') === 'false');
+  assert.equal(await page.locator('#cfg-auto_sleep [role=switch]').getAttribute('aria-disabled'), 'true');
+  assert.ok(prerequisiteGets > 0);
 });

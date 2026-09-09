@@ -236,6 +236,13 @@ object SettingsRegistry {
 
         // ---- Behaviour ---------------------------------------------------------------------------
         SettingSpec(
+            key = "auto_sleep_source", type = SettingType.ENUM, group = "Behaviour",
+            label = "Auto-sleep presence source", default = "panel", tier = Tier.BASIC, scope = Scope.DEVICE,
+            liveApply = true, options = listOf("panel", "home_assistant"),
+            help = "Use the panel’s calibrated proximity sensor, or choose Home Assistant Area devices. " +
+                "If the selected source is unavailable, automatic sleep pauses and touch remains available.",
+        ),
+        SettingSpec(
             key = "auto_sleep", type = SettingType.BOOL, group = "Behaviour",
             label = "Auto sleep", default = "false", tier = Tier.BASIC, scope = Scope.DEVICE,
             liveApply = true,
@@ -266,7 +273,7 @@ object SettingsRegistry {
             key = "wake_on_wave", type = SettingType.BOOL, group = "Behaviour",
             label = "Wake on wave", default = "false", tier = Tier.BASIC, scope = Scope.PORTABLE,
             liveApply = true,
-            help = "Wake locally after a learned deliberate far-to-near-to-far wave. Touch-to-wake remains available while the panel learns.",
+            help = "Wake after a calibrated clear-to-near-to-clear wave. Set up proximity on the panel; touch-to-wake remains available.",
             availableWhen = { it.hasProximity },
             ha = HaEntity(
                 "switch", "wake_on_wave", "Wake on wave",

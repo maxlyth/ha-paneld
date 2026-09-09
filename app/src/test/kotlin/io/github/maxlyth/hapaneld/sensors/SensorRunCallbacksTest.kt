@@ -10,6 +10,7 @@ class SensorRunCallbacksTest {
         val rawLux: MutableList<Float> = mutableListOf(),
         val proximity: MutableList<Pair<Boolean?, Int?>> = mutableListOf(),
         val gestures: MutableList<Unit> = mutableListOf(),
+        val approaches: MutableList<Unit> = mutableListOf(),
         val temperature: MutableList<Float> = mutableListOf(),
         val humidity: MutableList<Float> = mutableListOf(),
     )
@@ -21,6 +22,7 @@ class SensorRunCallbacksTest {
         onGesture = { events.gestures += Unit },
         onTemperature = events.temperature::add,
         onHumidity = events.humidity::add,
+        onPresenceApproach = { events.approaches += Unit },
     )
 
     @Test fun firstReadingsPublishAndCadenceUsesElapsedTime() {
@@ -52,6 +54,7 @@ class SensorRunCallbacksTest {
         old.light(50f, 100_000)
         old.proximity(true, 100)
         old.gesture()
+        old.presenceApproach()
         old.temperature(22f, 100_000)
         old.humidity(45f, 100_000)
         replacement.light(12f, 100)
@@ -61,6 +64,17 @@ class SensorRunCallbacksTest {
         assertEquals(Events(), oldEvents)
         assertEquals(listOf(12), replacementEvents.lux)
         assertEquals(listOf(false to 0), replacementEvents.proximity)
+    }
+
+    @Test fun reportingPresenceDoesNotInventAnApproachOrWave() {
+        val events = Events()
+        val callbacks = run(events)
+        callbacks.proximity(true, 100)
+        assertEquals(emptyList<Unit>(), events.approaches)
+        assertEquals(emptyList<Unit>(), events.gestures)
+        callbacks.presenceApproach()
+        assertEquals(listOf(Unit), events.approaches)
+        assertEquals(emptyList<Unit>(), events.gestures)
     }
 
     @Test fun aClockRollbackCannotFreezeAChangedReading() {
@@ -97,6 +111,7 @@ class SensorRunCallbacksTest {
             onGesture = { events.gestures += Unit },
             onTemperature = events.temperature::add,
             onHumidity = events.humidity::add,
+        onPresenceApproach = { events.approaches += Unit },
         )
         var activated = false
 

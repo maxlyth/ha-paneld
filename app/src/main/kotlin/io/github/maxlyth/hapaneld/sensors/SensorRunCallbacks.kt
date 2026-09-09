@@ -14,6 +14,7 @@ internal class SensorRunCallbacks(
     private val onGesture: () -> Unit,
     private val onTemperature: (Float) -> Unit,
     private val onHumidity: (Float) -> Unit,
+    private val onPresenceApproach: () -> Unit = {},
 ) {
     @Volatile private var open = true
     private var lastLux = -1f
@@ -41,6 +42,10 @@ internal class SensorRunCallbacks(
         reportMask: Int = ProximityReportGate.BOTH,
     ) {
         if (open) onProximity(near, normalizedLevel, reportMask)
+    }
+
+    fun presenceApproach() {
+        if (open) onPresenceApproach()
     }
 
     fun gesture() {

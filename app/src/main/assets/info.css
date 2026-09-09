@@ -135,6 +135,7 @@ button{background:#2557a7;border-color:#2557a7;color:#fff;cursor:pointer;align-s
 .prox-learning-evidence{font-size:.78rem;margin:.45rem 0}
 .prox-learning-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 .prox-learning-actions .pbtn{min-height:44px}
+.prox-learning-actions .pbtn[hidden]{display:none}
 /* Self-contained so it looks identical on <button> AND <a> (the "Open in HA" link) — anchors don't
    inherit the button{} border/radius/colour, so spell them out + kill the link underline. */
 .pbtn{font-size:.8rem;padding:6px 12px;background:var(--input-bg);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);cursor:pointer;text-decoration:none;display:inline-block;line-height:1.3;font-family:inherit}

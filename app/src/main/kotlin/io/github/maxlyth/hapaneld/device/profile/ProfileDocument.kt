@@ -144,6 +144,7 @@ data class ProfileLed(
 
 data class ProfileSensors(
     val proximityTechnology: String? = null,
+    val proximityCalibration: ProfileProximityCalibration? = null,
     val proximityGpio: Int? = null,
     val lightTechnology: String? = null,
     val cht8305: Boolean = false,
@@ -152,6 +153,44 @@ data class ProfileSensors(
      *  says the daemon route exists, because the driver reports nothing until it is started. */
     val vi530x: Boolean = false,
     val roomTempOffsetC: Float = 0f,
+)
+
+/** Explicit, versioned hardware observations; never inferred from advertised sensor range or model.
+ * Runtime acquisition must corroborate this baseline before it may actuate a wake. */
+data class ProfileProximityCalibration(
+    val revision: Int,
+    val mode: String,
+    val clearRaw: Float,
+    val nearRaw: Float,
+    /** Public evidence reference or description, not a runtime trust assertion. */
+    val verification: String,
+    val nearEnter: Float = 0.65f,
+    val clearExit: Float = 0.30f,
+    val debounceMs: Int = 150,
+    val clearArmMs: Int = 700,
+    val minimumNearMs: Int = 200,
+    val maximumNearMs: Int = 4000,
+    val cooldownMs: Int = 1000,
+    /** Format 1 retains its original single-wave interpretation; format 2 separates presence and wave. */
+    val formatVersion: Int = 1,
+    val wave: ProfileWaveCalibration? = null,
+    /** False only for a verified wave-only source; no ordinary-presence publication. */
+    val presenceSupported: Boolean = true,
+)
+
+/** Optional independently measured and validated wave capability; absence in format 2 means presence only. */
+data class ProfileWaveCalibration(
+    val pattern: String,
+    val clearRaw: Float,
+    val nearRaw: Float,
+    val nearEnter: Float = 0.65f,
+    val clearExit: Float = 0.30f,
+    val debounceMs: Int = 150,
+    val clearArmMs: Int = 700,
+    val minimumNearMs: Int = 200,
+    val maximumNearMs: Int = 4000,
+    val cooldownMs: Int = 1000,
+    val maxInterWaveGapMs: Int = 1800,
 )
 
 data class ProfileIdentity(

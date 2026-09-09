@@ -80,6 +80,60 @@ class AudioPlayerTest {
         }
     }
 
+    @Test fun preparedAudioIsPlayedAndBothFilesAreDeleted() = runTest {
+        val clip = FakeClip()
+        val preparation = object : AudioPlaybackPreparation {
+            override suspend fun prepare(source: File, destination: File) {
+                destination.writeBytes(source.readBytes() + byteArrayOf(0, 0))
+            }
+            override fun cancel() {}
+        }
+        DownloadedAudioRun("http://example/audio",
+            { File.createTempFile(AudioPlayer.TEMP_PREFIX, AudioPlayer.TEMP_SUFFIX, temporary.root) },
+            FakeTransfer(), clip, StandardTestDispatcher(testScheduler), preparation).execute()
+        assertArrayEquals(byteArrayOf(1, 2, 3, 0, 0), clip.observed)
+        assertTrue(temporary.root.listFiles()!!.isEmpty())
+    }
+
+    @Test fun failedPreparationCannotPlayOriginalAndDeletesPartialOutput() = runTest {
+        val clip = FakeClip()
+        val preparation = object : AudioPlaybackPreparation {
+            override suspend fun prepare(source: File, destination: File) {
+                destination.writeText("partial")
+                throw IOException("decode failed")
+            }
+            override fun cancel() {}
+        }
+        try {
+            DownloadedAudioRun("http://example/audio",
+                { File.createTempFile(AudioPlayer.TEMP_PREFIX, AudioPlayer.TEMP_SUFFIX, temporary.root) },
+                FakeTransfer(), clip, StandardTestDispatcher(testScheduler), preparation).execute()
+            fail("decode failure must propagate")
+        } catch (_: IOException) {}
+        assertFalse(clip.started.isCompleted)
+        assertTrue(temporary.root.listFiles()!!.isEmpty())
+    }
+
+    @Test fun cancellationDuringPreparationDeletesBothFilesWithoutPlayback() = runTest {
+        val clip = FakeClip()
+        var cancelled = false
+        val preparation = object : AudioPlaybackPreparation {
+            override suspend fun prepare(source: File, destination: File) { awaitCancellation() }
+            override fun cancel() { cancelled = true }
+        }
+        val run = DownloadedAudioRun("http://example/audio",
+            { File.createTempFile(AudioPlayer.TEMP_PREFIX, AudioPlayer.TEMP_SUFFIX, temporary.root) },
+            FakeTransfer(), clip, StandardTestDispatcher(testScheduler), preparation)
+        val job = launch { run.execute() }
+        runCurrent()
+        assertEquals(2, temporary.root.listFiles()!!.size)
+        run.cancel()
+        job.cancelAndJoin()
+        assertTrue(cancelled)
+        assertFalse(clip.started.isCompleted)
+        assertTrue(temporary.root.listFiles()!!.isEmpty())
+    }
+
     @Test fun runDeletesItsTemporaryFileAfterSuccessAndFailure() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         var successFile: File? = null

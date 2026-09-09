@@ -144,9 +144,16 @@ class AutoSleepUiContractTest {
             "invalidateAutoSleepData(true);" in oauthSuccess && "setTimeout(loadAutoSleepData, 0);" in oauthSuccess,
         )
         val summary = source.substringAfter("function autoSleepSummaryModel(status) {").substringBefore("function autoSleepPanel() {")
+        val haSummary = summary.substringAfter("var areaName = status.area_name")
         assertTrue(
-            "learned Home Assistant Area must lead the activity summary",
-            summary.indexOf("Home Assistant Area:") in 0 until summary.indexOf("Phase:"),
+            "learned Home Assistant Area must lead the HA-source activity summary",
+            haSummary.indexOf("Home Assistant Area:") in 0 until haSummary.indexOf("Phase:"),
+        )
+        val localSummary = summary.substringBefore("var areaName = status.area_name")
+        assertTrue(
+            "panel-source summary must name the panel sensor and avoid an irrelevant HA Area",
+            "if (autoSleepUsesPanel())" in localSummary && "This panel’s proximity sensor" in localSummary &&
+                "Home Assistant Area:" !in localSummary,
         )
         val panel = source.substringAfter("function autoSleepPanel() {").substringBefore("function updateAutoSleepSummary() {")
         assertFalse("self-evident replay copy must not clutter the chart", "One-minute replay from selected Area-source history" in panel)
