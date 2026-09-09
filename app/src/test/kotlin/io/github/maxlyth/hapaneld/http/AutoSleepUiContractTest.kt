@@ -181,12 +181,12 @@ class AutoSleepUiContractTest {
                 "windowButtons[index].disabled = busy && !settled" in source,
         )
         assertTrue(
-            "unrelated Configure renders must retain the whole Behaviour card in the rendered grid",
+            "unrelated Configure renders must retain the whole Auto-sleep card in the rendered grid",
             "var retainedAutoSleepPanel = document.getElementById(\"auto-sleep-status\")" in source &&
-                "function behaviourCardSignature(fields)" in source &&
-                "function syncBehaviourCardSignature()" in source &&
-                "var retainedBehaviourCard" in source &&
-                "desiredCards.push(retainedBehaviourCard)" in source &&
+                "function autoSleepCardSignature(fields)" in source &&
+                "function syncAutoSleepCardSignature()" in source &&
+                "var retainedAutoSleepCard" in source &&
+                "desiredCards.push(retainedAutoSleepCard)" in source &&
                 "card.appendChild(retainedAutoSleepPanel || autoSleepPanel())" in source &&
                 "reconcileConfigCards(root, desiredCards)" in source &&
                 "root.innerHTML = \"\"" !in source,
@@ -194,7 +194,7 @@ class AutoSleepUiContractTest {
         assertTrue(
             "retained chart renders must restore nested scroll and preserve the visible card's viewport anchor",
             "retainedAutoSleepScrollTop" in source &&
-                "var retainedAutoSleepViewportAnchor = retainedBehaviourCard ? configViewportAnchor(retainedAutoSleepPanel) : null" in source &&
+                "var retainedAutoSleepViewportAnchor = retainedAutoSleepCard ? configViewportAnchor(retainedAutoSleepPanel) : null" in source &&
                 "restoreConfigViewportAnchor(retainedAutoSleepViewportAnchor)" in source &&
                 "window.matchMedia(\"(max-width: 857px)\")" in source &&
                 "var beforeY = window.pageYOffset || 0" in source &&
