@@ -1056,10 +1056,10 @@
         }
       ],
       "sourcePath": "README.md",
-      "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
-      "structureSha256": "1db7aa7adcb79d5fc61644fdc1232be189b37a60fc2fd5d92df6d82a676883bd",
+      "sourceSha256": "8fcb8feaad3b60fc1f9184fc52f403c2bb8796a5c75e55477f83d13dddf0b3ab",
+      "structureSha256": "e3dd70edf2874460bf317dba1fdba6a4fd8b405b2e9b24ede3be25db2653051d",
       "targetPath": "docs/zh-Hans/README.md",
-      "targetSha256": "a8fa6c60541485bcbd408466ea4772453e2ee7c46f13a200f1a61bc3c35930c8"
+      "targetSha256": "c50b58f079247e5301eae791e0cdd969f6a59decfb1edfe3eeaa80cf6817bf10"
     },
     {
       "languagePickerSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -2971,135 +2971,135 @@
     {
       "packetId": "zh-Hans-0001",
       "packetSha256": "487535294ca648f0904e20159539b0978d10ca5a11c0b352cd8b421dd637fb98",
-      "resultSha256": "61625fdc0674852d8a8b4f680aaa26c25bee5ec894917a1434ebbc6222da1f38"
+      "resultSha256": "06851f502faf41f315f9560d9014cb8ed2f9eb4bd933377f9983297efdd35f9f"
     },
     {
       "packetId": "zh-Hans-0002",
       "packetSha256": "e4f482dd93e5add276dcf1d61dafcb9881348b651551e4958e1ea9ab8b2191c9",
-      "resultSha256": "6b2b5fd5d090b64f0d14ff6d7a5306ce5f331dacd5c778447af6f72f0c878bc6"
+      "resultSha256": "09dc8d74a7ea3b99c0bdde01b6e65e323970f9cced631870bf0a1cede690ec09"
     },
     {
       "packetId": "zh-Hans-0003",
       "packetSha256": "632ba327a76d13beee06853f954b80a3510e5ee287b5b5e4f1b27cc4f895d09b",
-      "resultSha256": "5098987cf7c4b131dc865930df1cca984102756059d3334fdd906ae0e73482ec"
+      "resultSha256": "aed445c27dc2600f95886f4e543e0cbecb6275805edfeb323b767a8b7fb4c411"
     },
     {
       "packetId": "zh-Hans-0004",
       "packetSha256": "eda5f0746f6fefc7693a72beda1dedf500b847eede57bd9c2dd1d671fb8dd77f",
-      "resultSha256": "37b9f60f110e7b26945d26696c257ba6f1fd92c16a5b2ce6a4aecb827167d2e4"
+      "resultSha256": "d4efbf4c7cfb012b7785139403aa33ae62787f58d132e6f7313493a4a81742d0"
     },
     {
       "packetId": "zh-Hans-0005",
       "packetSha256": "f4e4f0680cefe1b3f8339cdb896933bce4bffb28c07006facb8b03479e73903d",
-      "resultSha256": "83247dc6569ee3b3c5f404428ba9b510c4991b381e038ec863bc94699633dd8e"
+      "resultSha256": "0568b2c3fc008f443b89e72f474103d501bf08de2ff3784f0ed736010dba5a9f"
     },
     {
       "packetId": "zh-Hans-0006",
       "packetSha256": "f911c4345b70eefc6f8b9c0ef49821657c0b6affe9de52be2557ac945643efc3",
-      "resultSha256": "7be2918c3ba5ff1745fcd60ba3cc8da5bad569db1a657421c4ce19b0956c8f7e"
+      "resultSha256": "af927754a9b7684cf96cb1cbcbe5ee0b058c0f4d16b98870e3b86748e8e977cd"
     },
     {
       "packetId": "zh-Hans-0007",
       "packetSha256": "4ef898ca654156f9ae7a9ec9ddc005d1db3049bcde2b98f0c0883c87425ea529",
-      "resultSha256": "64aaa98b50d9dfd5637ae5d50c034f68422196af56257f340b03ac6a4dac9943"
+      "resultSha256": "6c19d93435845ad4cac624f9f7b51aafefc9e42d15872a100836cb58f6eed242"
     },
     {
       "packetId": "zh-Hans-0008",
       "packetSha256": "7d5e74e076d548be6d0c926f6e6bf4aa84dc7bf8617d48b4b4e315a8dc6a0221",
-      "resultSha256": "f3163824b77813d0e11d61945d3622dfe7b211343938419a317be4a270b2764e"
+      "resultSha256": "1c8292742a28a61b9f8d975d59610bd28ab0a831c4acd234994c00b0a63e0b50"
     },
     {
       "packetId": "zh-Hans-0009",
       "packetSha256": "3a2f70777ec30ea392014b6715c5f972baf11f4f865c39c53f66447b82ae5547",
-      "resultSha256": "7cd24c777adca790ae9af25fcf1fbb177cf35012787b2928952ba9178c8ac7e1"
+      "resultSha256": "7dfe296b6006c8d7c783ad7ba0615328a4cf421a97e44dd502036e8a64f7408a"
     },
     {
       "packetId": "zh-Hans-0010",
       "packetSha256": "2214a383070b3b6084d8e12ca9a90cffd761c63a3f9003cc1ebe0b64c18f2b14",
-      "resultSha256": "f693795ae34e87d6434c0bf80f12ef58879f51966e2c5c5c898f5ddccc25cae7"
+      "resultSha256": "74abdd5fd6a18da2cd8c0df4e565df339572658872e2532980fc03ca2d872731"
     },
     {
       "packetId": "zh-Hans-0011",
       "packetSha256": "9890d1984cbe6ba1c61bff1e140fb8c6d4401ecd90646c4bea7ae9da6b12b396",
-      "resultSha256": "0822d947c851144e805117aada24d70420a0c78eeac813b362cfe71b245836d3"
+      "resultSha256": "e11a5b17af6ae6e7281494b7be66e889edd99aee1b14415723768e9ed835cedb"
     },
     {
       "packetId": "zh-Hans-0012",
       "packetSha256": "136ca3efcb459ea865e8ebdea47c78ffd0bf28379198b6925d50e098701229ec",
-      "resultSha256": "0bb3562555a1a7f8efb2aed95cd6e2671cbb492e8229f2d0309adce722232cc8"
+      "resultSha256": "641d8f0aa7a17d6b35fc109afac4c5be9bf5e9fdbd0e3b7c6b2c963efc38b13c"
     },
     {
       "packetId": "zh-Hans-0013",
       "packetSha256": "eab02e556c3834220070423480e87d6a199f47311d01d169e4543148cce343bb",
-      "resultSha256": "5d3b42fc4196f3991e2193c241187697afab9ec327b28411daa192f295b5d726"
+      "resultSha256": "68fe18445028c6c921e943d1cb5ea8bed43ef6162e243443a0f971699da97636"
     },
     {
       "packetId": "zh-Hans-0014",
       "packetSha256": "45d2d8acfd288e21cf9a14f044e1f5cb891454183f652cef120c9962febc557e",
-      "resultSha256": "384a681bec50d3a199a930ada28b6f1ad1b0bbcf42b6bbe84f4c23ba6c6dfe6f"
+      "resultSha256": "2562736abd5a7f5c91acc0d1531ae97fa85ae3a15ad43009ca146de5a0baaaa3"
     },
     {
       "packetId": "zh-Hans-0015",
       "packetSha256": "e1810ea681dfe1e5b623b8c1d2a01fe9863701637db366707f8b331da9cad17c",
-      "resultSha256": "f32c9309d0b31a4046031320228cc9b126b33f6c55aa55877d0ab58799397a0c"
+      "resultSha256": "050fe0ea8f021d03999733b6ee66da3262abaf458a6d53e242893f93d26e3628"
     },
     {
       "packetId": "zh-Hans-0016",
       "packetSha256": "e180bc9fe46dd2fa2f48ce789f45b1595b11348b85846cbcffb03b39f9710d46",
-      "resultSha256": "dc95fb98e6b186781044173fbee593495fd8d10a95f6796f935621ae2e72c56e"
+      "resultSha256": "83eeba866d57d1649b293ae675f9049c410b574b890dd70648f0764d4db441f1"
     },
     {
       "packetId": "zh-Hans-0017",
       "packetSha256": "3706affb4603fed122fa3492e71084a0e7787f059bef37fc6307ced057f09cdf",
-      "resultSha256": "c255677d96f9a7cf8b37dc7956ba58292f88d66a268e553d1a5065b67a44f10c"
+      "resultSha256": "1944433361fa019c728f19fb93031c7f290adc8a1763eee605ea6ba76918c589"
     },
     {
       "packetId": "zh-Hans-0018",
       "packetSha256": "7c78c8c8b97554aa7eeedbccf7a1bc4a63cc294c1ff831adf099ba0340108f39",
-      "resultSha256": "7cb82eb103230f724d8998cf00c2226c5adf39532df7c3615748821653ddaa84"
+      "resultSha256": "dc3d85847b70bd49d5e47bed6def8ba04133b4ce6aa5766ba7e6a03fccf02ed8"
     },
     {
       "packetId": "zh-Hans-0019",
       "packetSha256": "5597de7a7664a185a64f60ddac9b349ea31fd35f456e20e56be377bb3404665f",
-      "resultSha256": "907f827665afb6b813cf59d47ca7bf77f4b171bdb2ad14e3815dfb45207b2d0c"
+      "resultSha256": "9f50759851a8449ad021201aeef45488f76c765c5c0fe05300311c5c85d9b85f"
     },
     {
       "packetId": "zh-Hans-0020",
       "packetSha256": "9c963964cea6ae2ad0a6130e901dceb3cccf93bdfce68e8b276b57e074da0861",
-      "resultSha256": "1bde8b2430c1894992118e3ea1c82d72a3be94038c0c9e3f9548d2d91bd7e79b"
+      "resultSha256": "b85d8fb93e54f726074f103ab9bbaac02349b1a76b771cafdf39f80a5d26a8e8"
     },
     {
       "packetId": "zh-Hans-0021",
       "packetSha256": "dfab23067c0e75492017d5fe22126be4c83e8f0632779d131aa80a85697ee1f1",
-      "resultSha256": "295502d2531bcf8d2587bd75a22d8af81c7540320158ae6dbb35e40e00fa5984"
+      "resultSha256": "42887157f711304abdff8e7f739a373fba66dd7fb980bace17603bf24b3110c6"
     },
     {
       "packetId": "zh-Hans-0022",
       "packetSha256": "db120ba5e18dae585b94646c31d90b264f647c30a6dd5d7edf71053e9eec20c4",
-      "resultSha256": "3fd8cdb9c1698c4fa1579094f9393bfc26b51490be780cabe0a7a27adaaf2007"
+      "resultSha256": "136453e96caff78a0a3399d08b14c3d8b9cb5a708a93e83a736ed659b0d2baaf"
     },
     {
       "packetId": "zh-Hans-0023",
       "packetSha256": "58fc890ebdcadf06f4140ebabb9c96d9ae220361d16c85a6371b8935d0fa633d",
-      "resultSha256": "618d82ed8cdd437904614c3912ea00bd6c7cd31338dbae8b1a74fb6ec21ad68e"
+      "resultSha256": "bee97a84a4f23668fb62972782ba22618936aa0820f6680b70385b0967f61d2e"
     },
     {
       "packetId": "zh-Hans-0024",
       "packetSha256": "075329979015ea350dfac47939fa2a3426caf98dd8b79f9e1205b5351d16fd92",
-      "resultSha256": "402bff7b52be4a00b002fb5b0be8b6605b893795bfa15fbb5b2b9e9b75a9842e"
+      "resultSha256": "e9dbfac581d075a2bcbac098cc4c6760feeb038b93928d22b2452fe02ca42500"
     },
     {
       "packetId": "zh-Hans-0025",
       "packetSha256": "d2440cdd40857c73ea8183bdc1ddf365121dc0176cdea0503434a59b62a73984",
-      "resultSha256": "88ee98430833e85c05ece86e2e13d4adbbfa8652c339772d310ca96f66bb469e"
+      "resultSha256": "f595130aa3b495c6ed429eab4ab1307fd4faf0cbc764c6c7f4c627a48606c978"
     },
     {
       "packetId": "zh-Hans-0026",
       "packetSha256": "6f96d74a58af07482dceb6f344ab9ce289ea8ae6dc2ba4ed34b55f38e3dd6aa9",
-      "resultSha256": "59118e073e03a2c257494b76579c464c8ea3a982ede364cdcf0caebf102c86fc"
+      "resultSha256": "aab6f98d4a4268a182f2d3efe0fc4f9c707367ecdd7090d95b32cc9fc4656d11"
     }
   ],
   "schema": 1,
-  "sourceManifestSha256": "5f05008604eb3d54cc01c91bb707b0462bfc4bfca3087dc1c41ecc8dae9e9774",
-  "sourceRevision": "30c5a359f7a195b83d73ed4b90b8af4cfbca44a7"
+  "sourceManifestSha256": "156058f3091d0a4cd94821adbece984f8dab298e003569a8b16c75aaeff756ec",
+  "sourceRevision": "a2f5de2396431b86c5cfc452c13750871bfeb787"
 }
