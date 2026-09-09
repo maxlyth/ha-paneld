@@ -63,6 +63,6 @@
     <string name="proximity_wizard_cancel">Annuler</string>
     <string name="proximity_wizard_done">Terminé</string>
     <string name="proximity_wizard_action_failed">Cette étape n’a pas pu être terminée. Vos réglages précédents sont préservés.</string>
-    <string name="proximity_wizard_raw_value">Valeur brute du capteur : %1$s</string>
+    <string name="proximity_wizard_raw_value">Valeur brute : %1$s</string>
     <string name="proximity_wizard_raw_waiting">en attente d’une mesure</string>
 </resources>

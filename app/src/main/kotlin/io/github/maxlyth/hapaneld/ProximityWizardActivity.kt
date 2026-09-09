@@ -154,8 +154,13 @@ class ProximityWizardActivity : AppCompatActivity() {
         }
         if (landscape) {
             content.orientation = LinearLayout.HORIZONTAL
-            content.addView(copy, LinearLayout.LayoutParams(0, -2, 1.1f))
-            content.addView(visualRow, LinearLayout.LayoutParams(0, dp(216), 1f).apply { leftMargin = dp(20) })
+            content.addView(copy, LinearLayout.LayoutParams(0, -2, if (compact) 1.55f else 1.1f))
+            content.addView(
+                visualRow,
+                LinearLayout.LayoutParams(0, dp(if (compact) 164 else 216), if (compact) 0.65f else 1f).apply {
+                    leftMargin = dp(if (compact) 8 else 20)
+                },
+            )
         } else {
             // The instruction precedes the motion, with the supporting copy below it as in the preview.
             copy.removeView(instruction)
