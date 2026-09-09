@@ -16,6 +16,7 @@ import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
 import java.net.InetAddress
 import java.net.URI
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CompletableFuture
@@ -203,15 +204,18 @@ class MdnsAdvertiser(
                     )
                 }
                 val generationProbeToken = UUID.randomUUID().toString()
-                val props = mapOf(
-                    "ver" to Config.VERSION,
-                    "caps" to "tts",
-                    "path" to "/play",
+                val props = buildMap {
+                    put("ver", Config.VERSION)
+                    put("caps", "tts")
+                    put("path", "/play")
                     // Friendly name so a peer's fleet switcher can label this panel nicely (falls back to the
                     // instance name = panel_id on older panels that don't advertise it). Additive TXT key.
-                    "name" to runtimeFriendlyName.ifBlank { runtimePanelId },
-                    "probe" to generationProbeToken,
-                )
+                    put("name", runtimeFriendlyName.ifBlank { runtimePanelId })
+                    put("probe", generationProbeToken)
+                    // A stable token lets Panel Assistant distinguish the mutable mDNS instance/name from
+                    // a panel identity without advertising Settings.Secure.ANDROID_ID on the LAN.
+                    panelAssistantDiscoveryId(config.androidId)?.let { put("did", it) }
+                }
                 val info = ServiceInfo.create(
                     Config.MDNS_SERVICE_TYPE,
                     runtimePanelId,
@@ -654,6 +658,21 @@ class MdnsAdvertiser(
         private const val MAX_HA_BROWSE_MS = 5_000L
         private const val MAX_HA_RECORDS = 16
     }
+}
+
+private const val PANEL_ASSISTANT_DISCOVERY_NAMESPACE = "panel-assistant-mdns-v1\u0000"
+
+/**
+ * Return the stable pseudonymous identity exposed to Panel Assistant discovery, if Android supplies
+ * one. This deliberately does not expose the Android ID itself: the domain-separated digest cannot be
+ * confused with ha-paneld's MQTT or Home Assistant device identity.
+ */
+internal fun panelAssistantDiscoveryId(androidId: String): String? {
+    val source = androidId.trim()
+    if (source.isEmpty()) return null
+    return MessageDigest.getInstance("SHA-256")
+        .digest((PANEL_ASSISTANT_DISCOVERY_NAMESPACE + source).toByteArray(Charsets.UTF_8))
+        .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
 }
 
 /** Observable mDNS state. A null [lanIp] means DHCP has not supplied a usable IPv4 address yet. */
