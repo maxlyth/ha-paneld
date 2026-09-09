@@ -1,5 +1,7 @@
 package io.github.maxlyth.hapaneld
 
+import io.github.maxlyth.hapaneld.camera.cameraCapabilityReason
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -49,5 +51,24 @@ class CameraCapabilityPolicyTest {
 
     @Test fun anExplicitRefusalAlsoHoldsWithNothingEnumerated() {
         assertFalse(cameraCapabilityPresent(declared = false, observed = null))
+    }
+
+    /**
+     * The capability is now derived from [cameraCapabilityReason] so the panel can explain the answer as
+     * well as act on it. This asserts over the whole input space that deriving it changed nothing: a
+     * reason that disagreed with the capability would offer settings the gates refuse, or refuse a camera
+     * the panel says it has.
+     */
+    @Test fun theStatedReasonAgreesWithTheCapabilityOnEveryInput() {
+        val values = listOf(true, false, null)
+        values.forEach { declared ->
+            values.forEach { observed ->
+                assertEquals(
+                    "declared=$declared observed=$observed",
+                    cameraCapabilityPresent(declared, observed),
+                    cameraCapabilityReason(declared, observed).capable,
+                )
+            }
+        }
     }
 }

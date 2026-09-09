@@ -67,7 +67,7 @@ class CameraCapabilitySourceContractTest {
     @Test fun oneRuleAnswersForEveryCameraSurface() {
         assertTrue(
             "the rule combines the declaration with the observation",
-            "cameraCapabilityPresent(profile.cameraDeclared, cameraPresence.get())" in service,
+            "cameraCapabilityReason(profile.cameraDeclared, cameraPresence.get())" in service,
         )
         assertEquals(
             "the profile's declaration is read in exactly one place",
@@ -108,7 +108,10 @@ class CameraCapabilitySourceContractTest {
         val presentation = body(owner, "override fun presentation()")
         val presentationRead = presentation.indexOf("val present = hasCamera()")
         assertTrue("the presentation reads it before taking the lock", presentationRead in 0 until presentation.indexOf("synchronized(lock)"))
-        assertTrue("!present -> CameraPresentation.absent()" in presentation)
+        assertTrue("!present -> CameraPresentation.absent(absence)" in presentation)
+        // The reason is a second read of the same probe, so it is subject to the same rule.
+        val absenceRead = presentation.indexOf("val absence = if (present)")
+        assertTrue("the reason is read before the lock too", absenceRead in 0 until presentation.indexOf("synchronized(lock)"))
 
         val acquire = body(owner, "private fun acquireLease")
         val acquireRead = acquire.indexOf("val present = hasCamera()")

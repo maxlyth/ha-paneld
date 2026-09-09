@@ -28,6 +28,8 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.pm.PackageInfoCompat
 import androidx.webkit.WebViewCompat
+import io.github.maxlyth.hapaneld.camera.CameraCapabilityReason
+import io.github.maxlyth.hapaneld.camera.cameraCapabilityReason
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.device.DeviceProfile
 import io.github.maxlyth.hapaneld.device.probe.AndroidPassiveProfileProbe
@@ -520,9 +522,13 @@ internal fun zigbeeCapabilityPresent(
  * A declaration still wins in both directions. The two boards that declare a camera are unaffected by a
  * probe that throws, and a board whose enumerated device is not a usable room camera is suppressed with
  * an explicit `camera: false`.
+ *
+ * The boolean is derived from [cameraCapabilityReason] rather than restated here, because the panel now
+ * has to explain the answer as well as act on it, and a capability that disagreed with its own stated
+ * reason would be the worst of both.
  */
 internal fun cameraCapabilityPresent(declared: Boolean?, observed: Boolean?): Boolean =
-    declared ?: (observed == true)
+    cameraCapabilityReason(declared, observed).capable
 
 internal fun commitBorrowedRendererTarget(
     commit: () -> Boolean,
@@ -1254,6 +1260,7 @@ class PaneldService : Service() {
         camera = io.github.maxlyth.hapaneld.camera.CameraSessionOwner(
             context = this,
             hasCamera = { cameraPresent() },
+            capabilityReason = { cameraReason() },
             enabled = { config.cameraEnabled },
             defaultResolution = { config.cameraResolution },
             defaultFps = { config.cameraFps },
@@ -2660,8 +2667,15 @@ class PaneldService : Service() {
     )
 
     /** The profile's declaration, or what Android enumerates when the profile is silent. */
-    private fun cameraPresent(): Boolean =
-        cameraCapabilityPresent(profile.cameraDeclared, cameraPresence.get())
+    private fun cameraPresent(): Boolean = cameraReason().capable
+
+    /**
+     * Why this panel does or does not offer a camera, from the same two inputs as the capability. This is
+     * the only place either input is read, so the answer the panel acts on and the answer it shows a user
+     * are the same answer.
+     */
+    private fun cameraReason(): CameraCapabilityReason =
+        cameraCapabilityReason(profile.cameraDeclared, cameraPresence.get())
 
     private val zigbeePresence = SuccessStickyProbe(
         probe = {
