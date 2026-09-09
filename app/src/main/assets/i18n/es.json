@@ -1068,6 +1068,11 @@
       "state": "machine-cross-checked",
       "text": "Comportamiento"
     },
+    "configure.group.auto_sleep": {
+      "sourceHash": "ffa395b8fc89398516172e390d9e37039d65a7421abeeafd6d7c1931dbaaa084",
+      "state": "machine-cross-checked",
+      "text": "Suspensión automática"
+    },
     "configure.group.builtin_renderer": {
       "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",
       "state": "machine-cross-checked",

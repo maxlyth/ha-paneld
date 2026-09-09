@@ -365,7 +365,7 @@
     recomputeDirty();
     updateSaveUi();
     syncHaOAuthAvailability();
-    syncBehaviourCardSignature();
+    syncAutoSleepCardSignature();
     reloadSavedLocaleWhenSettled();
   }
   function clearDirty() {
@@ -2810,6 +2810,7 @@
       "Identity": i18nText("configure.group.identity", "Identity"),
       "MQTT": "MQTT",
       "Behaviour": i18nText("configure.group.behaviour", "Behaviour"),
+      "Auto-sleep": i18nText("configure.group.auto_sleep", "Auto-sleep"),
       "Display": i18nText("configure.group.display", "Display"),
       "Camera": i18nText("configure.group.camera", "Camera"),
       "System": i18nText("configure.group.system", "System"),
@@ -2829,8 +2830,10 @@
   };
   var BUILTIN_RENDERER_ONLY_KEYS = { dashboard_idle_return_min: true };
   var HA_CONNECTION_KEYS = { ha_url: true, ha_token: true };
+  var AUTO_SLEEP_KEYS = { auto_sleep_source: true, auto_sleep: true };
   var CONFIG_LAYOUT_KEYS = {
     "Identity": "configure-identity", "MQTT": "configure-mqtt", "Behaviour": "configure-behaviour",
+    "Auto-sleep": "configure-auto-sleep",
     "Display": "configure-display", "System": "configure-system", "Sensors": "configure-sensors",
     "Diagnostics": "configure-diagnostics", "Logging": "configure-logging",
     "Home Assistant connection": "configure-ha-connection", "Dashboard": "configure-dashboard",
@@ -2840,6 +2843,7 @@
     return CONFIG_LAYOUT_KEYS[group] || ("configure-" + String(group).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 50));
   }
   function presentationGroup(f) {
+    if (AUTO_SLEEP_KEYS[f.key]) return "Auto-sleep";
     if (f.group !== "Dashboard") return f.group;
     if (BUILTIN_RENDERER_KEYS[f.key]) return "Built-in renderer";
     if (HA_CONNECTION_KEYS[f.key]) return "Home Assistant connection";
@@ -2858,7 +2862,7 @@
     });
   }
 
-  function behaviourCardSignature(fields) {
+  function autoSleepCardSignature(fields) {
     return JSON.stringify([
       advanced,
       values.auto_sleep === "true",
@@ -2884,9 +2888,9 @@
     ]);
   }
 
-  function syncBehaviourCardSignature() {
-    var card = document.querySelector('[data-config-group="Behaviour"]');
-    if (card) card.setAttribute("data-render-signature", behaviourCardSignature(fieldsForConfigGroup("Behaviour")));
+  function syncAutoSleepCardSignature() {
+    var card = document.querySelector('[data-config-group="Auto-sleep"]');
+    if (card) card.setAttribute("data-render-signature", autoSleepCardSignature(fieldsForConfigGroup("Auto-sleep")));
   }
 
   function reconcileConfigCards(root, cards) {
@@ -2983,29 +2987,31 @@
     moveGroupTo("Home Assistant connection", 2);
     moveGroupTo("Dashboard", 3);
     moveGroupTo("Built-in renderer", 4);
+    var behaviourIndex = groups.indexOf("Behaviour");
+    if (behaviourIndex >= 0) moveGroupTo("Auto-sleep", behaviourIndex + 1);
     var loggingIndex = groups.indexOf("Logging");
     if (loggingIndex >= 0 && loggingIndex !== groups.length - 1) {
       groups.splice(loggingIndex, 1);
       groups.push("Logging");
     }
-    var behaviourFields = fieldsForConfigGroup("Behaviour");
-    var nextBehaviourSignature = behaviourCardSignature(behaviourFields);
+    var autoSleepFields = fieldsForConfigGroup("Auto-sleep");
+    var nextAutoSleepSignature = autoSleepCardSignature(autoSleepFields);
     var retainedAutoSleepPanel = document.getElementById("auto-sleep-status");
     if (!retainedAutoSleepPanel || !retainedAutoSleepPanel.parentNode || typeof retainedAutoSleepPanel.contains !== "function") retainedAutoSleepPanel = null;
-    var existingBehaviourCard = retainedAutoSleepPanel && retainedAutoSleepPanel.closest('[data-config-group="Behaviour"]');
-    var retainedBehaviourCard = existingBehaviourCard && values.auto_sleep === "true" &&
-      existingBehaviourCard.getAttribute("data-render-signature") === nextBehaviourSignature ? existingBehaviourCard : null;
+    var existingAutoSleepCard = retainedAutoSleepPanel && retainedAutoSleepPanel.closest('[data-config-group="Auto-sleep"]');
+    var retainedAutoSleepCard = existingAutoSleepCard && values.auto_sleep === "true" &&
+      existingAutoSleepCard.getAttribute("data-render-signature") === nextAutoSleepSignature ? existingAutoSleepCard : null;
     var retainedAutoSleepFocus = retainedAutoSleepPanel && retainedAutoSleepPanel.contains(document.activeElement) ? document.activeElement : null;
     var retainedAutoSleepScroll = retainedAutoSleepPanel && retainedAutoSleepPanel.querySelector(".auto-sleep-source-scroll");
     var retainedAutoSleepScrollTop = retainedAutoSleepScroll ? retainedAutoSleepScroll.scrollTop : 0;
-    var retainedAutoSleepViewportAnchor = retainedBehaviourCard ? configViewportAnchor(retainedAutoSleepPanel) : null;
+    var retainedAutoSleepViewportAnchor = retainedAutoSleepCard ? configViewportAnchor(retainedAutoSleepPanel) : null;
     // Fresh off-screen cards normally use content-visibility's intrinsic placeholder until a later
-    // frame. If Behaviour is already being viewed, that delayed replacement would relocate it after
+    // frame. If Auto-sleep is already being viewed, that delayed replacement would relocate it after
     // this render has finished. Lay out this transaction's cards exactly; the narrow-screen lazy
     // optimization remains active whenever the auto-sleep panel is outside the viewport.
     root.classList.toggle("config-viewport-anchored", !!retainedAutoSleepViewportAnchor);
     var autoSleepParking = null;
-    if (retainedAutoSleepPanel && !retainedBehaviourCard) {
+    if (retainedAutoSleepPanel && !retainedAutoSleepCard) {
       // render() rebuilds unrelated Configure cards after asynchronous probes. Keep the activity
       // subtree connected while that happens so its chart, scroll and focus do not flash away.
       autoSleepParking = el("div", { hidden: "", "aria-hidden": "true" });
@@ -3033,8 +3039,8 @@
         return;
       }
       shown += fields.length;
-      if (g === "Behaviour" && retainedBehaviourCard) {
-        desiredCards.push(retainedBehaviourCard);
+      if (g === "Auto-sleep" && retainedAutoSleepCard) {
+        desiredCards.push(retainedAutoSleepCard);
         return;
       }
       // Maturity badges on whole cards; Logging is intentionally no longer experimental.
@@ -3046,12 +3052,12 @@
       var card = el("div", { class: "card" }, [el("h2", {}, h2kids)]);
       card.setAttribute("data-config-group", g);
       card.setAttribute("data-layout-key", configLayoutKey(g));
-      if (g === "Behaviour") card.setAttribute("data-render-signature", nextBehaviourSignature);
+      if (g === "Auto-sleep") card.setAttribute("data-render-signature", nextAutoSleepSignature);
       fields.forEach(function (f) {
         if (!shouldRenderRow(f)) return;
         card.appendChild(row(f));
-        if (g === "Behaviour" && f.key === "auto_sleep") card.appendChild(autoSleepPrerequisiteNode());
-        if (g === "Behaviour" && f.key === "auto_sleep" && values.auto_sleep === "true") {
+        if (g === "Auto-sleep" && f.key === "auto_sleep") card.appendChild(autoSleepPrerequisiteNode());
+        if (g === "Auto-sleep" && f.key === "auto_sleep" && values.auto_sleep === "true") {
           card.appendChild(retainedAutoSleepPanel || autoSleepPanel());
           if (!autoSleepStatus && !autoSleepLoading) setTimeout(loadAutoSleepData, 0);
         }
@@ -3106,17 +3112,32 @@
       }
       desiredCards.push(card);
     });
-    if (proximityCard) {
-      var loggingCardIndex = desiredCards.findIndex(function (card) {
-        return card.getAttribute("data-config-group") === "Logging";
-      });
-      desiredCards.splice(loggingCardIndex < 0 ? desiredCards.length : loggingCardIndex, 0, proximityCard);
+    var autoSleepCard = desiredCards.find(function (card) {
+      return card.getAttribute("data-config-group") === "Auto-sleep";
+    });
+    var behaviourCard = desiredCards.find(function (card) {
+      return card.getAttribute("data-config-group") === "Behaviour";
+    });
+    if (autoSleepCard && behaviourCard) {
+      desiredCards.splice(desiredCards.indexOf(autoSleepCard), 1);
+      desiredCards.splice(desiredCards.indexOf(behaviourCard) + 1, 0, autoSleepCard);
     }
-    // Reconcile by card instead of emptying the grid. In particular, an unchanged Behaviour card
+    if (proximityCard) {
+      var autoSleepCardIndex = desiredCards.findIndex(function (card) {
+        return card.getAttribute("data-config-group") === "Auto-sleep";
+      });
+      var behaviourCardIndex = desiredCards.findIndex(function (card) {
+        return card.getAttribute("data-config-group") === "Behaviour";
+      });
+      var presenceCardIndex = autoSleepCardIndex >= 0 ? autoSleepCardIndex + 1 : behaviourCardIndex + 1;
+      desiredCards.splice(presenceCardIndex < 0 ? desiredCards.length : presenceCardIndex, 0, proximityCard);
+    }
+    // Reconcile by card instead of emptying the grid. In particular, an unchanged Auto-sleep card
     // never leaves the rendered tree while Home-dashboard and adaptive-brightness requests finish,
     // so low-end WebViews do not discard and repaint the large Auto-sleep chart raster.
     reconcileConfigCards(root, desiredCards);
-    if (retainedAutoSleepPanel && retainedAutoSleepPanel.isConnected && !retainedBehaviourCard) {
+    if (typeof window.repositionProximityLearningCard === "function") window.repositionProximityLearningCard();
+    if (retainedAutoSleepPanel && retainedAutoSleepPanel.isConnected && !retainedAutoSleepCard) {
       updateAutoSleepSummary();
       updateAutoSleepHistory();
     }
@@ -3565,7 +3586,7 @@
               else if (status.textContent !== statusText) status.textContent = statusText;
             } else if (status) status.remove();
           });
-          syncBehaviourCardSignature();
+          syncAutoSleepCardSignature();
           if (!nextKeys.length) {
             var msg = document.getElementById("cfg-msg");
             msg.textContent = i18nText("configure.save.applied_newer_changes", "Saved settings are now applied; newer changes still need saving.");

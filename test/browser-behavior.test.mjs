@@ -2395,7 +2395,7 @@ browserTest('Auto-sleep requires an assigned Area before OFF can be switched ON'
   await page.getByText('Assign this panel to a Home Assistant Area before enabling Auto sleep.').waitFor();
   assert.equal(await toggle.getAttribute('aria-disabled'), 'true');
   assert.match(await page.locator('#cfg-auto_sleep').innerText(), /Automatically wake the panel when activity is detected and switch the screen off/);
-  assert.doesNotMatch(await page.locator('[data-config-group="Behaviour"] h2').innerText(), /Android\/app behaviour/);
+  assert.doesNotMatch(await page.locator('[data-config-group="Auto-sleep"] h2').innerText(), /Android\/app behaviour/);
 
   prerequisiteAssigned = true;
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -2442,7 +2442,7 @@ browserTest('Auto-sleep Area focus refresh supersedes a slow prerequisite reques
   assert.equal(await page.locator('#cfg-auto_sleep [role=switch]').getAttribute('aria-disabled'), 'false');
 });
 
-browserTest('Auto-sleep Behaviour card stays continuously painted across unrelated startup results', async (t) => {
+browserTest('Auto-sleep card stays continuously painted across unrelated startup results', async (t) => {
   const homeDashboards = deferred();
   const brightnessStatus = deferred();
   const brightnessHistory = deferred();
@@ -2518,7 +2518,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   await page.locator('#cfg-ha-oauth').getByText('Connected as Panel User').waitFor();
   await page.locator('#auto-sleep-prerequisite-status').getByText('Home Assistant Area: Office', { exact: true }).waitFor();
 
-  const behaviourCard = await page.locator('[data-config-group="Behaviour"]').elementHandle();
+  const autoSleepCard = await page.locator('[data-config-group="Auto-sleep"]').elementHandle();
   const panel = await page.locator('#auto-sleep-status').elementHandle();
   const chart = await page.locator('#auto-sleep-chart').elementHandle();
   const content = await page.locator('.auto-sleep-chart-content').elementHandle();
@@ -2529,7 +2529,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   const originalDisplayCard = await page.locator('[data-config-group="Display"]').elementHandle();
   assert.deepEqual(await page.locator('#cfg-groups > [data-config-group]').evaluateAll((cards) =>
     cards.map((card) => card.getAttribute('data-config-group'))), [
-    'Identity', 'MQTT', 'Home Assistant connection', 'Dashboard', 'Built-in renderer', 'Behaviour', 'Display',
+    'Identity', 'MQTT', 'Home Assistant connection', 'Dashboard', 'Built-in renderer', 'Behaviour', 'Auto-sleep', 'Display',
     'System', 'Sensors', 'Diagnostics', 'Logging',
   ]);
   await page.locator('#auto-sleep-status').evaluate((panelNode) => panelNode.scrollIntoView({ block: 'center' }));
@@ -2543,7 +2543,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
     return rect.bottom > 0 && rect.top < window.innerHeight;
   }), true);
   await page.evaluate(() => {
-    const card = document.querySelector('[data-config-group="Behaviour"]');
+    const card = document.querySelector('[data-config-group="Auto-sleep"]');
     const panelNode = document.querySelector('#auto-sleep-status');
     const chartNode = document.querySelector('#auto-sleep-chart');
     const overlay = document.querySelector('.auto-sleep-loading-overlay');
@@ -2633,7 +2633,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
   await page.waitForTimeout(1600);
   await page.evaluate(() => { window.__autoSleepPaintSampling = false; });
 
-  assert.equal(await behaviourCard.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Behaviour"]')), true);
+  assert.equal(await autoSleepCard.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Auto-sleep"]')), true);
   assert.equal(await panel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
   assert.equal(await chart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
   assert.equal(await content.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
@@ -2677,7 +2677,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
     `panel y moved by ${paintAudit.maxYDelta}px: ${JSON.stringify(paintAudit)}`);
   assert.ok(paintAudit.maxWidthDelta <= 0.5, `panel width changed by ${paintAudit.maxWidthDelta}px`);
   assert.ok(paintAudit.maxHeightDelta <= 0.5, `panel height changed by ${paintAudit.maxHeightDelta}px`);
-  assert.ok(paintAudit.maxCardYDelta <= 0.5, `Behaviour card y moved by ${paintAudit.maxCardYDelta}px`);
+  assert.ok(paintAudit.maxCardYDelta <= 0.5, `Auto-sleep card y moved by ${paintAudit.maxCardYDelta}px`);
   assert.ok(paintAudit.maxChartYDelta <= 0.5, `chart y moved by ${paintAudit.maxChartYDelta}px`);
   assert.ok(paintAudit.maxChartRelativeYDelta <= 0.5,
     `chart moved within the panel by ${paintAudit.maxChartRelativeYDelta}px`);
@@ -2691,7 +2691,7 @@ browserTest('Auto-sleep Behaviour card stays continuously painted across unrelat
     `viewport was not compensated for upstream movement (${paintAudit.maxScrollY - paintAudit.minScrollY}px)`);
 });
 
-browserTest('Auto-sleep hydration does not scroll toward an off-screen Behaviour card', async (t) => {
+browserTest('Auto-sleep hydration does not scroll toward an off-screen Auto-sleep card', async (t) => {
   const homeDashboards = deferred();
   const source = 'sensor.office_illuminance';
   const revision = 'office-source';
@@ -3036,7 +3036,7 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
   assert.equal(await sourceRow.getAttribute('title'), null);
   assert.equal(await sourceRow.locator('.auto-sleep-interval').getAttribute('title'), null);
   const oldPanel = await page.locator('#auto-sleep-status').elementHandle();
-  const oldBehaviourCard = await page.locator('[data-config-group="Behaviour"]').elementHandle();
+  const oldAutoSleepCard = await page.locator('[data-config-group="Auto-sleep"]').elementHandle();
   const oldChart = await page.locator('#auto-sleep-chart').elementHandle();
   const oldContent = await page.locator('.auto-sleep-chart-content').elementHandle();
   const oldSnapshot = await page.locator('.auto-sleep-chart-snapshot').elementHandle();
@@ -3055,7 +3055,7 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
     return { height: chart.height, legendY: legend.y, systemY: system.y };
   });
   await page.evaluate(() => {
-    const card = document.querySelector('[data-config-group="Behaviour"]');
+    const card = document.querySelector('[data-config-group="Auto-sleep"]');
     const panel = document.querySelector('#auto-sleep-status');
     const overlay = document.querySelector('.auto-sleep-loading-overlay');
     window.__autoSleepVisualMutations = { cardRemoved: 0, hiddenAncestor: 0, overlayShown: 0 };
@@ -3099,10 +3099,10 @@ browserTest('Auto-sleep retains chart geometry and swaps a refreshed source snap
   assert.deepEqual(duringPost, before);
 
   // An unrelated asynchronous Configure probe may rebuild other cards while the source update is
-  // pending. The settled Behaviour card must stay rendered and unchanged throughout that work.
+  // pending. The settled Auto-sleep card must stay rendered and unchanged throughout that work.
   homeDashboards.resolve(json({ queried: true, items: [{ path: 'overview', title: 'Overview', group: 'dashboard' }], default: {} }));
   await page.waitForTimeout(50);
-  assert.equal(await oldBehaviourCard.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Behaviour"]')), true);
+  assert.equal(await oldAutoSleepCard.evaluate((node) => node.isConnected && node === document.querySelector('[data-config-group="Auto-sleep"]')), true);
   assert.equal(await oldPanel.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-status')), true);
   assert.equal(await oldChart.evaluate((node) => node.isConnected && node === document.querySelector('#auto-sleep-chart')), true);
   assert.equal(await oldContent.evaluate((node) => node.isConnected && node === document.querySelector('.auto-sleep-chart-content')), true);
@@ -4993,6 +4993,13 @@ browserTest('Panel proximity Auto-sleep works without HA prerequisites or an HA 
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   const source = page.locator('#cfg-auto_sleep_source select');
   await source.waitFor();
+  await page.locator('#cfg-proximity-learning').waitFor();
+  assert.deepEqual(await page.locator('#cfg-groups').evaluate((root) => Array.from(root.children).map((card) =>
+    card.getAttribute('data-config-group') || card.id
+  )), ['Auto-sleep', 'cfg-proximity-learning'],
+  'Presence follows the dedicated Auto-sleep card even when its script attaches after Configure');
+  assert.equal(await page.locator('[data-config-group="Auto-sleep"] #cfg-auto_sleep').count(), 1);
+  assert.equal(await page.locator('[data-config-group="Auto-sleep"] #cfg-auto_sleep_source').count(), 1);
   assert.deepEqual(await source.locator('option').allTextContents(), ['This panel’s proximity sensor', 'Home Assistant Area devices']);
   const toggle = page.locator('#cfg-auto_sleep [role=switch]');
   assert.equal(await toggle.getAttribute('aria-disabled'), 'false');

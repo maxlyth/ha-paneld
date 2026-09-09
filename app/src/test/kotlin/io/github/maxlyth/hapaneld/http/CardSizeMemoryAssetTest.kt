@@ -140,7 +140,7 @@ class CardSizeMemoryAssetTest {
         ).forEach { key -> assertTrue("missing Install layout key $key", server.contains("data-layout-key=\"$key\"")) }
         val configure = File(assetsDir, "configure.js").readText()
         listOf(
-            "configure-identity", "configure-mqtt", "configure-behaviour", "configure-display",
+            "configure-identity", "configure-mqtt", "configure-behaviour", "configure-auto-sleep", "configure-display",
             "configure-system", "configure-sensors", "configure-diagnostics", "configure-logging",
             "configure-ha-connection", "configure-dashboard", "configure-builtin-renderer",
         ).forEach { key -> assertTrue("missing Configure layout key $key", configure.contains("\"$key\"")) }

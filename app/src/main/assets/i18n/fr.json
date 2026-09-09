@@ -1068,6 +1068,11 @@
       "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
       "state": "machine-cross-checked"
     },
+    "configure.group.auto_sleep": {
+      "text": "Veille automatique",
+      "sourceHash": "ffa395b8fc89398516172e390d9e37039d65a7421abeeafd6d7c1931dbaaa084",
+      "state": "machine-cross-checked"
+    },
     "configure.group.builtin_renderer": {
       "text": "Moteur de rendu intégré",
       "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",

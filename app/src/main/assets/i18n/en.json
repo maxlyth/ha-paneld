@@ -2905,6 +2905,18 @@
       "softMaxChars": 24,
       "hardMaxChars": 40
     },
+    "configure.group.auto_sleep": {
+      "text": "Auto-sleep",
+      "sourceHash": "ffa395b8fc89398516172e390d9e37039d65a7421abeeafd6d7c1931dbaaa084",
+      "surface": "configure",
+      "context": "Configure card heading for the automatic sleep policy.",
+      "risk": "ordinary",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 24,
+      "hardMaxChars": 40
+    },
     "configure.group.builtin_renderer": {
       "text": "Built-in renderer",
       "sourceHash": "fd2cabcaf7c75b86391a94759b420c6b375a163b555506bd675acbeb1f73dd53",

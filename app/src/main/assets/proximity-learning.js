@@ -37,7 +37,14 @@
   var result = node("p", "note", "");
   result.setAttribute("role", "status"); result.setAttribute("aria-live", "polite"); result.setAttribute("aria-atomic", "true");
   [heading, state, detail, evidence, actions, result].forEach(function (child) { card.appendChild(child); });
-  cardRoot.insertBefore(card, cardRoot.querySelector('[data-config-group="Logging"]'));
+  function placeCard() {
+    var after = cardRoot.querySelector('[data-config-group="Auto-sleep"]') ||
+      cardRoot.querySelector('[data-config-group="Behaviour"]');
+    if (after) cardRoot.insertBefore(card, after.nextSibling);
+    else cardRoot.insertBefore(card, cardRoot.querySelector('[data-config-group="Logging"]'));
+  }
+  window.repositionProximityLearningCard = placeCard;
+  placeCard();
 
   function stopHeartbeat() {
     clearTimeout(heartbeatTimer); heartbeatTimer = null; ownedSession = null;
