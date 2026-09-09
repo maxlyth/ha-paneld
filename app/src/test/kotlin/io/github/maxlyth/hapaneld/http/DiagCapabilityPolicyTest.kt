@@ -141,7 +141,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(css.contains("border-top:1px solid var(--config-divider)"))
         assertFalse(css.contains(".cfg-group-contents{display:contents}"))
         assertTrue(configure.contains("""card.setAttribute("data-config-group", g)"""))
-        assertTrue(configure.contains("desiredCards.splice(loggingCardIndex < 0 ? desiredCards.length : loggingCardIndex, 0, proximityCard)"))
+        assertTrue(configure.contains("var presenceCardIndex = autoSleepCardIndex >= 0 ? autoSleepCardIndex + 1 : behaviourCardIndex + 1;"))
         assertTrue(configure.contains("""var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })]"""))
         assertTrue(configure.contains("""} else if (f.key === "auto_sleep") {
       help = el("small", { lang: f.helpLanguage, text: f.help });"""))

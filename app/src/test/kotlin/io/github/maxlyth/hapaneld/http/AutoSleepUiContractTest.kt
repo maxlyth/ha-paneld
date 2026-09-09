@@ -25,7 +25,7 @@ class AutoSleepUiContractTest {
         assertTrue("status belongs only to the enabled form", "values.auto_sleep === \"true\"" in fieldLoop)
         assertTrue("status refresh must update its own node", "updateAutoSleepSummary();" in source)
         assertTrue(
-            "status must immediately follow the auto sleep control rather than the Behaviour group",
+            "status must immediately follow the auto sleep control in its dedicated card",
             rowIndex >= 0 && statusIndex > rowIndex && nextFieldDecorationIndex > statusIndex,
         )
         assertFalse(
