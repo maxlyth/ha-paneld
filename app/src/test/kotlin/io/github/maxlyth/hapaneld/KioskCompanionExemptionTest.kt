@@ -108,6 +108,21 @@ class KioskCompanionExemptionTest {
         assertNull(parseForegroundPackage("mFocusedApp=AppWindowToken{x u0 com.example.ava/.MainActivity}"))
     }
 
+    /**
+     * dumpsys puts more than one field on a line. The body must be read from after the marker, not
+     * from the first brace on the line, or a neighbouring window supplies the package and the kiosk
+     * exempts an app that does not hold focus.
+     */
+    @Test fun aWindowNamedBeforeTheMarkerOnTheSameLineIsNotMistakenForFocus() {
+        assertEquals(
+            "com.example.ava",
+            parseForegroundPackage(
+                "  mFocusedWindow=Window{aa11 u0 com.other.app/com.other.app.MainActivity} " +
+                    "mCurrentFocus=Window{bb22 u0 com.example.ava/com.example.ava.MainActivity}"
+            ),
+        )
+    }
+
     @Test fun theFocusLineIsFoundAmongOtherOutput() {
         assertEquals(
             "com.example.ava",
