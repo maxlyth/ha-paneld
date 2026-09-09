@@ -57,7 +57,10 @@ class CameraPresentationTest {
         ).forEach { assertTrue("missing $it", j.has(it)) }
         assertEquals("absent", j.getString("state"))
         assertEquals("none", j.getString("fault"))
-        assertEquals(CameraCapabilityReason.NOT_ENUMERATED.wire, j.getString("fault_detail"))
+        // optString rather than getString: a regression that drops the reason leaves JSON null, and
+        // getString throws JSONException there, which reports as a test error rather than as the
+        // assertion failure it is.
+        assertEquals(CameraCapabilityReason.NOT_ENUMERATED.wire, j.optString("fault_detail", ""))
         assertTrue(j.isNull("last_frame_age_ms"))
         assertFalse(j.getBoolean("live"))
         assertEquals(0, j.getInt("stream_clients"))
