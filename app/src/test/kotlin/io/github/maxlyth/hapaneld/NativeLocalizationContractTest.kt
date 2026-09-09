@@ -16,8 +16,11 @@ class NativeLocalizationContractTest {
     private fun kotlin(path: String): String = productionKotlin.getValue("kotlin/io/github/maxlyth/hapaneld/$path")
 
     private fun baseStrings(): Map<String, Boolean> {
-        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder()
-            .parse(File("src/main/res/values/strings.xml"))
+        return stringsIn(File("src/main/res/values/strings.xml"))
+    }
+
+    private fun stringsIn(file: File): Map<String, Boolean> {
+        val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
         val strings = document.getElementsByTagName("string")
         return (0 until strings.length).associate { index ->
             val attributes = strings.item(index).attributes
@@ -77,6 +80,7 @@ class NativeLocalizationContractTest {
 
     @Test fun everyAppStringReferenceResolvesAndEveryFrozenKeyIsAccountedFor() {
         val catalogue = baseStrings()
+        val supplemental = stringsIn(File("src/main/res/values/proximity_wizard.xml"))
         val kotlinReferences = productionKotlin.values.flatMap { source ->
             Regex("(?<!android\\.)R\\.string\\.([A-Za-z0-9_]+)").findAll(source).map { it.groupValues[1] }.toList()
         }.toSet()
@@ -88,12 +92,21 @@ class NativeLocalizationContractTest {
             .toSet()
         val references = kotlinReferences + xmlReferences
 
-        assertEquals("missing base resources", emptySet<String>(), references - catalogue.keys)
+        assertEquals("missing base resources", emptySet<String>(), references - catalogue.keys - supplemental.keys)
         assertEquals(
             "unaccounted frozen resources",
             emptySet<String>(),
             catalogue.keys - references,
         )
+    }
+
+    @Test fun proximityWizardResourcesAreCompleteInEveryReleaseLocale() {
+        val base = stringsIn(File("src/main/res/values/proximity_wizard.xml"))
+        for (directory in listOf("values-de", "values-es", "values-fr", "values-it", "values-zh-rCN")) {
+            val translated = stringsIn(File("src/main/res/$directory/proximity_wizard.xml"))
+            assertEquals("$directory proximity strings", base.keys, translated.keys)
+            assertTrue("$directory must contain only translated strings", translated.values.all { it })
+        }
     }
 
     @Test fun nativeLocaleFollowsThePersistedUiLanguage() {

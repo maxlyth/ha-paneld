@@ -8,6 +8,86 @@ import org.junit.Test
 
 class ProximityWizardPresentationTest {
     @Test
+    fun rawValueIsAReadableFocalPointOnEverySupportedPanelShape() {
+        val square = proximityWizardLayoutSpec(480, 432)
+        assertEquals(ProximityWizardLayoutMode.COMPACT_SQUARE, square.mode)
+        assertTrue(square.rawValueSp >= 84f)
+
+        val portrait = proximityWizardLayoutSpec(500, 889)
+        assertEquals(ProximityWizardLayoutMode.PORTRAIT, portrait.mode)
+        assertTrue(portrait.rawValueSp >= 96f)
+
+        val landscape = proximityWizardLayoutSpec(1449, 906)
+        assertEquals(ProximityWizardLayoutMode.LANDSCAPE, landscape.mode)
+        assertTrue(landscape.rawValueSp >= 96f)
+    }
+
+    @Test
+    fun compactSquareIsNotMisclassifiedByItsNavigationBarReducedHeight() {
+        assertEquals(
+            ProximityWizardLayoutMode.COMPACT_SQUARE,
+            proximityWizardLayoutSpec(480, 432).mode,
+        )
+        assertEquals(
+            ProximityWizardLayoutMode.LANDSCAPE,
+            proximityWizardLayoutSpec(600, 432).mode,
+        )
+    }
+
+    @Test
+    fun spokenInstructionsAreStableAcrossVisualCueChangesAndNeverJoinScreenCopy() {
+        val speech = proximityWizardSpeech(
+            stage = "clear",
+            awaitingReading = false,
+            mode = "ranged",
+            waveCount = 1,
+            capabilities = ProximityWizardCapabilities.NEITHER,
+            acceptedGestures = 0,
+            requiredGestures = 3,
+        )
+        assertEquals("clear", speech?.prompt)
+        assertEquals(R.string.proximity_wizard_speech_clear, speech?.textRes)
+
+        val cancelled = proximityWizardSpeech(
+            stage = "cancelled",
+            awaitingReading = false,
+            mode = "ranged",
+            waveCount = 1,
+            capabilities = ProximityWizardCapabilities.NEITHER,
+            acceptedGestures = 0,
+            requiredGestures = 3,
+        )
+        assertEquals("cancelled", cancelled?.prompt)
+        assertEquals(R.string.proximity_wizard_speech_cancelled, cancelled?.textRes)
+    }
+
+    @Test
+    fun narrationSetsBinaryExpectationsAndReportsGestureProgress() {
+        val binary = proximityWizardSpeech(
+            stage = "intro",
+            awaitingReading = false,
+            mode = "binary",
+            waveCount = 1,
+            capabilities = ProximityWizardCapabilities.NEITHER,
+            acceptedGestures = 0,
+            requiredGestures = 3,
+        )
+        assertEquals(R.string.proximity_wizard_speech_intro_binary, binary?.textRes)
+
+        val progress = proximityWizardSpeech(
+            stage = "waves",
+            awaitingReading = false,
+            mode = "ranged",
+            waveCount = 1,
+            capabilities = ProximityWizardCapabilities.BOTH,
+            acceptedGestures = 2,
+            requiredGestures = 3,
+        )
+        assertEquals("waves|2|3", progress?.prompt)
+        assertEquals(listOf(2, 3), progress?.formatArgs)
+    }
+
+    @Test
     fun liveRawValueAppearsThroughoutObservationButNotOnReviewOrTerminalScreens() {
         for (stage in listOf("intro", "clear", "near", "return_clear", "wave_baseline", "wave_capture", "waves", "review")) {
             assertTrue(stage, proximityWizardShowsRawValue(stage))

@@ -22,13 +22,81 @@ import androidx.appcompat.app.AppCompatActivity
 import java.text.NumberFormat
 import org.json.JSONObject
 
-internal fun proximityWizardNarrationPrompt(
+internal data class ProximityWizardSpeech(
+    val prompt: String,
+    val textRes: Int,
+    val formatArgs: List<Any> = emptyList(),
+)
+
+internal fun proximityWizardSpeech(
     stage: String,
-    cue: ProximityWizardCue,
     awaitingReading: Boolean,
+    mode: String,
     waveCount: Int,
     capabilities: ProximityWizardCapabilities,
-): String = "$stage|${cue.name}|waiting=$awaitingReading|waves=$waveCount|capabilities=${capabilities.name}"
+    acceptedGestures: Int,
+    requiredGestures: Int,
+): ProximityWizardSpeech? = when (stage) {
+    "intro" -> when {
+        awaitingReading -> ProximityWizardSpeech("intro|waiting", R.string.proximity_wizard_speech_waiting)
+        mode == "binary" -> ProximityWizardSpeech("intro|binary", R.string.proximity_wizard_speech_intro_binary)
+        else -> ProximityWizardSpeech("intro|ranged", R.string.proximity_wizard_speech_intro)
+    }
+    "clear" -> ProximityWizardSpeech("clear", R.string.proximity_wizard_speech_clear)
+    "near" -> ProximityWizardSpeech("near", R.string.proximity_wizard_speech_near)
+    "return_clear" -> ProximityWizardSpeech("return_clear", R.string.proximity_wizard_speech_return_clear)
+    "wave_baseline" -> ProximityWizardSpeech("wave_baseline", R.string.proximity_wizard_speech_wave_baseline)
+    "wave_capture" -> if (waveCount == 2) {
+        ProximityWizardSpeech("wave_capture|double", R.string.proximity_wizard_speech_wave_double)
+    } else {
+        ProximityWizardSpeech("wave_capture|single", R.string.proximity_wizard_speech_wave_single)
+    }
+    "waves" -> if (acceptedGestures == 0) {
+        ProximityWizardSpeech("waves|start", R.string.proximity_wizard_speech_waves_start)
+    } else {
+        ProximityWizardSpeech(
+            "waves|$acceptedGestures|$requiredGestures",
+            R.string.proximity_wizard_speech_wave_count,
+            listOf(acceptedGestures, requiredGestures),
+        )
+    }
+    "review" -> ProximityWizardSpeech(
+        "review|${capabilities.name}",
+        when (capabilities) {
+            ProximityWizardCapabilities.BOTH -> R.string.proximity_wizard_speech_review_both
+            ProximityWizardCapabilities.PRESENCE_ONLY -> R.string.proximity_wizard_speech_review_presence
+            ProximityWizardCapabilities.WAVE_ONLY -> R.string.proximity_wizard_speech_review_wave
+            ProximityWizardCapabilities.NEITHER -> R.string.proximity_wizard_speech_review_neither
+        },
+    )
+    "saved" -> when (capabilities) {
+        ProximityWizardCapabilities.BOTH -> ProximityWizardSpeech("saved|both", R.string.proximity_wizard_speech_saved_both)
+        ProximityWizardCapabilities.PRESENCE_ONLY -> ProximityWizardSpeech("saved|presence", R.string.proximity_wizard_speech_saved_presence)
+        ProximityWizardCapabilities.WAVE_ONLY -> ProximityWizardSpeech("saved|wave", R.string.proximity_wizard_speech_saved_wave)
+        ProximityWizardCapabilities.NEITHER -> null
+    }
+    "cancelled" -> ProximityWizardSpeech("cancelled", R.string.proximity_wizard_speech_cancelled)
+    "timed_out" -> ProximityWizardSpeech("timed_out", R.string.proximity_wizard_speech_timed_out)
+    "failed" -> ProximityWizardSpeech("failed", R.string.proximity_wizard_speech_failed)
+    else -> null
+}
+
+internal enum class ProximityWizardLayoutMode { COMPACT_SQUARE, PORTRAIT, LANDSCAPE }
+
+internal data class ProximityWizardLayoutSpec(
+    val mode: ProximityWizardLayoutMode,
+    val rawValueSp: Float,
+)
+
+internal fun proximityWizardLayoutSpec(widthDp: Int, heightDp: Int): ProximityWizardLayoutSpec {
+    val ratio = if (heightDp > 0) widthDp.toFloat() / heightDp else 1f
+    return when {
+        ratio >= 1.2f -> ProximityWizardLayoutSpec(ProximityWizardLayoutMode.LANDSCAPE, 96f)
+        widthDp <= 520 && heightDp <= 520 ->
+            ProximityWizardLayoutSpec(ProximityWizardLayoutMode.COMPACT_SQUARE, 84f)
+        else -> ProximityWizardLayoutSpec(ProximityWizardLayoutMode.PORTRAIT, 96f)
+    }
+}
 
 /** The physical calibration journey stays on the panel, independently of its dashboard renderer. */
 class ProximityWizardActivity : AppCompatActivity() {
@@ -40,7 +108,9 @@ class ProximityWizardActivity : AppCompatActivity() {
     private var lastPresentation = ""
     private lateinit var instruction: TextView
     private lateinit var detail: TextView
+    private lateinit var rawLabel: TextView
     private lateinit var rawValue: TextView
+    private lateinit var rawWaiting: TextView
     private lateinit var mode: TextView
     private lateinit var progress: TextView
     private lateinit var indicator: ProgressBar
@@ -52,6 +122,7 @@ class ProximityWizardActivity : AppCompatActivity() {
     private lateinit var visualRow: LinearLayout
     private lateinit var countdownRing: ProximityCountdownView
     private lateinit var rawNumberFormat: NumberFormat
+    private lateinit var layoutSpec: ProximityWizardLayoutSpec
     private val backgroundColor = Color.rgb(14, 23, 37)
     private val bodyColor = Color.rgb(243, 247, 255)
     private val accentColor = Color.rgb(133, 186, 255)
@@ -71,6 +142,10 @@ class ProximityWizardActivity : AppCompatActivity() {
         supportActionBar?.hide()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         sessionId = savedInstanceState?.getString(SESSION)
+        layoutSpec = proximityWizardLayoutSpec(
+            resources.configuration.screenWidthDp,
+            resources.configuration.screenHeightDp,
+        )
         rawNumberFormat = NumberFormat.getNumberInstance(resources.configuration.locales[0]).apply {
             isGroupingUsed = false
             maximumFractionDigits = 4
@@ -81,8 +156,9 @@ class ProximityWizardActivity : AppCompatActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun buildUi() {
-        val landscape = resources.configuration.screenWidthDp > resources.configuration.screenHeightDp
-        val compact = resources.configuration.screenHeightDp < 520
+        val landscape = layoutSpec.mode == ProximityWizardLayoutMode.LANDSCAPE
+        val compactSquare = layoutSpec.mode == ProximityWizardLayoutMode.COMPACT_SQUARE
+        val compact = compactSquare || resources.configuration.screenHeightDp < 520
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(if (compact) 16 else 28), dp(24), dp(20))
@@ -111,7 +187,22 @@ class ProximityWizardActivity : AppCompatActivity() {
             letterSpacing = -0.025f
         }
         detail = label(26f)
-        rawValue = label(28f, true).apply { setTextColor(accentColor) }
+        rawLabel = label(if (compactSquare) 18f else 22f, true).apply {
+            setText(R.string.proximity_wizard_raw_label)
+            setTextColor(Color.rgb(169, 190, 219))
+            letterSpacing = 0.04f
+        }
+        rawValue = label(layoutSpec.rawValueSp, true).apply {
+            setTextColor(accentColor)
+            typeface = Typeface.create("monospace", Typeface.BOLD)
+            gravity = if (compactSquare) Gravity.START else Gravity.CENTER_HORIZONTAL
+            maxLines = 1
+        }
+        rawWaiting = label(if (compactSquare) 22f else 26f).apply {
+            setTextColor(accentColor)
+            setText(R.string.proximity_wizard_raw_waiting)
+            gravity = if (compactSquare) Gravity.START else Gravity.CENTER_HORIZONTAL
+        }
         mode = label(24f).apply { setTextColor(Color.rgb(179, 200, 228)) }
         progress = label(24f, true).apply { setTextColor(accentColor) }
         indicator = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -148,25 +239,38 @@ class ProximityWizardActivity : AppCompatActivity() {
             gravity = Gravity.TOP
             addView(instruction)
             addView(detail, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
-            addView(rawValue, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(8) })
             addView(mode)
             addView(progress)
         }
-        if (landscape) {
-            content.orientation = LinearLayout.HORIZONTAL
-            content.addView(copy, LinearLayout.LayoutParams(0, -2, if (compact) 1.55f else 1.1f))
-            content.addView(
-                visualRow,
-                LinearLayout.LayoutParams(0, dp(if (compact) 164 else 216), if (compact) 0.65f else 1f).apply {
-                    leftMargin = dp(if (compact) 8 else 20)
-                },
-            )
+        val rawBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = if (compactSquare) Gravity.START else Gravity.CENTER_HORIZONTAL
+            addView(rawLabel, LinearLayout.LayoutParams(-1, -2))
+            addView(rawValue, LinearLayout.LayoutParams(-1, -2))
+            addView(rawWaiting, LinearLayout.LayoutParams(-1, -2))
+        }
+        if (compactSquare) {
+            val top = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                addView(copy, LinearLayout.LayoutParams(0, -2, 1.7f))
+                addView(visualRow, LinearLayout.LayoutParams(0, dp(150), 0.55f).apply { leftMargin = dp(6) })
+            }
+            content.addView(rawBlock, LinearLayout.LayoutParams(-1, -2))
+            content.addView(top, LinearLayout.LayoutParams(-1, dp(218)))
+        } else if (landscape) {
+            val top = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                addView(copy, LinearLayout.LayoutParams(0, -2, 1.1f))
+                addView(visualRow, LinearLayout.LayoutParams(0, dp(216), 1f).apply { leftMargin = dp(20) })
+            }
+            content.addView(top)
+            content.addView(rawBlock, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
         } else {
-            // The instruction precedes the motion, with the supporting copy below it as in the preview.
-            copy.removeView(instruction)
-            content.addView(instruction)
-            content.addView(visualRow, LinearLayout.LayoutParams(-1, dp(if (compact) 188 else 248)))
             content.addView(copy)
+            content.addView(rawBlock, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(12) })
+            content.addView(visualRow, LinearLayout.LayoutParams(-1, dp(if (compact) 188 else 248)))
         }
         root.addView(ScrollView(this).apply {
             isFillViewport = true
@@ -373,16 +477,22 @@ class ProximityWizardActivity : AppCompatActivity() {
             // Failed sessions offer a local exit as well as Retry.
             if (stage == "failed" || stage == "timed_out") cancel.visibility = View.VISIBLE
             sessionId?.let { currentId ->
-                val spokenText = listOf(instruction.text, detail.text)
-                    .map(CharSequence::toString)
-                    .filter(String::isNotBlank)
-                    .joinToString(". ")
-                ProximityWizardHost.narrate(
-                    currentId,
-                    proximityWizardNarrationPrompt(stage, cue, awaitingReading, waveCount, capabilities),
-                    spokenText,
-                    resources.configuration.locales[0].toLanguageTag(),
-                )
+                proximityWizardSpeech(
+                    stage = stage,
+                    awaitingReading = awaitingReading,
+                    mode = snapshot.optString("mode"),
+                    waveCount = waveCount,
+                    capabilities = capabilities,
+                    acceptedGestures = accepted,
+                    requiredGestures = required,
+                )?.let { speech ->
+                    ProximityWizardHost.narrate(
+                        currentId,
+                        speech.prompt,
+                        getString(speech.textRes, *speech.formatArgs.toTypedArray()),
+                        resources.configuration.locales[0].toLanguageTag(),
+                    )
+                }
             }
         }
         val countdown = proximityWizardCountdownSeconds(
@@ -404,9 +514,11 @@ class ProximityWizardActivity : AppCompatActivity() {
         val raw = if (snapshot.optString("health") == "healthy") {
             runCatching { snapshot.getDouble("raw") }.getOrNull()?.takeIf { it.isFinite() }
         } else null
-        val formattedRaw = raw?.let(rawNumberFormat::format) ?: getString(R.string.proximity_wizard_raw_waiting)
-        rawValue.text = getString(R.string.proximity_wizard_raw_value, formattedRaw)
-        rawValue.visibility = if (proximityWizardShowsRawValue(stage)) View.VISIBLE else View.GONE
+        val showRaw = proximityWizardShowsRawValue(stage)
+        rawLabel.visibility = if (showRaw) View.VISIBLE else View.GONE
+        rawValue.text = raw?.let(rawNumberFormat::format).orEmpty()
+        rawValue.visibility = if (showRaw && raw != null) View.VISIBLE else View.GONE
+        rawWaiting.visibility = if (showRaw && raw == null) View.VISIBLE else View.GONE
     }
 
     private fun perform(action: String) {

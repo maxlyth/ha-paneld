@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.util.ByteLimitExceeded
+import io.github.maxlyth.hapaneld.testsupport.TestSources
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -78,6 +79,13 @@ class AudioPlayerTest {
         override suspend fun close() {
             closeCalls++
         }
+    }
+
+    @Test fun androidClipKeepsAPlaybackTailButCancellationStillReleasesImmediately() {
+        val source = TestSources.kotlin("AudioPlayer.kt").readText()
+        assertTrue(source.contains("owner.postDelayed({ finish() }, PLAYBACK_TAIL_MS)"))
+        assertTrue(source.contains("const val PLAYBACK_TAIL_MS = 450L"))
+        assertTrue(source.contains("owner.post { releaseOwned() }"))
     }
 
     @Test fun runDeletesItsTemporaryFileAfterSuccessAndFailure() = runTest {

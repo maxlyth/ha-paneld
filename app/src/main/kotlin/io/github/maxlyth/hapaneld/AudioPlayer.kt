@@ -222,7 +222,12 @@ internal class AndroidAudioClip : AudioClip {
                     runCatching { prepared.start() }.onFailure(::finish)
                 }
             }
-            mediaPlayer.setOnCompletionListener { finish() }
+            // Some vendor audio paths report completion before their final buffered samples have
+            // reached the speaker. Keep this player generation alive briefly so sentence endings
+            // are not clipped. Explicit cancellation still releases it immediately.
+            mediaPlayer.setOnCompletionListener {
+                owner.postDelayed({ finish() }, PLAYBACK_TAIL_MS)
+            }
             mediaPlayer.setOnErrorListener { _, what, extra ->
                 finish(IOException("MediaPlayer error what=$what extra=$extra"))
                 true
@@ -247,5 +252,9 @@ internal class AndroidAudioClip : AudioClip {
 
     private fun releaseCurrent() {
         runCatching { player.getAndSet(null)?.release() }
+    }
+
+    private companion object {
+        const val PLAYBACK_TAIL_MS = 450L
     }
 }

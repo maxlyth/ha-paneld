@@ -1,6 +1,8 @@
 package io.github.maxlyth.hapaneld
 
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -8,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class ProximityWizardNarratorTest {
     @Test fun unchangedSemanticPromptIsSpokenOnlyOnce() = runTest {
         val spoken = mutableListOf<String>()
@@ -20,22 +23,30 @@ class ProximityWizardNarratorTest {
         } finally { narrator.close() }
     }
 
-    @Test fun newestInstructionCancelsObsoleteSpeechAndStartsImmediately() = runTest {
+    @Test fun nextInstructionWaitsForTheCurrentSentenceAndAQuietGap() = runTest {
         val events = mutableListOf<String>()
+        val firstFinished = CompletableDeferred<Unit>()
         val narrator = ProximityWizardNarrator({ text, locale, accepted ->
             events += "start:$text:$locale"
             accepted(if (text == "Get ready") 41L else 42L)
-            try { awaitCancellation() } finally { events += "stop:$text:$locale" }
+            if (text == "Get ready") firstFinished.await()
         }, stopPlayback = { events += "stop-playback:$it" }, dispatcher = StandardTestDispatcher(testScheduler))
         try {
-            narrator.narrate("clear|PREPARE", "Get ready", "en-GB")
+            narrator.narrate("clear", "Get ready", "en-GB")
             testScheduler.runCurrent()
-            narrator.narrate("clear|WAIT_CLEAR", "Stand clear", "fr-FR")
+            narrator.narrate("near", "Stand near", "fr-FR")
             testScheduler.runCurrent()
-            assertEquals(
-                listOf("start:Get ready:en-GB", "stop-playback:41", "stop:Get ready:en-GB", "start:Stand clear:fr-FR"),
-                events,
-            )
+            assertEquals(listOf("start:Get ready:en-GB"), events)
+
+            firstFinished.complete(Unit)
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(449)
+            testScheduler.runCurrent()
+            assertEquals(listOf("start:Get ready:en-GB"), events)
+
+            testScheduler.advanceTimeBy(1)
+            testScheduler.runCurrent()
+            assertEquals(listOf("start:Get ready:en-GB", "start:Stand near:fr-FR"), events)
         } finally { narrator.close(); testScheduler.runCurrent() }
     }
 
