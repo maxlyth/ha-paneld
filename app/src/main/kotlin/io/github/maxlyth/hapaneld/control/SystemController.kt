@@ -459,16 +459,21 @@ class SystemController(
  *
  * The line reads `mCurrentFocus=Window{<hash> u0 <package>/<activity>}` when an activity holds focus.
  * Several shapes must return null rather than a wrong answer, because a wrong package here would
- * exempt the wrong app from the kiosk lock: `mCurrentFocus=null` between transitions, and system
- * windows whose name carries no `package/activity` pair at all (`NavigationBar0`, `StatusBar`).
- * Anything not recognised with confidence is null, which the caller treats as "keep enforcing".
+ * exempt the wrong app from the kiosk lock: `mCurrentFocus=null` between transitions, a bare
+ * `mCurrentFocus=`, and system windows whose name carries no `package/activity` pair at all
+ * (`NavigationBar0`, `StatusBar`). Anything not recognised with confidence is null, which the caller
+ * treats as "keep enforcing".
+ *
+ * Every one of those shapes is rejected by the single `contains('/')` test. Earlier drafts also
+ * guarded the empty and `null` values and the empty brace body explicitly; a mutation run showed
+ * removing them changed no result on any of them, because a value with no `{` yields an empty body
+ * and an empty body has no component. They were deleted rather than kept as reassurance, so every
+ * remaining line here carries weight and a future edit to the `/` test cannot be masked by a guard
+ * that looks protective but never fires.
  */
 internal fun parseForegroundPackage(raw: String): String? {
     val line = raw.lineSequence().firstOrNull { it.contains("mCurrentFocus=") } ?: return null
-    val value = line.substringAfter("mCurrentFocus=").trim()
-    if (value.isEmpty() || value.startsWith("null")) return null
-    val inner = value.substringAfter('{', "").substringBefore('}').trim()
-    if (inner.isEmpty()) return null
-    val component = inner.split(' ').lastOrNull()?.takeIf { it.contains('/') } ?: return null
+    val inner = line.substringAfter("mCurrentFocus=").substringAfter('{', "").substringBefore('}')
+    val component = inner.trim().split(' ').lastOrNull()?.takeIf { it.contains('/') } ?: return null
     return component.substringBefore('/').takeIf { it.isNotEmpty() }
 }
