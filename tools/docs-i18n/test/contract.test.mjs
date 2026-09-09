@@ -686,6 +686,74 @@ test("localized links relocate selected documents and translated heading fragmen
   assert.match(guide, /\[guide\]\(README\.md\)/);
 });
 
+test("localized image destinations prefer a locale blob added after planning and otherwise fall back", () => {
+  const current = fixture();
+  const readmePath = path.join(current.repository, "README.md");
+  fs.appendFileSync(readmePath, "\n![Panel](docs/img/panel.png?raw=1#preview)\n");
+  write(current.repository, "docs/img/panel.png", "english image\n");
+  command(current.repository, ["git", "add", "README.md", "docs/img/panel.png"]);
+  command(current.repository, ["git", "commit", "-qm", "add image reference"]);
+  const sourceRevision = command(current.repository, ["git", "rev-parse", "HEAD"]);
+  const manifest = buildSourceManifest({
+    repository: current.repository,
+    sourceRevision,
+    documents: ["README.md", "docs/guide.md"],
+  });
+
+  write(current.repository, "docs/img/de/panel.png", "localized image\n");
+  command(current.repository, ["git", "add", "docs/img/de/panel.png"]);
+  command(current.repository, ["git", "commit", "-qm", "add localized image after planning"]);
+  assert.equal(command(current.repository, [
+    "git", "ls-tree", sourceRevision, "--", "docs/img/de/panel.png",
+  ]), "");
+
+  const german = applyLocaleReceipt({
+    repository: current.repository,
+    manifest,
+    locale: "de",
+    results: localeResults(manifest, "de", current.repository),
+  });
+  const germanReadme = fs.readFileSync(path.join(current.repository, "docs/de/README.md"), "utf8");
+  assert.match(germanReadme, /!\[Panel\]\(\.\.\/img\/de\/panel\.png\?raw=1#preview\)/);
+  assert.doesNotThrow(() => validateLocaleReceipt(manifest, "de", german, {
+    repository: current.repository,
+  }));
+
+  const french = applyLocaleReceipt({
+    repository: current.repository,
+    manifest,
+    locale: "fr",
+    results: localeResults(manifest, "fr", current.repository),
+  });
+  const frenchReadme = fs.readFileSync(path.join(current.repository, "docs/fr/README.md"), "utf8");
+  assert.match(frenchReadme, /!\[Panel\]\(\.\.\/img\/panel\.png\?raw=1#preview\)/);
+  assert.doesNotMatch(frenchReadme, /img\/fr\/panel\.png/);
+  assert.doesNotThrow(() => validateLocaleReceipt(manifest, "fr", french, {
+    repository: current.repository,
+  }));
+
+  fs.mkdirSync(path.join(current.repository, "docs/img/es"), { recursive: true });
+  fs.symlinkSync("../panel.png", path.join(current.repository, "docs/img/es/panel.png"));
+  command(current.repository, ["git", "add", "docs/img/es/panel.png"]);
+  command(current.repository, ["git", "commit", "-qm", "add invalid localized image symlink"]);
+  assert.throws(
+    () => buildLocaleReceipt(manifest, "es", localeResults(manifest, "es", current.repository), {
+      repository: current.repository,
+    }),
+    /localized image target is not a regular blob/,
+  );
+
+  fs.unlinkSync(path.join(current.repository, "docs/img/panel.png"));
+  command(current.repository, ["git", "add", "docs/img/panel.png"]);
+  command(current.repository, ["git", "commit", "-qm", "delete authoritative image"]);
+  assert.throws(
+    () => buildLocaleReceipt(manifest, "de", localeResults(manifest, "de", current.repository), {
+      repository: current.repository,
+    }),
+    /link target is absent/,
+  );
+});
+
 test("a missing source fragment is rejected before a localized receipt is produced", () => {
   const current = fixture();
   const readmePath = path.join(current.repository, "README.md");

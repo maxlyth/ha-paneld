@@ -1057,9 +1057,9 @@
       ],
       "sourcePath": "README.md",
       "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
-      "structureSha256": "88c64742a60503b3ab345154b21eb270ff594a54b62101632f2624e8d082450c",
+      "structureSha256": "b773839b03e8ed03f1cdcca21c6cd86600a9ef839943a8a8d2cc80926e7a73c0",
       "targetPath": "docs/es/README.md",
-      "targetSha256": "f7689e8ed7699a59f280ebe05f63178e993ed7aeb7d331a49de20dee9a15664f"
+      "targetSha256": "f2b26ff024a1421fa011f96bb2a6bc3c40f785cb6a2aec9146c8d812693d5979"
     },
     {
       "languagePickerSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

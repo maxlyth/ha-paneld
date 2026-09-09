@@ -1057,9 +1057,9 @@
       ],
       "sourcePath": "README.md",
       "sourceSha256": "df7fcaafe0046f32ed48be8b4405ad1c4f41e54d63af5b87ac516d5983c05e95",
-      "structureSha256": "d033a73329b6cbb86c07f0adb8bdb733ccc7b4b41e94e5b03fa5c8585435142b",
+      "structureSha256": "1db7aa7adcb79d5fc61644fdc1232be189b37a60fc2fd5d92df6d82a676883bd",
       "targetPath": "docs/zh-Hans/README.md",
-      "targetSha256": "7c814103b79231f94c73118a372ef68fa68ea2a07960d097297030519eea2ca8"
+      "targetSha256": "a8fa6c60541485bcbd408466ea4772453e2ee7c46f13a200f1a61bc3c35930c8"
     },
     {
       "languagePickerSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

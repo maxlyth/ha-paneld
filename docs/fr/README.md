@@ -34,19 +34,19 @@ L’interface web permet de configurer un écran, d’installer des logiciels et
 
 | Tableau de bord | Configurer |
 |---|---|
-| <a href="../img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-dashboard-light.png"><img src="../img/ui-dashboard-dark.png" alt="Onglet Tableau de bord" width="420"></picture></a> | <a href="../img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-configure-light.png"><img src="../img/ui-configure-dark.png" alt="Onglet Configurer" width="420"></picture></a> |
+| <a href="../img/fr/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-dashboard-light.png"><img src="../img/fr/ui-dashboard-dark.png" alt="Onglet Tableau de bord" width="420"></picture></a> | <a href="../img/fr/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-configure-light.png"><img src="../img/fr/ui-configure-dark.png" alt="Onglet Configurer" width="420"></picture></a> |
 
 | Entités | Installer |
 |---|---|
-| <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="Onglet Entités" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="Onglet Installer" width="420"></picture></a> |
+| <a href="../img/fr/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-entities-light.png"><img src="../img/fr/ui-entities-dark.png" alt="Onglet Entités" width="420"></picture></a> | <a href="../img/fr/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-install-light.png"><img src="../img/fr/ui-install-dark.png" alt="Onglet Installer" width="420"></picture></a> |
 
 | Profil | Journaux |
 |---|---|
-| <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="Onglet Profil" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="Onglet des journaux" width="420"></picture></a> |
+| <a href="../img/fr/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-profile-light.png"><img src="../img/fr/ui-profile-dark.png" alt="Onglet Profil" width="420"></picture></a> | <a href="../img/fr/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-logs-light.png"><img src="../img/fr/ui-logs-dark.png" alt="Onglet des journaux" width="420"></picture></a> |
 
 | Écran d’attente | Explorateur de l’API REST |
 |---|---|
-| <img src="../img/standing-screen.png" alt="Écran d’attente de ha-paneld avec l’adresse de configuration et le code QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/api-explorer-light.png"><img src="../img/api-explorer-dark.png" alt="Explorateur de l’API REST" width="420"></picture> |
+| <img src="../img/fr/standing-screen.png" alt="Écran d’attente de ha-paneld avec l’adresse de configuration et le code QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/api-explorer-light.png"><img src="../img/fr/api-explorer-dark.png" alt="Explorateur de l’API REST" width="420"></picture> |
 
 </details>
 
