@@ -10,10 +10,10 @@ import org.junit.Test
  * The camera light's schedule, asserted where it is decided rather than watched for on a panel.
  *
  * This is the privacy-critical half of the indicator. The geometry test pins what the arc looks like;
- * this pins what it *does* over a session that keeps running, and above all that it never stops being
- * there. The whole reason a stretching gap is admissible at all is that the level between flashes is a
- * visible floor rather than transparency, so several assertions below exist only to make an
- * implementation that let the gap go dark fail loudly.
+ * this pins what it *does* over a session that keeps running, and above all that the flash it settles
+ * into is still a real flash. At rest the blip IS the indication - the gap between blips is transparent
+ * - so the two things that must never drift toward nothing are its length and its opacity. Several
+ * assertions below exist only to make an implementation that shortened or faded the blip fail loudly.
  */
 class CameraIndicatorAttenuationTest {
 
@@ -52,14 +52,26 @@ class CameraIndicatorAttenuationTest {
 
     // ---- the floor: the clause everything else rests on ---------------------------------------------
 
-    @Test fun theLevelBetweenFlashesIsNeverTransparentAtAnyPointInAnySession() {
-        assertEquals("the floor between flashes is pinned; it is what makes a stretching gap honest", 0.24f, A.GAP_FLOOR, 0.0001f)
-        assertTrue("a transparent floor would be no indication at all", A.GAP_FLOOR > 0f)
+    @Test fun theFlashIsNeverTransparentAtAnyPointInAnySession() {
+        // At rest the blip is the entire indication, so this is the assertion the feature stands on.
+        assertEquals("the floor the flash settles to is pinned", 0.62f, A.LIT_FLOOR, 0.0001f)
+        assertTrue("a flash that fades toward nothing is not an indication", A.LIT_FLOOR > 0.5f)
         ages().forEach { age ->
-            val gap = A.alphaAt(age, lit = false)
-            assertTrue("at ${age}ms the arc had faded to $gap, below its floor", gap >= A.GAP_FLOOR - 0.0001f)
-            assertTrue("at ${age}ms the arc was transparent", gap > 0f)
+            val flash = A.alphaAt(age, lit = true)
+            assertTrue("at ${age}ms the flash had faded to $flash, below its floor", flash >= A.LIT_FLOOR - 0.0001f)
+            assertTrue("at ${age}ms the flash was transparent", flash > 0f)
         }
+    }
+
+    @Test fun theGapIsAllowedToReachTransparentBecauseTheFlashIsWhatIndicates() {
+        // Deliberate, and the opposite of the flash rule: holding a dim arc for fifty-nine of every
+        // sixty seconds is the standing prominence this feature exists to remove.
+        assertEquals("the gap fades out completely", 0.0f, A.GAP_FLOOR, 0.0001f)
+        assertEquals(0.0f, A.alphaAt(settled, lit = false), 0.0001f)
+        // It still opens at the shipped never-blank level; only the settled state goes to nothing.
+        assertEquals(0.42f, A.alphaAt(0L, lit = false), 0.0001f)
+        assertTrue("the gap must fade rather than blanking the moment attenuation starts",
+            A.alphaAt(A.PROMINENT_MS + A.RAMP_MS / 2, lit = false) > 0.15f)
     }
 
     @Test fun theFloorIsReachedAndThenNothingChangesAgain() {
@@ -67,19 +79,19 @@ class CameraIndicatorAttenuationTest {
         assertEquals(A.LIT_FLOOR, A.alphaAt(settled, lit = true), 0.0001f)
         listOf(settled + 1_000L, settled + 3_600_000L, 86_400_000L).forEach { age ->
             assertEquals("the schedule settles rather than continuing to fade", A.GAP_FLOOR, A.alphaAt(age, lit = false), 0.0001f)
-            assertEquals(A.LIT_FLOOR, A.alphaAt(age, lit = true), 0.0001f)
+            assertEquals("the flash must not keep dimming after the ramp ends", A.LIT_FLOOR, A.alphaAt(age, lit = true), 0.0001f)
             assertEquals(A.MAX_GAP_MS, A.gapMsAt(age))
         }
     }
 
-    @Test fun theSettledFlashIsStillVisiblyAFlashAgainstTheFloor() {
-        assertEquals("the settled flash level is pinned", 0.62f, A.LIT_FLOOR, 0.0001f)
+    @Test fun theSettledFlashIsStillVisiblyAFlashAgainstWhatSurroundsIt() {
         assertTrue(
             "a flash that settles to the same level as the gap is not a flash any more",
-            A.LIT_FLOOR - A.GAP_FLOOR > 0.2f,
+            A.LIT_FLOOR - A.GAP_FLOOR > 0.5f,
         )
-        assertTrue("the floor must stay below the level it descends from", A.GAP_FLOOR < A.GAP_BRIGHT)
-        assertTrue("the flash floor must stay below the level it descends from", A.LIT_FLOOR < A.LIT_BRIGHT)
+        // Both floors descend from the pulse's own two levels, which is where they are asserted.
+        assertTrue("the gap floor must stay below the level it descends from", A.GAP_FLOOR < CameraIndicatorPulse.DIM)
+        assertTrue("the flash floor must stay below the level it descends from", A.LIT_FLOOR < CameraIndicatorPulse.BRIGHT)
     }
 
     // ---- the asymmetry: the lit part keeps its length, only the gap stretches ------------------------
@@ -121,7 +133,7 @@ class CameraIndicatorAttenuationTest {
             val litAlpha = A.alphaAt(age, lit = true)
             val gapAlpha = A.alphaAt(age, lit = false)
             assertTrue("at ${age}ms the flash brightened again", litAlpha <= lastLit + 0.0001f)
-            assertTrue("at ${age}ms the arc brightened again", gapAlpha <= lastGap + 0.0001f)
+            assertTrue("at ${age}ms the gap brightened again", gapAlpha <= lastGap + 0.0001f)
             assertTrue("the flash must always outshine the gap", litAlpha > gapAlpha)
             lastLit = litAlpha
             lastGap = gapAlpha
@@ -195,11 +207,13 @@ class CameraIndicatorAttenuationTest {
         val lastTwoMinutes = session.filter { it.first > 480_000L }
         val settledFlashes = lastTwoMinutes.count { it.second.lit }
         assertTrue("a settled session should flash about twice in two minutes, not constantly", settledFlashes in 1..3)
-        val settledGaps = lastTwoMinutes.filter { !it.second.lit }
-        assertTrue("a settled session must still have a level between its flashes", settledGaps.isNotEmpty())
         assertTrue(
-            "the settled arc is dim but present, and never transparent",
-            settledGaps.all { it.second.alpha == A.GAP_FLOOR },
+            "every settled flash must still arrive at its full floor opacity",
+            lastTwoMinutes.filter { it.second.lit }.all { it.second.alpha == A.LIT_FLOOR },
+        )
+        assertTrue(
+            "between settled flashes the screen carries no indicator at all, by design",
+            lastTwoMinutes.filter { !it.second.lit }.all { it.second.alpha == 0.0f },
         )
     }
 

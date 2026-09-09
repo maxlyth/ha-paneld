@@ -135,21 +135,19 @@ object CameraIndicatorPulse {
  * the session has been running, so elapsed session time is the only thing this schedule is a function
  * of. Not the consumer, not the setting, not anything the dashboard can reach.
  *
- * It backs off in two ways at once, and the asymmetry is the point:
+ * It backs off in two ways at once, and the asymmetry is the whole design:
  *
  * - **The lit part keeps its length** ([LIT_MS]) while the gap after it stretches, from [MIN_GAP_MS] to
- *   [MAX_GAP_MS] - roughly one flash a second to roughly one flash a minute. The lit duration is
- *   deliberately the thing that never shrinks: a flash that got shorter as well as rarer would end as a
- *   blink too brief to register, which is exactly the presentation the contract refuses.
- * - **Both levels lose opacity**, so the settled state is a dim arc that flashes occasionally rather
- *   than a bright one that flashes rarely.
+ *   [MAX_GAP_MS] - roughly one flash a second to roughly one flash a minute.
+ * - **The flash dims only as far as [LIT_FLOOR], and the gap goes all the way to transparent.**
  *
- * [GAP_FLOOR] is the clause the whole design rests on. The level *between* flashes descends to a fixed
- * visible minimum and stops; it never reaches zero. That is what makes a stretching gap an attenuation
- * rather than a covert-capture channel: the arc is continuously on screen for the entire session, so a
- * person who knows what it means can see it at any instant they look, and the flash is an attention-grab
- * layered on a persistent indication rather than the indication itself. Let the gap go dark and this
- * becomes the sub-second blink the contract exists to forbid.
+ * [LIT_FLOOR] is the clause the whole design rests on, and it is a floor on *the blip*, not on some
+ * level held between blips. What the room gets at rest is a real flash - half a second, at better than
+ * half opacity - arriving about once a minute; between flashes the screen is the dashboard and nothing
+ * else. The two constants that must never move toward zero are therefore [LIT_MS] and [LIT_FLOOR]: a
+ * flash that got shorter as well as rarer, or that faded toward nothing, would end as a blink too brief
+ * or too faint to register, and that is the presentation the privacy contract refuses. A stretching gap
+ * is not that, because what it stretches is the interval between unmistakable flashes.
  *
  * The gap grows geometrically rather than linearly. Linear growth spends most of the ramp already close
  * to a minute apart; geometric growth stays visibly frequent while somebody might still be reacting to
@@ -174,13 +172,23 @@ object CameraIndicatorAttenuation {
     /** Gap at rest: with [LIT_MS] the settled cycle is exactly one minute long. */
     const val MAX_GAP_MS = 59_500L
 
-    /** Opacity of the flash at full prominence, and the level it settles to. */
-    const val LIT_BRIGHT = CameraIndicatorPulse.BRIGHT
+    /**
+     * The floor the flash settles to. This is the one opacity here that may never approach zero: at rest
+     * the blip is the whole indication, so [LIT_MS] and this constant are what the feature stands on.
+     *
+     * Both levels *descend from* [CameraIndicatorPulse], which [alphaAt] reads directly rather than
+     * restating. Aliases for those two opening values used to sit here and were removed: nothing read
+     * them, and the mutation battery proved it by failing to make a change to one matter.
+     */
     const val LIT_FLOOR = 0.62f
 
-    /** Opacity between flashes at full prominence, and the floor it descends to. Neither is transparent. */
-    const val GAP_BRIGHT = CameraIndicatorPulse.DIM
-    const val GAP_FLOOR = 0.24f
+    /**
+     * The level between flashes fades all the way out. A session still opens at the never-blank
+     * [CameraIndicatorPulse.DIM], so the first half-minute is unchanged, but as the gap stretches it
+     * reaches transparent: a dim arc held for fifty-nine of every sixty seconds is exactly the standing
+     * prominence this feature exists to remove.
+     */
+    const val GAP_FLOOR = 0.0f
 
     /**
      * How far through the backing-off a session is: 0 while prominent, 1 once settled.
