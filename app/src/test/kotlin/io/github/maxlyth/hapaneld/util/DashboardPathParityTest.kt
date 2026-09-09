@@ -8,7 +8,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The server half of the shared route-admission matrix in `test/fixtures/dashboard-path-parity.json`.
+ * The server half of the shared route-admission matrix in `tools/test/fixtures/dashboard-path-parity.json`.
  *
  * The browser suite reads the same file and asserts the client never refuses a route this side accepts.
  * Exact parity between a Kotlin canonicalizer and a JavaScript expression is unreachable — the server
@@ -18,8 +18,8 @@ import org.junit.Test
  */
 class DashboardPathParityTest {
     private val matrix = JSONObject(
-        File("../test/fixtures/dashboard-path-parity.json").takeIf { it.isFile }
-            ?.readText() ?: File("test/fixtures/dashboard-path-parity.json").readText(),
+        File("../tools/test/fixtures/dashboard-path-parity.json").takeIf { it.isFile }
+            ?.readText() ?: File("tools/test/fixtures/dashboard-path-parity.json").readText(),
     )
 
     private fun cases(key: String): List<String> =

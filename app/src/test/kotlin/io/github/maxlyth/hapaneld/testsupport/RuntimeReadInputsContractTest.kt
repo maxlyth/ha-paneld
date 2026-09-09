@@ -22,7 +22,9 @@ import org.junit.Test
  *
  * Two shapes of read are recognised:
  *  - path literals whose prefix is one of the families tests read today (`src/main/…`, `src/test/…`,
- *    `docs/`, `scripts/`, `helper/`, `test/fixtures/`, `tools/`, `gradle/`, the two build scripts) and
+ *    `docs/`, `scripts/`, `helper/`, `tools/`, `gradle/`, the two build scripts; the browser-harness
+ *    fixtures moved under `tools/test/` and are covered by `tools/`, while the legacy `test/fixtures/`
+ *    prefix stays recognised so a stray pre-move reference is reported rather than silently ignored) and
  *    the `TestSources.kotlin/asset/assetDir` helpers; an interpolated literal is checked as a prefix;
  *  - constructed reads: a bare name after `parentFile,` or `resolveSibling(`, resolved against the
  *    directory of every path literal in the same file; and a `../`-relative literal given to

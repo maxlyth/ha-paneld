@@ -137,7 +137,7 @@ class CardColumnAlignmentAssetTest {
     }
 
     @Test fun layoutFixtureLoadsTheSharedAuthorityBeforeDashboardCode() {
-        val fixture = listOf(File("test/fixtures/info-fixture.html"), File("../test/fixtures/info-fixture.html"))
+        val fixture = listOf(File("tools/test/fixtures/info-fixture.html"), File("../tools/test/fixtures/info-fixture.html"))
             .first(File::isFile)
             .readText()
         val shared = fixture.indexOf("card-column-alignment.js")

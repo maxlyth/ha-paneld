@@ -1,13 +1,13 @@
 // Non-blocking layout-stability (CLS) matrix for the info page.
 //
-// Serves the real info.css/info.js (via test/fixtures/info-fixture.html), mocks /perf + /proximity +
+// Serves the real info.css/info.js (via tools/test/fixtures/info-fixture.html), mocks /perf + /proximity +
 // /inspect with worst-case CYCLING data (process names long↔short, render drawing↔idle, raw sweeping),
 // then measures Cumulative Layout Shift across a matrix of viewport WIDTHS × TEXT SIZES (the myopic
 // axis) while the live cards are scrolled OFF-SCREEN. Each cell reports the median of repeated page
 // loads, preserving the representative run's offender attribution. Diffs a committed baseline:
 //   - worse than baseline (+epsilon)  -> REGRESSION (flagged, but exit 0 — never blocks a build)
 //   - within baseline                 -> ok / known-backlog
-// `--update-baseline` rewrites test/baseline.json; use RUNS=5 or greater for baseline refreshes.
+// `--update-baseline` rewrites tools/test/baseline.json; use RUNS=5 or greater for baseline refreshes.
 // Local: `node test/layout-matrix.mjs`.
 import { chromium } from 'playwright-core';
 import http from 'node:http';

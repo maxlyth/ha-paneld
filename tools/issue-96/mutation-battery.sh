@@ -17,7 +17,7 @@ WT="$BATTERY_DIR/checkout"
 trap 'git -C "$SRC_ROOT" worktree remove --force "$WT" >/dev/null 2>&1; rm -rf "$BATTERY_DIR"' EXIT
 
 git -C "$SRC_ROOT" worktree add --detach "$WT" HEAD >/dev/null 2>&1 || { echo "cannot create throwaway checkout"; exit 1; }
-ln -s "$SRC_ROOT/test/node_modules" "$WT/test/node_modules"
+ln -s "$SRC_ROOT/tools/test/node_modules" "$WT/tools/test/node_modules"
 
 KOTLIN_RESULTS="$WT/app/build/test-results/testDebugUnitTest"
 BROWSER_PATTERN='APK preview|Choosing another APK|reload surfaces|upload-busy offers|stale recovery card'
@@ -38,7 +38,7 @@ run_kotlin() { # -> 0 green, 1 red, 2 compile failure
 
 run_browser() { # -> 0 green, 1 red, 2 harness/syntax failure; TAP lands in $1
   local tap="$1"
-  (cd "$WT/test" && CHROME="$CHROME" node --test \
+  (cd "$WT/tools/test" && CHROME="$CHROME" node --test \
       --test-name-pattern="$BROWSER_PATTERN" browser-behavior.test.mjs) >"$tap" 2>&1
   local status=$?
   grep -q '^# tests ' "$tap" || return 2

@@ -4308,7 +4308,7 @@ browserTest('A malformed Custom path left behind never blocks a later Auto or li
 
 browserTest('The client never refuses a dashboard route the server would accept', async (t) => {
   // Shared matrix, not a second opinion. Two independently maintained expressions once agreed as
-  // strings while differing in behaviour, so both sides read test/fixtures/dashboard-path-parity.json.
+  // strings while differing in behaviour, so both sides read tools/test/fixtures/dashboard-path-parity.json.
   // Exact parity is unreachable — the server percent-decodes to reject traversal and a client
   // expression cannot — so the contract is one-directional: the client may be a superset, never
   // stricter. A stricter client blocks a legal route, worst when the catalogue is unavailable and
