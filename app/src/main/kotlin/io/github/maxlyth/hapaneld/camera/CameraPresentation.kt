@@ -41,6 +41,31 @@ enum class CameraRefusal(val token: String) {
     BUSY("camera-busy"),
     /** The service is tearing down. */
     STOPPING("camera-stopping"),
+    ;
+
+    companion object {
+        /**
+         * Recovers the identifier a stored token came from. [ABSENT] and [FAILED] share
+         * `camera-unavailable` on the wire deliberately — a consumer holding an HTTP body cannot act on
+         * the difference — so the token alone is ambiguous and [cameraPresent] resolves it. Scanning
+         * declaration order instead answers [ABSENT] for every `camera-unavailable`, which tells a panel
+         * whose camera merely failed to open that it has no camera, and turns a recoverable 503 into a
+         * 404 documented as "this board has no camera at all". An unrecognised token is a fault rather
+         * than absent hardware, because absence is a fact only the capability may assert.
+         */
+        fun fromToken(token: String, cameraPresent: Boolean): CameraRefusal = when (token) {
+            ABSENT.token -> if (cameraPresent) FAILED else ABSENT
+            else -> entries.firstOrNull { it.token == token } ?: FAILED
+        }
+
+        /**
+         * The snapshot route's status for a refusal. Only genuinely absent hardware is `404`; every
+         * refusal a camera-bearing panel can raise is a `503`, because the resource exists and the
+         * panel is declining to serve it right now.
+         */
+        fun snapshotStatusCode(refusal: CameraRefusal): Int =
+            if (refusal == ABSENT) 404 else 503
+    }
 }
 
 sealed interface SnapshotResult {

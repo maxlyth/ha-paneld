@@ -3408,11 +3408,9 @@ class PaneldServer internal constructor(
                             is SnapshotResult.Jpeg -> call.respondBytes(result.bytes, ContentType.Image.JPEG)
                             is SnapshotResult.Refused -> call.respondText(
                                 "${result.reason.token}\n",
-                                status = if (result.reason == CameraRefusal.ABSENT) {
-                                    HttpStatusCode.NotFound
-                                } else {
-                                    HttpStatusCode.ServiceUnavailable
-                                },
+                                status = HttpStatusCode.fromValue(
+                                    CameraRefusal.snapshotStatusCode(result.reason),
+                                ),
                             )
                         }
                     }

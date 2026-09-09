@@ -477,8 +477,11 @@ class CameraSessionOwner(
         return Lease(leaseId)
     }
 
-    private fun lastRefusal(): CameraRefusal = synchronized(lock) {
-        CameraRefusal.entries.firstOrNull { it.token == outcome } ?: CameraRefusal.FAILED
+    // The capability is read before the lock is taken, never under it: the presence probe may enumerate,
+    // and `CameraCapabilitySourceContractTest` holds this owner to never enumerating under its own lock.
+    private fun lastRefusal(): CameraRefusal {
+        val present = hasCamera()
+        return synchronized(lock) { CameraRefusal.fromToken(outcome, present) }
     }
 
     // ---- open ---------------------------------------------------------------------------------------
