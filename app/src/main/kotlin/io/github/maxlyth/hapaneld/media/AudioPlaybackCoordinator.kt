@@ -22,6 +22,7 @@ internal interface AudioPlaybackRun {
 
 internal fun interface AudioPlaybackRunFactory {
     fun create(url: String): AudioPlaybackRun
+    fun createSpeech(url: String): AudioPlaybackRun = create(url)
 }
 
 /** Owns one latest-wins announcement lane for the service lifetime. */
@@ -46,7 +47,7 @@ internal class AudioPlaybackCoordinator(
         }
     }
 
-    private data class Request(val generation: Long, val url: String)
+    private data class Request(val generation: Long, val url: String, val speech: Boolean)
     private class Active(val generation: Long, val run: AudioPlaybackRun, val job: Job) {
         private val cancelled = AtomicBoolean(false)
         fun cancel() {
@@ -77,9 +78,9 @@ internal class AudioPlaybackCoordinator(
      * later announcement's generation and leave the caller watching work that is not its own.
      */
     @Synchronized
-    fun submitForGeneration(url: String): Long? {
+    fun submitForGeneration(url: String, speech: Boolean = false): Long? {
         if (closed) return null
-        val request = Request(++generation, url)
+        val request = Request(++generation, url, speech)
         snapshot = Snapshot(State.QUEUED, request.generation)
         if (requests.trySend(request).isSuccess) return request.generation
         closed = true
@@ -153,7 +154,7 @@ internal class AudioPlaybackCoordinator(
                 if (!isPending(request.generation)) continue
 
                 val run = try {
-                    factory.create(request.url)
+                    if (request.speech) factory.createSpeech(request.url) else factory.create(request.url)
                 } catch (error: Throwable) {
                     fail(request.generation, error)
                     continue

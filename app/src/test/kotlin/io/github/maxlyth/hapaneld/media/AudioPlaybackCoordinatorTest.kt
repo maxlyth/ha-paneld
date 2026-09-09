@@ -16,6 +16,25 @@ import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AudioPlaybackCoordinatorTest {
+    @Test fun onlyExplicitSpeechUsesPreparedPlayback() = runTest {
+        val selected = mutableListOf<String>()
+        val factory = object : AudioPlaybackRunFactory {
+            private fun run(kind: String) = object : AudioPlaybackRun {
+                override suspend fun execute() { selected += kind }
+                override fun cancel() {}
+            }
+            override fun create(url: String) = run("media:$url")
+            override fun createSpeech(url: String) = run("speech:$url")
+        }
+        val coordinator = AudioPlaybackCoordinator(factory, StandardTestDispatcher(testScheduler))
+        coordinator.submit("music")
+        runCurrent()
+        coordinator.submitForGeneration("instruction", speech = true)
+        runCurrent()
+        assertEquals(listOf("media:music", "speech:instruction"), selected)
+        assertTrue(coordinator.close(1_000L))
+    }
+
     private class FakeRun(
         private val name: String,
         private val events: MutableList<String>,

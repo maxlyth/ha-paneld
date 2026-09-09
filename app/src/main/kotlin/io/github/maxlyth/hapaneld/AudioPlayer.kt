@@ -34,13 +34,15 @@ object AudioPlayer {
 
     internal fun factory(cacheDir: File): AudioPlaybackRunFactory {
         cleanupStale(cacheDir)
-        return AudioPlaybackRunFactory { url ->
-            DownloadedAudioRun(
+        return object : AudioPlaybackRunFactory {
+            override fun create(url: String) = createRun(url, false)
+            override fun createSpeech(url: String) = createRun(url, true)
+            private fun createRun(url: String, speech: Boolean) = DownloadedAudioRun(
                 url = url,
                 createTemp = { File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, cacheDir) },
                 transfer = HttpAudioTransfer(MAX_AUDIO_BYTES),
                 clip = AndroidAudioClip(),
-                preparation = AndroidPcmAudioPreparation(),
+                preparation = if (speech) AndroidPcmAudioPreparation() else null,
             )
         }
     }
