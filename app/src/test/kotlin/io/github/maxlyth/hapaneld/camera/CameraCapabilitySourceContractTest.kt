@@ -67,7 +67,7 @@ class CameraCapabilitySourceContractTest {
     @Test fun oneRuleAnswersForEveryCameraSurface() {
         assertTrue(
             "the rule combines the declaration with the observation",
-            "cameraCapabilityPresent(profile.cameraDeclared, cameraPresence.get())" in service,
+            "cameraCapabilityReason(profile.cameraDeclared, cameraPresence.get())" in service,
         )
         assertEquals(
             "the profile's declaration is read in exactly one place",
@@ -106,14 +106,15 @@ class CameraCapabilitySourceContractTest {
         assertTrue("and again wherever the prompt is republished", "wantsPermission = enabled() && hasCamera() && !permissionGranted()" in prompt)
 
         val presentation = body(owner, "override fun presentation()")
-        val presentationRead = presentation.indexOf("val present = hasCamera()")
+        val presentationRead = presentation.indexOf("val reason = capabilityReason()")
         assertTrue("the presentation reads it before taking the lock", presentationRead in 0 until presentation.indexOf("synchronized(lock)"))
-        assertTrue("!present -> CameraPresentation.absent()" in presentation)
+        assertTrue("the capability is derived from that reason", "val present = reason.capable" in presentation)
+        assertTrue("!present -> CameraPresentation.absent(reason)" in presentation)
 
         val acquire = body(owner, "private fun acquireLease")
-        val acquireRead = acquire.indexOf("val present = hasCamera()")
+        val acquireRead = acquire.indexOf("val reason = capabilityReason()")
         assertTrue("so does the lease gate", acquireRead in 0 until acquire.indexOf("synchronized(lock)"))
-        assertTrue("!present -> CameraRefusal.ABSENT" in acquire)
+        assertTrue("only settled non-enumeration becomes absence", "reason == CameraCapabilityReason.NOT_ENUMERATED" in acquire)
 
         assertFalse("nothing enumerates while the lock is held", "!hasCamera() ->" in owner)
     }

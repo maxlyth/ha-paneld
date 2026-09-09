@@ -330,7 +330,8 @@ function cameraCard(tbl,hdr){
   switch(action){
    case 'turn on the camera setting to serve snapshots and a stream':return i18nText('dashboard.camera.action.enable','turn on the camera setting to serve snapshots and a stream');
    case 'grant the camera permission on the panel when prompted':return i18nText('dashboard.camera.action.grant_permission','grant the camera permission on the panel when prompted');
-   case 'check the camera hardware; a new client after the hold or a setting toggle retries':return i18nText('dashboard.camera.action.check_hardware','check the camera hardware; a new client after the hold or a setting toggle retries');
+   case 'check the camera hardware; a new client after the hold retries':return i18nText('dashboard.camera.action.check_hardware','check the camera hardware; a new client after the hold retries');
+   case 'the profile declares a camera this board does not expose; correct hardware.camera in the profile':return i18nText('dashboard.camera.action.misdeclared_profile','the profile declares a camera this board does not expose; correct hardware.camera in the profile');
    case 'wake the panel: a camera session can only start while the dashboard is visible':return i18nText('dashboard.camera.action.wake_panel','wake the panel: a camera session can only start while the dashboard is visible');
    case 'the camera-in-use light could not be shown; check overlay permission and the LED':return i18nText('dashboard.camera.action.check_indicator','the camera-in-use light could not be shown; check overlay permission and the LED');
    case "the camera delivers frames but they could not be encoded; report this with the panel's diagnostics":return i18nText('dashboard.camera.action.report_encode_failure',"the camera delivers frames but they could not be encoded; report this with the panel's diagnostics");

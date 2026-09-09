@@ -768,6 +768,21 @@
       "state": "machine-cross-checked",
       "text": "正在等待有效的环境光读数。"
     },
+    "configure.camera.not_enumerated": {
+      "text": "此面板未报告摄像头。如果确实有，请在其设备配置文件中声明 hardware.camera，并同时提供一个可在摄像头开启时点亮的 LED。",
+      "sourceHash": "331f1ddebf379a9351bf10e42bf20b13e6cb055eca836a67be47d20c0dd65c5e",
+      "state": "machine-cross-checked"
+    },
+    "configure.camera.suppressed": {
+      "text": "此面板的设备配置文件将 hardware.camera 设为 false，因此不提供摄像头。请编辑该配置文件以启用。",
+      "sourceHash": "7d9630a0bbdfc2c972fd1a2b6febfabdf62ce5e8e00a0b9bc98660a725a7460e",
+      "state": "machine-cross-checked"
+    },
+    "configure.camera.undetermined": {
+      "text": "面板仍在检查是否配有摄像头。这尚不能说明硬件的情况。",
+      "sourceHash": "49b599f864427b27005cc385b12d1452365117ad90a6b4d51a335bfae6165520",
+      "state": "machine-cross-checked"
+    },
     "configure.dashboard.auto_account_default": {
       "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
       "state": "machine-cross-checked",
@@ -2164,9 +2179,9 @@
       "text": "仪表盘缩放比例为 {zoom}%"
     },
     "dashboard.camera.action.check_hardware": {
-      "sourceHash": "ead895a9433b1b339ce71fb87b51a913cea97707df38d20d00a76d06e112b66c",
-      "state": "machine-cross-checked",
-      "text": "检查摄像头硬件；等待期结束后接入新客户端，或切换设置，都会触发重试"
+      "text": "请检查摄像头硬件；等待期结束后新的客户端会重试",
+      "sourceHash": "090d1ef719dc1159410c638eac487771bb3151e5dfe1deebeaa9b19e0d6ce11f",
+      "state": "machine-cross-checked"
     },
     "dashboard.camera.action.check_indicator": {
       "sourceHash": "f215faa3267178604f1d4d8c8fa70f5d6e4ab132f7942ffa677d64eb1726e37c",
@@ -2187,6 +2202,11 @@
       "sourceHash": "b8021f57862db8b3de847ed071a7d422746cc592947888bb9f369fff7668c4e0",
       "state": "machine-cross-checked",
       "text": "面板提示时，请授予摄像头权限"
+    },
+    "dashboard.camera.action.misdeclared_profile": {
+      "text": "配置文件声明了此主板并未提供的摄像头；请在配置文件中更正 hardware.camera",
+      "sourceHash": "a21c61954e1a191d0d9a3e4864a132a68878650930555cc74a9e99653099bd48",
+      "state": "machine-cross-checked"
     },
     "dashboard.camera.action.report_encode_failure": {
       "sourceHash": "e357e35fdd3e41b26dfcd530e77a10a34b239a0b525a735f9ed401554bf40eb6",

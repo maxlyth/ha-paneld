@@ -41,6 +41,32 @@ enum class CameraRefusal(val token: String) {
     BUSY("camera-busy"),
     /** The service is tearing down. */
     STOPPING("camera-stopping"),
+    ;
+
+    companion object {
+        /**
+         * Recovers the identifier a stored token came from. [ABSENT] and [FAILED] share
+         * `camera-unavailable` on the wire deliberately — a consumer holding an HTTP body cannot act on
+         * the difference — so the token alone is ambiguous and [cameraPresent] resolves it. Scanning
+         * declaration order instead answers [ABSENT] for every `camera-unavailable`, which tells a panel
+         * whose camera merely failed to open that it has no camera, and turns a recoverable 503 into a
+         * 404 documented as "this board has no camera at all". Only a completed empty enumeration is
+         * settled absence; a suppressed camera or an unanswered probe remains a 503 refusal. An
+         * unrecognised token is likewise a fault rather than absent hardware.
+         */
+        fun fromToken(token: String, capabilityReason: CameraCapabilityReason): CameraRefusal = when (token) {
+            ABSENT.token -> if (capabilityReason == CameraCapabilityReason.NOT_ENUMERATED) ABSENT else FAILED
+            else -> entries.firstOrNull { it.token == token } ?: FAILED
+        }
+
+        /**
+         * The snapshot route's status for a refusal. Only genuinely absent hardware is `404`; every
+         * refusal a camera-bearing panel can raise is a `503`, because the resource exists and the
+         * panel is declining to serve it right now.
+         */
+        fun snapshotStatusCode(refusal: CameraRefusal): Int =
+            if (refusal == ABSENT) 404 else 503
+    }
 }
 
 sealed interface SnapshotResult {
@@ -267,12 +293,40 @@ data class CameraPresentation(
     }
 
     companion object {
-        fun absent(): CameraPresentation = CameraPresentation(
-            state = CameraState.ABSENT, outcome = CameraRefusal.ABSENT.token, fault = CameraFault.NONE,
-            faultDetail = null, recovery = "none", clients = 0, lastFrameAgeMs = null,
-            consecutiveFailures = 0, indication = CameraIndication.NONE,
-            summary = "no camera on this panel", action = "none",
-        )
+        /**
+         * The projection for a panel offering no camera. [reason] says which of the three ways of
+         * arriving at "no" this is, carried in `fault_detail` — already the sanitized sub-classification
+         * field — so no new field is added to a status object every consumer parses.
+         *
+         * Each case gets an action, because "no camera on this panel" with nothing to do next is the
+         * whole complaint: a suppressed camera is somebody's decision and reversible, an enumeration
+         * that found nothing is a fact about the board, and a probe that has not answered is neither and
+         * must not be read as either. The enumeration case names the profile flag *and* the indication
+         * route, because a profile with no off-display indication may not enable the camera at all
+         * (privacy contract §2) and guidance that stops at the flag would send somebody down a path the
+         * panel will refuse.
+         */
+        fun absent(reason: CameraCapabilityReason = CameraCapabilityReason.NOT_ENUMERATED): CameraPresentation {
+            val summary = when (reason) {
+                CameraCapabilityReason.SUPPRESSED_BY_PROFILE -> "no camera: the device profile suppresses it"
+                CameraCapabilityReason.UNDETERMINED -> "checking whether this panel has a camera"
+                else -> "no camera on this panel"
+            }
+            val action = when (reason) {
+                CameraCapabilityReason.SUPPRESSED_BY_PROFILE ->
+                    "the profile sets hardware.camera false; edit the profile to offer this panel's camera"
+                CameraCapabilityReason.UNDETERMINED ->
+                    "the camera enumeration has not answered yet; this is not yet a statement about the hardware"
+                else ->
+                    "if this panel has a camera, declare hardware.camera in its profile alongside an LED the panel can light"
+            }
+            return CameraPresentation(
+                state = CameraState.ABSENT, outcome = CameraRefusal.ABSENT.token, fault = CameraFault.NONE,
+                faultDetail = reason.wire, recovery = "none", clients = 0, lastFrameAgeMs = null,
+                consecutiveFailures = 0, indication = CameraIndication.NONE,
+                summary = summary, action = action,
+            )
+        }
 
         fun disabled(): CameraPresentation = CameraPresentation(
             state = CameraState.DISABLED, outcome = CameraRefusal.DISABLED.token, fault = CameraFault.NONE,

@@ -1928,6 +1928,41 @@
     return i18nText("configure.auto_sleep.area_check_failed", "Could not check this panel’s Home Assistant Area. Check the Home Assistant connection.");
   }
 
+  // Why the Camera group is not offered. The panel already answers this on /api/v1/camera/status —
+  // state plus fault_detail — and reusing it keeps Configure, the Dashboard card and the status endpoint
+  // reading one classification instead of three that drift apart inside a release.
+  var cameraCapability = null, cameraCapabilityLoading = false;
+  function loadCameraCapability() {
+    if (cameraCapabilityLoading || cameraCapability) return;
+    cameraCapabilityLoading = true;
+    fetch("/api/v1/camera/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw r.status; return r.json(); })
+      .then(function (d) { cameraCapability = d; render(); })
+      .catch(function () { /* the block stays on its generic wording */ })
+      .then(function () { cameraCapabilityLoading = false; });
+  }
+
+  // True only when the panel does not offer the camera at all. A camera-bearing panel on the Basic tab
+  // also shows an empty Camera group — every camera setting is ADVANCED — and must not be told it has no
+  // camera. That case has available:true fields filtered out by tier, so it is excluded here.
+  function cameraGroupUnavailable() {
+    var camera = schema.filter(function (f) { return presentationGroup(f) === "Camera"; });
+    return camera.length > 0 && camera.every(function (f) { return !f.available; });
+  }
+
+  function cameraUnavailableNode() {
+    var reason = cameraCapability && cameraCapability.state === "absent" ? cameraCapability.fault_detail : null;
+    var text;
+    if (reason === "suppressed_by_profile") {
+      text = i18nText("configure.camera.suppressed", "This panel's device profile sets hardware.camera to false, so the camera is not offered. Edit the profile to offer it.");
+    } else if (reason === "undetermined") {
+      text = i18nText("configure.camera.undetermined", "The panel is still checking whether it has a camera. This is not yet an answer about the hardware.");
+    } else {
+      text = i18nText("configure.camera.not_enumerated", "This panel reports no camera. If it has one, declare hardware.camera in its device profile, alongside an LED the panel can light while the camera is open.");
+    }
+    return el("div", { class: "camera-unavailable", role: "status", text: text });
+  }
+
   function autoSleepPrerequisiteNode() {
     return el("div", {
       id: "auto-sleep-prerequisite-status",
@@ -2979,10 +3014,24 @@
     }
     if (haPickerCleanup) haPickerCleanup();
     haOauthButton = null; haOauthStatus = null; haOauthLinks = null;
-    var shown = 0, desiredCards = [];
+    var shown = 0, explained = 0, desiredCards = [];
     groups.forEach(function (g) {
       var fields = fieldsForConfigGroup(g);
-      if (!fields.length) return;
+      if (!fields.length) {
+        // The one group that explains itself when it has nothing to show: a missing Camera card is the
+        // documented complaint, because nothing connected "my panel has a camera" to "set the flag".
+        if (g !== "Camera" || !cameraGroupUnavailable()) return;
+        loadCameraCapability();
+        var absent = el("div", { class: "card" }, [
+          el("h2", {}, [el("span", { text: groupTitle(g) })]),
+          cameraUnavailableNode(),
+        ]);
+        absent.setAttribute("data-config-group", g);
+        absent.setAttribute("data-layout-key", configLayoutKey(g));
+        desiredCards.push(absent);
+        explained += 1;
+        return;
+      }
       shown += fields.length;
       if (g === "Behaviour" && retainedBehaviourCard) {
         desiredCards.push(retainedBehaviourCard);
@@ -3071,8 +3120,9 @@
       updateAutoSleepSummary();
       updateAutoSleepHistory();
     }
-    document.getElementById("cfg-status").style.display = shown ? "none" : "block";
-    if (!shown) document.getElementById("cfg-status").textContent = i18nText("configure.empty", "No settings in this view.");
+    var anyContent = shown || explained;
+    document.getElementById("cfg-status").style.display = anyContent ? "none" : "block";
+    if (!anyContent) document.getElementById("cfg-status").textContent = i18nText("configure.empty", "No settings in this view.");
     if (retainedAutoSleepFocus && retainedAutoSleepFocus.isConnected && document.activeElement !== retainedAutoSleepFocus) {
       try { retainedAutoSleepFocus.focus({ preventScroll: true }); }
       catch (_) { retainedAutoSleepFocus.focus(); }

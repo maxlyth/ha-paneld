@@ -91,6 +91,15 @@ class CameraSessionOwner(
     },
     private val localAddress: () -> String? = ::localIpv4,
     private val nowMs: () -> Long = SystemClock::elapsedRealtime,
+    /**
+     * Why the panel does or does not have a camera, for the projection alone — never for a gate, which
+     * reads [hasCamera] as it always has. Supplied by the one place that reads the profile declaration
+     * and the enumeration probe. The default keeps every construction that does not care working, and
+     * says only what [hasCamera] already said.
+     */
+    private val capabilityReason: () -> CameraCapabilityReason = {
+        if (hasCamera()) CameraCapabilityReason.PRESENT else CameraCapabilityReason.NOT_ENUMERATED
+    },
 ) : CameraSurface, CameraStreamSource {
 
     private val lock = Any()
@@ -263,10 +272,11 @@ class CameraSessionOwner(
         // this lock. It is safe to read early because camera presence does not change at runtime.
         val facts = transport.facts()
         val address = facts.port?.let { localAddress() }
-        val present = hasCamera()
+        val reason = capabilityReason()
+        val present = reason.capable
         return synchronized(lock) {
             when {
-                !present -> CameraPresentation.absent()
+                !present -> CameraPresentation.absent(reason)
                 state.phase == Phase.STOPPING -> current(facts, address)
                 !enabled() -> CameraPresentation.disabled()
                 !permissionGranted() -> CameraPresentation.permissionNeeded(streamPort = facts.port)
@@ -419,7 +429,8 @@ class CameraSessionOwner(
         // Read outside the lock, like the presentation's: the capability may enumerate Android's
         // cameras. Unlike the switch below it cannot change while the panel runs, so reading it early
         // cannot produce the stale-observation defect the critical section beneath exists to prevent.
-        val present = hasCamera()
+        val reason = capabilityReason()
+        val present = reason.capable
         synchronized(lock) {
             // The switch and the permission are observed and applied in ONE critical section. Split
             // across two, an enable landing in the gap let a caller that had already read the switch as
@@ -427,7 +438,11 @@ class CameraSessionOwner(
             // this class exists to clear — and this time on a camera that was on. Both reads are the
             // same cheap non-blocking reads the presentation already makes under this lock.
             val gate = when {
-                !present -> CameraRefusal.ABSENT
+                !present -> if (reason == CameraCapabilityReason.NOT_ENUMERATED) {
+                    CameraRefusal.ABSENT
+                } else {
+                    CameraRefusal.FAILED
+                }
                 admissionClosed -> CameraRefusal.STOPPING
                 !enabled() -> CameraRefusal.DISABLED
                 !permissionGranted() -> CameraRefusal.PERMISSION
@@ -477,8 +492,11 @@ class CameraSessionOwner(
         return Lease(leaseId)
     }
 
-    private fun lastRefusal(): CameraRefusal = synchronized(lock) {
-        CameraRefusal.entries.firstOrNull { it.token == outcome } ?: CameraRefusal.FAILED
+    // The capability is read before the lock is taken, never under it: the presence probe may enumerate,
+    // and `CameraCapabilitySourceContractTest` holds this owner to never enumerating under its own lock.
+    private fun lastRefusal(): CameraRefusal {
+        val reason = capabilityReason()
+        return synchronized(lock) { CameraRefusal.fromToken(outcome, reason) }
     }
 
     // ---- open ---------------------------------------------------------------------------------------
@@ -667,7 +685,7 @@ class CameraSessionOwner(
                 attempt.releaseStanding()
                 indicator.hide()
                 synchronized(lock) {
-                    recovery = if (state.phase == Phase.DEGRADED) "reattach a client after the hold or toggle the camera setting"
+                    recovery = if (state.phase == Phase.DEGRADED) "reattach a client after the hold"
                     else "next open retries after ${state.retryNotBeforeMs - nowMs()}ms"
                 }
                 quitThread()
@@ -1065,7 +1083,7 @@ class CameraSessionOwner(
                     if (!state.degraded(attempt.id, decision.attempt, nowMs())) return
                     fault = decision.fault
                     outcome = CameraRefusal.FAILED.token
-                    recovery = "reattach a client after the hold or toggle the camera setting"
+                    recovery = "reattach a client after the hold"
                     current = null
                     TickAction.Degrade(decision.fault, decision.attempt, state.generation)
                 }
@@ -1120,7 +1138,7 @@ class CameraSessionOwner(
         synchronized(lock) {
             fault = f
             outcome = CameraRefusal.FAILED.token
-            recovery = "reattach a client after the hold or toggle the camera setting"
+            recovery = "reattach a client after the hold"
             if (current === attempt) current = null
             generation = state.generation
         }
@@ -1224,7 +1242,15 @@ class CameraSessionOwner(
                 Phase.IDLE -> "camera closed; nobody is watching; $stream"
             },
             action = when {
-                phase == Phase.DEGRADED -> "check the camera hardware; a new client after the hold or a setting toggle retries"
+                // Ahead of the degraded branch on purpose: when the profile declares a camera the board
+                // does not expose, every open fails here and "check the camera hardware" sends somebody
+                // to look for a fault in a board that is behaving correctly. The profile is the fault.
+                faultDetail == "no_camera_id" ->
+                    "the profile declares a camera this board does not expose; correct hardware.camera in the profile"
+                // The switch is deliberately not offered as a remedy: endSession clears neither the retry
+                // backoff nor the degraded phase, so toggling it does not retry, and the text used to say
+                // it did (privacy contract §6).
+                phase == Phase.DEGRADED -> "check the camera hardware; a new client after the hold retries"
                 fault == CameraFault.FOREGROUND -> "wake the panel: a camera session can only start while the dashboard is visible"
                 fault == CameraFault.INDICATION -> "the camera-in-use light could not be shown; check overlay permission and the LED"
                 fault == CameraFault.ENCODE -> "the camera delivers frames but they could not be encoded; report this with the panel's diagnostics"

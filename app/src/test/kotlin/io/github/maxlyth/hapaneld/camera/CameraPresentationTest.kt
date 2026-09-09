@@ -19,12 +19,16 @@ class CameraPresentationTest {
         assertEquals(CameraState.ABSENT, p.state)
         assertEquals(CameraRefusal.ABSENT.token, p.outcome)
         assertEquals(CameraFault.NONE, p.fault)
-        assertNull(p.faultDetail)
+        // The absent state carries which of the three ways of arriving at "no" this is.
+        assertEquals(CameraCapabilityReason.NOT_ENUMERATED.wire, p.faultDetail)
         assertEquals(0, p.clients)
         assertNull(p.lastFrameAgeMs)
         assertEquals(CameraIndication.NONE, p.indication)
         assertTrue(p.summary.contains("no camera"))
-        assertEquals("none", p.action)
+        // An absent camera used to end the conversation. It now says what would change the answer,
+        // including the indication route, because a profile without one may not enable a camera.
+        assertTrue("must name the profile flag", p.action.contains("hardware.camera"))
+        assertTrue("must name the indication requirement", p.action.contains("LED"))
     }
 
     @Test fun disabledReportsTheDisabledStateAndItsToken() {
@@ -53,7 +57,10 @@ class CameraPresentationTest {
         ).forEach { assertTrue("missing $it", j.has(it)) }
         assertEquals("absent", j.getString("state"))
         assertEquals("none", j.getString("fault"))
-        assertTrue(j.isNull("fault_detail"))
+        // optString rather than getString: a regression that drops the reason leaves JSON null, and
+        // getString throws JSONException there, which reports as a test error rather than as the
+        // assertion failure it is.
+        assertEquals(CameraCapabilityReason.NOT_ENUMERATED.wire, j.optString("fault_detail", ""))
         assertTrue(j.isNull("last_frame_age_ms"))
         assertFalse(j.getBoolean("live"))
         assertEquals(0, j.getInt("stream_clients"))

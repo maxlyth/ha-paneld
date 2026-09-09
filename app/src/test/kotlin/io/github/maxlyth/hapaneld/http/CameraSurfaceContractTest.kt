@@ -165,8 +165,18 @@ class CameraSurfaceContractTest {
         }
         val reachable = CameraRefusal.entries.filter { it !in streamOnly }
         namedInSnapshot.forEach { name -> assertTrue("$name named in snapshot() is reachable", reachable.any { it.name == name }) }
-        // The route sends exactly one refusal as 404 and every other as 503.
-        assertTrue("result.reason == CameraRefusal.ABSENT" in server)
+        // The route sends exactly one refusal as 404 and every other as 503. It no longer decides that
+        // inline: the mapping is `CameraRefusal.snapshotStatusCode`, so that `CameraRefusalTokenTest` can
+        // pin it per refusal without a server. The route's obligation here is to delegate to it rather
+        // than to re-derive a status of its own.
+        assertTrue(
+            "the snapshot route must take its status from the pure mapping",
+            "CameraRefusal.snapshotStatusCode(result.reason)" in server,
+        )
+        assertEquals(404, CameraRefusal.snapshotStatusCode(CameraRefusal.ABSENT))
+        reachable.filterNot { it == CameraRefusal.ABSENT }.forEach {
+            assertEquals("${it.name} must not be answered as absent hardware", 503, CameraRefusal.snapshotStatusCode(it))
+        }
         val responses = openApi.getJSONObject("paths").getJSONObject("/api/v1/camera/snapshot.jpg").getJSONObject("get").getJSONObject("responses")
         val notFound = responses.getJSONObject("404").getString("description")
         val unavailable = responses.getJSONObject("503").getString("description")
