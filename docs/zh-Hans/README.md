@@ -34,19 +34,19 @@ Web 界面提供一个统一的位置，用于配置面板、安装软件以及�
 
 | 仪表盘 | 设置 |
 |---|---|
-| <a href="../img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-dashboard-light.png"><img src="../img/ui-dashboard-dark.png" alt="仪表盘选项卡" width="420"></picture></a> | <a href="../img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-configure-light.png"><img src="../img/ui-configure-dark.png" alt="设置选项卡" width="420"></picture></a> |
+| <a href="../img/zh-Hans/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-dashboard-light.png"><img src="../img/zh-Hans/ui-dashboard-dark.png" alt="仪表盘选项卡" width="420"></picture></a> | <a href="../img/zh-Hans/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-configure-light.png"><img src="../img/zh-Hans/ui-configure-dark.png" alt="设置选项卡" width="420"></picture></a> |
 
 | 实体 | 安装 |
 |---|---|
-| <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="实体选项卡" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="安装选项卡" width="420"></picture></a> |
+| <a href="../img/zh-Hans/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-entities-light.png"><img src="../img/zh-Hans/ui-entities-dark.png" alt="实体选项卡" width="420"></picture></a> | <a href="../img/zh-Hans/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-install-light.png"><img src="../img/zh-Hans/ui-install-dark.png" alt="安装选项卡" width="420"></picture></a> |
 
 | 配置文件 | 日志 |
 |---|---|
-| <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="配置文件选项卡" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="日志标签页" width="420"></picture></a> |
+| <a href="../img/zh-Hans/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-profile-light.png"><img src="../img/zh-Hans/ui-profile-dark.png" alt="配置文件选项卡" width="420"></picture></a> | <a href="../img/zh-Hans/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-logs-light.png"><img src="../img/zh-Hans/ui-logs-dark.png" alt="日志标签页" width="420"></picture></a> |
 
 | 待机屏幕 | REST API 探索器 |
 |---|---|
-| <img src="../img/standing-screen.png" alt="显示配置地址和二维码的 ha-paneld 待机屏幕" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/api-explorer-light.png"><img src="../img/api-explorer-dark.png" alt="REST API 探索器" width="420"></picture> |
+| <img src="../img/zh-Hans/standing-screen.png" alt="显示配置地址和二维码的 ha-paneld 待机屏幕" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/api-explorer-light.png"><img src="../img/zh-Hans/api-explorer-dark.png" alt="REST API 探索器" width="420"></picture> |
 
 </details>
 

@@ -34,19 +34,19 @@ La interfaz web ofrece un único lugar para configurar un panel, instalar softwa
 
 | Panel de control | Configurar |
 |---|---|
-| <a href="../img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-dashboard-light.png"><img src="../img/ui-dashboard-dark.png" alt="Pestaña Panel de control" width="420"></picture></a> | <a href="../img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-configure-light.png"><img src="../img/ui-configure-dark.png" alt="Pestaña Configurar" width="420"></picture></a> |
+| <a href="../img/es/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-dashboard-light.png"><img src="../img/es/ui-dashboard-dark.png" alt="Pestaña Panel de control" width="420"></picture></a> | <a href="../img/es/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-configure-light.png"><img src="../img/es/ui-configure-dark.png" alt="Pestaña Configurar" width="420"></picture></a> |
 
 | Entidades | Instalar |
 |---|---|
-| <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="Pestaña Entidades" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="Pestaña Instalar" width="420"></picture></a> |
+| <a href="../img/es/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-entities-light.png"><img src="../img/es/ui-entities-dark.png" alt="Pestaña Entidades" width="420"></picture></a> | <a href="../img/es/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-install-light.png"><img src="../img/es/ui-install-dark.png" alt="Pestaña Instalar" width="420"></picture></a> |
 
 | Perfil | Registros |
 |---|---|
-| <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="Pestaña Perfil" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="Pestaña Registros" width="420"></picture></a> |
+| <a href="../img/es/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-profile-light.png"><img src="../img/es/ui-profile-dark.png" alt="Pestaña Perfil" width="420"></picture></a> | <a href="../img/es/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-logs-light.png"><img src="../img/es/ui-logs-dark.png" alt="Pestaña Registros" width="420"></picture></a> |
 
 | Pantalla de espera | Explorador de la API REST |
 |---|---|
-| <img src="../img/standing-screen.png" alt="Pantalla de espera de ha-paneld con la dirección de configuración y el código QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/api-explorer-light.png"><img src="../img/api-explorer-dark.png" alt="Explorador de la API REST" width="420"></picture> |
+| <img src="../img/es/standing-screen.png" alt="Pantalla de espera de ha-paneld con la dirección de configuración y el código QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/es/api-explorer-light.png"><img src="../img/es/api-explorer-dark.png" alt="Explorador de la API REST" width="420"></picture> |
 
 </details>
 

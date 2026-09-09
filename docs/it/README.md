@@ -34,19 +34,19 @@ L'interfaccia web offre un unico posto in cui configurare un pannello, installar
 
 | Dashboard | Configura |
 |---|---|
-| <a href="../img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-dashboard-light.png"><img src="../img/ui-dashboard-dark.png" alt="Scheda Dashboard" width="420"></picture></a> | <a href="../img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-configure-light.png"><img src="../img/ui-configure-dark.png" alt="Scheda Configura" width="420"></picture></a> |
+| <a href="../img/it/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-dashboard-light.png"><img src="../img/it/ui-dashboard-dark.png" alt="Scheda Dashboard" width="420"></picture></a> | <a href="../img/it/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-configure-light.png"><img src="../img/it/ui-configure-dark.png" alt="Scheda Configura" width="420"></picture></a> |
 
 | Entità | Installa |
 |---|---|
-| <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="Scheda Entità" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="Scheda Installa" width="420"></picture></a> |
+| <a href="../img/it/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-entities-light.png"><img src="../img/it/ui-entities-dark.png" alt="Scheda Entità" width="420"></picture></a> | <a href="../img/it/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-install-light.png"><img src="../img/it/ui-install-dark.png" alt="Scheda Installa" width="420"></picture></a> |
 
 | Profilo | Registri |
 |---|---|
-| <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="Scheda Profilo" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="Scheda Registri" width="420"></picture></a> |
+| <a href="../img/it/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-profile-light.png"><img src="../img/it/ui-profile-dark.png" alt="Scheda Profilo" width="420"></picture></a> | <a href="../img/it/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-logs-light.png"><img src="../img/it/ui-logs-dark.png" alt="Scheda Registri" width="420"></picture></a> |
 
 | Schermata di attesa | Esplora API REST |
 |---|---|
-| <img src="../img/standing-screen.png" alt="Schermata di attesa di ha-paneld con l'indirizzo di configurazione e il codice QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/api-explorer-light.png"><img src="../img/api-explorer-dark.png" alt="Esplora API REST" width="420"></picture> |
+| <img src="../img/it/standing-screen.png" alt="Schermata di attesa di ha-paneld con l'indirizzo di configurazione e il codice QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/it/api-explorer-light.png"><img src="../img/it/api-explorer-dark.png" alt="Esplora API REST" width="420"></picture> |
 
 </details>
 

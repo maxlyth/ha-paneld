@@ -34,19 +34,19 @@ Diese App ist für dedizierte Wandpanels vorgesehen, nicht für persönliche Sma
 
 | Dashboard | Konfiguration |
 |---|---|
-| <a href="../img/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-dashboard-light.png"><img src="../img/ui-dashboard-dark.png" alt="Registerkarte „Dashboard“" width="420"></picture></a> | <a href="../img/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-configure-light.png"><img src="../img/ui-configure-dark.png" alt="Registerkarte „Konfiguration“" width="420"></picture></a> |
+| <a href="../img/de/ui-dashboard-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-dashboard-light.png"><img src="../img/de/ui-dashboard-dark.png" alt="Registerkarte „Dashboard“" width="420"></picture></a> | <a href="../img/de/ui-configure-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-configure-light.png"><img src="../img/de/ui-configure-dark.png" alt="Registerkarte „Konfiguration“" width="420"></picture></a> |
 
 | Entitäten | Installation |
 |---|---|
-| <a href="../img/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-entities-light.png"><img src="../img/ui-entities-dark.png" alt="Registerkarte „Entitäten“" width="420"></picture></a> | <a href="../img/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-install-light.png"><img src="../img/ui-install-dark.png" alt="Registerkarte „Installation“" width="420"></picture></a> |
+| <a href="../img/de/ui-entities-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-entities-light.png"><img src="../img/de/ui-entities-dark.png" alt="Registerkarte „Entitäten“" width="420"></picture></a> | <a href="../img/de/ui-install-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-install-light.png"><img src="../img/de/ui-install-dark.png" alt="Registerkarte „Installation“" width="420"></picture></a> |
 
 | Profil | Protokolle |
 |---|---|
-| <a href="../img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-profile-light.png"><img src="../img/ui-profile-dark.png" alt="Registerkarte „Profil“" width="420"></picture></a> | <a href="../img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/ui-logs-light.png"><img src="../img/ui-logs-dark.png" alt="Registerkarte „Protokolle“" width="420"></picture></a> |
+| <a href="../img/de/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-profile-light.png"><img src="../img/de/ui-profile-dark.png" alt="Registerkarte „Profil“" width="420"></picture></a> | <a href="../img/de/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-logs-light.png"><img src="../img/de/ui-logs-dark.png" alt="Registerkarte „Protokolle“" width="420"></picture></a> |
 
 | Bereitschaftsbildschirm | REST-API-Explorer |
 |---|---|
-| <img src="../img/standing-screen.png" alt="ha-paneld-Bereitschaftsbildschirm mit Konfigurationsadresse und QR-Code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/api-explorer-light.png"><img src="../img/api-explorer-dark.png" alt="REST-API-Explorer" width="420"></picture> |
+| <img src="../img/de/standing-screen.png" alt="ha-paneld-Bereitschaftsbildschirm mit Konfigurationsadresse und QR-Code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/de/api-explorer-light.png"><img src="../img/de/api-explorer-dark.png" alt="REST-API-Explorer" width="420"></picture> |
 
 </details>
 
