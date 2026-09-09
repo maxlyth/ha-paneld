@@ -354,6 +354,26 @@ function assertLinkTarget(repository, revision, target, owner) {
   if (mode === "120000" || !["blob", "tree"].includes(type)) {
     throw new Error(`${owner}: link target is not a regular blob or tree: ${target}`);
   }
+  return { mode, type };
+}
+
+function localizedImageTarget(repository, revision, sourceTarget, locale, owner) {
+  if (!sourceTarget.startsWith("docs/img/") || sourceTarget.endsWith("/")) return null;
+  const candidate = path.posix.join("docs/img", locale, path.posix.basename(sourceTarget));
+  let entry;
+  try {
+    entry = git(repository, ["ls-tree", revision, "--", candidate]).trim();
+  } catch {
+    entry = "";
+  }
+  if (!entry) return null;
+  const rows = entry.split("\n");
+  if (rows.length !== 1) throw new Error(`${owner}: localized image target is ambiguous: ${candidate}`);
+  const [mode, type] = rows[0].split(/\s+/, 2);
+  if (mode === "120000" || type !== "blob") {
+    throw new Error(`${owner}: localized image target is not a regular blob: ${candidate}`);
+  }
+  return candidate;
 }
 
 function relocateDocumentLinks(item, allItems, manifest, locale, repository) {
@@ -397,10 +417,18 @@ function relocateDocumentLinks(item, allItems, manifest, locale, repository) {
     if (sourceTarget === ".." || sourceTarget.startsWith("../") || path.posix.isAbsolute(sourceTarget)) {
       throw new Error(`${item.sourcePath}: link escapes the repository: ${url}`);
     }
-    assertLinkTarget(repository, manifest.sourceRevision, sourceTarget, item.sourcePath);
-    assertLinkTarget(repository, headRevision, sourceTarget, item.sourcePath);
+    const sourceEntry = assertLinkTarget(
+      repository,
+      manifest.sourceRevision,
+      sourceTarget,
+      item.sourcePath,
+    );
+    const headEntry = assertLinkTarget(repository, headRevision, sourceTarget, item.sourcePath);
     const selectedTarget = selected.get(sourceTarget);
-    const desired = selectedTarget ? selectedTarget.targetPath : sourceTarget;
+    const localizedImage = sourceEntry.type === "blob" && headEntry.type === "blob"
+      ? localizedImageTarget(repository, headRevision, sourceTarget, locale, item.sourcePath)
+      : null;
+    const desired = localizedImage || (selectedTarget ? selectedTarget.targetPath : sourceTarget);
     let relative = path.posix.relative(path.posix.dirname(item.targetPath), desired);
     if (!split.pathname) relative = "";
     if (!relative && split.pathname) relative = path.posix.basename(desired);
