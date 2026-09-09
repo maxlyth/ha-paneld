@@ -52,6 +52,14 @@ class ReleaseCatalogTest {
         assertEquals("u6", selected?.apkUrl)
     }
 
+    @Test fun apkTargetRetainsTheExactSourceTagBesideTheNormalisedVersion() {
+        val target = ReleaseCatalog.apkTarget(Raw("v0.8.6", false, "n6", "u6"), strip)
+        assertEquals("0.8.6", target?.version)
+        assertEquals("v0.8.6", target?.tag)
+        assertEquals("u6", target?.apkUrl)
+        assertNull(ReleaseCatalog.apkTarget(Raw("v0.8.6", false, "n6", null), strip))
+    }
+
     @Test fun newestDoesNotFallBackPastAReleaseWithoutAnApk() {
         val missingHead = listOf(
             Raw("v0.8.7-rc1", true, "n7", null),

@@ -4842,7 +4842,8 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         // (not the ignore-filtered view — Ignore only silences the dashboard banner). Plus two warnings not
         // modelled by HealthAudit: renderer recovery suppression and a Companion with a blank internal_url.
         val h = healthInputs()
-        val findings = healthFindings(h, h.webView.display, UpdateChecker.current(appContext))
+        val currentUpdates = UpdateChecker.current(appContext)
+        val findings = healthFindings(h, h.webView.display, currentUpdates)
         val warns = mutableListOf<String>()
         val warningPresentations = mutableListOf<InstallPresentation?>()
         fun addWarning(warning: String?, presentation: InstallPresentation?) {
@@ -4917,6 +4918,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         return "{\"warnings\":[${warns.joinToString(",") { jsonStr(it) }}]," + presentationOverlay +
             "\"capabilities\":[$caps]," +
             storageProof +
+            "\"panel_assistant_update\":${UpdateChecker.panelAssistantUpdateJson(currentUpdates)}," +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
             // `ha_network` follows the same unconditional rule: idle with measuring=false when no
             // socket is held, never absent.

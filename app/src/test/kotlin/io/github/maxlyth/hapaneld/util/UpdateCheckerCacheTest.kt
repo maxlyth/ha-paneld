@@ -2,8 +2,10 @@ package io.github.maxlyth.hapaneld.util
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
 class UpdateCheckerCacheTest {
     private val stable = UpdateChecker.RequestedPolicies(
@@ -110,6 +112,56 @@ class UpdateCheckerCacheTest {
         assertEquals(listOf(paneldUpdate), result.available)
         assertEquals(stable.companion, result.companionCachePolicy)
         assertTrue(result.complete)
+    }
+
+    @Test fun panelAssistantProjectionRetainsOnlyTheCachedStableExactTarget() {
+        val json = JSONObject(
+            UpdateChecker.panelAssistantUpdateJson(
+                listOf(
+                    UpdateChecker.UpdateInfo(
+                        "ha-paneld",
+                        "0.9.7-rc3",
+                        "0.9.7",
+                        "https://release.example/private-details",
+                        "paneld",
+                        "v0.9.7",
+                    ),
+                    companionUpdate,
+                ),
+            ),
+        )
+
+        assertEquals("available", json.getString("state"))
+        assertEquals("0.9.7-rc3", json.getString("current_version"))
+        assertEquals("0.9.7", json.getString("target_version"))
+        assertEquals("v0.9.7", json.getString("tag"))
+        assertFalse(json.toString().contains("release.example"))
+        assertEquals(
+            setOf("state", "current_version", "target_version", "tag"),
+            json.keys().asSequence().toSet(),
+        )
+    }
+
+    @Test fun panelAssistantProjectionUsesExplicitAbsenceForUnsafeOrUnsupportedCache() {
+        val unsupported = listOf(
+            // A prerelease target must not become a stable update offer.
+            UpdateChecker.UpdateInfo("ha-paneld", "0.9.7-rc3", "0.9.8-rc1", "url", "paneld", "v0.9.8-rc1"),
+            // A duplicate component makes the cache ambiguous rather than allowing a first-entry choice.
+            UpdateChecker.UpdateInfo("ha-paneld", "0.9.7", "0.9.8", "url", "paneld", "v0.9.8"),
+        )
+        val absent = JSONObject(UpdateChecker.panelAssistantUpdateJson(unsupported))
+        assertEquals("none", absent.getString("state"))
+        assertEquals(setOf("state"), absent.keys().asSequence().toSet())
+
+        val missingTag = UpdateChecker.panelAssistantUpdate(
+            listOf(UpdateChecker.UpdateInfo("ha-paneld", "0.9.7", "0.9.8", "url", "paneld")),
+        )
+        assertNull(missingTag)
+        assertNull(
+            UpdateChecker.panelAssistantUpdate(
+                listOf(UpdateChecker.UpdateInfo("ha-paneld", "0.9.7", "0.9.8", "url", "paneld", "v0.9.9")),
+            ),
+        )
     }
 
     private fun reconcile(
