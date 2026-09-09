@@ -92,7 +92,7 @@
     start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true) || d.canCalibrate === false || (d.canCalibrate == null && d.canTeach === false);
     cancel.hidden = !active;
     cancel.disabled = busy || !currentSession;
-    reset.disabled = busy || active || !available;
+    reset.disabled = busy || active || !available || d.profileDefaultAvailable !== true;
   }
   function changed() {
     if (window.configCardSizeSourceReady) window.configCardSizeSourceReady("proximity");

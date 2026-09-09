@@ -105,6 +105,19 @@ class ProximityCalibrationRuntimeTest {
         }
     }
 
+    @Test fun resetWithoutProfileDefaultPreservesUserCalibration() {
+        val previous = row(binaryLegacy())
+        val backing = Backing(previous)
+        val runtime = ProximityCalibrationRuntime(SOURCE, PROFILE, null, Store(backing),
+            elapsed = { 1_000L }, wall = { 1_800_000_000_000L })
+        val status = JSONObject(runtime.json())
+        assertFalse(status.getBoolean("profileDefaultAvailable"))
+        assertEquals("user", status.getString("calibrationSource"))
+        assertFalse(runtime.resetToProfile())
+        assertEquals(previous, backing.row)
+        assertEquals(0, backing.clears)
+    }
+
     @Test fun rawSourceExcludesHalCalibrationAndReportsItsVerifiedRepresentationBeforeCalibration() {
         val previous = row(binaryLegacy())
         val backing = Backing(previous)

@@ -168,7 +168,7 @@ internal class ProximityCalibrationRuntime(
 
     @Synchronized
     fun resetToProfile(): Boolean {
-        if (closed || view.active || saving) return false
+        if (closed || view.active || saving || baseline == null) return false
         if (runCatching { store.clearProximityLearning(fingerprint) }.isFailure) return false
         userOverride = false
         readFailed = false

@@ -14,7 +14,7 @@ async function fixture(t, initial = {}) {
   t.after(() => browser.close());
   const page = await browser.newPage();
   const posts = [];
-  let status = { present: true, phase: 'ready', signalMode: 'binary', ...initial };
+  let status = { present: true, phase: 'ready', signalMode: 'binary', profileDefaultAvailable: false, ...initial };
   await page.clock.install();
   await page.route('http://panel.test/**', async (route) => {
     const request = route.request();
@@ -75,7 +75,7 @@ browserTest('a monitoring browser never adopts heartbeat ownership and shows pro
 });
 
 browserTest('profile reset requires confirmation and does not restart calibration', async (t) => {
-  const { page, posts } = await fixture(t);
+  const { page, posts } = await fixture(t, { profileDefaultAvailable: true });
   page.once('dialog', (dialog) => dialog.dismiss());
   await page.getByRole('button', { name: 'Restore profile defaults' }).click();
   assert.equal(posts.length, 0);
@@ -83,6 +83,14 @@ browserTest('profile reset requires confirmation and does not restart calibratio
   await page.getByRole('button', { name: 'Restore profile defaults' }).click();
   await page.waitForFunction(() => document.querySelector('.prox-learning-actions button:last-child').disabled === false);
   assert.deepEqual(posts.map(({ body }) => body), [{ action: 'reset' }]);
+});
+
+browserTest('profile reset stays disabled when no profile default exists', async (t) => {
+  const { page, posts } = await fixture(t);
+  const reset = page.getByRole('button', { name: 'Restore profile defaults' });
+  assert.equal(await reset.isDisabled(), true);
+  await reset.evaluate((button) => button.click());
+  assert.equal(posts.length, 0);
 });
 
 browserTest('starter heartbeat pauses after failure and resumes for an on-panel retry with the same session', async (t) => {
