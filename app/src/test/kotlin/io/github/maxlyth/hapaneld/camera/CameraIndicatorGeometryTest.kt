@@ -93,7 +93,7 @@ class CameraIndicatorGeometryTest {
      * look. What happens to that pulse as the session runs on is
      * [CameraIndicatorAttenuationTest]'s subject, not this one's.
      */
-    @Test fun thePulseIsTwoSteppedLevelsASecond() {
+    @Test fun theSessionOpensAtTwoSteppedLevelsASecond() {
         assertEquals(1_000L, CameraIndicatorPulse.PERIOD_MS)
         assertEquals(
             "two steps per period, so the light changes twice a second and no more",
@@ -112,12 +112,4 @@ class CameraIndicatorGeometryTest {
         assertTrue("the dim level must be visibly dimmer than bright", CameraIndicatorPulse.DIM < 0.8f)
     }
 
-    @Test fun theTwoLevelsAreTheOnesTheSessionOpensAt() {
-        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorPulse.alphaFor(bright = true), 0.001f)
-        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorPulse.alphaFor(bright = false), 0.001f)
-        // The attenuation schedule starts from exactly these, so the first half-minute of a session is
-        // the light that shipped before it existed.
-        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorAttenuation.alphaAt(0L, lit = true), 0.001f)
-        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorAttenuation.alphaAt(0L, lit = false), 0.001f)
-    }
 }

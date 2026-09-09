@@ -97,159 +97,57 @@ object CameraIndicatorGeometry {
 }
 
 /**
- * How the camera light moves during the session's first seconds, before it begins to back off.
+ * How the camera light moves, and how it backs off once a session keeps running.
  *
- * Two levels, stepped, once a second - deliberately not an animator. Cost is the whole argument, and
- * duty cycle is why it matters here: this light can be up for as long as a camera session lasts, so
- * whatever it costs, it costs continuously. Measured on a live panel, the compositor spends about
- * 6.8 ms of CPU per composited frame, so a stepped two-level pulse costs two layer updates a second -
- * under 1.4% of one core in the worst case, and effectively nothing while the dashboard is already
- * compositing. Driving the same effect with a `ValueAnimator` on alpha would redraw at the display
- * refresh rate whether or not the value visibly changed, which measures around 41% of a core. For an
- * effect that ends in a second that might be a fair trade; for one that may run for hours beside a
- * rendering dashboard it is not.
+ * Two stepped levels, deliberately not an animator. Cost is the whole argument: this light can be up for
+ * as long as a camera session lasts, so whatever it costs, it costs continuously. Measured on a live
+ * panel a stepped pulse costs two layer updates a second, under 1.4% of one core, while a `ValueAnimator`
+ * on alpha redraws at the display refresh rate whether or not the value visibly changed - about 41%.
  *
- * [DIM] is a visible level rather than transparent on purpose. A hard blink costs exactly the same but
- * leaves nothing on screen for half of every second, and the privacy contract already refuses an
- * indication that presents as invisible sub-second blinks.
+ * A session opens at [BRIGHT]/[DIM] once a second, which is unmissable and right for a camera nobody
+ * expected. That is wrong for one the owner deliberately left running, and the two differ only in how
+ * long the session has lasted, so that is the only thing this schedule reads. After [PROMINENT_MS] the
+ * gap after each flash stretches toward [MAX_GAP_MS] and both levels fade: the gap to nothing, the flash
+ * only as far as [LIT_FLOOR]. At rest the room gets a real half-second flash about once a minute and
+ * nothing in between, which is also far cheaper than what it replaces.
  *
- * These are the values the session *starts* at; [CameraIndicatorAttenuation] carries it on from here.
+ * The flash's length and its floor are the two things that must never drift toward nothing, because once
+ * the gap has faded out the flash *is* the indication.
  */
 object CameraIndicatorPulse {
     const val PERIOD_MS = 1_000L
+
+    /** The lit half of every cycle, at every age. Only the gap after it ever changes. */
     const val STEP_MS = PERIOD_MS / 2
     const val BRIGHT = 1.0f
     const val DIM = 0.42f
 
-    /** The two levels, so a test can assert the dim one is still visible rather than off. */
-    fun alphaFor(bright: Boolean): Float = if (bright) BRIGHT else DIM
-}
-
-/**
- * How the camera light backs off once a session keeps running, and the reason it is allowed to.
- *
- * The all-or-nothing presentation this replaces was right for the case the privacy contract is written
- * around - a camera that opens when nobody expected it - and wrong for the case the trial produced,
- * where somebody deliberately leaves a stream or a motion consumer running and a light at full
- * prominence sits on their dashboard for hours. Those are the same situation differing only in how long
- * the session has been running, so elapsed session time is the only thing this schedule is a function
- * of. Not the consumer, not the setting, not anything the dashboard can reach.
- *
- * It backs off in two ways at once, and the asymmetry is the whole design:
- *
- * - **The lit part keeps its length** ([LIT_MS]) while the gap after it stretches, from [MIN_GAP_MS] to
- *   [MAX_GAP_MS] - roughly one flash a second to roughly one flash a minute.
- * - **The flash dims only as far as [LIT_FLOOR], and the gap goes all the way to transparent.**
- *
- * [LIT_FLOOR] is the clause the whole design rests on, and it is a floor on *the blip*, not on some
- * level held between blips. What the room gets at rest is a real flash - half a second, at better than
- * half opacity - arriving about once a minute; between flashes the screen is the dashboard and nothing
- * else. The two constants that must never move toward zero are therefore [LIT_MS] and [LIT_FLOOR]: a
- * flash that got shorter as well as rarer, or that faded toward nothing, would end as a blink too brief
- * or too faint to register, and that is the presentation the privacy contract refuses. A stretching gap
- * is not that, because what it stretches is the interval between unmistakable flashes.
- *
- * The gap grows geometrically rather than linearly. Linear growth spends most of the ramp already close
- * to a minute apart; geometric growth stays visibly frequent while somebody might still be reacting to
- * the camera opening, then backs off quickly once nobody is.
- *
- * Cost falls as it attenuates: a settled session issues two layer updates a minute where a prominent one
- * issues two a second, so the longest sessions - the ones this exists for - are the cheapest to indicate.
- */
-object CameraIndicatorAttenuation {
-    /** Full prominence for this long, so a camera opening unexpectedly is unmistakable while it matters. */
+    /** Full prominence for this long, then a ramp this long to the settled state. */
     const val PROMINENT_MS = 30_000L
-
-    /** How long the backing-off takes. Fast enough to stop dominating, slow enough not to read as a fault. */
     const val RAMP_MS = 120_000L
 
-    /** The lit part of every cycle, at every point in the schedule. This is the constant that never moves. */
-    const val LIT_MS = CameraIndicatorPulse.STEP_MS
-
-    /** Gap after the flash at full prominence: with [LIT_MS] this is the once-a-second light we start at. */
-    const val MIN_GAP_MS = CameraIndicatorPulse.STEP_MS
-
-    /** Gap at rest: with [LIT_MS] the settled cycle is exactly one minute long. */
+    /** With [STEP_MS] this makes the settled cycle exactly one minute. */
     const val MAX_GAP_MS = 59_500L
 
-    /**
-     * The floor the flash settles to. This is the one opacity here that may never approach zero: at rest
-     * the blip is the whole indication, so [LIT_MS] and this constant are what the feature stands on.
-     *
-     * Both levels *descend from* [CameraIndicatorPulse], which [alphaAt] reads directly rather than
-     * restating. Aliases for those two opening values used to sit here and were removed: nothing read
-     * them, and the mutation battery proved it by failing to make a change to one matter.
-     */
+    /** The flash dims to here and stops. A flash that faded out would not be an indication at all. */
     const val LIT_FLOOR = 0.62f
 
-    /**
-     * The level between flashes fades all the way out. A session still opens at the never-blank
-     * [CameraIndicatorPulse.DIM], so the first half-minute is unchanged, but as the gap stretches it
-     * reaches transparent: a dim arc held for fifty-nine of every sixty seconds is exactly the standing
-     * prominence this feature exists to remove.
-     */
-    const val GAP_FLOOR = 0.0f
+    fun alphaFor(bright: Boolean): Float = if (bright) BRIGHT else DIM
 
-    /**
-     * How far through the backing-off a session is: 0 while prominent, 1 once settled.
-     *
-     * The prominent phase needs no branch of its own — before [PROMINENT_MS] the numerator is negative
-     * and the clamp already answers 0. An explicit early return was written here first and removed: the
-     * mutation battery could not make it matter, which is the definition of a guard that is not doing
-     * anything. The clamp is also what makes this fail *prominent* rather than faded if the clock ever
-     * runs backwards, so it is load-bearing in both directions.
-     */
+    /** 0 while prominent, 1 once settled. The clamp is also what fails prominent on a backwards clock. */
     fun progressAt(elapsedMs: Long): Float =
         ((elapsedMs - PROMINENT_MS).toFloat() / RAMP_MS).coerceIn(0f, 1f)
 
-    /** Gap after the flash, growing geometrically with progress. */
-    fun gapMsAt(elapsedMs: Long): Long {
-        val p = progressAt(elapsedMs).toDouble()
-        val grown = MIN_GAP_MS.toDouble() * Math.pow(MAX_GAP_MS.toDouble() / MIN_GAP_MS.toDouble(), p)
-        return Math.round(grown).coerceIn(MIN_GAP_MS, MAX_GAP_MS)
-    }
+    /** The gap after the flash. Geometric, so it stays frequent while somebody may still be reacting. */
+    fun gapMsAt(elapsedMs: Long): Long =
+        Math.round(STEP_MS * Math.pow(MAX_GAP_MS.toDouble() / STEP_MS, progressAt(elapsedMs).toDouble()))
 
-    /** Alpha for either half of the cycle, descending linearly to its floor and never below it. */
+    /** Alpha for either half: the flash descends only to [LIT_FLOOR], the gap all the way to nothing. */
     fun alphaAt(elapsedMs: Long, lit: Boolean): Float {
-        val p = progressAt(elapsedMs)
-        // Taken from the pulse itself rather than restated, so the first half-minute of a session is the
-        // light that shipped before this schedule existed, by construction and not by coincidence.
-        val bright = CameraIndicatorPulse.alphaFor(bright = lit)
-        val floor = if (lit) LIT_FLOOR else GAP_FLOOR
-        return (bright - p * (bright - floor)).coerceIn(floor, bright)
+        val from = alphaFor(lit)
+        val floor = if (lit) LIT_FLOOR else 0f
+        return from - progressAt(elapsedMs) * (from - floor)
     }
-
-    /** Whole cycle length at a point in the schedule, which is what a person reads as "how often". */
-    fun periodMsAt(elapsedMs: Long): Long = LIT_MS + gapMsAt(elapsedMs)
-
-    /** What the light shows next and for how long: the whole visible timeline, as one pure step. */
-    data class Step(val lit: Boolean, val alpha: Float, val holdMs: Long)
-
-    /**
-     * One step of the cycle. Everything the running indicator decides is here, so the timeline a person
-     * would actually watch can be folded out in a test instead of waited for on a panel.
-     */
-    fun stepAfter(elapsedMs: Long, wasLit: Boolean): Step {
-        val lit = !wasLit
-        return Step(lit, alphaAt(elapsedMs, lit), if (lit) LIT_MS else gapMsAt(elapsedMs))
-    }
-
-    /**
-     * Whether the display's screen state changing restores full prominence. Only the return of the
-     * display does: the clock measures how long the room has had the light in front of it, and a dark
-     * screen has shown it nothing, so time spent dark is not time the indication was on offer. Going
-     * dark does not restart anything, because the overlay is not what indicates then — the LED is.
-     */
-    fun restartsForScreen(wasDark: Boolean, nowDark: Boolean): Boolean = wasDark && !nowDark
-
-    /**
-     * Whether a call to open the camera restores full prominence. It always does, including when the
-     * overlay is still up from the session that just ended: a reopen inside the post-close hold is a new
-     * opening of the camera however close it lands, and so is a reopen after a permission, encoder or
-     * device fault. Consumers attaching to a session that is already running never reach this, which is
-     * what keeps churn from flashing the light back to full brightness.
-     */
-    fun restartsForOpen(@Suppress("UNUSED_PARAMETER") alreadyAttached: Boolean): Boolean = true
 }
 
 /**
@@ -268,12 +166,10 @@ object CameraIndicatorAttenuation {
  *   indication; a [show] inside the hold cancels it. Releasing the LED never restores from a snapshot:
  *   [restoreLed] re-derives it from persisted intent, and that work runs on a worker thread because the
  *   LED HAL blocks on every write.
- * - The overlay attenuates over the session on [CameraIndicatorAttenuation]'s fixed schedule, and every
- *   discontinuity restores full prominence: [show] does, so a new hardware session and a reopen after a
- *   permission, encoder or device fault all present as new; the return of the display after screen-off
- *   does, detected in [refresh], because the clock measures how long the room has had the light in front
- *   of it and a dark screen has shown it nothing. Consumers attaching and leaving inside one continuous
- *   session do not reach this class at all, which is what keeps churn from flashing the light bright.
+ * - The pulse backs off over the session on [CameraIndicatorPulse]'s schedule. [startPulse] returns it
+ *   to full prominence, and every discontinuity goes through it: each camera open, including a reopen
+ *   inside the post-close hold or after a fault, and the display coming back after screen-off. Consumers
+ *   attaching and leaving inside one session never reach this class, so churn cannot flash it bright.
  */
 class CameraIndicator(
     private val context: Context,
@@ -295,68 +191,42 @@ class CameraIndicator(
     private var generation = 0L
     private var ledHold: LedEffectController.Hold? = null
     private var ledLit = false
-    /** When the current prominence period started, on [clock]. Every reset moves it forward. */
-    private var prominenceStartedAtMs = 0L
-    /** Which half of the cycle is showing. The cycle flips it, so the first run after a reset lights it. */
+    /** When the current prominence period started, on [clock]. Only [startPulse] moves it. */
+    private var pulseStartedAtMs = 0L
+
+    /** Which half of the cycle is showing. [startPulse] clears it so the first run lights the arc. */
     private var lit = false
-    /** The alpha actually on the view, so an unchanged level costs no layer update at all. */
-    private var appliedAlpha = Float.NaN
-    /** Whether the last [refresh] saw the screen intended off, so the return edge can be detected. */
-    private var lastDark = false
 
     /**
-     * One half-cycle, re-posting itself with the delay its own half is due. It stops by returning without
-     * re-posting once the view is gone, so a missed cancellation cannot leave it running against a
-     * detached window.
+     * One half-cycle, re-posting itself for however long its own half lasts: the lit half is always
+     * [CameraIndicatorPulse.STEP_MS], the gap after it is whatever the session's age says. It stops by
+     * returning without re-posting once the view is gone, so a missed cancellation cannot leave it
+     * running against a detached window.
      *
-     * The two halves are not the same length and the difference grows: the lit half is always
-     * [CameraIndicatorAttenuation.LIT_MS], the unlit half is whatever
-     * [CameraIndicatorAttenuation.gapMsAt] says for the session's age. That is
-     * the whole mechanism — there is no animator, no interpolator and no second timer, and the schedule
-     * costs strictly less as it goes on.
-     *
-     * It keeps running while the screen is intended off, and that is a deliberate choice rather than an
-     * oversight: pausing it would need its own resume path on every route back, and by then it is issuing
-     * a couple of layer updates a minute anyway. The window only exists while a camera session does,
-     * which bounds it. [refresh] restarts it at full prominence when the display comes back.
+     * It keeps running while the screen is intended off, which is deliberate: pausing it would need a
+     * resume path on every route back, and by then it is issuing a couple of layer updates a minute.
+     * [refresh] restarts it at full prominence when the display returns.
      */
-    private val cycle = object : Runnable {
+    private val pulse = object : Runnable {
         override fun run() {
             val delay: Long
             synchronized(lock) {
                 val current = view ?: return
-                val step = CameraIndicatorAttenuation.stepAfter(clock() - prominenceStartedAtMs, lit)
-                lit = step.lit
-                if (step.alpha != appliedAlpha) {
-                    current.alpha = step.alpha
-                    appliedAlpha = step.alpha
-                }
-                delay = step.holdMs
+                val elapsed = clock() - pulseStartedAtMs
+                lit = !lit
+                current.alpha = CameraIndicatorPulse.alphaAt(elapsed, lit)
+                delay = if (lit) CameraIndicatorPulse.STEP_MS else CameraIndicatorPulse.gapMsAt(elapsed)
             }
             main.postDelayed(this, delay)
         }
     }
 
-    /**
-     * Put the light back to full prominence and restart the schedule. Safe from any thread, and does its
-     * work on the main looper for a reason: cancelling and re-posting from a worker can race a cycle run
-     * that is already executing there and leave two schedules running. Posting means the whole reset and
-     * every cycle run are ordered on one thread, so there is nothing to interleave.
-     */
-    private fun resetProminence() {
-        main.post {
-            main.removeCallbacks(cycle)
-            val attached = synchronized(lock) {
-                if (view == null) false else {
-                    prominenceStartedAtMs = clock()
-                    lit = false
-                    appliedAlpha = Float.NaN
-                    true
-                }
-            }
-            // A freshly added view is already fully opaque, so the first run lighting it is not a flash.
-            if (attached) cycle.run()
-        }
+    /** Start the pulse, or return it to full prominence. Main thread only. */
+    private fun startPulse() {
+        main.removeCallbacks(pulse)
+        pulseStartedAtMs = clock()
+        lit = false
+        main.post(pulse)
     }
 
     fun route(): CameraIndication = synchronized(lock) { CameraIndicationPolicy.route(view != null, ledLit) }
@@ -369,14 +239,13 @@ class CameraIndicator(
             return false
         }
         var attached = false
-        var reset = false
         val ran = onMain {
             synchronized(lock) {
                 if (view != null) {
                     // A reopen inside the post-close hold is still a new opening of the camera, so it
                     // presents as new rather than inheriting however far the last one had faded.
                     attached = true
-                    reset = CameraIndicatorAttenuation.restartsForOpen(alreadyAttached = true)
+                    startPulse()
                     return@onMain
                 }
                 val candidate = IndicatorView(context, lensOffsetPx)
@@ -398,14 +267,13 @@ class CameraIndicator(
                 attached = runCatching {
                     wm.addView(candidate, params)
                     view = candidate
-                    reset = CameraIndicatorAttenuation.restartsForOpen(alreadyAttached = false)
+                    startPulse()
                     true
                 }.onFailure { Log.w(TAG, "indicator addView failed: ${it.javaClass.simpleName}") }
                     .getOrDefault(false)
             }
         }
         if (!ran || !attached) return false
-        if (reset) resetProminence()
         return refresh()
     }
 
@@ -417,10 +285,6 @@ class CameraIndicator(
         val dark = screenOff()
         synchronized(lock) {
             if (view == null) return false
-            // The fade clock measures how long the room has had the light in front of it, and a dark
-            // screen has shown it nothing, so the display coming back is a discontinuity like any other.
-            if (CameraIndicatorAttenuation.restartsForScreen(wasDark = lastDark, nowDark = dark)) resetProminence()
-            lastDark = dark
             if (dark && ledHold == null) {
                 val hold = ledEffect.hold()
                 if (hold == null) {
@@ -436,7 +300,11 @@ class CameraIndicator(
                 // A hold whose write failed earlier: try once more rather than sit negative for ever.
                 ledLit = ledHold?.setSolid(255, 0, 0) == true
             } else if (!dark && ledHold != null) {
+                // This branch is exactly the display coming back: the hold is only ever held while dark.
+                // The clock measures how long the room has had the light in front of it, and a dark
+                // screen showed it nothing, so the return starts it again.
                 releaseLedLocked()
+                main.post { startPulse() }
             }
             return CameraIndicationPolicy.positive(overlayAttached = true, screenOff = dark, ledLit = ledLit)
         }
@@ -449,7 +317,7 @@ class CameraIndicator(
             val removeLed: Boolean
             synchronized(lock) {
                 if (generation != token) return@postDelayed
-                main.removeCallbacks(cycle)
+                main.removeCallbacks(pulse)
                 view?.let { runCatching { wm.removeView(it) } }
                 view = null
                 removeLed = ledHold != null
@@ -464,7 +332,7 @@ class CameraIndicator(
         synchronized(lock) { generation++ }
         onMain {
             synchronized(lock) {
-                main.removeCallbacks(cycle)
+                main.removeCallbacks(pulse)
                 view?.let { runCatching { wm.removeView(it) } }
                 view = null
             }
