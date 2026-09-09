@@ -46,7 +46,8 @@ class HealthWarningAuthoritySourceTest {
         // Configure tab: only setup blockers, no update warnings above the settings form.
         assertTrue(server.contains("healthFindings(healthInputs(), \"\", emptyList())"))
         // GET /api/v1/status: the UNFILTERED list (Ignore only silences the dashboard banner).
-        assertTrue(server.contains("healthFindings(h, h.webView.display, UpdateChecker.current(appContext))"))
+        assertTrue(server.contains("val currentUpdates = UpdateChecker.current(appContext)"))
+        assertTrue(server.contains("healthFindings(h, h.webView.display, currentUpdates)"))
         // Dashboard banner: the ignore-FILTERED list.
         assertTrue(
             server.contains(
