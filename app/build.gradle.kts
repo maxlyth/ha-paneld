@@ -80,7 +80,7 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the public release; publication remains a separate explicit action.
-        versionCode = 751
+        versionCode = 743
         versionName = "0.9.7-rc4"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
@@ -414,8 +414,8 @@ val unitTestRuntimeReadFiles = listOf(
     "../helper/test/sysexec_stub.h",
     "../scripts/provision.sh",
     "../scripts/tests/fixtures/database-compatibility-vectors.tsv",
-    "../tools/test/fixtures/dashboard-path-parity.json",
-    "../tools/test/fixtures/info-fixture.html",
+    "../test/fixtures/dashboard-path-parity.json",
+    "../test/fixtures/info-fixture.html",
     "../tools/profile-editor/package.json", // ProfileUiSourceTest reads these three, never builds the bundle
     "../tools/profile-editor/package-lock.json",
     "../tools/profile-editor/build.mjs",

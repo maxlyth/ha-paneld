@@ -2,6 +2,10 @@
 
 ## v0.9.7-rc4 - 2026-09-08
 
+### Changed
+
+- **The camera indicator now settles down during a camera session you meant to leave running.** It still opens the way it always did - a red arc under the lens, flashing about once a second at full brightness - because a camera opening when you did not expect it should be impossible to miss. Over the following couple of minutes it now backs off: the flash keeps its length while the gap between flashes stretches to about a minute, and both the flash and the arc between flashes dim. What it never does is disappear. The arc stays on screen the whole time the camera is open, at a fixed minimum brightness it cannot go below, and there is no setting anywhere that turns it off, speeds it up or lowers that floor. Anything that breaks the continuity puts it back to full brightness and starts the clock again: a new camera session, a session reopening after a permission or encoder failure, or the display coming back on after the screen was off. Attaching or dropping a viewer while one session keeps running does not, because a light that flared every time somebody opened a card would be worse than the one this replaces. The off-screen indication on the status LED, the rule that the camera cannot open unless the indicator can be drawn, and the few seconds the indicator stays lit after the camera closes are all unchanged.
+
 ### Fixed
 
 - **A backup taken from a panel that could not read its own stored state now says so.** A backup carries the panel's durable state alongside its configuration, and a failure to read that state was quietly replaced with nothing: the bundle then looked exactly like one from a panel that had never stored anything, and restoring it reported plain success while bringing none of it back. The backup is still created, because the configuration in it is still worth having, but it now records the failure. The Install page reports it when the backup is made, the restore preview warns before anything is written, and the restore result says the bundle carried no panel state. A backup from a panel with genuinely nothing stored is unchanged, and existing backups restore exactly as before.

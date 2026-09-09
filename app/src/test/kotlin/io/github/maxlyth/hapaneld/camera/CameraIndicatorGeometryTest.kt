@@ -87,9 +87,11 @@ class CameraIndicatorGeometryTest {
     }
 
     /**
-     * The pulse is two stepped levels once a second. Cost is why: a stepped pulse is two layer updates
-     * a second, while an animator on alpha redraws at the display rate — about 41% of a core, charged
-     * for as long as the camera is open. These assertions pin the cheap shape, not the look.
+     * The pulse a session opens at is two stepped levels once a second. Cost is why: a stepped pulse is
+     * two layer updates a second, while an animator on alpha redraws at the display rate — about 41% of
+     * a core, charged for as long as the camera is open. These assertions pin the cheap shape, not the
+     * look. What happens to that pulse as the session runs on is
+     * [CameraIndicatorAttenuationTest]'s subject, not this one's.
      */
     @Test fun thePulseIsTwoSteppedLevelsASecond() {
         assertEquals(1_000L, CameraIndicatorPulse.PERIOD_MS)
@@ -110,12 +112,12 @@ class CameraIndicatorGeometryTest {
         assertTrue("the dim level must be visibly dimmer than bright", CameraIndicatorPulse.DIM < 0.8f)
     }
 
-    @Test fun theStepSequenceAlternatesAndStartsBright() {
-        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorPulse.alphaAtStep(0), 0.001f)
-        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorPulse.alphaAtStep(1), 0.001f)
-        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorPulse.alphaAtStep(2), 0.001f)
-        // It must keep alternating far from zero, not drift or saturate as the session runs on.
-        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorPulse.alphaAtStep(86_400), 0.001f)
-        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorPulse.alphaAtStep(86_401), 0.001f)
+    @Test fun theTwoLevelsAreTheOnesTheSessionOpensAt() {
+        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorPulse.alphaFor(bright = true), 0.001f)
+        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorPulse.alphaFor(bright = false), 0.001f)
+        // The attenuation schedule starts from exactly these, so the first half-minute of a session is
+        // the light that shipped before it existed.
+        assertEquals(CameraIndicatorPulse.BRIGHT, CameraIndicatorAttenuation.alphaAt(0L, lit = true), 0.001f)
+        assertEquals(CameraIndicatorPulse.DIM, CameraIndicatorAttenuation.alphaAt(0L, lit = false), 0.001f)
     }
 }
