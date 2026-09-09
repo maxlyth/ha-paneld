@@ -4514,7 +4514,11 @@ browserTest('Only a typed query moves the Entities page', async (t) => {
 
 browserTest('The search status line reserves its height, so feedback shifts nothing below it', async (t) => {
   const page = await startEntitiesHarness(t);
-  const issuesTop = () => page.locator('#entity-issues').evaluate((node) => node.getBoundingClientRect().top);
+  // Document-relative, not viewport-relative: announcing the counts also starts a reveal of the
+  // matched card, and that scroll can land after the measurement, moving a viewport-relative top by
+  // the scroll delta while nothing about the layout has changed. This test is about the reserved
+  // height, so it measures the position in the document, which a scroll cannot alter.
+  const issuesTop = () => page.locator('#entity-issues').evaluate((node) => node.getBoundingClientRect().top + window.scrollY);
 
   const before = await issuesTop();
   await page.locator('#entity-search').fill('kitchen');
