@@ -32,6 +32,14 @@ object ReleaseCatalog {
         val apkUrl: String? = null,
     )
 
+    /** One installable release, retaining the source tag alongside its normalised display version.
+     *
+     * The tag is deliberately retained rather than reconstructed from [version]. A release resolver is
+     * free to use a tag that is not simply `v<version>`; consumers that need to initiate an exact
+     * installation must therefore keep the value GitHub supplied.
+     */
+    data class ApkTarget(val version: String, val tag: String, val apkUrl: String)
+
     /** A tag is only ever interpolated into a GitHub API path — restrict it to release-tag characters so
      *  a crafted value can't escape the path. */
     private val TAG_RE = Regex("^[A-Za-z0-9._-]{1,64}$")
@@ -85,16 +93,28 @@ object ReleaseCatalog {
         channel: String,
         apkMatch: (String) -> Boolean,
         normalize: (String) -> String,
-    ): Pair<String, String>? = runCatching {
+    ): Pair<String, String>? = newestApkTarget(repo, channel, apkMatch, normalize)
+        ?.let { it.version to it.apkUrl }
+
+    /** The newest release on [channel] with an APK, retaining its exact source tag. */
+    fun newestApkTarget(
+        repo: String,
+        channel: String,
+        apkMatch: (String) -> Boolean,
+        normalize: (String) -> String,
+    ): ApkTarget? = runCatching {
         val release = if (channel == "prerelease") {
             newest(fetch(repo, 10, apkMatch), channel)
         } else {
             val json = get("https://api.github.com/repos/$repo/releases/latest") ?: return null
             raw(JSONObject(json), apkMatch)
         } ?: return null
-        val apk = release.apkUrl ?: return null
-        normalize(release.tag) to apk
+        apkTarget(release, normalize)
     }.getOrElse { Log.w(TAG, "newestApk $repo failed", it); null }
+
+    /** Pure tag-preserving shape used by [newestApkTarget]. */
+    internal fun apkTarget(release: Raw?, normalize: (String) -> String): ApkTarget? =
+        release?.apkUrl?.let { apk -> ApkTarget(normalize(release.tag), release.tag, apk) }
 
     private fun fetch(repo: String, limit: Int, apkMatch: (String) -> Boolean): List<Raw> {
         val json = get("https://api.github.com/repos/$repo/releases?per_page=$limit") ?: return emptyList()

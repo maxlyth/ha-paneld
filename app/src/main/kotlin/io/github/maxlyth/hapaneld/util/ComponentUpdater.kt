@@ -11,8 +11,14 @@ package io.github.maxlyth.hapaneld.util
  * this object only owns the pipeline shape around it. Pure + unit-tested (ComponentUpdaterTest).
  */
 object ComponentUpdater {
-    /** The newest installable release for a component: display [version], its [apkUrl], and release-notes [releaseUrl]. */
-    data class Target(val version: String, val apkUrl: String, val releaseUrl: String)
+    /** The newest installable release for a component: display [version], its [apkUrl], release-notes
+     * [releaseUrl], and (when the resolver retains it) exact source [tag]. */
+    data class Target(
+        val version: String,
+        val apkUrl: String,
+        val releaseUrl: String,
+        val tag: String? = null,
+    )
 
     /** The verdict of one resolve -> compare -> decide pass. */
     sealed interface Outcome {

@@ -83,8 +83,8 @@ object SelfUpdater {
     /** The newest release for [channel] as one coherent target (version + APK URL + release-notes URL), or
      *  null. Feeds the shared [ComponentUpdater] resolve -> compare -> decide pipeline. */
     fun resolveTarget(channel: String): ComponentUpdater.Target? =
-        ReleaseCatalog.newestApk(REPO, channel, APK_MATCH) { it.removePrefix("v") }
-            ?.let { (version, apkUrl) -> ComponentUpdater.Target(version, apkUrl, RELEASES_URL) }
+        ReleaseCatalog.newestApkTarget(REPO, channel, APK_MATCH) { it.removePrefix("v") }
+            ?.let { target -> ComponentUpdater.Target(target.version, target.apkUrl, RELEASES_URL, target.tag) }
 
     /**
      * Resolve, download, authenticate and database-admit one exact channel candidate without mutating

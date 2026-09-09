@@ -68,7 +68,7 @@ class InstallOperationPresentationWiringContractTest {
     @Test fun updateProducersSupplyStableComponentsWithoutConsultingCompatibilityLabels() {
         assertTrue(
             updateChecker.contains(
-                "UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, \"paneld\")",
+                "UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, \"paneld\", target.tag)",
             ),
         )
         assertTrue(updateChecker.contains("target.releaseUrl,\n                        \"companion\","))

@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * Checks GitHub releases for available updates to ha-paneld and the installed HA Companion app. Catalog
@@ -22,6 +23,8 @@ object UpdateChecker {
         val releaseUrl: String,
         /** Stable locale-neutral identity; [label] remains the exact compatibility and ignore-map key. */
         val component: String,
+        /** Exact release tag from the cached resolver when that resolver retains one. Never a URL. */
+        val tag: String? = null,
     ) {
         constructor(
             label: String,
@@ -89,7 +92,7 @@ object UpdateChecker {
             val current = BuildConfig.VERSION_NAME
             val paneldResolution = ComponentUpdater.resolveUpdate(current) { SelfUpdater.resolveTarget(channel) }
                 .toResolution { target ->
-                    UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, "paneld")
+                    UpdateInfo(PANELD_LABEL, current, target.version, target.releaseUrl, "paneld", target.tag)
                 }
 
             val companion = installedCompanion(context)
@@ -179,6 +182,42 @@ object UpdateChecker {
         return filterCurrent(filterIgnored(available, ignored), companion?.second)
     }
 
+    /** The only cached ha-paneld release observation Panel Assistant may surface.
+     *
+     * This is deliberately a projection of [current], not a release resolver: it never calls
+     * [check], [checkIfStale], GitHub, or the installer. A cache entry is usable only when it is the
+     * ha-paneld component, a strictly newer stable target, and carries the exact tag that resolved it.
+     * Anything incomplete, malformed, pre-release, ambiguous, or otherwise outside the bounded grammar
+     * is represented as absence instead of being guessed or exposed.
+     */
+    internal data class PanelAssistantUpdate(
+        val currentVersion: String,
+        val targetVersion: String,
+        val tag: String,
+    )
+
+    internal fun panelAssistantUpdate(current: List<UpdateInfo>): PanelAssistantUpdate? {
+        val update = current.singleOrNull { it.component == "paneld" } ?: return null
+        val currentVersion = update.currentVersion
+        val targetVersion = update.latestVersion
+        val tag = update.tag ?: return null
+        if (!PANEL_ASSISTANT_CURRENT_VERSION.matches(currentVersion) ||
+            !PANEL_ASSISTANT_STABLE_VERSION.matches(targetVersion) ||
+            !ReleaseCatalog.validTag(tag) ||
+            tag.removePrefix("v") != targetVersion ||
+            !isNewer(targetVersion, currentVersion)
+        ) return null
+        return PanelAssistantUpdate(currentVersion, targetVersion, tag)
+    }
+
+    /** Bounded JSON for the additive `panel_assistant_update` status object. `none` means no safe
+     * cached stable target is available; it does not claim that a release lookup was performed. */
+    internal fun panelAssistantUpdateJson(current: List<UpdateInfo>): String =
+        panelAssistantUpdate(current)?.let { update ->
+            "{\"state\":\"available\",\"current_version\":${JSONObject.quote(update.currentVersion)}," +
+                "\"target_version\":${JSONObject.quote(update.targetVersion)},\"tag\":${JSONObject.quote(update.tag)}}"
+        } ?: "{\"state\":\"none\"}"
+
     private fun installedCompanion(context: Context): Pair<String, String>? = COMPANION_PKGS.firstNotNullOfOrNull { pkg ->
         runCatching {
             val version = context.packageManager.getPackageInfo(pkg, 0).versionName ?: ""
@@ -262,4 +301,12 @@ object UpdateChecker {
 
     private const val PANELD_LABEL = "ha-paneld"
     private const val COMPANION_LABEL = "HA Companion"
+    private const val PANEL_ASSISTANT_VERSION_PART = "(?:0|[1-9][0-9]{0,7})"
+    private val PANEL_ASSISTANT_STABLE_VERSION = Regex(
+        "^$PANEL_ASSISTANT_VERSION_PART\\.$PANEL_ASSISTANT_VERSION_PART\\.$PANEL_ASSISTANT_VERSION_PART$",
+    )
+    private val PANEL_ASSISTANT_CURRENT_VERSION = Regex(
+        "^$PANEL_ASSISTANT_VERSION_PART\\.$PANEL_ASSISTANT_VERSION_PART\\.$PANEL_ASSISTANT_VERSION_PART" +
+            "(?:-(?:alpha|beta|rc)$PANEL_ASSISTANT_VERSION_PART)?$",
+    )
 }
