@@ -2,6 +2,7 @@ package io.github.maxlyth.hapaneld
 
 import io.github.maxlyth.hapaneld.http.panelAssistantDiscoveryHealthToken
 import io.github.maxlyth.hapaneld.testsupport.TestSources
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -15,6 +16,7 @@ class PanelAssistantDiscoveryIdentityTest {
         val token = requireNotNull(panelAssistantDiscoveryId(androidId))
 
         assertEquals(64, token.length)
+        assertEquals("9b1b5cbac97251414303d6d6ba268252b8e3458a3613b484dd43eee4460ea23a", token)
         assertTrue(token.matches(Regex("[0-9a-f]{64}")))
         assertEquals(token, panelAssistantDiscoveryId("  $androidId  "))
         assertFalse(token == panelAssistantDiscoveryId("fedcba9876543210"))
@@ -41,5 +43,18 @@ class PanelAssistantDiscoveryIdentityTest {
 
         assertEquals(2, Regex("panelAssistantDiscoveryHealthToken\\(config\\.androidId\\)").findAll(server).count())
         assertTrue(advertiser.contains("panelAssistantDiscoveryId(config.androidId)?.let { put(\"did\", it) }"))
+    }
+
+    @Test fun healthOpenApiDocumentsTheIdentityGrammarAndOmissionRule() {
+        val description = JSONObject(TestSources.asset("openapi.json").readText())
+            .getJSONObject("paths")
+            .getJSONObject("/api/v1/health")
+            .getJSONObject("get")
+            .getJSONObject("responses")
+            .getJSONObject("200")
+            .getString("description")
+
+        assertTrue(description.contains("did=<64 lower-case hexadecimal characters>"))
+        assertTrue(description.contains("omitted when Android ID is unavailable"))
     }
 }
