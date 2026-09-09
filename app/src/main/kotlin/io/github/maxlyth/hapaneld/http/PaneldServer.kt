@@ -24,6 +24,7 @@ import io.github.maxlyth.hapaneld.HaAuthSnapshot
 import io.github.maxlyth.hapaneld.HaDiscovery
 import io.github.maxlyth.hapaneld.LiveSettingRequestOutcome
 import io.github.maxlyth.hapaneld.PanelStatus
+import io.github.maxlyth.hapaneld.panelAssistantDiscoveryId
 import io.github.maxlyth.hapaneld.RendererAdmissionPresentation
 import io.github.maxlyth.hapaneld.RendererAdmissionRuntime
 import io.github.maxlyth.hapaneld.RendererMode
@@ -645,6 +646,10 @@ internal fun haLifecycleHealthToken(watching: Boolean, snap: HaLifecycle.Snapsho
     val refused = if (snap.refused) " ha_refused=1" else ""
     return " ha=${snap.state.wireValue}$src$refused"
 }
+
+/** Add Panel Assistant's stable discovery pseudonym without exposing the Android ID itself. */
+internal fun panelAssistantDiscoveryHealthToken(androidId: String): String =
+    panelAssistantDiscoveryId(androidId)?.let { " did=$it" }.orEmpty()
 
 internal fun autoSleepHistoryHours(hours: String?): Int {
     val parsed = hours?.toIntOrNull() ?: if (hours == null) 6 else null
@@ -2282,7 +2287,7 @@ class PaneldServer internal constructor(
                     call.respondText(html, ContentType.Text.Html)
                 }
                 get("/health") {
-                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
+                    call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${panelAssistantDiscoveryHealthToken(config.androidId)}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
                 }
                 // Pre-0.8.5 flat machine endpoints → 308 to their /api/v1 homes.
                 legacyRedirects()
@@ -2319,7 +2324,7 @@ class PaneldServer internal constructor(
                         )
                     } ?: unavailableProfileRoutes()
                     get("/health") {
-                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
+                        call.respondText("ha-paneld ${Config.VERSION} panel=${config.panelId} build=${buildToken()} cfg=${renderConfigConcurrencyHash()}${panelAssistantDiscoveryHealthToken(config.androidId)}${haLifecycleHealthToken()}${haNetworkHealthToken()}\n")
                     }
                     configReadRoutes(
                         currentConfigJson = ::configJson,
