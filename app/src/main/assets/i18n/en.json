@@ -2033,6 +2033,48 @@
       "softMaxChars": 53,
       "hardMaxChars": 76
     },
+    "configure.camera.not_enumerated": {
+      "text": "This panel reports no camera. If it has one, declare hardware.camera in its device profile, alongside an LED the panel can light while the camera is open.",
+      "sourceHash": "331f1ddebf379a9351bf10e42bf20b13e6cb055eca836a67be47d20c0dd65c5e",
+      "surface": "configure",
+      "context": "Configure page: why the Camera settings group is not offered on this panel, and what would change the answer; preserve the operational meaning and render as text, not HTML.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "hardware.camera",
+        "LED"
+      ],
+      "softMaxChars": 216,
+      "hardMaxChars": 308
+    },
+    "configure.camera.suppressed": {
+      "text": "This panel's device profile sets hardware.camera to false, so the camera is not offered. Edit the profile to offer it.",
+      "sourceHash": "7d9630a0bbdfc2c972fd1a2b6febfabdf62ce5e8e00a0b9bc98660a725a7460e",
+      "surface": "configure",
+      "context": "Configure page: why the Camera settings group is not offered on this panel, and what would change the answer; preserve the operational meaning and render as text, not HTML.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "hardware.camera",
+        "false"
+      ],
+      "softMaxChars": 165,
+      "hardMaxChars": 236
+    },
+    "configure.camera.undetermined": {
+      "text": "The panel is still checking whether it has a camera. This is not yet an answer about the hardware.",
+      "sourceHash": "49b599f864427b27005cc385b12d1452365117ad90a6b4d51a335bfae6165520",
+      "surface": "configure",
+      "context": "Configure page: why the Camera settings group is not offered on this panel, and what would change the answer; preserve the operational meaning and render as text, not HTML.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 137,
+      "hardMaxChars": 196
+    },
     "configure.dashboard.auto_account_default": {
       "text": "Auto — follow this account’s default",
       "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
@@ -5868,8 +5910,8 @@
       "hardMaxChars": 50
     },
     "dashboard.camera.action.check_hardware": {
-      "text": "check the camera hardware; a new client after the hold or a setting toggle retries",
-      "sourceHash": "ead895a9433b1b339ce71fb87b51a913cea97707df38d20d00a76d06e112b66c",
+      "text": "check the camera hardware; a new client after the hold retries",
+      "sourceHash": "090d1ef719dc1159410c638eac487771bb3151e5dfe1deebeaa9b19e0d6ce11f",
       "surface": "dashboard",
       "context": "Camera diagnostics remediation guidance; preserve the operational meaning and render as text, not HTML.",
       "risk": "consequential",
@@ -5928,6 +5970,20 @@
       "frozen": [],
       "softMaxChars": 76,
       "hardMaxChars": 108
+    },
+    "dashboard.camera.action.misdeclared_profile": {
+      "text": "the profile declares a camera this board does not expose; correct hardware.camera in the profile",
+      "sourceHash": "a21c61954e1a191d0d9a3e4864a132a68878650930555cc74a9e99653099bd48",
+      "surface": "dashboard",
+      "context": "Camera diagnostics remediation guidance; preserve the operational meaning and render as text, not HTML.",
+      "risk": "consequential",
+      "siblings": [],
+      "placeholders": [],
+      "frozen": [
+        "hardware.camera"
+      ],
+      "softMaxChars": 134,
+      "hardMaxChars": 192
     },
     "dashboard.camera.action.report_encode_failure": {
       "text": "the camera delivers frames but they could not be encoded; report this with the panel's diagnostics",

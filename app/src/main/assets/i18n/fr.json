@@ -768,6 +768,21 @@
       "sourceHash": "edd5ed1e90d7e79bd34ca9d5b5cf71c03665e8e81068a346681493bb771c8f38",
       "state": "machine-cross-checked"
     },
+    "configure.camera.not_enumerated": {
+      "text": "Ce panneau ne signale aucune caméra. S'il en possède une, déclarez hardware.camera dans son profil d'appareil, avec une LED que le panneau peut allumer lorsque la caméra est ouverte.",
+      "sourceHash": "331f1ddebf379a9351bf10e42bf20b13e6cb055eca836a67be47d20c0dd65c5e",
+      "state": "machine-cross-checked"
+    },
+    "configure.camera.suppressed": {
+      "text": "Le profil d'appareil de ce panneau définit hardware.camera sur false, la caméra n'est donc pas proposée. Modifiez le profil pour la proposer.",
+      "sourceHash": "7d9630a0bbdfc2c972fd1a2b6febfabdf62ce5e8e00a0b9bc98660a725a7460e",
+      "state": "machine-cross-checked"
+    },
+    "configure.camera.undetermined": {
+      "text": "Le panneau vérifie encore s'il possède une caméra. Ce n'est pas encore une réponse sur le matériel.",
+      "sourceHash": "49b599f864427b27005cc385b12d1452365117ad90a6b4d51a335bfae6165520",
+      "state": "machine-cross-checked"
+    },
     "configure.dashboard.auto_account_default": {
       "text": "Auto — valeur par défaut de ce compte",
       "sourceHash": "b049c63a3b2b17956fa93993993be49fef42b7b5be21a0272ee5fa4c2a8f1eef",
@@ -2004,8 +2019,8 @@
       "state": "machine-cross-checked"
     },
     "dashboard.camera.action.check_hardware": {
-      "text": "vérifiez le matériel de la caméra ; un nouveau client après la pause ou le changement d’un réglage relance un essai",
-      "sourceHash": "ead895a9433b1b339ce71fb87b51a913cea97707df38d20d00a76d06e112b66c",
+      "text": "vérifiez le matériel de la caméra ; un nouveau client après le délai réessaie",
+      "sourceHash": "090d1ef719dc1159410c638eac487771bb3151e5dfe1deebeaa9b19e0d6ce11f",
       "state": "machine-cross-checked"
     },
     "dashboard.camera.action.check_indicator": {
@@ -2026,6 +2041,11 @@
     "dashboard.camera.action.grant_permission": {
       "text": "accordez au panneau l’autorisation d’utiliser la caméra à l’invite",
       "sourceHash": "b8021f57862db8b3de847ed071a7d422746cc592947888bb9f369fff7668c4e0",
+      "state": "machine-cross-checked"
+    },
+    "dashboard.camera.action.misdeclared_profile": {
+      "text": "le profil déclare une caméra que cette carte n'expose pas ; corrigez hardware.camera dans le profil",
+      "sourceHash": "a21c61954e1a191d0d9a3e4864a132a68878650930555cc74a9e99653099bd48",
       "state": "machine-cross-checked"
     },
     "dashboard.camera.action.report_encode_failure": {
