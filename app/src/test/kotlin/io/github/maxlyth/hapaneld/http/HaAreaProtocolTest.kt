@@ -108,8 +108,16 @@ class HaAreaProtocolTest {
         ).first { it.isFile }.readText()
         assertTrue(
             "an area save must refresh the running auto-sleep controller without a service restart",
-            service.contains("override fun noteAreaChanged() {\n                    autoSleep.refresh()"),
+            service.contains("override fun noteAreaChanged() {\n                    refreshAutoSleepPresence()"),
         )
+        val refreshPresence = service.substringAfter("private fun refreshAutoSleepPresence(): Boolean {")
+            .substringBefore("\n    }")
+        assertTrue("the shared presence refresh must still refresh the controller",
+            refreshPresence.contains("val accepted = autoSleep.refresh()"))
+        assertTrue("accepted refresh must restore only trustworthy current proximity state",
+            refreshPresence.contains("if (accepted && ::sensors.isInitialized)") &&
+                refreshPresence.contains("autoSleep.noteProximityState(") &&
+                refreshPresence.contains("sensors.proximityPresenceNear().takeIf { sensors.proximityPresenceReady() }"))
         val manager = listOf(
             File("src/main/kotlin/io/github/maxlyth/hapaneld/sensors/HaPresenceSourceManager.kt"),
             File("app/src/main/kotlin/io/github/maxlyth/hapaneld/sensors/HaPresenceSourceManager.kt"),
