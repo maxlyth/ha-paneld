@@ -50,8 +50,10 @@ class PowerSafetyPresentationTest {
         }
         val json = JSONObject(PowerSafetyPresentation.json(advisory(assessment)))
         assertEquals("brightness_zero", json.getString("screen_off_mechanism"))
-        assertEquals("su_blpower", json.getString("screen_off_selected"))
-        assertTrue(json.getString("screen_off_reason").contains("fell back"))
+        assertTrue("screen_off_selected must be present on the JSON payload", json.has("screen_off_selected"))
+        assertEquals("su_blpower", json.optString("screen_off_selected"))
+        assertTrue("screen_off_reason must be present on the JSON payload", json.has("screen_off_reason"))
+        assertTrue(json.optString("screen_off_reason").contains("fell back"))
 
         val diagnostic = PowerSafetyPresentation.diagnosticLine(assessment)
         assertTrue(diagnostic.contains("screen_off=brightness_zero"))
