@@ -127,11 +127,11 @@ Jedes Panel stellt nur die Steuerungsmöglichkeiten bereit, die von seinem Profi
 | Adaptive Helligkeit | Optionales siebentägiges Lernen anhand des Lichtsensors des Panels oder einer Beleuchtungsstärke-Entität von Home Assistant |
 | Eine URL öffnen | `text.<panel>_navigate` |
 | Dashboard-Steuerung und Neustart | Home-Assistant-Schaltflächen sowie die Aktionen „Dashboard“ und „Neu laden“ und die Navigationsaktionen im entfernten Bereich „Steuerung“ |
-| TTS- und Durchsageaudio | `POST /play` und `number.<panel>_volume`; siehe die [TTS-Anleitung](../tts.md) |
+| TTS- und Durchsageaudio | `POST /play` und `number.<panel>_volume`; siehe die [TTS-Anleitung](tts.md) |
 | Dashboard-Screenshot und entferntes Tippen | Panels mit einer unterstützten Screenshot-Methode können den Bildschirm auf der Registerkarte „Dashboard“ anzeigen und aktualisieren; im Relaxed-Modus kann außerdem ein Tippen an das Panel zurückgesendet werden |
 | Panel-Informationen und -Konfiguration | Öffne `http://<panel>:8888/`, auf der Home Assistant-Geräteseite auch als **Besuchen** verlinkt |
 
-Home Assistant erkennt diese Bedienelemente über MQTT ohne YAML. Die wichtigsten Entitätsfamilien sowie Details zur HTTP-API und Kopplung findest du in [docs/api.md](../api.md). Du kannst die HTTP-API eines Panels unter `http://<panel>:8888/api` auch durchsuchen und ausprobieren.
+Home Assistant erkennt diese Bedienelemente über MQTT ohne YAML. Die wichtigsten Entitätsfamilien sowie Details zur HTTP-API und Kopplung findest du in [docs/api.md](api.md). Du kannst die HTTP-API eines Panels unter `http://<panel>:8888/api` auch durchsuchen und ausprobieren.
 
 ## Sicherheit und Root-Zugriff
 
@@ -160,14 +160,14 @@ Für tatsächlich nicht gerootete Panels gibt es eine eingeschränkte [erweitert
 - [Bereitstellung und Flottenaktualisierungen](provisioning.md): unbeaufsichtigte Installation, Einrichtung von ADB über USB und Netzwerk, Sicherungen und Aktualisierungen der gesamten Flotte.
 - [Integrierter Renderer](built-in-renderer.md): Anforderungen, Remote-Anmeldung, Dashboard-Auswahl, Wiederherstellung und bewusste Einschränkungen.
 - [Leistung](performance.md): herausfinden, warum ein Dashboard langsam ist, und die Auswirkung der Entitätsfilterung messen.
-- [Adaptive Helligkeit](../adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
-- [Adaptive Näherungserkennung und Aktivierung durch Winken](../adaptive-proximity.md): die Näherungserkennung konfigurieren und die Aktivierungsgeste anlernen.
+- [Adaptive Helligkeit](adaptive-brightness.md): eine Lichtquelle auswählen, den Lernvorgang verstehen und nach dem Versetzen eines Panels den Verlauf zurücksetzen.
+- [Adaptive Näherungserkennung und Aktivierung durch Winken](adaptive-proximity.md): die Näherungserkennung konfigurieren und die Aktivierungsgeste anlernen.
 - [Sicherheitsmodi](security-mode.md): den Relaxed-Modus und den Hardened-Modus verstehen, einschließlich der Aktionen, für die jemand am Panel anwesend sein muss.
-- [TTS](../tts.md): Sprache mit einer Home Assistant TTS-Engine erzeugen und an ein Panel senden.
+- [TTS](tts.md): Sprache mit einer Home Assistant TTS-Engine erzeugen und an ein Panel senden.
 
 ### ha-paneld entwickeln und erweitern
 
-- [HTTP-, MQTT- und Home-Assistant-API](../api.md): die HTTP-Endpunkte, wichtigsten MQTT-Entitätsfamilien, Kopplung und Erkennung. Die maschinenlesbare Spezifikation ist auf einem Panel unter `/api/v1/openapi.json` verfügbar.
+- [HTTP-, MQTT- und Home-Assistant-API](api.md): die HTTP-Endpunkte, wichtigsten MQTT-Entitätsfamilien, Kopplung und Erkennung. Die maschinenlesbare Spezifikation ist auf einem Panel unter `/api/v1/openapi.json` verfügbar.
 - [Panelprofile](../profiles/): Unterstützung für ein weiteres Panel erstellen, testen und teilen, ohne die App neu zu bauen.
 - [Hardware-Referenzen](../hardware/): modellspezifische Einrichtung, Sensoren, Bedienelemente, Firmware und Hinweise zum Reverse Engineering.
 - [Aus dem Quellcode bauen](../building.md) und [lokale Entwicklung](../local-builds.md): mit Docker, dem Entwicklungscontainer oder einer lokalen Android-Toolchain bauen.
@@ -218,7 +218,7 @@ Das Ergebnis ist immer offen: Dein Panel wird zu einem Profil, das alle verwende
 
 ## Entwicklung
 
-Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](../api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../tools/test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
+Wenn du an ha-paneld selbst mitarbeiten möchtest, beginne mit [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). Die Entwicklerdokumentation behandelt das [Bauen aus dem Quellcode](../building.md), [lokale Builds und Builds in Entwicklungscontainern](../local-builds.md), die [HTTP- und MQTT-API](api.md), die [Entwicklung von Panelprofilen](../profiles/README.md), die [Browser-Testumgebung](../../tools/test/README.md) und den [Veröffentlichungsprozess](../RELEASING.md).
 
 Ich habe bewusst genügend Informationen bereitgestellt, um den mitgelieferten Entwicklungscontainer zu verwenden und eine lokale Testversion zu erstellen. Reiche computergenerierte Pull Requests oder Issues nicht unverändert ein: Lies und verstehe jeden Teil des vorgeschlagenen Textes und Codes und formuliere ihn anschließend in deinen eigenen Worten neu. Dies ist ein Ein-Personen-Projekt, und ich habe keine Zeit, ungefilterte computergenerierte Ausgaben zu prüfen. Fasse dich kurz und schreibe für Menschen; wenn du dir bei etwas unsicher bist, frage zuerst nach.
 

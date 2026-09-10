@@ -5,7 +5,7 @@
 
 无需检出仓库，可下载的安装程序便能通过 adb 配置一台面板。它会安装或更新 ha-paneld、应用请求的设置、授予可通过 adb 授予的 Android 权限，并在完成前验证应用是否正在运行。本页先介绍常规的单面板操作流程，再介绍共享设置和整个设备群的更新。
 
-有关最简短的交互式安装流程，请参阅 [README](README.md#安装)。有关这些命令背后的数据库、软件包和辅助程序防护措施，请参阅[配置安全与恢复](../provisioning-safety.md)。
+有关最简短的交互式安装流程，请参阅 [README](README.md#安装)。有关这些命令背后的数据库、软件包和辅助程序防护措施，请参阅[配置安全与恢复](provisioning-safety.md)。
 
 > [!NOTE]
 > 这些是 `bash` 和 `adb` 命令。在 **Windows** 上，请在 **Git Bash**（来自 [Git for Windows](https://gitforwindows.org/)）或 **WSL** 中运行，而不要使用 PowerShell，并确保 `adb` 位于 `PATH` 中（`winget install Google.PlatformTools`）。在 macOS 和 Linux 上可按原样运行这些命令。
@@ -120,7 +120,7 @@ Fleet updates refuse `--reset-config`. Reset panels one at a time.
 
 The CLI `--restore FILE` and `--restore-fleet FILE` options import a config JSON export and require Python 3 on the computer running the installer. It does not accept an `.hpb` backup. Restore an `.hpb` through **Install → Restore** on the same panel page.
 
-有关配置导出、受支持的 `.hpb` 备份与自动创建的紧急数据库副本之间的区别，请参阅[配置安全与恢复](../provisioning-safety.md#backups-and-recovery)。
+有关配置导出、受支持的 `.hpb` 备份与自动创建的紧急数据库副本之间的区别，请参阅[配置安全与恢复](provisioning-safety.md#备份与恢复)。
 
 ## 向设备群部署共享设置
 
@@ -166,7 +166,7 @@ Four panels run concurrently by default. Set `--jobs 1..32` to change the bounde
 
 Each worker prints the panel's provisioning guidance, but fleet updates never accept hardware-profile recommendations automatically. Options that describe one panel are refused before any worker starts. Run `--reset-config`, `--export FILE`, `--id` and device-specific `--restore FILE` through `scripts/provision.sh` one panel at a time. `--restore-fleet FILE` is the supported way to apply portable settings across several panels.
 
-Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The wrapper checks the selected APK before the workers start, and each panel's provisioner verifies its input again before changing the panel. The [technical provisioning page](../provisioning-safety.md#fleet-update-boundaries) records the signer rules and remaining fleet safeguards.
+Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The wrapper checks the selected APK before the workers start, and each panel's provisioner verifies its input again before changing the panel. The [technical provisioning page](provisioning-safety.md#设备群更新边界) records the signer rules and remaining fleet safeguards.
 
 ## 例外访问方式和安全模式
 

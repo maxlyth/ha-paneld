@@ -1,0 +1,39 @@
+> [!IMPORTANT]
+> Dieses Dokument wurde maschinell erstellt und automatisch gegengeprüft, jedoch nicht systematisch von Personen geprüft, die diese Sprache sprechen. Die englische Dokumentation ist maßgeblich. [Englisches Original lesen](../adaptive-brightness.md) oder [ein Issue zur Übersetzungskorrektur öffnen](https://github.com/maxlyth/ha-paneld/issues/new?template=translation_correction.yml).
+
+# Adaptive Helligkeit
+
+Die adaptive Helligkeit ist eine optionale, auf dem Panel ausgeführte Steuerung, die das übliche Umgebungslichtmuster rund um ein Panel erlernt und den Bildschirm anpasst, ohne dass eine Home Assistant-Automatisierung erforderlich ist. Sie ist standardmäßig ausgeschaltet. Wenn sie ausgeschaltet ist, kann die Helligkeit weiterhin wie gewohnt manuell oder über Home Assistant gesteuert werden.
+
+## Lichtquelle auswählen
+
+Öffnen Sie **Konfigurieren → Anzeige** und wählen Sie **Umgebungslichtquelle** aus:
+
+- Lassen Sie das Feld leer, um den Lichtsensor des Panels zu verwenden, sofern das aktive Profil und die Live-Funktionsprüfung einen solchen als verfügbar melden.
+- Wählen Sie eine Beleuchtungsstärke-Entität in Home Assistant aus, wenn das Panel keinen geeigneten lokalen Sensor besitzt oder ein im Raum montierter Sensor das vom Benutzer wahrgenommene Licht besser abbildet.
+
+The Home Assistant source uses one exact authenticated entity subscription rather than the full state stream. If neither source is available, ha-paneld leaves adaptive control unavailable instead of guessing from time alone.
+
+When a Home Assistant illuminance source is selected, ha-paneld can seed the on-panel pattern with up to seven days of its existing Home Assistant history. This gives automatic brightness a useful starting point instead of waiting for fresh readings to accumulate. It depends on the source being recorded and the Home Assistant history service being available; if no usable history is returned, learning simply starts from new readings.
+
+## Einschalten und einstellen
+
+Enable **Auto-brightness** in the same Display card. The controller retains up to seven days of bounded, on-panel ambient history and learns the normal pattern for the time of day. Short positive deviations, such as a room light being switched on, can raise the proposed level above that baseline.
+
+**Minimum level** sets the lowest level proposed by automatic control and rescales the learned range from that floor to full brightness. It ranges from 4% to 99%. The 4% floor is where the backlight's own never-blank minimum sits, so anything lower would move the control without changing the screen. It does not limit manual brightness, which can still be set lower.
+
+**Sensitivity** is the percentage of a difference from the learned pattern that is applied to the screen, once the controller has decided the difference is real. At 0% it ignores the difference and uses the learned pattern alone. Lower values make the response steadier, and the default of 50% leaves equal room to tune in either direction. It is not a raw follow-the-light control: a brief brightening is only acted on once it has been sustained or risen sharply enough to be admitted, and while the daily pattern is still being learned the screen follows the measured light regardless of this setting. The seven-day chart previews the observed range, learned baseline and proposed level before or while the controller is active. Unsaved Minimum level and Sensitivity changes are reflected in the preview without rewriting stored ambient history.
+
+The history is tied to the selected source and a coarse room/time context derived from the configured Home Assistant location and timezone. A material location, timezone or source change starts a separate history rather than silently applying evidence learned for another room context.
+
+## Manuelle Änderungen und Wiederherstellung
+
+A manual brightness change records a four-hour temporary preference, so the learner does not immediately fight the user. Subsequent automatic changes retain 20% influence at first, then regain full authority through a smooth four-hour fade. Select **Resume full auto** in the adaptive-brightness panel to end that preference immediately instead of waiting for the fade to complete.
+
+Select **Reset learned history** after moving the panel, replacing its light source or when the retained week no longer represents the room. The confirmation deletes the seven-day ambient history for the current source and room/time context, then restarts learning; it does not change the selected source or the Auto-brightness setting.
+
+Adaptive brightness uses Android's normal screen-brightness path and does not require root. Reading a particular panel sensor can still depend on that sensor's hardware access path; the active profile and live capability checks remain authoritative.
+
+## Steuerung über Home Assistant
+
+When exposed, `switch.<panel>_auto_brightness` enables or disables the same on-panel controller. Screen brightness remains `light.<panel>_screen`. A manual brightness command can therefore create the same temporary preference as a local change; use the Configure page's **Resume full auto** action to return immediately to the learned target.

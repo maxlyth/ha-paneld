@@ -5,7 +5,7 @@
 
 Das herunterladbare Installationsprogramm kann ein Panel über adb einrichten, ohne dass das Repository ausgecheckt werden muss. Es installiert oder aktualisiert ha-paneld, wendet die angeforderten Einstellungen an, gewährt die über adb verfügbaren Android-Berechtigungen und überprüft vor dem Abschluss die laufende App. Diese Seite beginnt mit dem üblichen Ablauf für ein einzelnes Panel und behandelt anschließend gemeinsame Einstellungen und Aktualisierungen der gesamten Flotte.
 
-Die kürzeste interaktive Installation finden Sie in der [README](README.md#installation). Informationen zu den Schutzvorkehrungen für Datenbank, Paket und Hilfsprogramm hinter diesen Befehlen finden Sie unter [Sicherheit und Wiederherstellung bei der Bereitstellung](../provisioning-safety.md).
+Die kürzeste interaktive Installation finden Sie in der [README](README.md#installation). Informationen zu den Schutzvorkehrungen für Datenbank, Paket und Hilfsprogramm hinter diesen Befehlen finden Sie unter [Sicherheit und Wiederherstellung bei der Bereitstellung](provisioning-safety.md).
 
 > [!NOTE]
 > Dies sind `bash`- und `adb`-Befehle. Führen Sie sie unter **Windows** in **Git Bash** (aus [Git for Windows](https://gitforwindows.org/)) oder **WSL** aus, nicht in PowerShell. Dabei muss sich `adb` im `PATH` befinden (`winget install Google.PlatformTools`). Unter macOS und Linux können sie unverändert ausgeführt werden.
@@ -120,7 +120,7 @@ Fleet updates refuse `--reset-config`. Reset panels one at a time.
 
 The CLI `--restore FILE` and `--restore-fleet FILE` options import a config JSON export and require Python 3 on the computer running the installer. It does not accept an `.hpb` backup. Restore an `.hpb` through **Install → Restore** on the same panel page.
 
-Informationen zum Unterschied zwischen Konfigurationsexporten, unterstützten `.hpb`-Sicherungen und automatischen Datenbankkopien für Notfälle finden Sie unter [Sicherheit und Wiederherstellung bei der Bereitstellung](../provisioning-safety.md#backups-and-recovery).
+Informationen zum Unterschied zwischen Konfigurationsexporten, unterstützten `.hpb`-Sicherungen und automatischen Datenbankkopien für Notfälle finden Sie unter [Sicherheit und Wiederherstellung bei der Bereitstellung](provisioning-safety.md#sicherungen-und-wiederherstellung).
 
 ## Gemeinsame Einstellungen auf einer Flotte bereitstellen
 
@@ -166,7 +166,7 @@ Four panels run concurrently by default. Set `--jobs 1..32` to change the bounde
 
 Each worker prints the panel's provisioning guidance, but fleet updates never accept hardware-profile recommendations automatically. Options that describe one panel are refused before any worker starts. Run `--reset-config`, `--export FILE`, `--id` and device-specific `--restore FILE` through `scripts/provision.sh` one panel at a time. `--restore-fleet FILE` is the supported way to apply portable settings across several panels.
 
-Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The wrapper checks the selected APK before the workers start, and each panel's provisioner verifies its input again before changing the panel. The [technical provisioning page](../provisioning-safety.md#fleet-update-boundaries) records the signer rules and remaining fleet safeguards.
+Fleet updates require Android SDK Build-Tools containing `apksigner` and either `aapt` or `aapt2`. The wrapper checks the selected APK before the workers start, and each panel's provisioner verifies its input again before changing the panel. The [technical provisioning page](provisioning-safety.md#grenzen-für-flottenaktualisierungen) records the signer rules and remaining fleet safeguards.
 
 ## Zugriff in Ausnahmefällen und Sicherheitsmodi
 

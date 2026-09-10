@@ -127,11 +127,11 @@ Chaque panneau publie uniquement les commandes prises en charge par son profil e
 | Luminosité adaptative | Apprentissage facultatif sur sept jours à partir du capteur de luminosité du panneau ou d’une entité d’éclairement Home Assistant |
 | Ouvrir une URL | `text.<panel>_navigate` |
 | Commandes du tableau de bord et redémarrage | Boutons Home Assistant, ainsi que les actions « Tableau de bord », « Recharger » et les actions de navigation dans le volet distant « Commandes » |
-| Audio TTS et annonces | `POST /play` et `number.<panel>_volume` ; consultez le [guide TTS](../tts.md) |
+| Audio TTS et annonces | `POST /play` et `number.<panel>_volume` ; consultez le [guide TTS](tts.md) |
 | Capture du tableau de bord et appui à distance | Les panneaux disposant d’une méthode de capture d’écran prise en charge peuvent afficher et actualiser l’écran depuis l’onglet Tableau de bord ; le mode Assoupli permet également de renvoyer un clic au panneau |
 | Informations et configuration du panneau | Ouvrez `http://<panel>:8888/`, également accessible via **Visiter** sur la page de l’appareil Home Assistant |
 
-Home Assistant découvre ces commandes via MQTT sans YAML. Les principales familles d’entités, l’API HTTP et les détails de l’association sont présentés dans [docs/api.md](../api.md). Vous pouvez également parcourir et essayer l’API HTTP d’un panneau à l’adresse `http://<panel>:8888/api`.
+Home Assistant découvre ces commandes via MQTT sans YAML. Les principales familles d’entités, l’API HTTP et les détails de l’association sont présentés dans [docs/api.md](api.md). Vous pouvez également parcourir et essayer l’API HTTP d’un panneau à l’adresse `http://<panel>:8888/api`.
 
 ## Sécurité et accès root
 
@@ -160,14 +160,14 @@ Il existe une [solution de repli avancée](provisioning.md#solution-de-secours-s
 - [Provisionnement et mises à jour du parc](provisioning.md) : installation sans intervention, configuration d’ADB par USB et réseau, sauvegardes et mises à jour de l’ensemble du parc.
 - [Moteur de rendu intégré](built-in-renderer.md) : prérequis, connexion à distance, sélection du tableau de bord, récupération et limitations intentionnelles.
 - [Performances](performance.md) : découvrez pourquoi un tableau de bord est lent et mesurez l’effet du filtrage des entités.
-- [Luminosité adaptative](../adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.
-- [Proximité adaptative et réveil d’un geste de la main](../adaptive-proximity.md) : configurez la détection de proximité et apprenez au panneau le geste de réveil.
+- [Luminosité adaptative](adaptive-brightness.md) : sélectionnez une source lumineuse, comprenez l’apprentissage et réinitialisez l’historique après avoir déplacé un panneau.
+- [Proximité adaptative et réveil d’un geste de la main](adaptive-proximity.md) : configurez la détection de proximité et apprenez au panneau le geste de réveil.
 - [Modes de sécurité](security-mode.md) : comprenez le mode assoupli et le mode renforcé, notamment les actions qui nécessitent la présence d’une personne devant le panneau.
-- [TTS](../tts.md) : générez un message vocal avec un moteur TTS de Home Assistant et envoyez-le à un panneau.
+- [TTS](tts.md) : générez un message vocal avec un moteur TTS de Home Assistant et envoyez-le à un panneau.
 
 ### Développement et extension de ha-paneld
 
-- [API HTTP, MQTT et Home Assistant](../api.md) : points de terminaison HTTP, principales familles d’entités MQTT, association et découverte. La spécification lisible par machine est disponible sur un panneau à l’adresse `/api/v1/openapi.json`.
+- [API HTTP, MQTT et Home Assistant](api.md) : points de terminaison HTTP, principales familles d’entités MQTT, association et découverte. La spécification lisible par machine est disponible sur un panneau à l’adresse `/api/v1/openapi.json`.
 - [Profils de panneau](../profiles/) : créez, testez et partagez la prise en charge d’un autre panneau sans recompiler l’application.
 - [Références matérielles](../hardware/) : configuration propre à chaque modèle, capteurs, commandes, micrologiciel et notes de rétro-ingénierie.
 - [Compilation à partir des sources](../building.md) et [développement local](../local-builds.md) : compilez avec Docker, le conteneur de développement ou une chaîne d’outils Android locale.
@@ -218,7 +218,7 @@ Le résultat est toujours ouvert : votre panneau devient un profil que tout le m
 
 ## Développement
 
-Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](../api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../tools/test/README.md) et le [processus de publication](../RELEASING.md).
+Si vous souhaitez travailler sur ha-paneld lui-même, commencez par [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentation destinée aux développeurs couvre la [compilation à partir du code source](../building.md), les [compilations locales et dans un conteneur de développement](../local-builds.md), l’[API HTTP et MQTT](api.md), le [développement de profils de panneaux](../profiles/README.md), l’[environnement de test du navigateur](../../tools/test/README.md) et le [processus de publication](../RELEASING.md).
 
 J’ai délibérément fourni suffisamment d’informations pour utiliser le conteneur de développement fourni et créer une version de test locale. Ne soumettez pas sans les modifier des pull requests ou des tickets générés par ordinateur : lisez et comprenez chaque partie du texte et du code proposés, puis reformulez-les avec vos propres mots. Ce projet est géré par une seule personne et je n’ai pas le temps d’examiner des contenus générés par ordinateur sans aucun filtrage. Soyez concis et écrivez pour des humains ; si vous avez un doute, demandez d’abord.
 

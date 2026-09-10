@@ -127,11 +127,11 @@ Cada panel publica únicamente los controles compatibles con su perfil y con el 
 | Brillo adaptativo | Aprendizaje opcional durante siete días mediante el sensor de luz del panel o una entidad de iluminancia de Home Assistant |
 | Abrir una URL | `text.<panel>_navigate` |
 | Controles del panel de control y reinicio | Botones de Home Assistant, además de las acciones Panel de control, Recargar y de navegación en el panel remoto Controles |
-| Audio de TTS y anuncios | `POST /play` y `number.<panel>_volume`; consulta la [guía de TTS](../tts.md) |
+| Audio de TTS y anuncios | `POST /play` y `number.<panel>_volume`; consulta la [guía de TTS](tts.md) |
 | Captura del panel de control y toque remoto | Los paneles con un método de captura de pantalla compatible pueden mostrar y actualizar la pantalla desde la pestaña Panel de control; el modo relajado también permite enviar un clic al panel |
 | Información y configuración del panel | Abre `http://<panel>:8888/`, también enlazado como **Visitar** en la página del dispositivo de Home Assistant |
 
-Home Assistant detecta estos controles mediante MQTT sin YAML. Las principales familias de entidades y los detalles sobre la API HTTP y el emparejamiento se encuentran en [docs/api.md](../api.md). También puedes explorar y probar la API HTTP de un panel en `http://<panel>:8888/api`.
+Home Assistant detecta estos controles mediante MQTT sin YAML. Las principales familias de entidades y los detalles sobre la API HTTP y el emparejamiento se encuentran en [docs/api.md](api.md). También puedes explorar y probar la API HTTP de un panel en `http://<panel>:8888/api`.
 
 ## Seguridad y acceso root
 
@@ -160,14 +160,14 @@ Existe una [alternativa avanzada](provisioning.md#alternativa-con-shizuku-para-p
 - [Aprovisionamiento y actualizaciones de flotas](provisioning.md): instalación desatendida, configuración de ADB mediante USB y red, copias de seguridad y actualizaciones de toda la flota.
 - [Renderizador integrado](built-in-renderer.md): requisitos, inicio de sesión remoto, selección del panel de control, recuperación y limitaciones deliberadas.
 - [Rendimiento](performance.md): averigua por qué un panel de control es lento y mide el efecto del filtrado de entidades.
-- [Brillo adaptativo](../adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
-- [Proximidad adaptativa y activación con un gesto de la mano](../adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.
+- [Brillo adaptativo](adaptive-brightness.md): selecciona una fuente de luz, comprende el aprendizaje y restablece el historial después de mover un panel.
+- [Proximidad adaptativa y activación con un gesto de la mano](adaptive-proximity.md): configura la detección de proximidad y enseña el gesto de activación.
 - [Modos de seguridad](security-mode.md): comprende el modo relajado y el modo reforzado, incluidas las acciones que requieren la presencia de alguien junto al panel.
-- [TTS](../tts.md): genera voz con un motor TTS de Home Assistant y envíala a un panel.
+- [TTS](tts.md): genera voz con un motor TTS de Home Assistant y envíala a un panel.
 
 ### Desarrollo y ampliación de ha-paneld
 
-- [API HTTP, MQTT y de Home Assistant](../api.md): los endpoints HTTP, las principales familias de entidades MQTT, el emparejamiento y el descubrimiento. La especificación legible por máquinas está disponible en un panel en `/api/v1/openapi.json`.
+- [API HTTP, MQTT y de Home Assistant](api.md): los endpoints HTTP, las principales familias de entidades MQTT, el emparejamiento y el descubrimiento. La especificación legible por máquinas está disponible en un panel en `/api/v1/openapi.json`.
 - [Perfiles de panel](../profiles/): crea, prueba y comparte compatibilidad con otro panel sin volver a compilar la aplicación.
 - [Referencias de hardware](../hardware/): configuración específica de cada modelo, sensores, controles, firmware y notas de ingeniería inversa.
 - [Compilación desde el código fuente](../building.md) y [desarrollo local](../local-builds.md): compila con Docker, el contenedor de desarrollo o una cadena de herramientas de Android local.
@@ -218,7 +218,7 @@ El resultado siempre es abierto: tu panel se convierte en un perfil que todo el 
 
 ## Desarrollo
 
-Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](../api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../tools/test/README.md) y el [proceso de publicación](../RELEASING.md).
+Si quieres trabajar en el propio ha-paneld, empieza por [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentación para desarrolladores abarca la [compilación desde el código fuente](../building.md), las [compilaciones locales y en contenedores de desarrollo](../local-builds.md), la [API HTTP y MQTT](api.md), el [desarrollo de perfiles de panel](../profiles/README.md), el [entorno de pruebas del navegador](../../tools/test/README.md) y el [proceso de publicación](../RELEASING.md).
 
 He proporcionado deliberadamente suficiente información para usar el contenedor de desarrollo suministrado y compilar una versión de prueba local. No envíes solicitudes de cambios ni informes de problemas generados por ordenador sin modificarlos: lee y comprende cada parte del texto y del código propuestos y, después, reescríbelos con tus propias palabras. Este proyecto está a cargo de una sola persona y no tengo tiempo para revisar contenido generado por ordenador sin filtrar. Sé conciso y escribe para personas; si tienes dudas sobre algo, pregunta primero.
 

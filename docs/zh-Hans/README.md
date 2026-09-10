@@ -127,11 +127,11 @@ ha-paneld 无需作为系统应用安装。在兼容的面板上，亮度、导�
 | 自适应亮度 | 可选择根据面板的光线传感器或 Home Assistant 照度实体进行为期七天的学习 |
 | 打开 URL | `text.<panel>_navigate` |
 | 仪表盘控制和重启 | Home Assistant 按钮，以及远程“控制”面板中的“仪表盘”、“重新加载”和导航操作 |
-| TTS 和公告音频 | `POST /play` 和 `number.<panel>_volume`；请参阅 [TTS 指南](../tts.md) |
+| TTS 和公告音频 | `POST /play` 和 `number.<panel>_volume`；请参阅 [TTS 指南](tts.md) |
 | 仪表盘屏幕截图和远程点按 | 支持屏幕截图方法的面板可以在“仪表盘”选项卡中显示和刷新屏幕；宽松模式还允许将点按操作发送回面板 |
 | 面板信息和配置 | 打开 `http://<panel>:8888/`；也可点击 Home Assistant 设备页面上的**访问**链接 |
 
-Home Assistant 通过 MQTT 发现这些控制项，无需 YAML。主要实体系列、HTTP API 和配对详情请参阅 [docs/api.md](../api.md)。你也可以在面板上的 `http://<panel>:8888/api` 浏览和试用 HTTP API。
+Home Assistant 通过 MQTT 发现这些控制项，无需 YAML。主要实体系列、HTTP API 和配对详情请参阅 [docs/api.md](api.md)。你也可以在面板上的 `http://<panel>:8888/api` 浏览和试用 HTTP API。
 
 ## 安全性和 root 访问权限
 
@@ -160,14 +160,14 @@ Web 界面会用锁标记不可用的控制项，并说明面板缺少什么。�
 - [预配和设备群更新](provisioning.md)：无人值守安装、USB 和网络 ADB 设置、备份以及整个设备群的更新。
 - [内置渲染器](built-in-renderer.md)：要求、远程登录、仪表盘选择、恢复和有意设置的限制。
 - [性能](performance.md)：查明仪表盘运行缓慢的原因，并衡量实体筛选的效果。
-- [自适应亮度](../adaptive-brightness.md)：选择光源、了解学习机制，以及移动面板后重置历史记录。
-- [自适应接近感应和挥手唤醒](../adaptive-proximity.md)：配置接近检测并示教唤醒手势。
+- [自适应亮度](adaptive-brightness.md)：选择光源、了解学习机制，以及移动面板后重置历史记录。
+- [自适应接近感应和挥手唤醒](adaptive-proximity.md)：配置接近检测并示教唤醒手势。
 - [安全模式](security-mode.md)：了解宽松模式和强化安全模式，包括哪些操作要求有人在面板旁。
-- [TTS](../tts.md)：使用 Home Assistant TTS 引擎生成语音并将其发送到面板。
+- [TTS](tts.md)：使用 Home Assistant TTS 引擎生成语音并将其发送到面板。
 
 ### 开发和扩展 ha-paneld
 
-- [HTTP、MQTT 和 Home Assistant API](../api.md)：HTTP 端点、主要 MQTT 实体系列、配对和发现。机器可读的规范可通过面板上的 `/api/v1/openapi.json` 获取。
+- [HTTP、MQTT 和 Home Assistant API](api.md)：HTTP 端点、主要 MQTT 实体系列、配对和发现。机器可读的规范可通过面板上的 `/api/v1/openapi.json` 获取。
 - [面板配置文件](../profiles/)：无需重新构建应用，即可为其他面板创建、测试和共享支持。
 - [硬件参考资料](../hardware/)：特定型号的设置、传感器、控制项、固件和逆向工程说明。
 - [从源代码构建](../building.md)和[本地开发](../local-builds.md)：使用 Docker、开发容器或本地 Android 工具链进行构建。
@@ -218,7 +218,7 @@ ha-paneld 没有捐赠按钮。它是免费的，而真正能推动项目发展�
 
 ## 开发
 
-如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](../api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../tools/test/README.md)以及[发布流程](../RELEASING.md)。
+如果你想参与 ha-paneld 本身的开发，请先阅读 [CONTRIBUTING.md](../../.github/CONTRIBUTING.md)。开发者文档涵盖[从源代码构建](../building.md)、[本地构建和开发容器构建](../local-builds.md)、[HTTP 和 MQTT API](api.md)、[面板配置文件开发](../profiles/README.md)、[浏览器测试工具](../../tools/test/README.md)以及[发布流程](../RELEASING.md)。
 
 我特意提供了足够的信息，以便使用随附的开发容器并构建本地测试版本。请勿原样提交计算机生成的拉取请求或议题：请阅读并理解建议文本和代码的每个部分，然后用自己的语言重写。这是一个由我独自维护的项目，我没有时间审查未经筛选的计算机生成内容。请简明扼要，并以人类读者为对象；如果对某件事没有把握，请先询问。
 

@@ -127,11 +127,11 @@ Ogni pannello espone solo i controlli supportati dal proprio profilo e dall'hard
 | Luminosità adattiva | Apprendimento opzionale di sette giorni dal sensore di luminosità del pannello o da un'entità di illuminamento di Home Assistant |
 | Aprire un URL | `text.<panel>_navigate` |
 | Controlli della dashboard e riavvio | Pulsanti di Home Assistant, oltre alle azioni Dashboard, Ricarica e alle azioni di navigazione disponibili nel riquadro Comandi dell'interfaccia remota |
-| Audio TTS e degli annunci | `POST /play` e `number.<panel>_volume`; consultare la [guida TTS](../tts.md) |
+| Audio TTS e degli annunci | `POST /play` e `number.<panel>_volume`; consultare la [guida TTS](tts.md) |
 | Screenshot della dashboard e tocco remoto | I pannelli con un metodo di acquisizione degli screenshot supportato possono mostrare e aggiornare lo schermo dalla scheda Dashboard; la modalità Permissiva consente anche di inviare un clic al pannello |
 | Informazioni e configurazione del pannello | Aprire `http://<panel>:8888/`, disponibile anche tramite il collegamento **Visita** nella pagina del dispositivo di Home Assistant |
 
-Home Assistant rileva questi controlli tramite MQTT senza YAML. Le principali famiglie di entità, l'API HTTP e i dettagli sull'associazione sono disponibili in [docs/api.md](../api.md). È inoltre possibile esplorare e provare l'API HTTP su un pannello all'indirizzo `http://<panel>:8888/api`.
+Home Assistant rileva questi controlli tramite MQTT senza YAML. Le principali famiglie di entità, l'API HTTP e i dettagli sull'associazione sono disponibili in [docs/api.md](api.md). È inoltre possibile esplorare e provare l'API HTTP su un pannello all'indirizzo `http://<panel>:8888/api`.
 
 ## Sicurezza e accesso root
 
@@ -160,14 +160,14 @@ Per i pannelli realmente senza root esiste una [soluzione di ripiego avanzata](p
 - [Provisioning e aggiornamenti del parco dispositivi](provisioning.md): installazione automatica, configurazione di ADB tramite USB e rete, backup e aggiornamenti dell'intero parco dispositivi.
 - [Renderer integrato](built-in-renderer.md): requisiti, login remoto, selezione della dashboard, ripristino e limitazioni intenzionali.
 - [Prestazioni](performance.md): scopri perché una dashboard è lenta e misura l'effetto del filtraggio delle entità.
-- [Luminosità adattiva](../adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.
-- [Prossimità adattiva e riattivazione con un gesto della mano](../adaptive-proximity.md): configura il rilevamento di prossimità e insegna il gesto di riattivazione.
+- [Luminosità adattiva](adaptive-brightness.md): seleziona una sorgente luminosa, comprendi il processo di apprendimento e reimposta la cronologia dopo aver spostato un pannello.
+- [Prossimità adattiva e riattivazione con un gesto della mano](adaptive-proximity.md): configura il rilevamento di prossimità e insegna il gesto di riattivazione.
 - [Modalità di sicurezza](security-mode.md): comprendi la modalità permissiva e la modalità protetta, incluse le azioni che richiedono la presenza di una persona davanti al pannello.
-- [TTS](../tts.md): genera l'audio vocale con un motore TTS di Home Assistant e invialo a un pannello.
+- [TTS](tts.md): genera l'audio vocale con un motore TTS di Home Assistant e invialo a un pannello.
 
 ### Sviluppo ed estensione di ha-paneld
 
-- [API HTTP, MQTT e Home Assistant](../api.md): endpoint HTTP, principali famiglie di entità MQTT, associazione e rilevamento. La specifica leggibile dalle macchine è disponibile su un pannello all'indirizzo `/api/v1/openapi.json`.
+- [API HTTP, MQTT e Home Assistant](api.md): endpoint HTTP, principali famiglie di entità MQTT, associazione e rilevamento. La specifica leggibile dalle macchine è disponibile su un pannello all'indirizzo `/api/v1/openapi.json`.
 - [Profili dei pannelli](../profiles/): crea, testa e condividi il supporto per un altro pannello senza ricompilare l'app.
 - [Riferimenti hardware](../hardware/): configurazione specifica per modello, sensori, controlli, firmware e note sul reverse engineering.
 - [Compilazione dal codice sorgente](../building.md) e [sviluppo locale](../local-builds.md): compila con Docker, il container di sviluppo o una toolchain Android locale.
@@ -218,7 +218,7 @@ Il risultato è sempre aperto: il tuo pannello diventa un profilo utilizzabile d
 
 ## Sviluppo
 
-Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](../api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../tools/test/README.md) e il [processo di rilascio](../RELEASING.md).
+Se vuoi lavorare su ha-paneld, inizia da [CONTRIBUTING.md](../../.github/CONTRIBUTING.md). La documentazione per sviluppatori tratta la [compilazione dai sorgenti](../building.md), le [build locali e in container di sviluppo](../local-builds.md), l'[API HTTP e MQTT](api.md), lo [sviluppo dei profili dei pannelli](../profiles/README.md), l'[ambiente di test del browser](../../tools/test/README.md) e il [processo di rilascio](../RELEASING.md).
 
 Ho fornito deliberatamente informazioni sufficienti per usare il container di sviluppo incluso e creare una versione di test locale. Non inviare pull request o issue generate automaticamente senza modificarle: leggi e comprendi ogni parte del testo e del codice proposti, quindi riscrivili con parole tue. Questo progetto è gestito da una sola persona e non ho tempo di esaminare contenuti generati automaticamente e non filtrati. Sii conciso e scrivi per le persone; se hai dubbi su qualcosa, chiedi prima.
 
