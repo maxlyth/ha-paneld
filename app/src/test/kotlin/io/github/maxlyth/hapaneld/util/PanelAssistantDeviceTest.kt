@@ -45,7 +45,14 @@ class PanelAssistantDeviceTest {
         assertFalse(project(manufacturer = "a".repeat(129)).has("manufacturer"))
         assertFalse(project(area = "Two\nLines").has("area"))
         assertFalse(project(friendlyName = "Bell\u0007").has("name"))
+        assertFalse(project(area = "Two\u2028Lines").has("area"))
+        assertFalse(project(area = "Two\u2029Lines").has("area"))
+        assertFalse(project(friendlyName = "Family \uD83D\uDC68\u200D\uD83D\uDC69").has("name"))
+        assertFalse(project(friendlyName = "Private \uE000").has("name"))
+        assertFalse(project(friendlyName = "Unassigned \u0378").has("name"))
+        assertFalse(project(friendlyName = "Surrogate \uD800").has("name"))
         assertTrue(project(manufacturer = "a".repeat(128)).has("manufacturer"))
+        assertEquals("Rocket \uD83D\uDE80", project(friendlyName = "Rocket \uD83D\uDE80").getString("name"))
     }
 
     @Test fun oneMissingHardwareFactNeverInventsTheOther() {

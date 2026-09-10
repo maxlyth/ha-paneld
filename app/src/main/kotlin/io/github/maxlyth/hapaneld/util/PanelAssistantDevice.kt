@@ -21,11 +21,24 @@ object PanelAssistantDevice {
 
     private const val MAX_FIELD_LENGTH = 128
 
+    private fun isNonPresentationCodePoint(codePoint: Int): Boolean =
+        when (Character.getType(codePoint)) {
+            Character.UNASSIGNED.toInt(),
+            Character.CONTROL.toInt(),
+            Character.FORMAT.toInt(),
+            Character.PRIVATE_USE.toInt(),
+            Character.SURROGATE.toInt(),
+            Character.LINE_SEPARATOR.toInt(),
+            Character.PARAGRAPH_SEPARATOR.toInt(),
+            -> true
+            else -> false
+        }
+
     /** Bounded, printable, single-line presentation text, or absence. */
     internal fun field(value: String?): String? {
         val trimmed = value?.trim().orEmpty()
         if (trimmed.isEmpty() || trimmed.length > MAX_FIELD_LENGTH) return null
-        if (trimmed.any { it.isISOControl() }) return null
+        if (trimmed.codePoints().anyMatch(::isNonPresentationCodePoint)) return null
         return trimmed
     }
 
