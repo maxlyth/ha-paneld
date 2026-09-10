@@ -157,6 +157,7 @@ TARGET_LITERAL_EXCEPTIONS = {
     ("es", "install.presentation.status_no_renderer"): ("ℹ",),
     ("fr", "install.presentation.status_no_renderer"): ("ℹ",),
     ("it", "install.presentation.status_no_renderer"): ("ℹ",),
+    ("uk", "settings.kiosk_companion_packages.help"): ("root",),
     ("zh-Hans", "install.presentation.status_no_renderer"): ("ℹ",),
     ("zh-Hans", "install.apk.dynamic.paste_url"): ("https://",),
     ("zh-Hans", "install.apk_status.invalid_url"): ("https://",),

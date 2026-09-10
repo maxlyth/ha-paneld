@@ -9328,6 +9328,16 @@
    "sourceHash": "a7ec7e771773b541ddbd2cc8b80bcb7c777cfacca8b8a8b4251f37d51c30e366",
    "state": "machine-draft"
   },
+  "settings.kiosk_companion_packages.help": {
+   "text": "Android-pakketnamen, gescheiden door komma’s, die de dashboardvergrendeling vooraan laat staan in plaats van terug te keren naar het dashboard. Gebruik dit om de eigen schermen van een bijbehorende app te openen. Vereist root-toegang.",
+   "sourceHash": "384f4e706ef32a15c7d6abab7bc1ed63e84cde0f5278f637b0a774f0ed07661b",
+   "state": "machine-cross-checked"
+  },
+  "settings.kiosk_companion_packages.label": {
+   "text": "Apps die de vergrendeling toestaat",
+   "sourceHash": "d10363e328d4b092471a2bfeac18f6095a19876a6fd26b85a86675181efaec18",
+   "state": "machine-cross-checked"
+  },
   "settings.kiosk_lock.help": {
    "text": "Vergrendeling voor incidenteel gebruik, alleen voor root. Verbergt Android systeembalken en keert binnen ongeveer 3 seconden wanneer een andere app of Recents wordt geopend. Het wordt niet verborgen Home Assistant navigatie. Zet het hier neer, vanaf Home Assistant, via adb, met 7 snel linksboven tikken, of tijdens de 60- Tweede ontgrendeld venster na het opnieuw opstarten.",
    "sourceHash": "cb15071d31c33a73f5da36aef5a30c385125f3429136e556131067a9cdebd2a8",
