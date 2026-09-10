@@ -63,7 +63,9 @@ class RuntimeLocalizationContractTest {
                 assertTrue(
                     "$locale must promote runtime call-site key $key",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
         }

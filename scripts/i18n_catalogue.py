@@ -27,7 +27,7 @@ CANDIDATE_ROOT_KEYS = {
     "schema", "targetLocale", "sourceRevision", "sourceCatalogueHash", "translations",
 }
 CANDIDATE_RECORD_KEYS = {"key", "translation"}
-LOCALES = {"de", "fr", "it", "es", "zh-Hans"}
+LOCALES = {"de", "fr", "it", "es", "zh-Hans", "nl", "pl", "uk"}
 SOURCE_SURFACES = {
     "settings", "shell", "dashboard", "configure", "setup", "profiles", "entities", "install", "logs",
     "fleet", "api",
@@ -51,6 +51,9 @@ TARGET_SCRIPT_POLICIES = {
     "fr": "latin",
     "it": "latin",
     "zh-Hans": "han",
+    "nl": "latin",
+    "pl": "latin",
+    "uk": "ukrainian-cyrillic",
 }
 # A locale remains unsupported until it is present in LOCALES and has a catalogue. These
 # requirements reserve script policies for later locales so extending LOCALES cannot silently

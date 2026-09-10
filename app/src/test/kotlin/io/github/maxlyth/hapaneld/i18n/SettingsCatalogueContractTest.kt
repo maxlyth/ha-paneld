@@ -56,7 +56,9 @@ class SettingsCatalogueContractTest {
                 assertTrue(
                     "$locale $key must be reviewed before it can replace the English fallback",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
         }
@@ -160,7 +162,9 @@ class SettingsCatalogueContractTest {
                 assertTrue(
                     "$locale $key must be current and reviewed",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
         }

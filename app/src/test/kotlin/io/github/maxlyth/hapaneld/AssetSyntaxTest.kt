@@ -103,9 +103,9 @@ class AssetSyntaxTest {
             if(configSchemaUrl('zh-Hans')!=='/api/v1/config/schema?ha_lang=zh-Hans')process.exit(6);
             data.selectedLanguage='"bad language"';
             if(configSchemaUrl('de')!=='/api/v1/config/schema?ha_lang=de')process.exit(7);
-            data.selectedLanguage='"nl-NL"';
-            if(browserLanguageChoice()!=='nl-NL'||admittedBrowserLanguage(browserLanguageChoice())!==false||
-               configSchemaUrl('de')!=='/api/v1/config/schema?lang=nl-NL&ha_lang=de')process.exit(8);
+            data.selectedLanguage='"sv-SE"';
+            if(browserLanguageChoice()!=='sv-SE'||admittedBrowserLanguage(browserLanguageChoice())!==false||
+               configSchemaUrl('de')!=='/api/v1/config/schema?lang=sv-SE&ha_lang=de')process.exit(8);
             data.selectedLanguage='"de-DE"';
             if(admittedBrowserLanguage(browserLanguageChoice())!==true)process.exit(9);
             for(const locale of Object.keys(UI_LANGUAGE_LABELS).filter((value)=>value!=='auto')){

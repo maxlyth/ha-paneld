@@ -99,7 +99,9 @@ class LogsFleetI18nContractTest {
                 assertTrue(
                     "$locale must promote $key beyond draft before release",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
         }

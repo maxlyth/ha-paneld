@@ -52,6 +52,9 @@ class FakeHttp:
             {"language": "IT", "name": "Italian", "supports_formality": True},
             {"language": "ES", "name": "Spanish", "supports_formality": True},
             {"language": "ZH-HANS", "name": "Chinese (simplified)", "supports_formality": False},
+            {"language": "NL", "name": "Dutch", "supports_formality": True},
+            {"language": "PL", "name": "Polish", "supports_formality": True},
+            {"language": "UK", "name": "Ukrainian", "supports_formality": False},
         ]
         self.requests = []
 

@@ -35,6 +35,9 @@ TARGETS = {
     "it": ("IT", "less"),
     "es": ("ES", "less"),
     "zh-Hans": ("ZH-HANS", "default"),
+    "nl": ("NL", "less"),
+    "pl": ("PL", "more"),
+    "uk": ("UK", "default"),
 }
 HTTP = Callable[[urllib.request.Request], bytes]
 

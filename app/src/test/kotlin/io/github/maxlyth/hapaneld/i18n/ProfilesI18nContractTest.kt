@@ -118,7 +118,9 @@ class ProfilesI18nContractTest {
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
                         translated.state == TranslationState.COMMUNITY_CORRECTED ||
                         (translated.state == TranslationState.ENGLISH_FALLBACK &&
-                            fallback in APPROVED_PROFILES_ENGLISH_FALLBACKS),
+                            fallback in APPROVED_PROFILES_ENGLISH_FALLBACKS) ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
         }

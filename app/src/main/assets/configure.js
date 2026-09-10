@@ -68,7 +68,8 @@
   var localeReloadMessageKey = "ha-paneld-config-locale-reload-message";
   var UI_LANGUAGE_LABELS = {
     "auto": "Automatic", "en": "English", "de": "Deutsch", "fr": "Français",
-    "it": "Italiano", "es": "Español", "zh-Hans": "简体中文"
+    "it": "Italiano", "es": "Español", "zh-Hans": "简体中文",
+    "nl": "Nederlands", "pl": "Polski", "uk": "Українська"
   };
   // Setting values are API/storage vocabulary. Keep them in option.value and translate only the
   // visible label through this closed map; an option added server-side before its catalogue entry

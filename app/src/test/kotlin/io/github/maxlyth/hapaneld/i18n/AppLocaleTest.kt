@@ -59,7 +59,7 @@ class AppLocaleTest {
     @Test fun `accept language honors quality and falls through unsupported languages`() {
         assertEquals(
             "de",
-            AppLocale.resolve(null, acceptLanguage = "nl-NL, de-DE;q=0.8, fr;q=0.7", deviceLanguageTag = "it-IT", allowPseudo = false),
+            AppLocale.resolve(null, acceptLanguage = "sv-SE, de-DE;q=0.8, fr;q=0.7", deviceLanguageTag = "it-IT", allowPseudo = false),
         )
         assertEquals("es", AppLocale.resolve(null, acceptLanguage = "ar;q=1, es-MX;q=.9", deviceLanguageTag = "de", allowPseudo = false))
     }
@@ -69,18 +69,18 @@ class AppLocaleTest {
         assertEquals("en", AppLocale.resolve(null, acceptLanguage = "ar", deviceLanguageTag = "ja-JP", allowPseudo = false))
     }
 
-    @Test fun `Russian automatic alias remains dormant until Ukrainian is supported`() {
-        assertTrue(AppLocale.UKRAINIAN !in AppLocale.RELEASE_LOCALES)
-        assertNull(AppLocale.automaticLocaleOverride("ru-RU", AppLocale.RELEASE_LOCALES))
+    @Test fun `Russian automatic signals select Ukrainian now that Ukrainian is a release locale`() {
+        assertTrue(AppLocale.UKRAINIAN in AppLocale.RELEASE_LOCALES)
+        assertEquals("uk", AppLocale.automaticLocaleOverride("ru-RU", AppLocale.RELEASE_LOCALES))
         assertEquals(
             "de",
             AppLocale.resolve(
-                explicit = null, persisted = "auto", haUser = "ru-RU",
-                acceptLanguage = "de", deviceLanguageTag = "fr", allowPseudo = false,
+                explicit = null, persisted = "de-DE", haUser = "ru-RU",
+                acceptLanguage = "ru", deviceLanguageTag = "fr", allowPseudo = false,
             ),
         )
         assertEquals(
-            "en",
+            "uk",
             AppLocale.resolve(
                 explicit = null, persisted = "auto", haUser = "ru",
                 acceptLanguage = "ru-RU", deviceLanguageTag = "ru_UA", allowPseudo = false,

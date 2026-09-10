@@ -1,5 +1,6 @@
 package io.github.maxlyth.hapaneld.i18n
 
+import io.github.maxlyth.hapaneld.i18n.AppLocale.EARLY_ACCESS_LOCALES
 import org.json.JSONObject
 import java.security.MessageDigest
 
@@ -171,13 +172,15 @@ class Strings(
     val locale: String get() = when {
         pseudo -> AppLocale.PSEUDO
         target?.strings?.let { translated ->
+            val earlyAccess = target.locale in EARLY_ACCESS_LOCALES
             source.strings
                 .filterKeys { it.startsWith("settings.") }
                 .all { (key, value) ->
                 translated[key]?.let { candidate ->
                     candidate.sourceHash == value.sourceHash &&
                         (candidate.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                            candidate.state == TranslationState.COMMUNITY_CORRECTED)
+                            candidate.state == TranslationState.COMMUNITY_CORRECTED ||
+                            (earlyAccess && candidate.state == TranslationState.MACHINE_DRAFT))
                 } == true
             }
         } == true -> target.locale
@@ -220,8 +223,13 @@ class Strings(
             TranslationState.MACHINE_CROSS_CHECKED,
             TranslationState.COMMUNITY_CORRECTED,
             -> LocalizedText(candidate.text, target.locale)
-            TranslationState.ENGLISH_FALLBACK,
             TranslationState.MACHINE_DRAFT,
+            -> if (target.locale in EARLY_ACCESS_LOCALES) {
+                LocalizedText(candidate.text, target.locale)
+            } else {
+                LocalizedText(english, AppLocale.ENGLISH)
+            }
+            TranslationState.ENGLISH_FALLBACK,
             -> LocalizedText(english, AppLocale.ENGLISH)
         }
     }

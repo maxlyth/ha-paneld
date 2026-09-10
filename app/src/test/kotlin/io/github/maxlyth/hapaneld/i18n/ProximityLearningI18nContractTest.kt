@@ -28,7 +28,9 @@ class ProximityLearningI18nContractTest {
                 assertTrue(
                     "$locale $key must be promoted beyond a draft",
                     translated.state == TranslationState.MACHINE_CROSS_CHECKED ||
-                        translated.state == TranslationState.COMMUNITY_CORRECTED,
+                        translated.state == TranslationState.COMMUNITY_CORRECTED ||
+                        (locale in AppLocale.EARLY_ACCESS_LOCALES &&
+                            translated.state == TranslationState.MACHINE_DRAFT),
                 )
             }
             val permittedSourceIdentical = when (locale) {

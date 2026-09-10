@@ -105,6 +105,9 @@ class CatalogueTest(unittest.TestCase):
                     "es": "Configuración",
                     "fr": "Paramètres",
                     "it": "Impostazioni",
+                    "nl": "Instellingen",
+                    "pl": "Ustawienia",
+                    "uk": "Налаштування",
                     "zh-Hans": "设置",
                 },
             }],
@@ -168,16 +171,21 @@ class CatalogueTest(unittest.TestCase):
         ):
             i18n.validate_target_script_policies()
 
-    def test_future_uk_registration_requires_the_reserved_cyrillic_policy(self):
-        future_locales = {*i18n.LOCALES, "uk"}
+    def test_uk_registration_requires_the_reserved_cyrillic_policy(self):
+        # Ukrainian is now a registered release locale, so this exercises the reserved-policy
+        # requirement against the real locale set rather than a hypothetical future one: an
+        # incorrect or missing script policy for "uk" must still be rejected even though the
+        # locale itself is live.
+        self.assertIn("uk", i18n.LOCALES)
+        self.assertEqual(i18n.REQUIRED_TARGET_SCRIPT_POLICIES.get("uk"), "ukrainian-cyrillic")
         source_record = {"text": "Settings", "placeholders": [], "frozen": []}
+        without_uk = {key: value for key, value in i18n.TARGET_SCRIPT_POLICIES.items() if key != "uk"}
         for policies, message in (
-            (i18n.TARGET_SCRIPT_POLICIES, "must exactly cover"),
+            (without_uk, "must exactly cover"),
             ({**i18n.TARGET_SCRIPT_POLICIES, "uk": "latin"}, "violates locale requirement"),
         ):
             with (
                 self.subTest(policies=policies),
-                mock.patch.object(i18n, "LOCALES", future_locales),
                 mock.patch.object(i18n, "TARGET_SCRIPT_POLICIES", policies),
                 self.assertRaisesRegex(i18n.CatalogueError, message),
             ):

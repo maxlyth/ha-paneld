@@ -35,6 +35,9 @@
         "es": "Brillo",
         "fr": "Luminosité",
         "it": "Luminosità",
+        "nl": "Helderheid",
+        "pl": "Jasność",
+        "uk": "Яскравість",
         "zh-Hans": "亮度"
       }
     },
@@ -49,6 +52,9 @@
         "es": "Conectado a Home Assistant",
         "fr": "Connecté à Home Assistant",
         "it": "Connesso a Home Assistant",
+        "nl": "Verbonden met Home Assistant",
+        "pl": "Połączono z Home Assistant",
+        "uk": "З'єднано з Home Assistant",
         "zh-Hans": "已连接到 Home Assistant"
       }
     },
@@ -63,6 +69,9 @@
         "es": "No se ha podido conectar con Home Assistant.",
         "fr": "Impossible de se connecter à Home Assistant.",
         "it": "Impossibile connettersi a Home Assistant.",
+        "nl": "Kan geen verbinding maken met Home Assistant.",
+        "pl": "Nie można połączyć się z Home Assistant.",
+        "uk": "Не вдалося підключитися до Home Assistant.",
         "zh-Hans": "无法连接到 Home Assistant 。"
       }
     },
@@ -77,6 +86,9 @@
         "es": "Idioma del dispositivo",
         "fr": "Langue de l'appareil",
         "it": "Lingua del dispositivo",
+        "nl": "Apparaattaal",
+        "pl": "Język urządzenia",
+        "uk": "Мова пристрою",
         "zh-Hans": "设备语言"
       }
     },
@@ -91,6 +103,9 @@
         "es": "Entidad",
         "fr": "Entité",
         "it": "Entità",
+        "nl": "Entiteit",
+        "pl": "Encja",
+        "uk": "Сутність",
         "zh-Hans": "实体"
       }
     },
@@ -105,6 +120,9 @@
         "es": "Idioma",
         "fr": "Langue",
         "it": "Lingua",
+        "nl": "Taal",
+        "pl": "Język",
+        "uk": "Мова",
         "zh-Hans": "语言"
       }
     },
@@ -119,6 +137,9 @@
         "es": "Red",
         "fr": "Réseau",
         "it": "Rete",
+        "nl": "Netwerk",
+        "pl": "Sieć",
+        "uk": "Мережа",
         "zh-Hans": "网络"
       }
     },
@@ -133,6 +154,9 @@
         "es": "Recargar",
         "fr": "Recharger",
         "it": "Ricarica",
+        "nl": "Herladen",
+        "pl": "Odśwież",
+        "uk": "Оновити",
         "zh-Hans": "重载"
       }
     },
@@ -147,6 +171,9 @@
         "es": "Seguridad",
         "fr": "Sécurité",
         "it": "Sicurezza",
+        "nl": "Beveiliging",
+        "pl": "Bezpieczeństwo",
+        "uk": "Безпека",
         "zh-Hans": "安全"
       }
     },
@@ -161,6 +188,9 @@
         "es": "Configuración",
         "fr": "Paramètres",
         "it": "Impostazioni",
+        "nl": "Instellingen",
+        "pl": "Ustawienia",
+        "uk": "Налаштування",
         "zh-Hans": "设置"
       }
     }
