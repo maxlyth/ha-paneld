@@ -1,0 +1,77 @@
+package io.github.maxlyth.hapaneld.util
+
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** The device projection is presentation text, so every unusable field must vanish, not leak. */
+class PanelAssistantDeviceTest {
+    private fun project(
+        friendlyName: String? = "Office HA Dash",
+        manufacturer: String? = "Electron",
+        model: String? = "WF1589T (ha-paneld)",
+        androidRelease: String? = "14",
+        buildDisplay: String? = "TQ3A.230805.001",
+        area: String? = "Office",
+    ) = JSONObject(
+        PanelAssistantDevice.json(
+            friendlyName, manufacturer, model, androidRelease, buildDisplay, area,
+        ),
+    )
+
+    @Test fun completeHardwareFactsProjectEveryCardField() {
+        val device = project()
+        assertEquals("Office HA Dash", device.getString("name"))
+        assertEquals("Electron", device.getString("manufacturer"))
+        assertEquals("WF1589T", device.getString("model"))
+        assertEquals("Android 14 · TQ3A.230805.001", device.getString("hw_version"))
+        assertEquals("Office", device.getString("area"))
+        assertEquals(5, device.length())
+    }
+
+    @Test fun theApplicationMarkerNeverReachesTheHardwareModel() {
+        assertEquals("WF1589T", project(model = "WF1589T (ha-paneld)").getString("model"))
+        assertEquals("WF1589T", project(model = "WF1589T (ha-paneld) ").getString("model"))
+        assertEquals("NSPanel 86", project(model = "NSPanel 86").getString("model"))
+        assertFalse(project(model = " (ha-paneld)").has("model"))
+    }
+
+    @Test fun aFieldThePanelCannotStateSafelyIsAbsentRatherThanBlank() {
+        assertFalse(project(friendlyName = "").has("name"))
+        assertFalse(project(friendlyName = "   ").has("name"))
+        assertFalse(project(friendlyName = null).has("name"))
+        assertFalse(project(manufacturer = "a".repeat(129)).has("manufacturer"))
+        assertFalse(project(area = "Two\nLines").has("area"))
+        assertFalse(project(friendlyName = "Bell\u0007").has("name"))
+        assertTrue(project(manufacturer = "a".repeat(128)).has("manufacturer"))
+    }
+
+    @Test fun oneMissingHardwareFactNeverInventsTheOther() {
+        assertEquals("Android 14", project(buildDisplay = null).getString("hw_version"))
+        assertFalse(project(androidRelease = null).has("hw_version"))
+        assertFalse(project(androidRelease = "", buildDisplay = "TQ3A").has("hw_version"))
+    }
+
+    @Test fun anUnusablePanelStillProducesAValidEmptyObject() {
+        val device = project(
+            friendlyName = null,
+            manufacturer = null,
+            model = null,
+            androidRelease = null,
+            buildDisplay = null,
+            area = null,
+        )
+        assertEquals(0, device.length())
+    }
+
+    @Test fun theProjectionNeverCarriesAHardwareIdentifier() {
+        val raw = PanelAssistantDevice.json(
+            "Office HA Dash", "Electron", "WF1589T (ha-paneld)", "14", "TQ3A.230805.001", "Office",
+        )
+        for (forbidden in listOf("serial", "android_id", "androidId", "mac", "did")) {
+            assertFalse(forbidden, raw.contains(forbidden, ignoreCase = true))
+        }
+    }
+}

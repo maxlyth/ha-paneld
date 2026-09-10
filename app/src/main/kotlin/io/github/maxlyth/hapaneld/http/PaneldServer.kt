@@ -162,6 +162,7 @@ import io.github.maxlyth.hapaneld.util.LatestDispatcher
 import io.github.maxlyth.hapaneld.util.GenerationSingleFlight
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
+import io.github.maxlyth.hapaneld.util.PanelAssistantDevice
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.withStagedFiles
 import io.ktor.http.ContentType
@@ -4919,6 +4920,17 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             "\"capabilities\":[$caps]," +
             storageProof +
             "\"panel_assistant_update\":${UpdateChecker.panelAssistantUpdateJson(currentUpdates)}," +
+            // Additive, presentation-only, and read from state the panel already holds.
+            "\"panel_assistant_device\":${
+                PanelAssistantDevice.json(
+                    config.friendlyName,
+                    config.manufacturer,
+                    config.model,
+                    android.os.Build.VERSION.RELEASE,
+                    android.os.Build.DISPLAY,
+                    config.haArea,
+                )
+            }," +
             "\"zigbee_gateway\":$zigbee,\"storage_health\":${storage.statusJson()}," +
             // `ha_network` follows the same unconditional rule: idle with measuring=false when no
             // socket is held, never absent.
