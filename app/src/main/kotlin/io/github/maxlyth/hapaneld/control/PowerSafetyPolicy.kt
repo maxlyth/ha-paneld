@@ -17,7 +17,13 @@ data class PowerSafetyObservation(
     val stayOnWhilePluggedIn: Int?,
     val deviceIdleMode: Boolean?,
     val ignoringBatteryOptimizations: Boolean?,
+    /** The profile's declared screen-off route (an intent, not an observation of what ran). */
     val screenOffMechanism: String,
+    /** What the last actual screen-off applied, or null if none has run since this profile activated.
+     *  See [ScreenController.routeSelection]: this is read, never probed, so it costs nothing here. */
+    val screenOffSelected: String? = null,
+    /** Why [screenOffSelected] matches or differs from [screenOffMechanism]. */
+    val screenOffReason: String = ScreenController.REASON_UNEXERCISED,
 )
 
 enum class PowerRiskLevel(val wireValue: String) {

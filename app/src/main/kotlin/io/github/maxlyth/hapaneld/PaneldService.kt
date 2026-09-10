@@ -1395,6 +1395,7 @@ class PaneldService : Service() {
             context = this,
             power = power,
             screenOffMechanism = profile.screenOff.name.lowercase(),
+            screenRouteSelection = screen::routeSelection,
             directRootExpected = profile.appCanSu,
         )
 

@@ -14,6 +14,8 @@ class PowerSafetyController(
     private val power: PowerController,
     private val root: RootShell = Su,
     private val screenOffMechanism: String,
+    /** Durable read of the last actual screen-off; never probes su or the helper daemon on its own. */
+    private val screenRouteSelection: () -> RouteSelection,
     private val directRootExpected: Boolean = false,
 ) {
     private val app = context.applicationContext
@@ -56,6 +58,8 @@ class PowerSafetyController(
                 powerManager.isIgnoringBatteryOptimizations(app.packageName)
             }.getOrNull(),
             screenOffMechanism = screenOffMechanism,
+            screenOffSelected = screenRouteSelection().selected?.name?.lowercase(),
+            screenOffReason = screenRouteSelection().reason,
         )
     }
 

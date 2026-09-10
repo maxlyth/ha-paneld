@@ -36,6 +36,37 @@ class PowerSafetyPresentationTest {
         assertFalse(diagnostic.contains("battery"))
     }
 
+    /** Issue #138: declared and selected/reason are distinct wire fields, not one overloaded key —
+     *  screen_off= keeps its established declared-only meaning. */
+    @Test fun declaredAndSelectedScreenOffRouteAreDistinctWireFields() {
+        val assessment = assessment(PowerRiskLevel.SAFE).let {
+            it.copy(
+                observation = it.observation.copy(
+                    screenOffMechanism = "brightness_zero",
+                    screenOffSelected = "su_blpower",
+                    screenOffReason = "the declared su bl_power route was unavailable; fell back to the helper daemon",
+                ),
+            )
+        }
+        val json = JSONObject(PowerSafetyPresentation.json(advisory(assessment)))
+        assertEquals("brightness_zero", json.getString("screen_off_mechanism"))
+        assertEquals("su_blpower", json.getString("screen_off_selected"))
+        assertTrue(json.getString("screen_off_reason").contains("fell back"))
+
+        val diagnostic = PowerSafetyPresentation.diagnosticLine(assessment)
+        assertTrue(diagnostic.contains("screen_off=brightness_zero"))
+        assertTrue(diagnostic.contains("screen_off_selected=su_blpower"))
+        assertTrue(diagnostic.contains("screen_off_reason=\"the declared su bl_power route was unavailable"))
+    }
+
+    @Test fun unexercisedScreenOffSelectionReportsNullNotAGuess() {
+        val json = JSONObject(PowerSafetyPresentation.json(advisory(assessment(PowerRiskLevel.SAFE))))
+        assertTrue(json.isNull("screen_off_selected"))
+
+        val diagnostic = PowerSafetyPresentation.diagnosticLine(assessment(PowerRiskLevel.SAFE))
+        assertTrue(diagnostic.contains("screen_off_selected=unknown"))
+    }
+
     @Test fun repairableWarningsUseOneSharedSummaryAndOfferOnlyAnExplicitPostRepair() {
         val assessment = assessment(PowerRiskLevel.AT_RISK)
         val advisory = advisory(assessment, PowerRepairCapability.DIRECT_ROOT)

@@ -20,6 +20,15 @@ enum class WakeOutcome { WOKEN, ALREADY_ON, STALE_GENERATION, ACTUATION_FAILED }
 value class AutomaticOffEpoch internal constructor(internal val generation: Long)
 
 /**
+ * Declared vs. actually-applied screen-off route, for reporting only. [declared] is the profile's
+ * preference; [selected] is what the most recent [ScreenController.sleep]/[ScreenController.sleepAutomatically]
+ * actually applied, or null if none has run since this controller was constructed — that is reported
+ * as unexercised, never probed, because reading this must never itself touch su or the helper daemon.
+ * [selected] and [reason] survive wake: they describe the last off, not the current live state.
+ */
+data class RouteSelection(val declared: ScreenOff, val selected: ScreenOff?, val reason: String)
+
+/**
  * Screen on/off — vendor-free with one serialized transition owner.
  *
  * The active profile selects helper, direct `su`, keyevent, or brightness-zero as the preferred
@@ -79,6 +88,10 @@ class ScreenController(
     // stale screen-off can never strand the panel dark, but a deliberate "screen off" still stays off.
     @Volatile private var intendedOff = false
     @Volatile private var appliedOffRoute: ScreenOff? = null
+    // Durable report of the last off, kept across wake unlike [appliedOffRoute] above (which exists
+    // only while intentionally off). [routeSelection] reads these two directly rather than probing.
+    @Volatile private var lastSelectedRoute: ScreenOff? = null
+    @Volatile private var lastSelectionReason: String = REASON_UNEXERCISED
     private val stateGeneration = AtomicLong()
     @Volatile private var intendedOffGeneration = 0L
     @Volatile private var observedDarkGeneration = 0L
@@ -109,6 +122,18 @@ class ScreenController(
 
     /** Whether the last screen state ha-paneld set was a deliberate off (vs. never-asked / woken). */
     fun isIntendedOff(): Boolean = intendedOff
+
+    /**
+     * Declared route (the profile's preference) versus what the last actual off applied, and why they
+     * differ. A pure read of durable state recorded at the last [sleepInternal] — it never probes su or
+     * the helper daemon, so calling this is always safe from a diagnostics render.
+     */
+    fun routeSelection(): RouteSelection = RouteSelection(route, lastSelectedRoute, lastSelectionReason)
+
+    private fun recordSelection(selected: ScreenOff, reason: String) {
+        lastSelectedRoute = selected
+        lastSelectionReason = reason
+    }
 
     /** Serialize a brightness write with screen transitions. Either the write completes before a later
      * sleep (which then wins), or an already-intended off rejects it; ALS can never relight an OFF panel. */
@@ -257,22 +282,26 @@ class ScreenController(
         // bl_power paths below take the panel *truly* dark — freeze the WebView there (no point rendering
         // behind a black backlight). The brightness fallback (0) is not guaranteed dark on panels that
         // clamp a minimum, so it does NOT freeze (correctness over the CPU saving on those rare panels).
-        val poweredOffRoute = when (route) {
+        val poweredOff = when (route) {
             ScreenOff.DAEMON_BLPOWER -> when {
-                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER
-                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER
+                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER to REASON_DECLARED
+                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER to
+                    "the declared helper daemon route was unavailable; fell back to su bl_power"
                 else -> null
             }
             ScreenOff.SU_BLPOWER -> when {
-                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER
-                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER
+                root.run(blPower(false)) -> ScreenOff.SU_BLPOWER to REASON_DECLARED
+                daemon.send("SCREEN OFF") == "OK" -> ScreenOff.DAEMON_BLPOWER to
+                    "the declared su bl_power route was unavailable; fell back to the helper daemon"
                 else -> null
             }
-            ScreenOff.KEYEVENT -> if (sleepByKeyevent()) ScreenOff.KEYEVENT else null
+            ScreenOff.KEYEVENT -> if (sleepByKeyevent()) ScreenOff.KEYEVENT to REASON_DECLARED else null
             ScreenOff.BRIGHTNESS_ZERO -> null
         }
-        if (poweredOffRoute != null) {
+        if (poweredOff != null) {
+            val (poweredOffRoute, reason) = poweredOff
             appliedOffRoute = poweredOffRoute
+            recordSelection(poweredOffRoute, reason)
             // A successful bl_power actuator is authoritative for this exact off epoch. This permits
             // a quick external wake to reconcile before the next heartbeat. Brightness-zero remains
             // unconfirmed until read back dark because some panels visibly clamp its raw zero.
@@ -292,6 +321,14 @@ class ScreenController(
         if (cur > 0) savedLevel = cur
         backlight.setBrightnessRaw(0)
         appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
+        recordSelection(
+            ScreenOff.BRIGHTNESS_ZERO,
+            if (route == ScreenOff.BRIGHTNESS_ZERO) {
+                REASON_BRIGHTNESS_ZERO_NEVER_PROBES
+            } else {
+                "neither su bl_power nor the helper daemon was available; degraded to a brightness-only off"
+            },
+        )
         Log.d(TAG, "screen -> off (brightness fallback; saved=$savedLevel)")
         return automaticEpochOrNull()
     }
@@ -308,6 +345,10 @@ class ScreenController(
         if (cur > 0) savedLevel = cur
         backlight.setBrightness(NO_WAKE_DIM)
         appliedOffRoute = ScreenOff.BRIGHTNESS_ZERO
+        recordSelection(
+            ScreenOff.BRIGHTNESS_ZERO,
+            "the declared route was refused ($reason); dimmed to the never-blank floor instead",
+        )
         Log.w(TAG, "screen-off with $reason — dimming to floor (never-blank; saved=$savedLevel)")
         return automaticEpochOrNull()
     }
@@ -612,6 +653,11 @@ class ScreenController(
 
     companion object {
         private const val TAG = "ha-paneld/screen"
+        internal const val REASON_DECLARED = "matches the declared route"
+        internal const val REASON_BRIGHTNESS_ZERO_NEVER_PROBES =
+            "matches the declared route; brightness-zero never probes su or the helper daemon"
+        internal const val REASON_UNEXERCISED =
+            "not yet exercised — no screen-off has occurred since this controller was constructed"
         private const val DEFAULT_ON = 160
         private const val MIN_ON = 10
         // Dim level for a screen-off that can't be made touch-wakeable: low but clearly on, never blank.

@@ -92,7 +92,11 @@ internal object PowerSafetyPresentation {
             append(" stay_on_effective=").append(value(PowerSafetyPolicy.stayAwakeEffective(observation)))
             append(" device_idle=").append(value(observation.deviceIdleMode))
             append(" doze_exempt=").append(value(observation.ignoringBatteryOptimizations))
+            // screen_off= keeps its established meaning (the profile's DECLARED route) for wire
+            // compatibility; the two new fields are what the last actual off applied, and why.
             append(" screen_off=").append(observation.screenOffMechanism)
+            append(" screen_off_selected=").append(value(observation.screenOffSelected))
+            append(" screen_off_reason=\"").append(observation.screenOffReason).append('"')
             append(" reasons=").append(assessment.reasonCodes.ifEmpty { listOf("none") }.joinToString(","))
         }
     }
@@ -126,6 +130,8 @@ internal object PowerSafetyPresentation {
             .put("device_idle", observation.deviceIdleMode ?: JSONObject.NULL)
             .put("doze_exempt", observation.ignoringBatteryOptimizations ?: JSONObject.NULL)
             .put("screen_off_mechanism", observation.screenOffMechanism)
+            .put("screen_off_selected", observation.screenOffSelected ?: JSONObject.NULL)
+            .put("screen_off_reason", observation.screenOffReason)
     }
 
     private fun actionText(advisory: PowerSafetyAdvisory): String = when (advisory.action) {

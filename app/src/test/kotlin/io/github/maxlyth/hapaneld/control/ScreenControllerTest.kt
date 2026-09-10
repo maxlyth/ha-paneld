@@ -508,6 +508,137 @@ class ScreenControllerTest {
         assertTrue(daemon.sent.isEmpty())
     }
 
+    // --- declared vs. selected route (Issue #138) ------------------------------------------------
+    //
+    // routeSelection() is a durable report, not a live probe: it must never touch su/daemon on its
+    // own, must survive wake, and must start unexercised before any sleep has run.
+
+    @Test fun routeSelectionIsUnexercisedBeforeAnySleep() {
+        val (sc, root) = controller()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.declared)
+        assertNull(selection.selected)
+        assertEquals(ScreenController.REASON_UNEXERCISED, selection.reason)
+        assertTrue("reading the selection must never probe hardware", root.outputRan.isEmpty())
+    }
+
+    @Test fun routeSelectionMatchesDeclaredWhenTheDeclaredRouteWorks() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK"))
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.declared)
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.selected)
+        assertEquals(ScreenController.REASON_DECLARED, selection.reason)
+    }
+
+    @Test fun routeSelectionReportsTheFallbackWhenTheDeclaredRouteIsUnavailable() {
+        val (sc, _) = controller(suRuns = true) // declared DAEMON_BLPOWER; no daemon reply, su works
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.declared)
+        assertEquals(ScreenOff.SU_BLPOWER, selection.selected)
+        assertTrue(selection.reason.contains("helper daemon"))
+        assertTrue(selection.reason.contains("fell back"))
+    }
+
+    @Test fun routeSelectionReportsTheBrightnessDegradeWhenNoPrivilegedTransportIsAvailable() {
+        val (sc, _) = controller(suRuns = false) // declared DAEMON_BLPOWER; no daemon, su fails too
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.declared)
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, selection.selected)
+        assertTrue(selection.reason.contains("neither"))
+    }
+
+    @Test fun routeSelectionExplainsBrightnessZeroNeverProbesEvenWhenItMatchesTheDeclaredRoute() {
+        val root = FakeRootShell(runResult = true)
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK"))
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.BRIGHTNESS_ZERO)
+
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, selection.declared)
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, selection.selected)
+        assertTrue(selection.reason.contains("never probes su or the helper daemon"))
+    }
+
+    /** A route that worked once can stop working after activation — a later sleep must overwrite the
+     *  durable selection, not merely append to it. */
+    @Test fun routeSelectionUpdatesWhenARouteBecomesUnavailableAfterActivation() {
+        val replies = mutableMapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK")
+        val root = FakeRootShell(outputs = mapOf("bl_power" to "4"), runResult = true)
+        val daemon = FakeDaemon(replies)
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.DAEMON_BLPOWER)
+
+        sc.sleep()
+        assertEquals(ScreenOff.DAEMON_BLPOWER, sc.routeSelection().selected)
+        sc.wake()
+
+        replies.remove("SCREEN OFF") // the helper daemon route is now gone
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.SU_BLPOWER, selection.selected)
+        assertTrue(selection.reason.contains("fell back"))
+    }
+
+    /** The mirror case: root access arrives after the panel has already fallen back once, and the next
+     *  sleep must pick the declared route back up rather than sticking with the earlier fallback. */
+    @Test fun routeSelectionUpdatesWhenABetterRouteAppearsAfterRootIsGranted() {
+        val root = FakeRootShell(runResult = false) // su initially unavailable
+        val daemon = FakeDaemon(mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        val sc = ScreenController(backlight, power, root, daemon, wakeTap, ScreenOff.SU_BLPOWER)
+
+        sc.sleep()
+        val first = sc.routeSelection()
+        assertEquals(ScreenOff.DAEMON_BLPOWER, first.selected)
+        assertTrue(first.reason.contains("fell back"))
+        sc.wake()
+
+        root.runResult = true // root is granted before the next sleep
+        sc.sleep()
+        val second = sc.routeSelection()
+
+        assertEquals(ScreenOff.SU_BLPOWER, second.selected)
+        assertEquals(ScreenController.REASON_DECLARED, second.reason)
+    }
+
+    @Test fun routeSelectionRecordsTheRefusalReasonWhenTheOverlayCannotArm() {
+        wakeTap.canArm = false
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK"))
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, selection.selected)
+        assertTrue(selection.reason.contains("no touch-to-wake"))
+    }
+
+    @Test fun routeSelectionRecordsTheRefusalReasonWhenAKeyeventSleepIsUnconfirmed() {
+        val root = FakeRootShell(runResult = false)
+        val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap, ScreenOff.KEYEVENT)
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.KEYEVENT, selection.declared)
+        assertEquals(ScreenOff.BRIGHTNESS_ZERO, selection.selected)
+        assertTrue(selection.reason.contains("unconfirmed keyevent"))
+    }
+
+    @Test fun routeSelectionSurvivesWake() {
+        val (sc, _) = controller(daemon = mapOf("SCREEN OFF" to "OK", "SCREEN ON" to "OK"))
+        sc.sleep()
+        sc.wake()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.DAEMON_BLPOWER, selection.selected)
+        assertEquals(ScreenController.REASON_DECLARED, selection.reason)
+    }
+
     // --- wake always pulses the wakelock ---
     @Test fun wakePulsesOnDaemonTier() {
         val (sc, _) = controller(daemon = mapOf("SCREEN ON" to "OK"))
