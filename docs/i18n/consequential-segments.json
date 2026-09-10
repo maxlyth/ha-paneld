@@ -338,7 +338,7 @@
       ],
       "document": "docs/hardware/tpa10.md",
       "segmentCount": 104,
-      "sourceSha256": "00b85bd5bff29f6da7f6cac40503d745261c20f738cfff1123c51f7d5f22e980"
+      "sourceSha256": "1c9b057dcc045d8e47f5b8b1fb56ab1e6f1517c72d215a3c758c97d6a910430d"
     },
     {
       "consequentialSegments": [
@@ -361,7 +361,7 @@
       ],
       "document": "docs/hardware/wf1589t.md",
       "segmentCount": 69,
-      "sourceSha256": "13907c07e73fe6ca651b181350067b75dc8033de3dedf6e770c6af3065596e4d"
+      "sourceSha256": "45e74c87f296efb6e81df4b8c12d726bd9e93626ad943c8f1a7e3383268a63a7"
     }
   ],
   "schema": 2
