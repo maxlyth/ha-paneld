@@ -8,7 +8,7 @@
 //   - worse than baseline (+epsilon)  -> REGRESSION (flagged, but exit 0 — never blocks a build)
 //   - within baseline                 -> ok / known-backlog
 // `--update-baseline` rewrites tools/test/baseline.json; use RUNS=5 or greater for baseline refreshes.
-// Local: `node test/layout-matrix.mjs`.
+// Local: `node tools/test/layout-matrix.mjs`.
 import { chromium } from 'playwright-core';
 import http from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
