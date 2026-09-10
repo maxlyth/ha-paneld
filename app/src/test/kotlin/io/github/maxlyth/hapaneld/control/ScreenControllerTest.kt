@@ -618,6 +618,16 @@ class ScreenControllerTest {
         assertTrue(selection.reason.contains("no touch-to-wake"))
     }
 
+    @Test fun routeSelectionMatchesDeclaredForASuccessfulKeyeventSleep() {
+        val (sc, _, _) = keyeventController()
+        sc.sleep()
+        val selection = sc.routeSelection()
+
+        assertEquals(ScreenOff.KEYEVENT, selection.declared)
+        assertEquals(ScreenOff.KEYEVENT, selection.selected)
+        assertEquals(ScreenController.REASON_DECLARED, selection.reason)
+    }
+
     @Test fun routeSelectionRecordsTheRefusalReasonWhenAKeyeventSleepIsUnconfirmed() {
         val root = FakeRootShell(runResult = false)
         val sc = ScreenController(backlight, power, root, FakeDaemon(), wakeTap, ScreenOff.KEYEVENT)
