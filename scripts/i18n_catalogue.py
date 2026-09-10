@@ -169,6 +169,7 @@ TARGET_LITERAL_EXCEPTIONS = {
     ("zh-Hans", "entities.issue.kio\u0073k-mode-dynamic-javascript.recommendation"): ("Kiosk",),
     ("zh-Hans", "entities.status.unresolved_help"): ("ID",),
     ("zh-Hans", "settings.camera_exposure.help"): ("EV",),
+    ("zh-Hans", "settings.kiosk_companion_packages.help"): ("root",),
     ("zh-Hans", "settings.kiosk_lock.help"): ("root",),
     ("zh-Hans", "settings.voice_enabled.help"): ("Assist",),
     ("zh-Hans", "settings.voice_pipelines.help"): ("Assist", "ID"),

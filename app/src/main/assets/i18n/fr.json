@@ -10563,6 +10563,16 @@
       "state": "machine-cross-checked",
       "text": "Maintenir le panneau réactif"
     },
+    "settings.kiosk_companion_packages.help": {
+      "sourceHash": "384f4e706ef32a15c7d6abab7bc1ed63e84cde0f5278f637b0a774f0ed07661b",
+      "state": "machine-cross-checked",
+      "text": "Noms de paquets Android, séparés par des virgules, que le verrouillage du tableau de bord laisse à l'avant-plan au lieu de revenir au tableau de bord. Utilisez cette option pour accéder aux écrans propres à une application compagnon. Nécessite les droits root."
+    },
+    "settings.kiosk_companion_packages.label": {
+      "sourceHash": "d10363e328d4b092471a2bfeac18f6095a19876a6fd26b85a86675181efaec18",
+      "state": "machine-cross-checked",
+      "text": "Apps autorisées par le verrouillage"
+    },
     "settings.kiosk_lock.help": {
       "sourceHash": "cb15071d31c33a73f5da36aef5a30c385125f3429136e556131067a9cdebd2a8",
       "state": "machine-cross-checked",
