@@ -1,0 +1,36 @@
+{
+  "reviewFallbacks": [
+    {
+      "document": "docs/hardware/README.md",
+      "locale": "de",
+      "segmentId": "docs/hardware/README.md::1:889f9ea8f0e91f714c326c06f1cda2f2a54159ed9453860ed3288b7369429293::paragraph::277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912::1",
+      "sourceSha256": "277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912"
+    },
+    {
+      "document": "docs/hardware/README.md",
+      "locale": "es",
+      "segmentId": "docs/hardware/README.md::1:889f9ea8f0e91f714c326c06f1cda2f2a54159ed9453860ed3288b7369429293::paragraph::277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912::1",
+      "sourceSha256": "277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912"
+    },
+    {
+      "document": "docs/hardware/README.md",
+      "locale": "fr",
+      "segmentId": "docs/hardware/README.md::1:889f9ea8f0e91f714c326c06f1cda2f2a54159ed9453860ed3288b7369429293::paragraph::277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912::1",
+      "sourceSha256": "277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912"
+    },
+    {
+      "document": "docs/hardware/README.md",
+      "locale": "it",
+      "segmentId": "docs/hardware/README.md::1:889f9ea8f0e91f714c326c06f1cda2f2a54159ed9453860ed3288b7369429293::paragraph::277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912::1",
+      "sourceSha256": "277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912"
+    },
+    {
+      "document": "docs/hardware/README.md",
+      "locale": "zh-Hans",
+      "segmentId": "docs/hardware/README.md::1:889f9ea8f0e91f714c326c06f1cda2f2a54159ed9453860ed3288b7369429293::paragraph::277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912::1",
+      "sourceSha256": "277674cc5fd16f892cd96adcf2638d673592db87e2c1f929443a44f85e8e4912"
+    }
+  ],
+  "schema": 1,
+  "unchangedTargets": []
+}
