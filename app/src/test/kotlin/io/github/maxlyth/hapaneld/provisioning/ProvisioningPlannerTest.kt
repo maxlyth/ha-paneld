@@ -77,6 +77,31 @@ class ProvisioningPlannerTest {
     }
 
     @Test
+    fun sandboxPanelWithoutHelperDriverRecommendsHelperForSandboxControls() {
+        val plan = plan(
+            profile(helperImportance = ProvisioningImportance.RECOMMENDED),
+            observations().copy(helper = known(ProvisioningHelperState.MISSING)),
+        )
+
+        assertEquals(ProvisioningPlanState.ATTENTION, plan.state)
+        assertEquals(ProvisioningImportance.RECOMMENDED, plan.items.single().importance)
+        assertItem(
+            plan,
+            "access.helper",
+            ProvisioningItemStatus.MANUAL,
+            "missing",
+            "sandbox_controls_without_helper",
+        )
+        val text = ProvisioningTextRenderer.render(plan)
+        assertTrue(
+            text.contains(
+                "- Root helper [recommended]: Display sizing, CPU governor, screenshots and performance readings",
+            ),
+        )
+        assertFalse(text.contains("profiled hardware controls"))
+    }
+
+    @Test
     fun compatibleHelperSuppressesRedundantShizukuGuidance() {
         val plan = plan(
             profile(

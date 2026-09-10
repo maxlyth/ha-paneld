@@ -45,8 +45,15 @@ internal object ProvisioningPlanner {
             is ProvisioningObservation.Known -> when (observation.value) {
                 ProvisioningHelperState.COMPATIBLE ->
                     Result(ProvisioningItemStatus.SATISFIED, "compatible", "helper_compatible")
-                ProvisioningHelperState.MISSING ->
-                    Result(ProvisioningItemStatus.MANUAL, "missing", "daemon_driver_without_helper")
+                ProvisioningHelperState.MISSING -> Result(
+                    ProvisioningItemStatus.MANUAL,
+                    "missing",
+                    if (importance == ProvisioningImportance.REQUIRED) {
+                        "daemon_driver_without_helper"
+                    } else {
+                        "sandbox_controls_without_helper"
+                    },
+                )
                 ProvisioningHelperState.INCOMPATIBLE ->
                     Result(ProvisioningItemStatus.DEGRADED, "incompatible", "helper_incompatible")
                 ProvisioningHelperState.REACHABLE_UNVERIFIED ->

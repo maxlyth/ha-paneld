@@ -372,7 +372,7 @@ JSON
   */api/v1/provisioning/plan.txt)
     plan_status=200
     case "${MOCK_PLAN:-ok}" in
-      ok|recommendations|control) ;;
+      ok|recommendations|control|helper-absent|helper-required) ;;
       missing) plan_status=404 ;;
       transient)
         attempts="${MOCK_STATE_DIR:?}/plan-attempts"
@@ -384,6 +384,10 @@ JSON
     if [ "$plan_status" = 200 ] && [ -n "$output_file" ]; then
       if [ "${MOCK_PLAN:-ok}" = "recommendations" ]; then
         printf 'Detected panel: Test Panel\nRecommended: install the root helper\nRecommended: update System WebView\n' > "$output_file"
+      elif [ "${MOCK_PLAN:-ok}" = "helper-absent" ]; then
+        printf 'ha-paneld provisioning plan\nPanel: Shelly Wall Display\nProfile: shelly-wall-display@000000000000 (bundled)\nStatus: satisfied\nNo profile-specific provisioning guidance.\n' > "$output_file"
+      elif [ "${MOCK_PLAN:-ok}" = "helper-required" ]; then
+        printf 'ha-paneld provisioning plan\nPanel: Tuya TPA10\nProfile: tpa10@000000000000 (bundled)\nStatus: attention needed\n- Root helper [required]: This panel needs the root helper for profiled hardware controls; install it from the trusted host.\n' > "$output_file"
       elif [ "${MOCK_PLAN:-ok}" = "control" ]; then
         printf 'Detected panel: Hostile\033]2;forged title\007\nProvisioning guidance: safe\n' > "$output_file"
       else

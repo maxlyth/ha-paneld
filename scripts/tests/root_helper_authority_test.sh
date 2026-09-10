@@ -93,6 +93,7 @@ run_provision_case() {
   MOCK_STATEFUL_DUPLICATE_ON_LAUNCH="$duplicate" \
   MOCK_STATEFUL_COMMIT_FAIL="$commit_fail" \
   MOCK_HELPER_BUILD_ID="$BUILD_ID" \
+  MOCK_PLAN="${CASE_PLAN:-ok}" \
   MOCK_ROOT=1 \
   MOCK_SU_DIALECT=join \
   MOCK_SYSTEM_WRITABLE="$system_writable" \
@@ -232,6 +233,20 @@ for kind in system systemless hybrid; do
   if [ "$CASE_STATUS" -eq 0 ]; then pass "$kind canonical managed-provision scenario succeeds"; else fail "$kind canonical managed-provision scenario failed (see $CASE_STATE/output)"; fi
   assert_canonical "$kind" "$CASE_STATE"
 done
+
+# Helper eligibility follows the proven root route alone. A profile with no helper-demanding LED or
+# other driver and one whose LED route needs the helper must both converge the same canonical helper.
+for plan in helper-absent helper-required; do
+  CASE_PLAN="$plan" run_provision_case system "plan-$plan"
+  if [ "$CASE_STATUS" -eq 0 ]; then pass "$plan profile provisioning succeeds"; else fail "$plan profile provisioning failed (see $CASE_STATE/output)"; fi
+  expect_event '^INSTALL_OK .*path=/data/local/hapaneld-helper$' "$CASE_STATE" "$plan profile installs the canonical helper"
+  inspect="$CASE_STATE/inspect"
+  MOCK_STATE_DIR="$CASE_STATE" "$HELPER_STATE" inspect > "$inspect"
+  expect_line 'LIVE_PATH=/data/local/hapaneld-helper' "$inspect" "$plan profile moves the live helper off its legacy path"
+  expect_event '^LAUNCH_OK path=/data/local/hapaneld-helper supervised=1 attempt=1$' "$CASE_STATE" "$plan profile launches the canonical supervisor"
+done
+if grep -Fqx 'No profile-specific provisioning guidance.' "$(case_state system plan-helper-absent)/output"; then pass 'helper-absent case rendered the driverless profile plan'; else fail 'helper-absent case never rendered its plan'; fi
+if grep -Fq -- '- Root helper [required]:' "$(case_state system plan-helper-required)/output"; then pass 'helper-required case rendered the helper-backed LED profile plan'; else fail 'helper-required case never rendered its plan'; fi
 
 # A post-APK crash can leave a durable v2 TARGET journal with no surviving helper process.  Re-run
 # the whole provisioner against that state: it must authenticate the same record twice around the

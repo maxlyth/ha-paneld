@@ -6,6 +6,8 @@ import io.github.maxlyth.hapaneld.device.profile.ProfileMetadata
 import io.github.maxlyth.hapaneld.device.profile.ProfileOrigin
 import io.github.maxlyth.hapaneld.device.profile.ProfileSummary
 import io.github.maxlyth.hapaneld.device.profile.ResolvedProfile
+import io.github.maxlyth.hapaneld.provisioning.ProvisioningImportance
+import io.github.maxlyth.hapaneld.provisioning.provisioningHelperImportance
 import io.github.maxlyth.hapaneld.provisioning.requiresProvisioningHelper
 import io.github.maxlyth.hapaneld.provisioning.toProvisioningProfile
 import org.junit.Assert.assertEquals
@@ -21,6 +23,26 @@ class ProvisioningServiceAdapterTest {
 
         assertEquals(
             setOf("s9e", "smt1019", "tpa10", "wf1589t", "zx-smt156"),
+            actual,
+        )
+    }
+
+    @Test fun sandboxPanelsWithoutHelperDriversStillRecommendTheHelper() {
+        val actual = BundledProfileFixtures.bundled
+            .associate { it.document.id to it.profile().provisioningHelperImportance() }
+
+        assertEquals(
+            mapOf(
+                "generic" to null,
+                "nspanel-pro" to null,
+                "s9e" to ProvisioningImportance.REQUIRED,
+                "shelly-wall-display" to ProvisioningImportance.RECOMMENDED,
+                "shelly-wall-display-v2" to ProvisioningImportance.RECOMMENDED,
+                "smt1019" to ProvisioningImportance.REQUIRED,
+                "tpa10" to ProvisioningImportance.REQUIRED,
+                "wf1589t" to ProvisioningImportance.REQUIRED,
+                "zx-smt156" to ProvisioningImportance.REQUIRED,
+            ),
             actual,
         )
     }

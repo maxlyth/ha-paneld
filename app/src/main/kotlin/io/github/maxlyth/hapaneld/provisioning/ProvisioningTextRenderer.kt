@@ -47,6 +47,8 @@ internal object ProvisioningTextRenderer {
     private fun ProvisioningPlanItem.guidance(): String = when (reasonCode) {
         "helper_compatible" -> "The compatible helper is available."
         "daemon_driver_without_helper" -> "This panel needs the root helper for profiled hardware controls; install it from the trusted host."
+        "sandbox_controls_without_helper" ->
+            "Display sizing, CPU governor, screenshots and performance readings need the root helper on this panel; install it from the trusted host where a root route exists."
         "helper_incompatible" -> "The responding helper is incompatible; replace it from the trusted host."
         "helper_identity_unavailable" -> "A helper responds, but its compatibility cannot be verified."
         "helper_observation_not_ready", "helper_probe_failed", "helper_probe_unsupported" ->
