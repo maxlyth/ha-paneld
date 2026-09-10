@@ -99,12 +99,12 @@ class ConfigReadRoutesTest {
         persisted = "auto"
         assertSchema("/api/v1/config/schema?ha_lang=it", "es", "it:Checked", "en, it")
         // Without an HA choice, Accept-Language wins the Android/device locale.
-        assertSchema("/api/v1/config/schema", "nl, es-MX;q=.8", "es:Checked", "en, es")
+        assertSchema("/api/v1/config/schema", "sv, es-MX;q=.8", "es:Checked", "en, es")
         // Unsupported inherited languages fall through to the Android/device locale.
-        assertSchema("/api/v1/config/schema", "nl", "zh-Hans:Checked", "en, zh-Hans")
+        assertSchema("/api/v1/config/schema", "sv", "zh-Hans:Checked", "en, zh-Hans")
         // English is the final fallback when every signal is unsupported.
         device = "ja-JP"
-        assertSchema("/api/v1/config/schema?ha_lang=nl", "ar", "en:Checked", "en")
+        assertSchema("/api/v1/config/schema?ha_lang=sv", "ar", "en:Checked", "en")
     }
 
     private fun renderSyntheticSchema(strings: Strings): String {
