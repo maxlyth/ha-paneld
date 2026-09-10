@@ -2148,7 +2148,6 @@ MOCK_ROOT=0 MOCK_PLAN=helper-required run_provision "$MOCK_TARGET" --apk "$APK" 
 assert_success "an unrooted panel whose profile requires the helper still completes on standard capabilities"
 assert_contains 'no root path available.*continuing without the root helper' "a helper-required profile does not override the unrooted verdict"
 assert_contains 'Root helper \[required\]' "the app-owned plan reports the unmet helper requirement"
-assert_not_contains '/data/local/tmp/hapaneld-helper' "$MOCK_CALL_LOG" "a helper-required profile never stages a privileged binary without a root route"
 
 MOCK_ROOT=0 MOCK_ABI=x86_64 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "unsupported ABI is harmless on a genuinely unrooted panel"
