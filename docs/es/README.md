@@ -68,7 +68,7 @@ No necesitas clonar el repositorio ni proporcionar ninguna opción. El instalado
 Si falla un paso obligatorio, el instalador indica el problema y se cierra sin afirmar que la instalación se haya completado correctamente. Corrige el problema y vuelve a ejecutar el mismo comando.
 
 > [!IMPORTANT]
-> **Comprueba Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulta [Requisitos del renderizador integrado](built-in-renderer.md#requisitos-y-compatibilidad) y [Actualización del WebView del sistema](../hardware/README.md#updating-the-system-webview).
+> **Comprueba Home Assistant y el WebView del sistema del panel antes de cargar el panel de control por primera vez.** El renderizador integrado requiere Home Assistant 2026.4.2 o posterior y un WebView moderno. Incluso un panel nuevo puede incluir un WebView demasiado antiguo para mostrar un panel de control actual. Consulta [Requisitos del renderizador integrado](built-in-renderer.md#requisitos-y-compatibilidad) y [Actualización del WebView del sistema](hardware/README.md#actualización-del-webview-del-sistema).
 
 Para seguir la versión publicada más reciente, incluidas las versiones candidatas, añade `--prerelease`. Una versión estable más reciente sigue teniendo prioridad:
 

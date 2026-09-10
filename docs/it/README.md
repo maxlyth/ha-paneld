@@ -68,7 +68,7 @@ Non è necessario clonare il repository né specificare alcuna opzione. Il progr
 Se un passaggio obbligatorio non riesce, il programma di installazione indica il problema e termina senza dichiarare che l'installazione è riuscita. Correggi il problema ed esegui nuovamente lo stesso comando.
 
 > [!IMPORTANT]
-> **Controlla Home Assistant e la WebView di sistema del pannello prima di caricare la dashboard per la prima volta.** Il renderer integrato richiede Home Assistant 2026.4.2 o versioni successive e una WebView moderna. Anche un pannello nuovo può contenere una WebView troppo vecchia per visualizzare una dashboard attuale. Consulta [Requisiti del renderer integrato](built-in-renderer.md#requisiti-e-compatibilità) e [Aggiornamento della WebView di sistema](../hardware/README.md#updating-the-system-webview).
+> **Controlla Home Assistant e la WebView di sistema del pannello prima di caricare la dashboard per la prima volta.** Il renderer integrato richiede Home Assistant 2026.4.2 o versioni successive e una WebView moderna. Anche un pannello nuovo può contenere una WebView troppo vecchia per visualizzare una dashboard attuale. Consulta [Requisiti del renderer integrato](built-in-renderer.md#requisiti-e-compatibilità) e [Aggiornamento della WebView di sistema](hardware/README.md#aggiornamento-della-webview-di-sistema).
 
 Per seguire la versione pubblicata più recente, incluse le release candidate, aggiungi `--prerelease`. Una versione stabile più recente ha comunque la precedenza:
 

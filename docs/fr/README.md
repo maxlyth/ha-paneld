@@ -68,7 +68,7 @@ Vous n’avez pas besoin de cloner le dépôt ni de fournir d’options. Le prog
 Si une étape requise échoue, le programme d’installation indique le problème et se ferme sans prétendre que l’installation a réussi. Corrigez le problème et exécutez de nouveau la même commande.
 
 > [!IMPORTANT]
-> **Vérifiez Home Assistant et le WebView système du panneau avant le premier chargement du tableau de bord.** Le moteur de rendu intégré nécessite Home Assistant 2026.4.2 ou une version ultérieure, ainsi qu’un WebView moderne. Même un panneau neuf peut contenir un WebView trop ancien pour afficher un tableau de bord actuel. Consultez [Configuration requise du moteur de rendu intégré](built-in-renderer.md#configuration-requise-et-compatibilité) et [Mise à jour du WebView système](../hardware/README.md#updating-the-system-webview).
+> **Vérifiez Home Assistant et le WebView système du panneau avant le premier chargement du tableau de bord.** Le moteur de rendu intégré nécessite Home Assistant 2026.4.2 ou une version ultérieure, ainsi qu’un WebView moderne. Même un panneau neuf peut contenir un WebView trop ancien pour afficher un tableau de bord actuel. Consultez [Configuration requise du moteur de rendu intégré](built-in-renderer.md#configuration-requise-et-compatibilité) et [Mise à jour du WebView système](hardware/README.md#mise-à-jour-du-webview-système).
 
 Pour suivre la dernière version publiée, y compris les versions candidates, ajoutez `--prerelease`. Une version stable plus récente reste prioritaire :
 
