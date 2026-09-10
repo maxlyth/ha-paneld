@@ -2138,15 +2138,10 @@ assert_log_contains '/data/local/hapaneld-helper --request GUARDCAPS' "managed v
 assert_log_contains '/data/local/hapaneld-helper --request GUARDSTATUS' "managed validation proves Guard is exactly empty"
 assert_not_contains ' forward |/dev/tcp/' "$MOCK_CALL_LOG" "daemon validation does not weaken peer authentication with adb forwarding"
 
-MOCK_ROOT=0 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+MOCK_ROOT=0 MOCK_PLAN=helper-required run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_success "non-root provisioning continues without a root helper"
 assert_contains 'no root path available.*continuing without the root helper' "non-root helper skip is explicit"
 assert_not_contains '/data/local/tmp/hapaneld-helper' "$MOCK_CALL_LOG" "non-root provisioning never stages a privileged binary"
-
-# A profile whose drivers demand the helper cannot make a panel without a root route eligible for one.
-MOCK_ROOT=0 MOCK_PLAN=helper-required run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
-assert_success "an unrooted panel whose profile requires the helper still completes on standard capabilities"
-assert_contains 'no root path available.*continuing without the root helper' "a helper-required profile does not override the unrooted verdict"
 assert_contains 'Root helper \[required\]' "the app-owned plan reports the unmet helper requirement"
 
 MOCK_ROOT=0 MOCK_ABI=x86_64 run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
