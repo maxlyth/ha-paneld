@@ -22,7 +22,7 @@ The reported panel is a Lenovo ThinkSmart View with Android identity `lenovo sta
 
 The [`community-lenovo-thinksmart-view-lineageos.yaml`](community-lenovo-thinksmart-view-lineageos.yaml) profile changes screen off from `brightness-zero` to `keyevent`. This makes the Home Assistant **Screen** control request Android sleep instead of moving brightness to the firmware's visible minimum.
 
-The hardware test established the local behavior: touch does not wake the sleeping panel, while either physical volume button does. A direct `KEYCODE_WAKEUP` command did not work. ha-paneld's complete keyevent wake path also takes an unprivileged wakelock pulse, so the failed raw command does not prove that Home Assistant wake will fail, but that complete path must be tested after activation rather than assumed.
+The reporter confirmed in attended testing that Home Assistant screen off and on commands work reliably on this LineageOS firmware. Touch does not wake the sleeping panel; physical volume buttons do, as a fallback. A direct `KEYCODE_WAKEUP` command did not work when tested independently, but the complete ha-paneld keyevent wake path (which includes an unprivileged wakelock pulse) proved effective in real Home Assistant operation.
 
 A PIN, pattern or password must not be configured. The keyevent route refuses to sleep a secured panel and dims it instead because waking into a credential screen can strand a wall-mounted device.
 

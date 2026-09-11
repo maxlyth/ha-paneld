@@ -1,6 +1,6 @@
 schema: 2
 id: community.rpi4-konstakang-lineageos
-version: 1.0.0
+version: 1.1.0
 display_name: Unofficial Raspberry Pi 4 (KonstaKANG LineageOS)
 soc_class: Broadcom BCM2711
 metadata:
@@ -9,10 +9,10 @@ metadata:
   license: Apache-2.0
   maturity: draft
   tested_firmware:
-    - KonstaKANG LineageOS / Android 16, build BP4A.251205.006, on one contributor-assembled unit
+    - KonstaKANG LineageOS / Android 16, build BP4A.251205.006, on one contributor-assembled unit; touch wake confirmed working with Magisk
   limitations:
     - A Raspberry Pi 4 with a separately sourced HDMI touchscreen is an assembly, not a retail panel. There is no maintainer or fleet qualification.
-    - Whether a touch wakes the sleeping panel is a property of the attached touchscreen, not of the Pi. Prove it attended before relying on the keyevent screen route; where it does not wake, Home Assistant is the only way back.
+    - Touch wake on this board requires the HDMI touchscreen to be configured as a platform wake source, which depends on the user's Magisk module configuration. Where the touchscreen is not a wake source, Home Assistant is the only way back.
     - The keyevent route refuses to sleep a panel that has a PIN, pattern or password configured, and dims to a visible floor instead.
     - Matching cannot distinguish KonstaKANG's LineageOS image from its AOSP or Android TV images for the same board, which are untested but would also accept this profile when pinned by hand.
     - Does not describe the Raspberry Pi 5, the Pi 400 or the Compute Module 4.
