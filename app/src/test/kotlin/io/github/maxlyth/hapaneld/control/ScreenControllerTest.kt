@@ -522,7 +522,7 @@ class ScreenControllerTest {
         // A literal, not ScreenController.REASON_UNEXERCISED: comparing the constant against itself
         // could never distinguish a correct default from one whose *definition* silently changed.
         assertEquals(
-            "not yet exercised; no screen-off has occurred since this controller was constructed",
+            "not yet exercised — no screen-off has occurred since this controller was constructed",
             selection.reason,
         )
         assertTrue("reading the selection must never probe hardware", root.outputRan.isEmpty())

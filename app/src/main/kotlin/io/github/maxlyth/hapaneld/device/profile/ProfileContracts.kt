@@ -70,7 +70,6 @@ data class ProfilePresentation(
             "expected-catalog-revision-required",
             "invalid-profile-ref",
             "invalid-delete-request",
-            "profile-ref-both-forms-supplied",
             "yaml-content-type-required",
             "json-content-type-required",
             "profile-yaml-too-large",
