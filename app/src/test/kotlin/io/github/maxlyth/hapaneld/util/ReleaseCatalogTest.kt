@@ -33,6 +33,14 @@ class ReleaseCatalogTest {
         assertEquals(2, ReleaseCatalog.select(raw, "prerelease", 2, strip).size)
     }
 
+    @Test fun stablePagesStayInsideTheResponseBound() {
+        // The Companion target resolver asks for 40 stable releases; 100 per page measured 2.5 MB.
+        assertEquals(50, ReleaseCatalog.pageSize("stable", 40))
+        assertEquals(50, ReleaseCatalog.pageSize("stable", 10))
+        assertEquals(40, ReleaseCatalog.pageSize("stable", 5))
+        assertEquals(40, ReleaseCatalog.pageSize("prerelease", 40))
+    }
+
     @Test fun missingApkAssetIsNotInstallable() {
         val v = ReleaseCatalog.select(raw, "prerelease", 10, strip)
         assertFalse(v.first { it.tag == "v0.8.5-rc1" }.installable)

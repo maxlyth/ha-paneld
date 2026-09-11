@@ -75,10 +75,21 @@ object ReleaseCatalog {
      *  hold only a couple of stable ones. Fetch a larger page for the stable channel so [limit] stable
      *  versions still surface; the prerelease channel keeps everything, so one page of [limit] is enough. */
     fun list(repo: String, channel: String, limit: Int, apkMatch: (String) -> Boolean, normalize: (String) -> String): List<Version> {
-        val perPage = if (channel == "prerelease") limit else minOf(100, limit * 8)
+        val perPage = pageSize(channel, limit)
         return runCatching { select(fetch(repo, perPage, apkMatch), channel, limit, normalize) }
             .getOrElse { Log.w(TAG, "list $repo failed", it); emptyList() }
     }
+
+    /**
+     * Releases requested per page. The stable channel over-fetches to find enough stable releases, but
+     * never past [MAX_STABLE_PAGE]: measured 2026-09-11, 100 home-assistant/android releases were
+     * 2.5 MB and 80 were 2.08 MB against the [MAX_API_RESPONSE_BYTES] bound, so a larger page refused
+     * every stable Companion lookup. 50 were 1.4 MB and still held six stable releases.
+     */
+    internal fun pageSize(channel: String, limit: Int): Int =
+        if (channel == "prerelease") limit else minOf(MAX_STABLE_PAGE, limit * 8)
+
+    internal const val MAX_STABLE_PAGE = 50
 
     /** Resolve the installable APK asset URL for an exact [tag] in [repo], or null (unknown tag / no asset
      *  / invalid tag). */
