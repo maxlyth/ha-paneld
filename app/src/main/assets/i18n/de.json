@@ -9478,6 +9478,11 @@
       "sourceHash": "9699ce8f86c496618c872c877ca3419ebc8b7f0a9889e7e656b52e3c835eb872",
       "state": "machine-cross-checked"
     },
+    "profiles.result.profile-ref-both-forms-supplied": {
+      "text": "Die Anfrage enthält sowohl eine flache als auch eine verschachtelte Profilreferenz. Verwende nur eine davon.",
+      "sourceHash": "0c32e9917057f109b9650810ff1ed7a1723ef944d39ec79b5aacaf4b03fcd848",
+      "state": "machine-cross-checked"
+    },
     "profiles.result.profile-restart-unavailable": {
       "text": "Der Profilneustart konnte nicht geplant werden. Versuche es erneut.",
       "sourceHash": "c99af13857c3c56eaf384f110113a0ac5e393e44b6d9197b209412f089d1b339",

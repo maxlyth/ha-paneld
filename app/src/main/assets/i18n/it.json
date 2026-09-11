@@ -9478,6 +9478,11 @@
       "state": "machine-cross-checked",
       "text": "La revisione del profilo non è compatibile con questo core."
     },
+    "profiles.result.profile-ref-both-forms-supplied": {
+      "sourceHash": "0c32e9917057f109b9650810ff1ed7a1723ef944d39ec79b5aacaf4b03fcd848",
+      "state": "machine-cross-checked",
+      "text": "La richiesta fornisce sia un riferimento al profilo piatto che uno annidato. Usane solo uno."
+    },
     "profiles.result.profile-restart-unavailable": {
       "sourceHash": "c99af13857c3c56eaf384f110113a0ac5e393e44b6d9197b209412f089d1b339",
       "state": "machine-cross-checked",
