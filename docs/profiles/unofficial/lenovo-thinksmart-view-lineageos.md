@@ -22,9 +22,7 @@ The reported panel is a Lenovo ThinkSmart View with Android identity `lenovo sta
 
 The [`community-lenovo-thinksmart-view-lineageos.yaml`](community-lenovo-thinksmart-view-lineageos.yaml) profile changes screen off from `brightness-zero` to `keyevent`. This makes the Home Assistant **Screen** control request Android sleep instead of moving brightness to the firmware's visible minimum.
 
-The hardware test established the local behavior: touch does not wake the sleeping panel, while either physical volume button does. With the profile in use, the contributor then confirmed that Home Assistant can dim the panel and turn it fully off ([#130](https://github.com/maxlyth/ha-paneld/issues/130#issuecomment-5606586655)).
-
-Waking from Home Assistant is less certain. A direct `KEYCODE_WAKEUP` command did not work, but ha-paneld's keyevent wake path also takes an unprivileged wakelock pulse, so that failure does not prove Home Assistant wake will fail. Asked whether Home Assistant brings the screen back, the contributor answered yes while describing only dim and full off. Check it on your own panel before relying on it unattended.
+The hardware test established the local behavior: touch does not wake the sleeping panel, while either physical volume button does. With the profile in use, the contributor then confirmed that Home Assistant can dim the panel, turn it fully off and wake it again ([#130](https://github.com/maxlyth/ha-paneld/issues/130#issuecomment-5606586655)). A direct `KEYCODE_WAKEUP` command did not wake this firmware, but ha-paneld's keyevent wake path does not rely on that command alone; it also takes an unprivileged wakelock pulse.
 
 A PIN, pattern or password must not be configured. The keyevent route refuses to sleep a secured panel and dims it instead because waking into a credential screen can strand a wall-mounted device.
 
@@ -45,4 +43,4 @@ Use ha-paneld 0.9.7-rc3 or later, then follow the [unofficial catalog procedure]
 5. Check that ambient-light and proximity values respond to physical changes.
 6. Exercise **Roll back** before relying on the profile unattended.
 
-The contributor's report covers step 2 on the reported firmware, which is what `tested_firmware` records. Step 3 still needs a clear report.
+The contributor's report covers steps 2 and 3 on the reported firmware, which is what `tested_firmware` records.
