@@ -28,19 +28,18 @@ Root is declared as evidence, not as authority. After activation the running dri
 
 ## Before you rely on it
 
-Touch wake on this board depends on the HDMI touchscreen being configured as a kernel wake source through a Magisk module. The reporter confirmed that with proper Magisk module configuration, touch wake reliably wakes the panel from the keyevent sleep state.
+The contributor confirmed that a touch wakes the panel from keyevent sleep, but not out of the box ([#107](https://github.com/maxlyth/ha-paneld/issues/107#issuecomment-5608334945)). Android handles touch wake itself once the touchscreen's input device has an Android input device configuration (`.idc`) file that enables it; the contributor's file set `touch.wake = 1` and `touch.enableForInactiveViewport = 1`. On the reported image the directory for that file is read-only, so it had to be installed through a Magisk module. The file is keyed to the touchscreen's own vendor and product IDs, so every owner has to supply one for their own screen.
 
 Follow the [unofficial catalog procedure](README.md) to import and validate, then the [staged testing checklist](../testing.md). Stage 4 is the one that matters here, and it must be done with somebody standing at the panel:
 
-1. Ensure your touchscreen is configured as a platform wake source through an appropriate Magisk module (the reporter used a module making the display a wake source).
-2. Put the screen to sleep from Home Assistant.
-3. **Touch the panel.** If it wakes with proper Magisk configuration, this profile suits the hardware. If it does not wake, confirm your Magisk module setup before troubleshooting further; Home Assistant remains the reliable way back if needed.
-4. Wake it from Home Assistant and confirm the dashboard returns rather than a lock screen.
-5. Exercise **Roll back** before relying on the profile.
+1. Put the screen to sleep from Home Assistant.
+2. **Touch the panel.** If it wakes, this profile suits the hardware. If it does not, check the input device configuration described above; until touch wakes it, Home Assistant is the only way back, and you should decide whether that is acceptable before leaving the panel unattended.
+3. Wake it from Home Assistant and confirm the dashboard returns rather than a lock screen.
+4. Exercise **Roll back** before relying on the profile.
 
 A panel with a PIN, pattern or password configured is refused outright and dims instead, because nobody types a credential on a wall panel.
 
-If you prefer not to rely on touch wake, you can disable the keyevent route: edit two lines and save a new revision: set `hardware.screen_off` to `brightness-zero`, and in `requires.drivers` replace `screen.keyevent` with `screen.brightness-zero`. It is a swap rather than a deletion — a capability's driver must be listed, so removing the entry without replacing it fails validation. Bump the profile `version` at the same time, because that is a behavioural change.
+If a touch does not wake the panel and you would rather keep the previous behaviour, edit two lines and save a new revision: set `hardware.screen_off` to `brightness-zero`, and in `requires.drivers` replace `screen.keyevent` with `screen.brightness-zero`. It is a swap rather than a deletion — a capability's driver must be listed, so removing the entry without replacing it fails validation. Bump the profile `version` at the same time, because that is a behavioural change.
 
 ## Limitations
 

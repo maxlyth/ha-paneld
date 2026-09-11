@@ -482,7 +482,7 @@ class BundledProfileParityTest {
         assertEquals(189, candidate.display.physicalPpi)
         assertFalse("a community profile must remain import-only", candidate.match.fallback)
         assertEquals(
-            listOf("LineageOS 8.1.0 (API 27), build OPM7.181205.001, on one contributor unit; Home Assistant screen off/on confirmed"),
+            listOf("lineage_starfire-userdebug 8.1.0 OPM7.181205.001 d41d2fdda0; Home Assistant dim and full screen-off confirmed"),
             candidate.metadata.testedFirmware,
         )
         assertNull("no CPU governor policy was proved", candidate.cpu.governors)
@@ -895,9 +895,9 @@ class BundledProfileParityTest {
             "community-cronos-lineageos18.yaml" to
                 "c0207b2b43f46d84641d2d33683cb7fb0e8a4013544827bd3041337a40d02ea2",
             "community-lenovo-thinksmart-view-lineageos.yaml" to
-                "48f4b72e07eb213f81083522196d7147136854b8663ca40ec8e4e5c442a32924",
+                "137d7de6f9aa77d088e3dadb4c0323bd7d6235a5cac5213904c551777165077b",
             "community-rpi4-konstakang-lineageos.yaml" to
-                "8daf6333a4d5d4284f108f1e63fcf41ecda27607f04bf46bfe5e8bcd1b4e290c",
+                "a0dec39058b37b008c66e64462cd58f25f8827097bd56001f194db95db02658c",
             "community-sunworld-yc-sm55p-p76s01.yaml" to
                 "e2ff5c96d633251fa01731016484c8c53d8d7fb952bf8e28e481bd8a98268e5c",
         )
