@@ -231,19 +231,19 @@ object UpdateChecker {
         if (raw.isBlank() || raw.length > MAX_PERSISTED_TARGET_CHARS) return null
         return runCatching {
             val json = JSONObject(raw)
-            fun text(key: String): String? = json.opt(key).takeIf { it is String } as String?
-            val version = text("version")?.takeIf { compareVersions(it, it) != null } ?: return null
-            val tag = text("tag")?.takeIf(ReleaseCatalog::validTag) ?: return null
-            val releaseUrl = text("release_url")?.takeIf { it.startsWith("https://") } ?: return null
-            val channel = text("channel")?.takeIf { it == "stable" || it == "prerelease" } ?: return null
+            fun stringField(key: String): String? = json.opt(key).takeIf { it is String } as String?
+            val version = stringField("version")?.takeIf { compareVersions(it, it) != null } ?: return null
+            val tag = stringField("tag")?.takeIf(ReleaseCatalog::validTag) ?: return null
+            val releaseUrl = stringField("release_url")?.takeIf { it.startsWith("https://") } ?: return null
+            val channel = stringField("channel")?.takeIf { it == "stable" || it == "prerelease" } ?: return null
             ResolvedTarget(
                 version = version,
                 tag = tag,
                 releaseUrl = releaseUrl,
                 channel = channel,
-                cap = text("cap"),
+                cap = stringField("cap"),
                 capped = json.optBoolean("capped", false),
-                newestVersion = text("newest"),
+                newestVersion = stringField("newest"),
             )
         }.getOrNull()
     }
