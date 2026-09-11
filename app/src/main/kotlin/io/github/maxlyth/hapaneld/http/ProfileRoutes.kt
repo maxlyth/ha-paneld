@@ -233,10 +233,16 @@ private suspend fun handleSelection(
     } else if (request.optBoolean("auto", false)) {
         ProfileSelection.Auto
     } else {
-        val ref = request.profileRefOrNull()
-        if (ref == null) {
-            call.respondProfileError(HttpStatusCode.BadRequest, "invalid-profile-ref")
-            return
+        val ref = when (val parsed = request.parseProfileRef()) {
+            is ProfileRefParse.Valid -> parsed.ref
+            ProfileRefParse.BothFormsSupplied -> {
+                call.respondProfileError(HttpStatusCode.BadRequest, "profile-ref-both-forms-supplied")
+                return
+            }
+            ProfileRefParse.Invalid -> {
+                call.respondProfileError(HttpStatusCode.BadRequest, "invalid-profile-ref")
+                return
+            }
         }
         ProfileSelection.Pinned(ref)
     }
@@ -293,7 +299,14 @@ private suspend fun handleDelete(call: ApplicationCall, dependencies: ProfileRou
         call.respondProfileError(HttpStatusCode.Conflict, "explicit-confirmation-required")
         return
     }
-    val ref = request.profileRefOrNull()
+    val ref = when (val parsed = request.parseProfileRef()) {
+        is ProfileRefParse.Valid -> parsed.ref
+        ProfileRefParse.BothFormsSupplied -> {
+            call.respondProfileError(HttpStatusCode.BadRequest, "profile-ref-both-forms-supplied")
+            return
+        }
+        ProfileRefParse.Invalid -> null
+    }
     val expectedRevision = request.optLong("expected_catalog_revision", Long.MIN_VALUE)
     if (ref == null || expectedRevision == Long.MIN_VALUE) {
         call.respondProfileError(HttpStatusCode.BadRequest, "invalid-delete-request")
@@ -365,8 +378,26 @@ private suspend fun ApplicationCall.profileRefOrRespond(): ProfileRef? {
     return ref
 }
 
-private fun JSONObject.profileRefOrNull(): ProfileRef? =
-    ProfileRef(optString("id"), optString("revision")).takeIf { it.valid() }
+/**
+ * A profile ref may arrive flat (`{"id","revision"}`, the shape every write route has always
+ * accepted) or nested (`{"ref":{"id","revision"}}`, the shape [refJson] hands back from every read
+ * route). Supplying both at once is ambiguous rather than redundant, so it is rejected distinctly
+ * from a malformed ref.
+ */
+private sealed class ProfileRefParse {
+    data class Valid(val ref: ProfileRef) : ProfileRefParse()
+    object Invalid : ProfileRefParse()
+    object BothFormsSupplied : ProfileRefParse()
+}
+
+private fun JSONObject.parseProfileRef(): ProfileRefParse {
+    val hasFlat = has("id") || has("revision")
+    val hasNested = has("ref")
+    if (hasFlat && hasNested) return ProfileRefParse.BothFormsSupplied
+    val source = if (hasNested) optJSONObject("ref") ?: return ProfileRefParse.Invalid else this
+    val ref = ProfileRef(source.optString("id"), source.optString("revision"))
+    return if (ref.valid()) ProfileRefParse.Valid(ref) else ProfileRefParse.Invalid
+}
 
 private fun ProfileRef.valid(): Boolean = PROFILE_ID.matches(id) && ".." !in id && PROFILE_REVISION.matches(revision)
 

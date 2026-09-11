@@ -123,6 +123,7 @@
     "expected-catalog-revision-required": "profiles.result.expected-catalog-revision-required",
     "invalid-profile-ref": "profiles.result.invalid-profile-ref",
     "invalid-delete-request": "profiles.result.invalid-delete-request",
+    "profile-ref-both-forms-supplied": "profiles.result.profile-ref-both-forms-supplied",
     "yaml-content-type-required": "profiles.result.yaml-content-type-required",
     "json-content-type-required": "profiles.result.json-content-type-required",
     "profile-yaml-too-large": "profiles.result.profile-yaml-too-large",

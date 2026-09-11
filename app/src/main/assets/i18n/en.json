@@ -27976,7 +27976,9 @@
       "surface": "profiles",
       "context": "profile API presentation fallback",
       "risk": "consequential",
-      "siblings": [],
+      "siblings": [
+        "profiles.result.profile-ref-both-forms-supplied"
+      ],
       "placeholders": [],
       "frozen": [],
       "softMaxChars": 180,
@@ -28008,6 +28010,7 @@
       "risk": "ordinary",
       "siblings": [
         "profiles.result.profile-incompatible",
+        "profiles.result.profile-ref-both-forms-supplied",
         "profiles.result.profile-revision-not-found"
       ],
       "placeholders": [],
@@ -28202,6 +28205,21 @@
       "siblings": [
         "profiles.result.invalid-profile-ref",
         "profiles.result.profile-revision-not-found"
+      ],
+      "placeholders": [],
+      "frozen": [],
+      "softMaxChars": 180,
+      "hardMaxChars": 360
+    },
+    "profiles.result.profile-ref-both-forms-supplied": {
+      "text": "The request supplies both a flat and a nested profile reference. Use only one.",
+      "sourceHash": "0c32e9917057f109b9650810ff1ed7a1723ef944d39ec79b5aacaf4b03fcd848",
+      "surface": "profiles",
+      "context": "profile API presentation fallback",
+      "risk": "ordinary",
+      "siblings": [
+        "profiles.result.invalid-delete-request",
+        "profiles.result.invalid-profile-ref"
       ],
       "placeholders": [],
       "frozen": [],
