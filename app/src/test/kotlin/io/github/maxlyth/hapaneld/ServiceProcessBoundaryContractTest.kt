@@ -374,6 +374,24 @@ class ServiceProcessBoundaryContractTest {
         assertFalse(postCritical.contains("CompanionDb.serverUrl"))
     }
 
+    @Test fun buttonLedWarmUpRunsInItsOwnCoroutineAfterCriticalStartup() {
+        val source = source("PaneldService.kt")
+        val onCreate = source.substring(source.indexOf("override fun onCreate()"), source.indexOf("override fun onStartCommand("))
+        val startup = source.substring(
+            source.indexOf("restartLease.awaitPredecessor()"),
+            source.indexOf("\n        Thread({"),
+        )
+        val healthy = startup.indexOf("profileRegistry.markResolvedStartupHealthy()")
+        val call = startup.indexOf("relay.warmUp()")
+
+        assertFalse(onCreate.contains("relay.warmUp()"))
+        assertTrue("button-LED warm-up missing after the healthy-startup proof", healthy in 0 until call)
+        // Its own launch, so it neither waits for nor delays the management prewarm.
+        val launch = startup.lastIndexOf("scope.launch(Dispatchers.IO) {", call)
+        assertTrue(launch > startup.indexOf("server.prewarm()"))
+        assertEquals("", startup.substring(launch + "scope.launch(Dispatchers.IO) {".length, call).trim())
+    }
+
     @Test fun externalStateIsRestoredBeforeTheFreshProcessBoundary() {
         val source = source("PaneldService.kt")
         val destroy = source.substring(source.indexOf("override fun onDestroy()"), source.indexOf("if (!stopped)"))

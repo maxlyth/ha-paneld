@@ -43,6 +43,30 @@ internal fun classifyRootRun(
     else -> RootRunOutcome.RAN_FAILED
 }
 
+/** One persistent-shell request: [cmd] (its stderr suppressed), then the sentinel plus the exit code so
+ *  both stdout and status are recoverable over the single pipe. The `{ …; }` group tolerates
+ *  multi-statement (and even multi-line) commands. */
+internal fun persistentShellRequest(cmd: String, sentinel: String): String =
+    "{ $cmd ; } 2>/dev/null; echo $sentinel:$?\n"
+
+/**
+ * Read one reply to [persistentShellRequest]: (stdout, exit code). A command whose stdout lacks a trailing
+ * newline (`printf ready`) puts its last fragment on the sentinel's own line, so a line that ENDS with
+ * `<sentinel>:<exit code>` terminates the reply and the fragment before it is kept unterminated, as a
+ * one-shot exec would return it. Matching only at line start missed it, and the shell waited out its
+ * whole timeout before falling back to a one-shot (Issue #93: 5.15 s on every GPIO preparation).
+ */
+internal fun readPersistentShellReply(stdout: BufferedReader, sentinel: String): Pair<String, Int> {
+    val out = StringBuilder()
+    while (true) {
+        val line = stdout.readLine() ?: throw IOException("persistent su shell closed")
+        val at = line.lastIndexOf(sentinel)
+        val rc = if (at < 0) null else line.substring(at + sentinel.length).removePrefix(":").toIntOrNull()
+        if (rc != null) return out.append(line, 0, at).toString() to rc
+        out.append(line).append('\n')
+    }
+}
+
 /** Process-lifetime cache for the definitive "su binary does not exist" launch failure. */
 internal class SuExecFailureCache {
     private val missing = AtomicBoolean(false)
@@ -289,21 +313,11 @@ object Su : RootShell {
         }
     }
 
-    /** One round-trip on the shared shell. Runs [cmd] (its stderr suppressed), then echoes the sentinel
-     *  plus the exit code so both stdout and status are recoverable over the single pipe. The `{ …; }`
-     *  group tolerates multi-statement (and even multi-line) commands. */
+    /** One round-trip on the shared shell. */
     private fun transact(sh: ShellHandle, cmd: String): Pair<String, Int> {
-        sh.stdin.write("{ $cmd ; } 2>/dev/null; echo $SENTINEL:$?\n")
+        sh.stdin.write(persistentShellRequest(cmd, SENTINEL))
         sh.stdin.flush()
-        val out = StringBuilder()
-        while (true) {
-            val line = sh.stdout.readLine() ?: throw IOException("persistent su shell closed")
-            if (line.startsWith(SENTINEL)) {
-                val rc = line.substringAfter(':').trim().toIntOrNull() ?: -1
-                return out.toString() to rc
-            }
-            out.append(line).append('\n')
-        }
+        return readPersistentShellReply(sh.stdout, SENTINEL)
     }
 
     private fun ensureShell(): ShellHandle? {

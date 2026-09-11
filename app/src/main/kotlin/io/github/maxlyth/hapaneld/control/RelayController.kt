@@ -18,7 +18,8 @@ import io.github.maxlyth.hapaneld.platform.RootShell
  * `ready` is cached for the process lifetime so rapid commands pay one privileged round trip, not two;
  * any failed preparation or failed value write invalidates the pin so the next command re-verifies
  * export and direction (Issue #93 — every command re-ran the full preparation on the serialized root
- * lane). Reads never consult or populate that cache.
+ * lane). Reads never consult or populate that cache; only the read-only startup [warmUp] may seed it with
+ * pins the kernel already holds as writable outputs.
  *
  * The nodes are root-owned, so writes go through [Su]. On a panel without `su` the capability simply
  * doesn't activate (graceful — like the other root-gated controllers).
@@ -38,10 +39,14 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     @Volatile private var resolvedRelayCount: Int? = if (candidateBases.isEmpty()) 0 else null
     @Volatile private var resolvedLedCount: Int = if (ledBase == null) 0 else BUTTON_LED_COUNT
 
-    // GPIOs whose output preparation was PROVEN (`ready`), guarded by the class monitor. Only ledSet
-    // populates or consults it; a failed value write removes the pin because the kernel state it
+    // GPIOs whose output preparation was PROVEN (`ready`), guarded by the class monitor. ledSet and the
+    // read-only warmUp populate it; a failed value write removes the pin because the kernel state it
     // proved (exported, direction out, writable value node) may no longer hold.
     private val preparedGpios = mutableSetOf<Int>()
+
+    // Advanced under the monitor by every failed preparation or withdrawn proof, so a warm-up probe that
+    // started before the failure cannot re-prove the pin after it.
+    private var invalidations = 0L
 
     /** Resolve immutable sysfs topology once. A failed privileged probe is deliberately not cached:
      * root access can become available after boot. State reads still avoid repeating successful
@@ -151,6 +156,30 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
     @Synchronized
     fun ledCount(): Int = resolvedLedCount
 
+    /**
+     * Startup warm-up (Issue #93): record pins the kernel already holds as writable outputs — typically
+     * left so by the previous ha-paneld process — so the first command after an app restart skips
+     * preparation. Read-only by the same rule as [ledCount]: it never exports, changes a direction or
+     * writes a value, so after a reboot it proves nothing and [ledSet] prepares lazily as before.
+     *
+     * The probe holds neither this monitor nor the interactive root shell, so a command arriving while it
+     * runs, blocks or fails proceeds and re-verifies on its own. It shares only the bounded one-shot su
+     * launch, which a command reaches only when the persistent shell is unusable (su dialect not yet
+     * proven, or a failed round trip falling back). Proofs are recorded only when no failure was seen
+     * meanwhile.
+     */
+    fun warmUp() {
+        val base = ledBase ?: return
+        val (epoch, pins) = synchronized(this) { invalidations to (0 until resolvedLedCount).map { base + it } }
+        // Best-effort: any failure leaves the lazy path exactly as it was, so there is nothing to report.
+        val ready = try {
+            root.preparedOutputGpios(pins)
+        } catch (_: Exception) {
+            null
+        } ?: return
+        synchronized(this) { if (invalidations == epoch) preparedGpios += ready }
+    }
+
     /** Set button LED [i] (0-based, F1..F4) on/off. */
     @Synchronized
     fun ledSet(i: Int, on: Boolean): Boolean {
@@ -166,6 +195,7 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
                 outcome = FeatureCostOutcome.SUCCESS
             } else {
                 preparedGpios.remove(gpio)
+                invalidations++
             }
             return ok
         } finally {
@@ -222,6 +252,8 @@ class RelayController(profile: DeviceProfile, private val root: RootShell = Su) 
             if (ready) {
                 preparedGpios.add(gpio)
                 outcome = FeatureCostOutcome.SUCCESS
+            } else {
+                invalidations++
             }
             return ready
         } finally {

@@ -3528,6 +3528,8 @@ class PaneldService : Service() {
             scope.launch(Dispatchers.IO) {
                 server.prewarm()
             }
+            // Issue #93: read-only button-LED GPIO proof in its own coroutine, not queued behind prewarm().
+            scope.launch(Dispatchers.IO) { relay.warmUp() }
         }
         Thread({
             when (awaitServiceStartup(startup, startupActivationGeneration)) {

@@ -5,6 +5,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Callable
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * RelayController over the RootShell seam — base resolution (primary vs firmware-renamed fallback),
@@ -241,6 +246,211 @@ class RelayControllerTest {
         assertEquals(null, r.ledRead(4))
         assertFalse(root.ran.any { it.contains("gpio146") || it.contains("gpio151") })
         assertFalse(root.outputRan.any { it.contains("gpio146") || it.contains("gpio151") })
+    }
+
+    // --- Issue #93 startup warm-up ---
+
+    @Test fun warmUpLetsTheFirstCommandAfterStartSkipPreparation() {
+        val root = LaneRootShell(warmUpReply = { "147\n148\n149\n150\n" })
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        r.warmUp()
+        assertTrue(r.ledSet(0, true))
+        assertTrue(r.ledSet(3, false))
+
+        assertEquals(0, root.preparations())
+        assertEquals(
+            listOf(
+                "printf '%s' '1' > /sys/class/gpio/gpio147/value",
+                "printf '%s' '0' > /sys/class/gpio/gpio150/value",
+            ),
+            root.ran,
+        )
+    }
+
+    @Test fun warmUpIsReadOnlyAndOffTheInteractiveLane() {
+        val root = LaneRootShell(warmUpReply = { "147\n" })
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        r.warmUp()
+
+        assertTrue(root.ran.isEmpty())
+        assertTrue(root.outputRan.isEmpty())
+        assertEquals(1, root.isolatedRan.size)
+        val probe = root.isolatedRan.single()
+        (147..150).forEach { assertTrue(probe.contains("/sys/class/gpio/gpio$it/direction")) }
+        assertFalse(probe.contains("/sys/class/gpio/export"))
+        // Only stderr redirections: no export, direction or value write.
+        assertFalse(Regex("(^|[^2])>").containsMatchIn(probe))
+    }
+
+    @Test fun warmUpProvesOnlyTheReportedPins() {
+        val root = LaneRootShell(warmUpReply = { "148\n" })
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+        r.warmUp()
+        assertTrue(r.ledSet(0, true))
+        assertTrue(r.ledSet(1, true))
+
+        // After a reboot nothing is exported: unreported pins still prepare lazily.
+        assertEquals(listOf(147), root.preparedPins)
+    }
+
+    @Test fun warmUpIsInertWithoutDeclaredButtonLeds() {
+        val root = LaneRootShell(warmUpReply = { "147\n" })
+
+        RelayController(fakeProfile(relayBase = base), root).warmUp()
+
+        assertTrue(root.isolatedRan.isEmpty() && root.outputRan.isEmpty() && root.ran.isEmpty())
+    }
+
+    @Test fun aFailedOrThrowingWarmUpLeavesTheLazyPathIntact() {
+        for (reply in listOf<() -> String?>({ null }, { throw IllegalStateException("probe failed") })) {
+            val root = LaneRootShell(warmUpReply = reply)
+            val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+
+            r.warmUp()
+            assertTrue(r.ledSet(0, true))
+            assertTrue(r.ledSet(0, false))
+
+            assertEquals(listOf(147), root.preparedPins)
+        }
+    }
+
+    @Test(timeout = 10_000)
+    fun aBlockedWarmUpNeverDelaysARealCommandWhichReverifies() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val root = LaneRootShell(warmUpReply = {
+            entered.countDown()
+            release.await()
+            "147\n"
+        })
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+        val warmUp = startWarmUp(r)
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            // The warm-up is still blocked: the command must complete on its own, re-verifying the pin.
+            assertEquals("the command waited behind the warm-up", true, ledSetWithin(r, 0, true))
+            assertEquals(listOf(147), root.preparedPins)
+        } finally {
+            release.countDown()
+            warmUp.join(5_000)
+        }
+    }
+
+    @Test(timeout = 10_000)
+    fun aFailureDuringWarmUpStillForcesReverification() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val root = LaneRootShell(
+            warmUpReply = {
+                entered.countDown()
+                release.await()
+                "147\n"   // observed before the write below failed
+            },
+            runResults = listOf(false, true, true),
+        )
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+        val warmUp = startWarmUp(r)
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals("the command waited behind the warm-up", false, ledSetWithin(r, 0, true))
+        } finally {
+            release.countDown()
+            warmUp.join(5_000)
+        }
+        assertFalse("the warm-up must finish before the next command", warmUp.isAlive)
+        assertTrue(r.ledSet(0, true))
+
+        // The stale warm-up proof must not re-prove the pin that failure invalidated.
+        assertEquals(listOf(147, 147), root.preparedPins)
+    }
+
+    @Test(timeout = 10_000)
+    fun aFailedPreparationDuringWarmUpStillForcesReverification() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val root = LaneRootShell(
+            warmUpReply = {
+                entered.countDown()
+                release.await()
+                "147\n"   // observed before the preparation below failed
+            },
+            prepareReplies = listOf("input", "ready"),
+        )
+        val r = RelayController(fakeProfile(buttonLedGpioBase = 147), root)
+        val warmUp = startWarmUp(r)
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals("the command waited behind the warm-up", false, ledSetWithin(r, 0, true))
+        } finally {
+            release.countDown()
+            warmUp.join(5_000)
+        }
+        assertFalse("the warm-up must finish before the next command", warmUp.isAlive)
+        assertTrue(r.ledSet(0, true))
+
+        assertEquals(listOf(147, 147), root.preparedPins)
+    }
+
+    private fun startWarmUp(r: RelayController) = Thread { r.warmUp() }.apply { isDaemon = true; start() }
+
+    /** [RelayController.ledSet] from another thread, or null when it was still waiting after two seconds. */
+    private fun ledSetWithin(r: RelayController, i: Int, on: Boolean): Boolean? {
+        val command = Executors.newSingleThreadExecutor { task -> Thread(task).apply { isDaemon = true } }
+        return try {
+            command.submit(Callable { r.ledSet(i, on) }).get(2, TimeUnit.SECONDS)
+        } catch (_: TimeoutException) {
+            null
+        } finally {
+            command.shutdown()
+        }
+    }
+
+    /**
+     * A root lane shaped like production: [run]/[runOutput] share one monitor (the interactive persistent
+     * shell), while [runOutputIsolatedBounded] is independent of it. A warm-up that took the interactive
+     * lane or the controller monitor would therefore block a concurrent command in these tests.
+     */
+    private class LaneRootShell(
+        private val warmUpReply: () -> String?,
+        runResults: List<Boolean> = emptyList(),
+        prepareReplies: List<String> = emptyList(),
+    ) : RootShell {
+        private val lane = Any()
+        private val runResults = runResults.toMutableList()
+        private val prepareReplies = prepareReplies.toMutableList()
+        val ran = mutableListOf<String>()
+        val outputRan = mutableListOf<String>()
+        val isolatedRan = mutableListOf<String>()
+        val preparedPins = mutableListOf<Int>()
+
+        fun preparations() = synchronized(lane) { preparedPins.size }
+
+        override fun available(): Boolean = true
+
+        override fun run(cmd: String): Boolean = synchronized(lane) {
+            ran += cmd
+            if (runResults.isNotEmpty()) runResults.removeAt(0) else true
+        }
+
+        override fun runOutput(cmd: String): String? = synchronized(lane) {
+            outputRan += cmd
+            Regex("\\[ -e /sys/class/gpio/gpio(\\d+) ]").find(cmd)?.let {
+                preparedPins += it.groupValues[1].toInt()
+                if (prepareReplies.isNotEmpty()) prepareReplies.removeAt(0) else "ready"
+            }
+        }
+
+        override fun runOutputIsolatedBounded(cmd: String, maxBytes: Long, timeoutMs: Long): String? {
+            synchronized(isolatedRan) { isolatedRan += cmd }
+            return warmUpReply()
+        }
+
+        override fun runBytes(cmd: String): ByteArray? = null
+
+        override fun fireAndForget(cmd: String): Boolean = run(cmd)
     }
 
     private class SequencedRootShell(
