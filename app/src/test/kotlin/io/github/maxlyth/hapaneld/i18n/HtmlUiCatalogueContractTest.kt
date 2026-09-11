@@ -68,7 +68,7 @@ class HtmlUiCatalogueContractTest {
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
                 "$locale must contain the complete release catalogue",
-                2429,
+                2430,
                 target.strings.size,
             )
             assertEquals(
