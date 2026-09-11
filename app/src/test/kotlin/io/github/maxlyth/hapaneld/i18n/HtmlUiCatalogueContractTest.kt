@@ -62,8 +62,8 @@ class HtmlUiCatalogueContractTest {
             catalogue.getJSONObject(key).getString("surface") in promotedSurfaces
         }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 2429, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 2011, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 2430, source.strings.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 2012, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(

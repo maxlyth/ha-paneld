@@ -18,6 +18,15 @@
           "message": { "type": "string" }
         }
       },
+      "ProfileRef": {
+        "description": "Identifies one exact profile revision, as returned by every read route's `ref` field.",
+        "type": "object",
+        "required": ["id", "revision"],
+        "properties": {
+          "id": { "type": "string" },
+          "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      },
       "PanelAssistantDevice": {
         "description": "A bounded, presentation-only projection of the panel's own device identity, for one Home Assistant device card. Reading it resolves nothing and writes nothing. Every property is optional: a value the panel cannot state safely is omitted rather than sent blank, so an empty object is valid. It carries no Android id, no MAC address and no serial number.",
         "type": "object",
@@ -151,7 +160,7 @@
       "PowerSafety": {
         "type": "object",
         "description": "Conservative app-owned assessment of panel reachability after screen-off. A guard needed to establish safety is never inferred from an unavailable probe, and no individual setting is treated as proof against OEM suspend behaviour.",
-        "required": ["state", "warning", "summary", "action", "repair_capability", "repair_available", "manual_only", "acknowledge_available", "acknowledged", "acknowledgement_fingerprint", "reason_codes", "keep_awake_configured", "wake_lock_held", "wifi_lock_required", "wifi_lock_held", "prevent_idle_dim_configured", "screen_off_timeout_ms", "interactive", "power_source", "plugged_mask", "stay_on_while_plugged_in", "stay_on_effective", "device_idle", "doze_exempt", "screen_off_mechanism"],
+        "required": ["state", "warning", "summary", "action", "repair_capability", "repair_available", "manual_only", "acknowledge_available", "acknowledged", "acknowledgement_fingerprint", "reason_codes", "keep_awake_configured", "wake_lock_held", "wifi_lock_required", "wifi_lock_held", "prevent_idle_dim_configured", "screen_off_timeout_ms", "interactive", "power_source", "plugged_mask", "stay_on_while_plugged_in", "stay_on_effective", "device_idle", "doze_exempt", "screen_off_mechanism", "screen_off_selected", "screen_off_reason"],
         "properties": {
           "state": { "type": "string", "enum": ["safe", "caution", "at_risk", "unknown"] },
           "warning": { "type": "boolean" },
@@ -177,7 +186,9 @@
           "stay_on_effective": { "type": "boolean", "nullable": true },
           "device_idle": { "type": "boolean", "nullable": true },
           "doze_exempt": { "type": "boolean", "nullable": true },
-          "screen_off_mechanism": { "type": "string" }
+          "screen_off_mechanism": { "type": "string", "description": "The declared screen-off route (the profile's `hardware.screen_off` intent), regardless of what the runtime actually used." },
+          "screen_off_selected": { "type": "string", "nullable": true, "description": "The route the runtime actually used on the last screen-off, which can differ from screen_off_mechanism (a fallback transport, or a degrade to brightness-only). Null before any screen-off has occurred since this controller was constructed." },
+          "screen_off_reason": { "type": "string", "description": "Explains screen_off_selected: matches the declared route, fell back to the other transport, degraded to brightness-only, or not yet exercised." }
         }
       },
       "CameraHealth": {
@@ -347,23 +358,48 @@
     },
     "/api/v1/profiles/select": {
       "post": { "summary": "Select one exact revision and schedule a controlled service restart", "tags": ["profiles"],
+        "description": "The ref may be given flat (`id`/`revision` at the top level) or nested (`ref: {id, revision}`, the shape GET /profiles hands back) — never both in the same request, which is rejected as `profile-ref-both-forms-supplied`.",
         "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
           { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"], "properties": {
             "id": { "type": "string" }, "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
           } },
+          { "type": "object", "required": ["ref", "expected_catalog_revision", "confirm"], "properties": {
+            "ref": { "$ref": "#/components/schemas/ProfileRef" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } },
           { "type": "object", "required": ["auto", "expected_catalog_revision", "confirm"], "properties": {
             "auto": { "type": "boolean", "enum": [true] }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
           } }
-        ] } } } }, "responses": { "202": { "description": "Selection staged and restart scheduled, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Selection rejected" } } }
+        ] } } } }, "responses": { "202": { "description": "Selection staged and restart scheduled, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "400": { "description": "Invalid ref, or both the flat and nested ref forms supplied at once" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Selection rejected" } } }
     },
     "/api/v1/profiles/activate": {
-      "post": { "summary": "Alias of profile select used by explicit activation clients", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } }, "responses": { "202": { "description": "Activation staged, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation required or stale catalog" } } }
+      "post": { "summary": "Alias of profile select used by explicit activation clients", "tags": ["profiles"],
+        "description": "Identical body contract to POST /profiles/select, including the flat/nested ref forms and the same rejection when both are supplied.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
+          { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"], "properties": {
+            "id": { "type": "string" }, "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } },
+          { "type": "object", "required": ["ref", "expected_catalog_revision", "confirm"], "properties": {
+            "ref": { "$ref": "#/components/schemas/ProfileRef" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } },
+          { "type": "object", "required": ["auto", "expected_catalog_revision", "confirm"], "properties": {
+            "auto": { "type": "boolean", "enum": [true] }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } }
+        ] } } } }, "responses": { "202": { "description": "Activation staged, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "400": { "description": "Invalid ref, or both the flat and nested ref forms supplied at once" }, "409": { "description": "Confirmation required or stale catalog" } } }
     },
     "/api/v1/profiles/rollback": {
       "post": { "summary": "Select only the server-recorded last-known-good selection and schedule a controlled restart", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["expected_catalog_revision", "confirm"] } } } }, "responses": { "202": { "description": "Rollback staged, or Hardened-mode approval-required: approve the request on the panel, then retry the identical request from the same peer.", "content": { "application/json": { "schema": { "oneOf": [{ "type": "object" }, { "$ref": "#/components/schemas/ApprovalRequired" }] } } } }, "409": { "description": "Confirmation missing or catalog stale" }, "422": { "description": "No recorded rollback selection" } } }
     },
     "/api/v1/profiles/delete": {
-      "post": { "summary": "Delete an inactive unselected local revision", "tags": ["profiles"], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"] } } } }, "responses": { "200": { "description": "Deleted" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Bundled, active, selected or protected revision" } } }
+      "post": { "summary": "Delete an inactive unselected local revision", "tags": ["profiles"],
+        "description": "The ref may be given flat (`id`/`revision` at the top level) or nested (`ref: {id, revision}`) — never both in the same request, which is rejected as `profile-ref-both-forms-supplied`.",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "oneOf": [
+          { "type": "object", "required": ["id", "revision", "expected_catalog_revision", "confirm"], "properties": {
+            "id": { "type": "string" }, "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } },
+          { "type": "object", "required": ["ref", "expected_catalog_revision", "confirm"], "properties": {
+            "ref": { "$ref": "#/components/schemas/ProfileRef" }, "expected_catalog_revision": { "type": "integer" }, "confirm": { "type": "boolean", "enum": [true] }
+          } }
+        ] } } } }, "responses": { "200": { "description": "Deleted" }, "400": { "description": "Invalid ref, missing expected_catalog_revision, or both the flat and nested ref forms supplied at once" }, "409": { "description": "Confirmation required or stale catalog" }, "422": { "description": "Bundled, active, selected or protected revision" } } }
     },
     "/api/v1/config": {
       "get": { "summary": "Read full config (MQTT password redacted) incl. observed registry `settings`, durable `apply_pending` desired values, and `ha_expose` flags", "tags": ["config"], "responses": { "200": { "description": "config JSON" } } },
@@ -649,7 +685,7 @@
     "/api/v1/peers": { "get": { "summary": "Current persistent roster of ha-paneld panels discovered on the LAN over mDNS — powers the header panel switcher", "tags": ["fleet"], "responses": { "200": { "description": "[{panel_id,name,ip,port,url,version,self}] — ip/url null when unresolved" } } } },
     "/api/v1/voice/pipelines": { "get": { "summary": "Home Assistant Assist pipelines available for the configured wake words", "tags": ["voice"], "responses": { "200": { "description": "{pipelines:[{id,name}],preferred}" }, "503": { "description": "{error:\"not-configured\"|\"unavailable\",reason} — no Home Assistant connection, no microphone capability, or the pipeline catalogue could not be fetched" } } } },
     "/api/v1/voice/test": { "post": { "summary": "Trigger a one-shot voice-assistant test run", "tags": ["voice"], "responses": { "202": { "description": "{accepted:true}" }, "409": { "description": "{reason} — no microphone capability, voice assistant disabled, or refused by the pipeline runtime" }, "503": { "description": "{reason} — the voice test trigger is not available" } } } },
-    "/api/v1/diag": { "get": { "summary": "Terse plain-text diagnostics dump (hardware, firmware, boot security, renderer/Home Assistant admission, camera session health, app database and privilege/node probes)", "tags": ["status"], "responses": { "200": { "description": "Redacted text/plain report that omits configured identifiers and secrets; review before posting publicly. A [camera] line is present whenever a camera presentation was supplied, rendered identically to the camera object in GET /api/v1/status." } } } },
+    "/api/v1/diag": { "get": { "summary": "Terse plain-text diagnostics dump (hardware, firmware, boot security, renderer/Home Assistant admission, camera session health, app database and privilege/node probes)", "tags": ["status"], "responses": { "200": { "description": "Redacted text/plain report that omits configured identifiers and secrets; review before posting publicly. A [camera] line is present whenever a camera presentation was supplied, rendered identically to the camera object in GET /api/v1/status. The [power-safety] line's screen_off= reports only the profile's declared route; screen_off_selected= and screen_off_reason= report what the runtime actually used on the last screen-off and why, matching the power_safety.screen_off_selected/screen_off_reason fields in GET /api/v1/status." } } } },
     "/api/v1/info": { "get": { "summary": "Dashboard hydration payload — the probe-backed facts/value/capability fragments as ready-to-inject HTML (cached snapshot, single-flight)", "tags": ["status"], "responses": { "200": { "description": "{banners, shot, controls, cards} JSON" } } } },
     "/api/v1/logs/stream": {
       "get": { "summary": "Live log tail as Server-Sent Events (redacted logcat lines; capture stops when the last client disconnects)", "tags": ["status"],

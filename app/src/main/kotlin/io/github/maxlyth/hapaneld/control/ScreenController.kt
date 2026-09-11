@@ -657,7 +657,7 @@ class ScreenController(
         internal const val REASON_BRIGHTNESS_ZERO_NEVER_PROBES =
             "matches the declared route; brightness-zero never probes su or the helper daemon"
         internal const val REASON_UNEXERCISED =
-            "not yet exercised — no screen-off has occurred since this controller was constructed"
+            "not yet exercised; no screen-off has occurred since this controller was constructed"
         private const val DEFAULT_ON = 160
         private const val MIN_ON = 10
         // Dim level for a screen-off that can't be made touch-wakeable: low but clearly on, never blank.
