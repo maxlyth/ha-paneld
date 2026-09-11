@@ -1367,6 +1367,65 @@ class CatalogueTest(unittest.TestCase):
             ):
                 i18n.catalogue_report(source_path, [])
 
+    def test_report_counts_current_machine_draft_as_translated_only_for_early_access_locales(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_path = root / "catalogues" / "en.json"
+            source = self.report_source()
+            self.write(source_path, source)
+            hashes = {key: record["sourceHash"] for key, record in source["strings"].items()}
+
+            def draft_target(locale):
+                return {
+                    "schema": 1,
+                    "locale": locale,
+                    "sourceRevision": "e" * 40,
+                    "strings": {
+                        # Current (matching sourceHash) machine-draft: renders for an
+                        # early-access locale, still falls back to English otherwise.
+                        "settings.a.label": {
+                            "text": f"{locale} draft a",
+                            "sourceHash": hashes["settings.a.label"],
+                            "state": "machine-draft",
+                        },
+                        # Stale machine-draft: never renders, early-access or not.
+                        "settings.b.label": {
+                            "text": f"{locale} draft b",
+                            "sourceHash": "0" * 64,
+                            "state": "machine-draft",
+                        },
+                        "settings.c.label": {"text": f"{locale} c", "sourceHash": hashes["settings.c.label"], "state": "machine-cross-checked"},
+                        "settings.d.label": {
+                            "text": source["strings"]["settings.d.label"]["text"],
+                            "sourceHash": hashes["settings.d.label"], "state": "english-fallback",
+                        },
+                        "settings.e.label": {
+                            "text": source["strings"]["settings.e.label"]["text"],
+                            "sourceHash": hashes["settings.e.label"], "state": "english-fallback",
+                        },
+                        "settings.f.label": {
+                            "text": source["strings"]["settings.f.label"]["text"],
+                            "sourceHash": hashes["settings.f.label"], "state": "english-fallback",
+                        },
+                    },
+                }
+
+            nl_path = source_path.parent / "nl.json"
+            de_path = source_path.parent / "de.json"
+            self.write(nl_path, draft_target("nl"))
+            self.write(de_path, draft_target("de"))
+
+            report = i18n.catalogue_report(source_path, [nl_path, de_path])
+
+            # nl is early-access (AppLocale.EARLY_ACCESS_LOCALES): the current machine-draft
+            # record joins the cross-checked one as translated/renderable.
+            self.assertEqual(2, report["locales"]["nl"]["translated"]["count"])
+            self.assertEqual(4, report["locales"]["nl"]["fallback"]["count"])
+
+            # de is Tier A: machine-draft never renders regardless of currency.
+            self.assertEqual(1, report["locales"]["de"]["translated"]["count"])
+            self.assertEqual(5, report["locales"]["de"]["fallback"]["count"])
+
     def test_report_rejects_malformed_public_context_pin(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

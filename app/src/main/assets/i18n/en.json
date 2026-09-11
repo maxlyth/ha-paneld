@@ -2893,11 +2893,11 @@
       "softMaxChars": 52,
       "hardMaxChars": 74
     },
-    "configure.group.behaviour": {
-      "text": "Behaviour",
-      "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
+    "configure.group.auto_sleep": {
+      "text": "Auto-sleep",
+      "sourceHash": "ffa395b8fc89398516172e390d9e37039d65a7421abeeafd6d7c1931dbaaa084",
       "surface": "configure",
-      "context": "group",
+      "context": "Configure card heading for the automatic sleep policy.",
       "risk": "ordinary",
       "siblings": [],
       "placeholders": [],
@@ -2905,11 +2905,11 @@
       "softMaxChars": 24,
       "hardMaxChars": 40
     },
-    "configure.group.auto_sleep": {
-      "text": "Auto-sleep",
-      "sourceHash": "ffa395b8fc89398516172e390d9e37039d65a7421abeeafd6d7c1931dbaaa084",
+    "configure.group.behaviour": {
+      "text": "Behaviour",
+      "sourceHash": "12b98040fac50b169837bb79f5a07579e361a23f9cee4f31ce46080c58b1d07d",
       "surface": "configure",
-      "context": "Configure card heading for the automatic sleep policy.",
+      "context": "group",
       "risk": "ordinary",
       "siblings": [],
       "placeholders": [],

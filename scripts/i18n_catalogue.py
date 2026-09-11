@@ -68,6 +68,9 @@ UKRAINIAN_ALPHABETIC_CHARACTERS = frozenset(
 )
 REQUIRED_FROZEN_LITERALS = ("Home Assistant", "dB")
 RENDERABLE_STATES = {"machine-cross-checked", "community-corrected"}
+# Mirrors Kotlin AppLocale.EARLY_ACCESS_LOCALES: for exactly these locales, Strings.resolve()
+# also renders a current machine-draft record instead of falling back to English.
+EARLY_ACCESS_LOCALES = {"nl", "pl", "uk"}
 MAX_TARGET_TEXT_CHARS = 16_384
 MAX_TARGET_TEXT_BYTES = MAX_TARGET_TEXT_CHARS * 4
 MAX_REPLACEMENT_FILE_BYTES = MAX_TARGET_TEXT_BYTES + 2
@@ -965,9 +968,12 @@ def catalogue_report(
             if records[key]["sourceHash"] != source_strings[key]["sourceHash"]
         }
         current_keys = present_keys - stale_keys
+        renderable_states = (
+            RENDERABLE_STATES | {"machine-draft"} if locale in EARLY_ACCESS_LOCALES else RENDERABLE_STATES
+        )
         translated_keys = {
             key for key in current_keys
-            if records[key]["state"] in RENDERABLE_STATES
+            if records[key]["state"] in renderable_states
         }
         fallback_keys = source_keys - translated_keys
         state_counts = Counter(record["state"] for record in records.values())
