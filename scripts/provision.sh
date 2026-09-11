@@ -140,6 +140,7 @@ DB_SUPPORTED_USER_VERSION_MIN=1
 DB_SUPPORTED_USER_VERSION_MAX=14
 DB_COMPATIBILITY_METADATA_KEY="io.github.maxlyth.hapaneld.DATABASE_COMPATIBILITY"
 DB_COMPATIBILITY_CONTRACT=""
+DB_CONTRACT_EVALUATED=0
 DB_CANDIDATE_MIN=""
 DB_CANDIDATE_MAX=""
 DB_GATE_RECOVERY=""
@@ -147,6 +148,8 @@ DB_GATE_DECISION_KIND=""
 DB_GATE_INITIAL_EVIDENCE=""
 DB_GATE_CONSUME_EVIDENCE=""
 DB_GATE_RESET_FRESH=0
+DB_GATE_HELPER_RECOVERY=""
+DB_GATE_PROGRESS=""
 HOST_DB_PRIMARY_FINGERPRINT=""
 RESET_PACKAGE_STOPPED="unknown"
 SNAPSHOT_TXN_REMOTE=""; SNAPSHOT_TXN_HOST_DB=""; SNAPSHOT_TXN_HOST_RECEIPT=""
@@ -1758,37 +1761,77 @@ resolve_apk() {
 # runtime, so on a host without one it exists, is executable, and fails the moment it is invoked —
 # which read as "this APK is not properly signed" rather than "this tool cannot run" (#106). The
 # openssl probe below has always required `openssl version` to succeed for exactly this reason; this
-# holds the build tools to the same standard instead of trusting the file to be there.
+# holds the build tools to the same standard instead of trusting the file to be there. It must also
+# answer: a wrapper can exit 0 without running anything, and a silent apksigner would later read as an
+# APK with no signer, blaming the artifact for the host again (#24).
 android_build_tool_runs() {
-  "$1" version >/dev/null 2>&1 || "$1" --version >/dev/null 2>&1
+  local out
+  out="$("$1" version 2>/dev/null)" && [ -n "$out" ] && return 0
+  out="$("$1" --version 2>/dev/null)" && [ -n "$out" ]
 }
 
+# Windows Build-Tools ship apksigner as apksigner.bat. Git Bash's MSYS runtime resolves a bare command
+# name to name.exe and nothing else, so neither `command -v apksigner` nor the build-tools glob saw the
+# wrapper, and a host that had the tool was refused as though it had none (#24). Under that runtime the
+# .bat and .cmd spellings are searched too, and whatever is found is executed by its full name: the
+# runtime hands a wrapper to cmd.exe itself and still converts the host file operands the tool is given.
+# An SDK folder set the Windows way (C:\Users\...\Sdk, as System Properties writes it) arrives
+# untranslated, so it is read through cygpath. Unlike the adb exclusion list, this branch is reachable
+# from a Linux run: the suite drives it with a stand-in uname and cygpath.
+case "$(uname -s 2>/dev/null || true)" in
+  MINGW*|MSYS*|CYGWIN*) HOST_MSYS_RUNTIME=1 ;;
+  *) HOST_MSYS_RUNTIME=0 ;;
+esac
+
+android_build_tool_spellings() {
+  printf '%s\n' "$1"
+  [ "$HOST_MSYS_RUNTIME" = 0 ] || printf '%s\n' "$1.bat" "$1.cmd"
+  return 0
+}
+
+android_sdk_root() {
+  local root="$1" converted=""
+  [ "$HOST_MSYS_RUNTIME" = 0 ] || converted="$(cygpath -u "$root" 2>/dev/null || true)"
+  printf '%s\n' "${converted:-$root}"
+}
+
+# One candidate per line as `<origin><TAB><path>`: every PATH resolution first, in spelling order, then
+# every SDK build-tools entry in ascending version order. The origin is what lets a PATH choice win.
 android_build_tool_candidates() {
-  local name="$1" path root candidate
-  path="$(command -v "$name" 2>/dev/null || true)"
-  [ -z "$path" ] || printf '%s\n' "$path"
+  local name="$1" spelling path path_hits=$'\n' root version_dir candidate
+  while IFS= read -r spelling; do
+    path="$(command -v "$spelling" 2>/dev/null || true)"
+    [ -n "$path" ] || continue
+    printf 'path\t%s\n' "$path"
+    path_hits="$path_hits$path"$'\n'
+  done < <(android_build_tool_spellings "$name")
   for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}"; do
-    [ -n "$root" ] && [ -d "$root/build-tools" ] || continue
-    for candidate in "$root"/build-tools/*/"$name"; do
-      [ -x "$candidate" ] || continue
-      [ "$candidate" = "$path" ] || printf '%s\n' "$candidate"
+    [ -n "$root" ] || continue
+    root="$(android_sdk_root "$root")"
+    [ -d "$root/build-tools" ] || continue
+    for version_dir in "$root"/build-tools/*/; do
+      while IFS= read -r spelling; do
+        candidate="$version_dir$spelling"
+        [ -x "$candidate" ] || continue
+        case "$path_hits" in *$'\n'"$candidate"$'\n'*) continue ;; esac
+        printf 'sdk\t%s\n' "$candidate"
+      done < <(android_build_tool_spellings "$name")
     done
   done
   return 0
 }
 
 find_android_build_tool() {
-  local name="$1" candidate path newest=""
+  local name="$1" origin candidate newest=""
   # Requiring the tool to actually run is right: a present-but-unrunnable apksigner used to fail the whole
   # install. Taking the FIRST runnable candidate was not: the SDK glob is ascending, so it preferred the
   # OLDEST build-tools, where v0.9.6 preferred the newest. An old aapt whose `dump badging` prints nothing
   # then aborts a release install with "package mismatch / Got unavailable" on an APK that verified before.
   # A tool on PATH stays the operator's explicit choice and still wins outright.
-  path="$(command -v "$name" 2>/dev/null || true)"
-  if [ -n "$path" ] && android_build_tool_runs "$path"; then printf '%s\n' "$path"; return 0; fi
-  while IFS= read -r candidate; do
-    [ "$candidate" = "$path" ] && continue
-    if android_build_tool_runs "$candidate"; then newest="$candidate"; fi
+  while IFS=$'\t' read -r origin candidate; do
+    android_build_tool_runs "$candidate" || continue
+    if [ "$origin" = path ]; then printf '%s\n' "$candidate"; return 0; fi
+    newest="$candidate"
   done < <(android_build_tool_candidates "$name")
   [ -z "$newest" ] || printf '%s\n' "$newest"
   return 0
@@ -1798,7 +1841,7 @@ find_android_build_tool() {
 # tool is simply not installed — "absent" already has its own wording and is not a malfunction.
 android_build_tool_failure() {
   local name="$1" path detail failures=""
-  while IFS= read -r path; do
+  while IFS=$'\t' read -r _ path; do
     if android_build_tool_runs "$path"; then continue; fi
     detail="$("$path" version 2>&1 | head -1 | LC_ALL=C tr -d '\000-\037\177' || true)"
     failures="${failures}${failures:+; }$name is installed at $path but could not run: ${detail:-no output}"
@@ -1889,10 +1932,12 @@ verify_release_apk() {
       # A tool that cannot run carries exactly as much evidence as one that is absent — none — so it
       # takes the same path. Refusing here would reject an APK this run has already authenticated
       # against the pinned release key, and blame the artifact for the host's missing Java runtime.
+      # It is only skippable for a first installation, though, so the warning must not call the tool
+      # optional one line before an update of an installed panel refuses for the lack of it (#24).
       if [ -n "$signer_tool_problem" ]; then
-        warn "The optional APK structure inspection was skipped: $signer_tool_problem. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+        warn "The APK structure inspection was skipped: ${signer_tool_problem%.}. The APK was still authenticated by the signed checksum above, which is enough for a first installation because Android checks the APK signature itself. Updating a panel that already has ha-paneld needs this tool; that is checked before anything on the panel changes."
       else
-        warn "Android Build-Tools were not found, so the optional APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, and Android validates its APK signature during installation."
+        warn "Android Build-Tools were not found, so the APK structure inspection was skipped. The APK was still authenticated by the signed checksum above, which is enough for a first installation because Android checks the APK signature itself. Updating a panel that already has ha-paneld needs these tools; that is checked before anything on the panel changes."
       fi
     else
       fail "Android Build-Tools are required to verify a local APK signer" \
@@ -1948,7 +1993,7 @@ verify_incumbent_signer_for_replacement() {
   local signer_tool installed_path installed_apk output signer_lines signer_count installed_signer candidate_signer
   [ "$PACKAGE_PRESENCE" = present ] || return 0
   signer_tool="$(find_android_build_tool apksigner || true)"
-  [ -n "$signer_tool" ] || host_database_gate_refuse "Android Build-Tools are required to compare the installed and candidate signers"
+  [ -n "$signer_tool" ] || host_build_tools_refuse apksigner
   installed_path="$(run_with_deadline "$ADB_COMMAND_TIMEOUT_SECONDS" adb_exec -s "$TARGET" shell pm path "$PKG" 2>/dev/null \
     | sed -n 's/^package://p' | head -1 | tr -d '\r' || true)"
   case "$installed_path" in /*) ;; *) host_database_gate_refuse "the installed APK path could not be re-read for signer comparison" ;; esac
@@ -1969,7 +2014,7 @@ verify_incumbent_signer_for_replacement() {
   candidate_signer="$CANDIDATE_SIGNER_SHA256"
   printf '%s\n' "$candidate_signer" | grep -Eq '^[0-9a-f]{64}$' || \
     host_database_gate_refuse "the candidate APK signer could not be proven uniquely"
-  [ "$candidate_signer" = "$installed_signer" ] || host_database_gate_refuse "the candidate APK signer differs from the installed package signer"
+  [ "$candidate_signer" = "$installed_signer" ] || host_signer_mismatch_refuse "$installed_signer" "$candidate_signer"
 }
 
 verify_release_helper() {
@@ -5852,8 +5897,11 @@ read_candidate_database_contract() {
   DB_CANDIDATE_MAX=""
   tool="$(find_android_build_tool aapt || true)"
   [ -n "$tool" ] || tool="$(find_android_build_tool aapt2 || true)"
-  [ -n "$tool" ] || return 1
+  # 2, not 1: a missing host tool says nothing about the candidate, and must not be reported as missing
+  # or malformed metadata (#24).
+  [ -n "$tool" ] || return 2
   tool_name="${tool##*/}"
+  tool_name="${tool_name%.bat}"; tool_name="${tool_name%.cmd}"
   assert_candidate_apk_unchanged
   if [ "$tool_name" = aapt2 ]; then
     xml="$("$tool" dump xmltree "$APK" --file AndroidManifest.xml 2>/dev/null || true)"
@@ -6191,8 +6239,13 @@ echo HOSTDB_END:@NONCE@
   return 0
 }
 
-host_database_gate_refuse() {
-  local phase="${DB_GATE_PHASE:-initial}" helper_kind="" helper_recovery=""
+# Every refusal inside the gate stops the same way: a package-phase refusal first rolls back the
+# task-owned helper transaction, and the operator is told how far this run got. Only the reason
+# differs, so each kind of refusal words its own message around DB_GATE_HELPER_RECOVERY and
+# DB_GATE_PROGRESS rather than borrowing the database wording.
+host_database_gate_unwind() {
+  local phase="${DB_GATE_PHASE:-initial}" helper_kind=""
+  DB_GATE_HELPER_RECOVERY=""
   if [ "$phase" = package ] && [ -n "${ROOT_HELPER_TRANSACTION_KIND:-}" ]; then
     helper_kind="$ROOT_HELPER_TRANSACTION_KIND"
     stop_root_helper_lease_guard
@@ -6200,32 +6253,109 @@ host_database_gate_refuse() {
     if rollback_root_helper "$helper_kind"; then
       cleanup_root_helper_staging
       ROOT_HELPER_TRANSACTION_KIND=""
-      helper_recovery="The task-owned root-helper transaction was rolled back and verified before refusal."
+      DB_GATE_HELPER_RECOVERY="The task-owned root-helper transaction was rolled back and verified before refusal."
     else
-      helper_recovery="The APK was not replaced, but root-helper rollback could not be verified; preserve the recovery journal and repair the helper before retrying."
+      DB_GATE_HELPER_RECOVERY="The APK was not replaced, but root-helper rollback could not be verified; preserve the recovery journal and repair the helper before retrying."
     fi
   fi
-  if [ "$phase" = consume ] || [ "$phase" = package ]; then
-    if [ "$phase" = package ]; then
-      fail "database compatibility could not be proven at the package-time recheck: $1" \
-        "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
-        "$helper_recovery" \
-        "Backup/quiescence and requested helper or Shizuku preparation may already have completed, but the ha-paneld APK, permissions and configuration were not changed." \
-        "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
-    fi
-    fail "database compatibility could not be proven at the consume-time recheck: $1" \
-      "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
-      "A read-only backup or app quiescence may already have completed, but no reset, helper, Shizuku, APK, permission or configuration mutation was started." \
-      "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
+  case "$phase" in
+    package) DB_GATE_PROGRESS="Backup/quiescence and requested helper or Shizuku preparation may already have completed, but the ha-paneld APK, permissions and configuration were not changed." ;;
+    consume) DB_GATE_PROGRESS="A read-only backup or app quiescence may already have completed, but no reset, helper, Shizuku, APK, permission or configuration mutation was started." ;;
+    *) DB_GATE_PROGRESS="No settings backup, database quiescence, reset, helper, Shizuku, APK, permission or configuration mutation was started." ;;
+  esac
+}
+
+host_database_gate_refuse() {
+  local headline="database compatibility could not be proven" lines=()
+  host_database_gate_unwind
+  case "${DB_GATE_PHASE:-initial}" in
+    package) headline="$headline at the package-time recheck" ;;
+    consume) headline="$headline at the consume-time recheck" ;;
+  esac
+  # The boundary is evidence about the candidate only once its manifest has been read. A refusal that
+  # fires before then must not report the candidate's metadata as missing or malformed (#24).
+  [ "$DB_CONTRACT_EVALUATED" = 0 ] || lines+=("Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}.")
+  [ -z "$DB_GATE_HELPER_RECOVERY" ] || lines+=("$DB_GATE_HELPER_RECOVERY")
+  lines+=("$DB_GATE_PROGRESS")
+  if [ "$DB_CONTRACT_EVALUATED" = 0 ]; then
+    lines+=("The candidate's database boundary was not read yet, so nothing about its database support was judged. Resolve the reason above, then re-run the same command.")
+  else
+    lines+=("Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying.")
   fi
-  fail "database compatibility could not be proven: $1" \
-    "Candidate boundary: ${DB_COMPATIBILITY_CONTRACT:-missing or malformed}." \
-    "No settings backup, database quiescence, reset, helper, Shizuku, APK, permission or configuration mutation was started." \
-    "Use a candidate that supports the panel database, or recover the database with a current compatible build before retrying."
+  fail "$headline: $1" "${lines[@]}"
+}
+
+# Updating a panel that already carries ha-paneld needs two host tools that no checksum can stand in
+# for: apksigner reads the signer of the app already on the panel, and aapt or aapt2 reads the database
+# boundary the candidate declares in its manifest. Their absence is a fact about this computer, so it is
+# refused in its own words and never as a candidate or database verdict (#24). The caller names the tool
+# it could not find; the other is checked here too, so installing one does not end in a second refusal
+# for the other.
+host_build_tools_refuse() {
+  local missing_tool="$1" missing="" problem lines=() not_found=0 needs_install=0 needs_java=0
+  if [ "$missing_tool" = apksigner ] || [ -z "$(find_android_build_tool apksigner || true)" ]; then
+    missing="apksigner"
+    needs_java=1
+    problem="$(android_build_tool_failure apksigner || true)"
+    [ -n "$problem" ] || { not_found=1; needs_install=1; }
+    problem="${problem%.}"
+    lines+=("${problem:-apksigner was not found on PATH or in the build-tools folder of ANDROID_HOME or ANDROID_SDK_ROOT}. It proves the new APK is signed by the same key as the app already on the panel.")
+  fi
+  if [ "$missing_tool" = aapt ] || { [ -z "$(find_android_build_tool aapt || true)" ] && [ -z "$(find_android_build_tool aapt2 || true)" ]; }; then
+    missing="${missing:+$missing and }aapt or aapt2"
+    needs_install=1
+    problem="$(android_build_tool_failure aapt || true)"
+    [ -n "$problem" ] || problem="$(android_build_tool_failure aapt2 || true)"
+    [ -n "$problem" ] || not_found=1
+    problem="${problem%.}"
+    lines+=("${problem:-Neither aapt nor aapt2 was found on PATH or in the build-tools folder of ANDROID_HOME or ANDROID_SDK_ROOT}. Either one reads which panel database versions the new APK supports.")
+  fi
+  host_database_gate_unwind
+  lines+=("This is about the tools on this computer, not a verdict on the APK or the panel database.")
+  [ -z "$DB_GATE_HELPER_RECOVERY" ] || lines+=("$DB_GATE_HELPER_RECOVERY")
+  lines+=("$DB_GATE_PROGRESS")
+  # An apksigner that is installed but cannot run is almost always missing Java, and reinstalling
+  # Build-Tools would not help; where-to-find advice only helps a tool that was not found.
+  [ "$needs_install" = 0 ] || \
+    lines+=("Install Android SDK Build-Tools: in Android Studio open Tools > SDK Manager > SDK Tools and tick Android SDK Build-Tools, or run sdkmanager \"build-tools;36.0.0\" from the Android command-line tools (sdkmanager.bat in Git Bash).")
+  [ "$needs_java" = 0 ] || \
+    lines+=("apksigner runs on Java: install a Java runtime, or use the one bundled with Android Studio (its jbr folder) through PATH or JAVA_HOME, until java -version works in this terminal.")
+  if [ "$not_found" = 1 ]; then
+    lines+=("Then tell the installer where the SDK is and re-run the same command: export ANDROID_HOME=\"\$HOME/AppData/Local/Android/Sdk\" in Git Bash on Windows, \"\$HOME/Library/Android/sdk\" on macOS or \"\$HOME/Android/Sdk\" on Linux. Adding the build-tools/<version> folder to PATH works too.")
+  else
+    lines+=("Then re-run the same command.")
+  fi
+  fail "updating the ha-paneld already on this panel needs $missing from Android SDK Build-Tools on this computer" "${lines[@]}"
+}
+
+# The supported way past a signer change, shared by the pre-mutation refusal below and Android's own
+# INSTALL_FAILED_UPDATE_INCOMPATIBLE so the two can never advise differently.
+signer_change_recovery_steps() {
+  SIGNER_CHANGE_RECOVERY_STEPS=(
+    "1. For the fullest recovery, open the panel's :8888 page → Install → Backup and verify the downloaded .hpb file is non-empty. It carries settings, durable panel state, the profile catalog and the Companion login; the entity catalog and the proximity and ambient history are relearned rather than restored. --export saves settings only."
+    "2. adb -s $TARGET uninstall $PKG    (removes the app AND its on-panel config)"
+    "3. Re-run this command, then restore the .hpb from Install → Restore. Do not pass an .hpb to --restore; that CLI option accepts config JSON only."
+  )
+}
+
+# A different signer is a real refusal, but it is not a database verdict and it is found before the
+# candidate boundary is read. Android would reject the replacement anyway; the only way past it deletes
+# the panel's settings and database, so this stops before any mutation and says so in its own words.
+host_signer_mismatch_refuse() {
+  local lines=()
+  host_database_gate_unwind
+  signer_change_recovery_steps
+  lines+=("Installed app signer: $1" "New APK signer:       $2"
+    "Android does not update an app from an APK signed by a different key.")
+  [ -z "$DB_GATE_HELPER_RECOVERY" ] || lines+=("$DB_GATE_HELPER_RECOVERY")
+  lines+=("$DB_GATE_PROGRESS"
+    "Use an APK signed by the same key as the app on the panel. To change keys instead, the app must be uninstalled first:"
+    "${SIGNER_CHANGE_RECOVERY_STEPS[@]}")
+  fail "the new APK is signed by a different key than the ha-paneld already on this panel" "${lines[@]}"
 }
 
 host_database_compatibility_decision() {
-  local primary_version primary_quick recovery_file_version recovery_state recovery_version recovery_quick observation_nonce
+  local primary_version primary_quick recovery_file_version recovery_state recovery_version recovery_quick observation_nonce contract_status
   DB_GATE_RECOVERY=""
   DB_GATE_DECISION_KIND=""
   DB_GATE_RESET_FRESH=0
@@ -6245,7 +6375,11 @@ host_database_compatibility_decision() {
   fi
   verify_incumbent_signer_for_replacement
 
-  if ! read_candidate_database_contract; then
+  contract_status=0
+  read_candidate_database_contract || contract_status=$?
+  if [ "$contract_status" = 2 ] && [ "$PACKAGE_PRESENCE" = present ]; then host_build_tools_refuse aapt; fi
+  DB_CONTRACT_EVALUATED=1
+  if [ "$contract_status" != 0 ]; then
     if [ "$PACKAGE_PRESENCE" = absent ]; then
       # Legacy APKs without the signed contract remain valid only for a positively proven first
       # installation. Android package removal owns and removes app-private data on rootless devices;
@@ -7534,11 +7668,10 @@ install_apk() {
         "$helper_recovery" \
         "Android's package manager outcome may be delayed. Restore adb connectivity if needed, then re-run the same command; provisioning will reconcile the installed APK before changing the helper journal." ;;
     *INSTALL_FAILED_UPDATE_INCOMPATIBLE*|*"signatures do not match"*)
+      signer_change_recovery_steps
       fail "install failed: signature mismatch — the ha-paneld already on the panel was signed with a different key (e.g. a local debug build vs a GitHub release)" \
         "$helper_recovery" \
-        "1. For the fullest recovery, open the panel's :8888 page → Install → Backup and verify the downloaded .hpb file is non-empty. It carries settings, durable panel state, the profile catalog and the Companion login; the entity catalog and the proximity and ambient history are relearned rather than restored. --export saves settings only." \
-        "2. adb -s $TARGET uninstall $PKG    (removes the app AND its on-panel config)" \
-        "3. Re-run this command, then restore the .hpb from Install → Restore. Do not pass an .hpb to --restore; that CLI option accepts config JSON only." ;;
+        "${SIGNER_CHANGE_RECOVERY_STEPS[@]}" ;;
     *INSTALL_FAILED_VERSION_DOWNGRADE*)
       fail "install failed: the panel already runs a NEWER version than this APK" \
         "$helper_recovery" \

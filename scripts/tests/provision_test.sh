@@ -276,7 +276,7 @@ run_provision() {
   # The slow-health probe counter is per-run state; leaving it behind made one test's outcome
   # depend on how many health probes an earlier test happened to make.
   rm -f "$TMP/plan-attempts" "$TMP/storage-status-attempts" "$TMP/health-probes"
-  rm -f "$TMP/upgrade-release-attempts"
+  rm -f "$TMP/upgrade-release-attempts" "$TMP/installed-apk-signer-reads"
   rm -f "$TMP/stale-helper-transaction" "$TMP/active-helper-transaction"
   rm -f "$TMP/package-stopped" "$TMP/apk-install-attempted" "$TMP/pm-probe-count"
   rm -f "$TMP/host-db-observation-count" "$TMP/installer-db-observation-count" \
@@ -679,6 +679,18 @@ else
   pass "no apksigner-absence scenario re-admits the host's tool directories"
 fi
 fi
+# The same subtraction for any set of tools, built only by the shards that use it: every fixture, then
+# every host tool in /usr/bin and /bin, minus the named ones.
+make_host_without() {
+  local sandbox="$1" source; shift
+  mkdir -p "$sandbox"
+  for source in "$FIXTURES"/* /usr/bin/* /bin/*; do
+    case " $* " in *" ${source##*/} "*) continue ;; esac
+    [ -e "$sandbox/${source##*/}" ] || ln -s "$source" "$sandbox/${source##*/}" 2>/dev/null
+  done
+  return 0
+}
+
 NO_GH_FIXTURES="$TMP/fixtures-without-gh"
 mkdir -p "$NO_GH_FIXTURES"
 for fixture in "$FIXTURES"/*; do
@@ -888,6 +900,7 @@ for metadata_scope_mode in component duplicate_application; do
   fi
   assert_failure "$metadata_scope_mode database metadata is refused"
   assert_contains 'missing, duplicate or malformed database metadata' "$metadata_scope_mode refusal names candidate metadata"
+  assert_contains 'Candidate boundary: ' "$metadata_scope_mode refusal keeps the candidate-boundary advice"
   assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put|monkey -p io\.github\.maxlyth\.hapaneld|am start -n io\.github\.maxlyth\.hapaneld|/api/v1/config($|[? /])' \
     "$MOCK_CALL_LOG" "$metadata_scope_mode refusal has zero tracked mutations"
 done
@@ -1058,14 +1071,57 @@ MOCK_INSTALLED_CERT=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
   MOCK_DB_CANDIDATE_CONTRACT='hapaneld-db:v1:ha-paneld.db:11:14' \
   MOCK_HOST_DB_PRIMARY='readable:14:ok' run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "a candidate signed by a different key is refused before compatibility metadata can license replacement"
-assert_contains 'candidate APK signer differs from the installed package signer' "incumbent signer mismatch names the refusal"
+# A different signer is its own refusal (#24): not a database verdict, and not the candidate-boundary
+# advice, which describes a manifest this refusal fires before reading.
+assert_contains 'the new APK is signed by a different key than the ha-paneld already on this panel' \
+  "incumbent signer mismatch has its own headline"
+assert_contains 'Installed app signer: f{64}' "the signer refusal shows the installed signer"
+assert_contains 'New APK signer: +ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339' \
+  "the signer refusal shows the candidate signer"
+assert_contains "uninstall io\\.github\\.maxlyth\\.hapaneld +\\(removes the app AND its on-panel config\\)" \
+  "the signer refusal gives the signer-change recovery steps"
+assert_contains 'No settings backup, database quiescence, reset, helper, Shizuku, APK, permission or configuration mutation was started' \
+  "the signer refusal states that nothing was changed"
+assert_not_contains 'database compatibility could not be proven|Candidate boundary|Use a candidate that supports' "$LAST_OUTPUT" \
+  "a signer mismatch is not reported as a database or candidate-boundary verdict"
 assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put|monkey -p io\.github\.maxlyth\.hapaneld|am start -n io\.github\.maxlyth\.hapaneld|/api/v1/config($|[? /])' \
   "$MOCK_CALL_LOG" "incumbent signer mismatch has zero tracked mutations"
+
+# The same refusal at the package-time recheck, after the helper transaction has been prepared: it
+# must still roll that transaction back, which the database refusals already did through the same stop.
+MOCK_INSTALLED_CERT_FROM_READ=3 \
+  MOCK_INSTALLED_CERT_LATE=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff \
+  MOCK_DB_CANDIDATE_CONTRACT='hapaneld-db:v1:ha-paneld.db:11:14' \
+  MOCK_HOST_DB_PRIMARY='readable:14:ok' run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "an incumbent signer that changes before package replacement is refused"
+assert_contains 'the new APK is signed by a different key' "the late signer change keeps its own headline"
+assert_log_contains 'helper-transaction-[0-9a-f]+.*rollback-system' \
+  "the late signer change rolls back task-owned helper preparation"
+assert_contains 'The task-owned root-helper transaction was rolled back and verified before refusal' \
+  "the late signer change reports the verified helper rollback"
+assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the late signer change never reaches APK install"
+
+# Android's own rejection of a signer change gives the same recovery steps as the refusal above.
+MOCK_APK_INSTALL=fail \
+  MOCK_APK_INSTALL_OUTPUT='Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Package io.github.maxlyth.hapaneld signatures do not match newer version; ignoring!]' \
+  MOCK_DB_CANDIDATE_CONTRACT='hapaneld-db:v1:ha-paneld.db:11:14' \
+  MOCK_HOST_DB_PRIMARY='readable:14:ok' run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
+assert_failure "Android's signer-change rejection fails the run"
+assert_contains 'install failed: signature mismatch' "Android's signer-change rejection keeps its headline"
+assert_contains "uninstall io\\.github\\.maxlyth\\.hapaneld +\\(removes the app AND its on-panel config\\)" \
+  "Android's signer-change rejection gives the shared recovery steps"
 
 MOCK_INSTALLED_APK_VERIFY_FAIL=1 \
   MOCK_DB_CANDIDATE_CONTRACT='hapaneld-db:v1:ha-paneld.db:11:14' \
   MOCK_HOST_DB_PRIMARY='readable:14:ok' run_provision "$MOCK_TARGET" --apk "$APK" --no-tame
 assert_failure "an unreadable incumbent signer fails closed"
+assert_contains 'installed APK signer could not be proven uniquely' "an unreadable incumbent signer names the refusal"
+# The candidate's manifest has not been read when this fires, so the refusal must not report its
+# database metadata as missing or malformed (#24).
+assert_not_contains 'Candidate boundary|Use a candidate that supports' "$LAST_OUTPUT" \
+  "a refusal before the manifest is read makes no claim about the candidate boundary"
+assert_contains 'nothing about its database support was judged' \
+  "a refusal before the manifest is read says the candidate's database support was not judged"
 assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put|monkey -p io\.github\.maxlyth\.hapaneld|am start -n io\.github\.maxlyth\.hapaneld|/api/v1/config($|[? /])' \
   "$MOCK_CALL_LOG" "unreadable incumbent signer has zero tracked mutations"
 
@@ -3182,15 +3238,55 @@ fi
 
 # A signed checksum authenticates the publisher, but an existing panel also needs the incumbent
 # signer comparison and exact manifest contract. Both require Android Build-Tools before mutation.
-PATH="$NO_SIGNER_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
+# The refusal is about this computer, so it names the missing tools, where to get them and how to
+# point the installer at them, and never blames the candidate APK or the panel database (#24).
+NO_BUILD_TOOL_FIXTURES="$TMP/fixtures-without-build-tools"
+make_host_without "$NO_BUILD_TOOL_FIXTURES" apksigner aapt aapt2
+if PATH="$NO_BUILD_TOOL_FIXTURES" command -v bash >/dev/null 2>&1 && \
+   ! PATH="$NO_BUILD_TOOL_FIXTURES" command -v apksigner >/dev/null 2>&1 && \
+   ! PATH="$NO_BUILD_TOOL_FIXTURES" command -v aapt >/dev/null 2>&1 && \
+   ! PATH="$NO_BUILD_TOOL_FIXTURES" command -v aapt2 >/dev/null 2>&1; then
+  pass "the no-Build-Tools sandbox is a complete host without apksigner, aapt or aapt2"
+else
+  fail_test "the no-Build-Tools sandbox is a complete host without apksigner, aapt or aapt2"
+fi
+PATH="$NO_BUILD_TOOL_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
   run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
 assert_failure "an existing release install refuses without required Android Build-Tools"
-assert_contains 'Android Build-Tools are required to compare the installed and candidate signers' \
-  "missing Build-Tools names the incumbent authentication requirement"
-assert_contains 'database compatibility could not be proven' "missing Build-Tools fails at the host compatibility gate"
+assert_contains 'updating the ha-paneld already on this panel needs apksigner and aapt or aapt2 from Android SDK Build-Tools on this computer' \
+  "missing Build-Tools names every missing tool in one refusal"
+assert_contains 'apksigner was not found on PATH or in the build-tools folder of ANDROID_HOME or ANDROID_SDK_ROOT' \
+  "missing Build-Tools says where apksigner was looked for"
+assert_contains 'sdkmanager "build-tools;36\.0\.0" from the Android command-line tools \(sdkmanager\.bat in Git Bash\)' \
+  "missing Build-Tools says where to get them, including under Git Bash"
+assert_contains 'export ANDROID_HOME="\$HOME/AppData/Local/Android/Sdk" in Git Bash on Windows' \
+  "missing Build-Tools says how to point the installer at them"
+assert_contains 'No settings backup, database quiescence, reset, helper, Shizuku, APK, permission or configuration mutation was started' \
+  "missing Build-Tools states that nothing was changed"
+assert_not_contains 'Candidate boundary|Use a candidate that supports|database compatibility could not be proven' "$LAST_OUTPUT" \
+  "missing Build-Tools is not reported as a candidate or database verdict"
+assert_not_contains 'optional APK structure inspection' "$LAST_OUTPUT" \
+  "the skipped inspection is not called optional before an update refuses without it"
+assert_contains 'Updating a panel that already has ha-paneld needs these tools' \
+  "the skipped inspection says an update still needs the tools"
 assert_log_contains '^openssl dgst -sha256 -verify ' "no-apksigner path still authenticates the checksum signature"
 assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put' \
   "$MOCK_CALL_LOG" "missing Build-Tools refuses before every tracked mutation"
+
+# apksigner present, aapt and aapt2 absent: the signer comparison runs, then the manifest read refuses
+# naming the missing tool rather than reporting the candidate's metadata as missing or malformed.
+NO_AAPT_FIXTURES="$TMP/fixtures-without-aapt"
+make_host_without "$NO_AAPT_FIXTURES" aapt aapt2
+PATH="$NO_AAPT_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "an existing release install refuses without aapt or aapt2"
+assert_contains 'needs aapt or aapt2 from Android SDK Build-Tools on this computer' "a missing aapt is named as the missing tool"
+assert_not_contains 'needs apksigner' "$LAST_OUTPUT" "a present apksigner is not reported missing"
+assert_not_contains 'missing, duplicate or malformed database metadata|Candidate boundary' "$LAST_OUTPUT" \
+  "a missing aapt is not reported as malformed candidate metadata"
+assert_log_contains '^apksigner verify --print-certs .*installed-apk' "the incumbent signer comparison ran before the manifest read"
+assert_not_contains 'config/export|PREPARE_UPGRADE|ha-paneld-db-txn|/data/local/tmp/hapaneld-helper|^adb .* install( |$)|pm clear|pm grant|appops set|settings put' \
+  "$MOCK_CALL_LOG" "a missing aapt refuses before every tracked mutation"
 
 # An apksigner that is PRESENT but cannot run still carries no signer-comparison evidence. The signed
 # checksum authenticates the release bytes, but an existing database-bearing panel additionally needs
@@ -3203,9 +3299,23 @@ assert_failure "an unrunnable apksigner fails closed when incumbent signer equal
 assert_contains 'could not run' "the skip names the tool as the problem, not the APK"
 assert_contains 'Unable to locate a Java Runtime' "the tool's own reason reaches the operator"
 assert_not_contains 'release APK signature verification failed' "$LAST_OUTPUT" "the APK is not blamed for the host's missing runtime"
-assert_contains 'Android Build-Tools are required to compare the installed and candidate signers' \
+assert_contains 'needs apksigner from Android SDK Build-Tools on this computer' \
   "the missing signer equality proof is named"
+# The tool is installed; what is missing is Java, so the remedy is Java rather than reinstalling
+# Build-Tools or pointing the installer at an SDK it already found.
+assert_contains 'apksigner runs on Java: install a Java runtime' "an unrunnable apksigner is sent to Java"
+assert_not_contains 'Install Android SDK Build-Tools|tell the installer where the SDK is' "$LAST_OUTPUT" \
+  "an unrunnable apksigner is not told to install or locate Build-Tools it already has"
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "the unproved replacement never reaches APK install"
+
+# A wrapper that exits 0 without running anything is not a usable tool either. Taken at its word it
+# answers every signer question with nothing, and the run then blamed the APK for having no signer.
+MOCK_APKSIGNER_RUNS=silent ANDROID_HOME= ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "an apksigner that answers nothing cannot authorize incumbent replacement"
+assert_contains 'apksigner is installed at .* but could not run: no output' "a silent apksigner is reported as a tool that did not run"
+assert_not_contains 'signer count mismatch|release APK signature verification failed' "$LAST_OUTPUT" \
+  "a silent apksigner is not reported as an APK without a signer"
 
 UNRUNNABLE_SDK="$TMP/unrunnable-android-sdk"
 mkdir -p "$UNRUNNABLE_SDK/build-tools/99.0.0"
@@ -5430,9 +5540,11 @@ LAST_STATUS=$?
 # declares. So the run must still stop - what changes is WHICH gate stops it, and what it says.
 #
 # Absence checks alone would not establish that. A run that died of a package mismatch also lacks the
-# aapt message, so the positive assertions below carry the weight.
+# aapt message, so the positive assertions below carry the weight. Since #24 that gate refuses in the
+# missing tool's own words, naming what the tool is for, rather than as a database verdict.
 assert_failure "a release asset without aapt still stops at the database gate"
-assert_contains 'database compatibility could not be proven' "the refusal names the database gate rather than a missing tool"
+assert_contains 'updating the ha-paneld already on this panel needs aapt or aapt2 from Android SDK Build-Tools on this computer' \
+  "the refusal comes from the database-contract read and names the missing tool"
 assert_contains 'package authenticated release asset' "the package gate is satisfied by the signed checksum instead of a tool"
 assert_not_contains 'aapt or aapt2 is required' "$LAST_OUTPUT" "a release asset is not refused for a missing aapt"
 assert_not_contains 'package mismatch' "$LAST_OUTPUT" "a release asset is not refused for an unreadable package name"
@@ -8420,6 +8532,70 @@ else
 fi
 assert_log_contains '/data/local/tmp/hapaneld-helper-[0-9a-f]+' \
   "the staged helper path is unchanged on Linux"
+
+# --------------------------------------------------------------------------------------------------
+# Git Bash: Android Build-Tools that exist only as Windows wrappers.
+#
+# The Windows SDK ships apksigner as apksigner.bat, and the MSYS runtime resolves a bare command name
+# to name.exe only, so a Git Bash host that had Build-Tools was refused as though it had none (#24).
+# A stand-in uname reports the MSYS runtime and a stand-in cygpath translates the Windows spelling of
+# ANDROID_HOME that System Properties writes. aapt ships as aapt.exe, which the runtime does resolve
+# by its bare name, so the SDK holds a bare aapt beside apksigner.bat. Nothing else on the host
+# carries a Build-Tool.
+# --------------------------------------------------------------------------------------------------
+GIT_BASH_HOST="$TMP/git-bash-host"
+WINDOWS_SDK="$TMP/windows-android-sdk"
+WINDOWS_TOOL_PATH="$TMP/windows-build-tools-on-path"
+mkdir -p "$GIT_BASH_HOST" "$WINDOWS_SDK/build-tools/36.0.0" "$WINDOWS_TOOL_PATH"
+printf '#!/bin/sh\necho MINGW64_NT-10.0-26100\n' > "$GIT_BASH_HOST/uname"
+cat > "$GIT_BASH_HOST/cygpath" <<CYGPATH
+#!/bin/sh
+[ "\$1" = -u ] && shift
+case "\$1" in
+  'C:\\Users\\tester\\AppData\\Local\\Android\\Sdk') echo '$WINDOWS_SDK' ;;
+  *) printf '%s\n' "\$1" ;;
+esac
+CYGPATH
+chmod 755 "$GIT_BASH_HOST/uname" "$GIT_BASH_HOST/cygpath"
+ln -s "$FIXTURES/apksigner" "$WINDOWS_SDK/build-tools/36.0.0/apksigner.bat"
+ln -s "$FIXTURES/aapt" "$WINDOWS_SDK/build-tools/36.0.0/aapt"
+ln -s "$FIXTURES/apksigner" "$WINDOWS_TOOL_PATH/apksigner.cmd"
+ln -s "$FIXTURES/aapt" "$WINDOWS_TOOL_PATH/aapt2.cmd"
+NO_BUILD_TOOL_FIXTURES="$TMP/fixtures-without-build-tools"
+make_host_without "$NO_BUILD_TOOL_FIXTURES" apksigner aapt aapt2
+
+PATH="$GIT_BASH_HOST:$NO_BUILD_TOOL_FIXTURES" ANDROID_HOME='C:\Users\tester\AppData\Local\Android\Sdk' ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "a Git Bash host whose apksigner is only apksigner.bat passes the signer gate"
+assert_log_contains '^apksigner\.bat verify --print-certs .*installed-apk' \
+  "the installed app's signer is read through apksigner.bat"
+assert_log_contains '^apksigner\.bat verify --print-certs .*ha-paneld-v0\.9\.2-rc3-manual-setup-required\.apk$' \
+  "the candidate's signer is read through apksigner.bat"
+assert_contains 'database compatible' "the .bat-only host reaches the database decision"
+
+PATH="$GIT_BASH_HOST:$WINDOWS_TOOL_PATH:$NO_BUILD_TOOL_FIXTURES" ANDROID_HOME= ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_success "a Git Bash host with .cmd wrappers on PATH passes the signer gate"
+assert_log_contains '^apksigner\.cmd verify --print-certs .*installed-apk' \
+  "the installed app's signer is read through apksigner.cmd from PATH"
+assert_log_contains '^aapt2\.cmd dump xmltree .* --file AndroidManifest\.xml$' \
+  "a wrapper-spelled aapt2 is given aapt2's own xmltree grammar"
+
+# Both at once: a wrapper on PATH stays the operator's explicit choice over one in the SDK.
+PATH="$GIT_BASH_HOST:$WINDOWS_TOOL_PATH:$NO_BUILD_TOOL_FIXTURES" ANDROID_HOME='C:\Users\tester\AppData\Local\Android\Sdk' ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_log_contains '^apksigner\.cmd verify --print-certs .*installed-apk' \
+  "with wrappers on PATH and in the SDK, the PATH wrapper is the one run"
+assert_not_contains '^apksigner\.bat ' "$MOCK_CALL_LOG" "with wrappers on PATH and in the SDK, the SDK wrapper is not run"
+
+# Control: the identical .bat-only SDK on a host that is not Git Bash. The wrapper spellings are an
+# MSYS rule, so they are not searched, and the run refuses in the tool's own words.
+PATH="$NO_BUILD_TOOL_FIXTURES" ANDROID_HOME="$WINDOWS_SDK" ANDROID_SDK_ROOT= \
+  run_provision "$MOCK_TARGET" --apk "$RELEASE_APK" --release-tag v0.9.2-rc3 --no-tame
+assert_failure "the same .bat-only SDK is not searched outside the MSYS runtime"
+assert_contains 'needs apksigner from Android SDK Build-Tools on this computer' \
+  "outside the MSYS runtime the .bat-only host is refused for the missing tool"
+assert_not_contains '^apksigner\.bat ' "$MOCK_CALL_LOG" "outside the MSYS runtime apksigner.bat is never run"
 fi
 
 [ "$PROVISION_TEST_SCOPE" != shard-git-bash ] || finish_provision_test

@@ -3,7 +3,9 @@ set -u
 
 # Runnability probe, answered before the call log so discovery does not appear as traffic.
 # MOCK_APKSIGNER_RUNS=0 models a host with no Java runtime — the #106 shape, where the tool existed,
-# could not execute, and the APK got the blame.
+# could not execute, and the APK got the blame. MOCK_APKSIGNER_RUNS=silent models a wrapper that exits
+# 0 without running anything, so every call succeeds and prints nothing.
+[ "${MOCK_APKSIGNER_RUNS:-1}" != silent ] || exit 0
 if [ "$*" = "version" ] || [ "$*" = "--version" ]; then
   if [ "${MOCK_APKSIGNER_RUNS:-1}" = 1 ]; then printf '35.0.0\n'; exit 0; fi
   printf "The operation couldn't be completed. Unable to locate a Java Runtime.\n" >&2
@@ -13,10 +15,22 @@ if [ "${MOCK_APKSIGNER_RUNS:-1}" != 1 ]; then
   printf "The operation couldn't be completed. Unable to locate a Java Runtime.\n" >&2
   exit 1
 fi
-printf 'apksigner %s\n' "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
+# Logged under the name it was invoked by, so a run through a Windows wrapper (apksigner.bat) is
+# distinguishable from one through the bare tool.
+printf '%s %s\n' "${0##*/}" "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 case "$*" in
   *installed-apk*)
     [ "${MOCK_INSTALLED_APK_VERIFY_FAIL:-0}" = 0 ] || exit 1
+    # MOCK_INSTALLED_CERT_LATE from read MOCK_INSTALLED_CERT_FROM_READ onward models an incumbent whose
+    # signer changes between gate phases (the initial, consume and package comparisons are reads 1-3).
+    if [ -n "${MOCK_INSTALLED_CERT_FROM_READ:-}" ]; then
+      printf x >> "${MOCK_STATE_DIR:?}/installed-apk-signer-reads"
+      installed_reads="$(wc -c < "${MOCK_STATE_DIR:?}/installed-apk-signer-reads")"
+      if [ "$installed_reads" -ge "$MOCK_INSTALLED_CERT_FROM_READ" ]; then
+        printf 'Signer #1 certificate SHA-256 digest: %s\n' "${MOCK_INSTALLED_CERT_LATE:?}"
+        exit 0
+      fi
+    fi
     printf 'Signer #1 certificate SHA-256 digest: %s\n' "${MOCK_INSTALLED_CERT:-${MOCK_RELEASE_CERT:-ac6193307fb0b70113aae205d7549406f96e063bc5491b67b1d5694a34b0e339}}"
     [ -z "${MOCK_ADDITIONAL_INSTALLED_CERT:-}" ] || printf 'Signer #2 certificate SHA-256 digest: %s\n' "$MOCK_ADDITIONAL_INSTALLED_CERT"
     ;;
