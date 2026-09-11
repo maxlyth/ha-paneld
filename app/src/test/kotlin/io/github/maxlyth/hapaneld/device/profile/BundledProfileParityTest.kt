@@ -481,7 +481,10 @@ class BundledProfileParityTest {
         assertTrue("standard Android volume keys must not be grabbed through evdev", candidate.input.evdevButtons.isEmpty())
         assertEquals(189, candidate.display.physicalPpi)
         assertFalse("a community profile must remain import-only", candidate.match.fallback)
-        assertEquals(emptyList<String>(), candidate.metadata.testedFirmware)
+        assertEquals(
+            listOf("LineageOS 8.1.0 (API 27), build OPM7.181205.001, on one contributor unit; Home Assistant screen off/on confirmed"),
+            candidate.metadata.testedFirmware,
+        )
         assertNull("no CPU governor policy was proved", candidate.cpu.governors)
         val soc = requireNotNull(candidate.soc)
         assertEquals("Qualcomm Snapdragon 624", soc.model)
@@ -892,9 +895,9 @@ class BundledProfileParityTest {
             "community-cronos-lineageos18.yaml" to
                 "c0207b2b43f46d84641d2d33683cb7fb0e8a4013544827bd3041337a40d02ea2",
             "community-lenovo-thinksmart-view-lineageos.yaml" to
-                "cb31af531c3e7b22a3ea10864217e4a5e0879bd7d02eee2c5d860deb438695b2",
+                "48f4b72e07eb213f81083522196d7147136854b8663ca40ec8e4e5c442a32924",
             "community-rpi4-konstakang-lineageos.yaml" to
-                "e49e0db3e29d8bb77c581c32a2f70d55bc629178d4bb2077a7b55d1885bd2e29",
+                "8daf6333a4d5d4284f108f1e63fcf41ecda27607f04bf46bfe5e8bcd1b4e290c",
             "community-sunworld-yc-sm55p-p76s01.yaml" to
                 "e2ff5c96d633251fa01731016484c8c53d8d7fb952bf8e28e481bd8a98268e5c",
         )
