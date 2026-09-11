@@ -196,6 +196,10 @@ import io.github.maxlyth.hapaneld.util.WebViewInstaller
 import io.github.maxlyth.hapaneld.mqtt.ConnectionSupervisor
 import io.github.maxlyth.hapaneld.mqtt.HeartbeatAdmission
 import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
+import io.github.maxlyth.hapaneld.mqtt.SoftwareComponent
+import io.github.maxlyth.hapaneld.mqtt.SoftwareTarget
+import io.github.maxlyth.hapaneld.mqtt.SoftwareUpdateSources
+import io.github.maxlyth.hapaneld.util.PanelAssistantUpdateLease
 import io.github.maxlyth.hapaneld.platform.AndroidScreenPower
 import io.github.maxlyth.hapaneld.platform.AndroidSystemEnv
 import io.github.maxlyth.hapaneld.util.periodic
@@ -879,6 +883,25 @@ class PaneldService : Service() {
     )
     private lateinit var companionDataOperationState: CompanionDataOperationState
     private val mqtt: MqttBridge get() = runtime.current().mqtt
+    // A Panel Assistant entry owning the ha-paneld update entity; see PanelAssistantUpdateLease.
+    private val panelAssistantUpdateLease by lazy {
+        PanelAssistantUpdateLease(
+            wallNowMs = System::currentTimeMillis,
+            uptimeMs = android.os.SystemClock::elapsedRealtime,
+            readPersisted = { config.panelAssistantUpdateOwnerSeenMs },
+            writePersisted = config::setPanelAssistantUpdateOwnerSeenMs,
+        )
+    }
+    // Observer identities for InstallProgress and UpdateChecker, so detach clears only this service's.
+    // Progress only schedules a republish: lane claims include database maintenance, which must not
+    // gain a configuration write from here.
+    private val softwareProgressObserver: () -> Unit = {
+        runCatching { mqtt.publishSoftwareUpdates() }
+    }
+    private val softwareCatalogObserver: () -> Unit = {
+        runCatching { config.setSoftwareUpdateTargets(UpdateChecker.persistableTargets()) }
+        runCatching { mqtt.publishSoftwareUpdates() }
+    }
     private val mdns: MdnsAdvertiser get() = runtime.current().mdns
     // Default-network callback that nudges an MQTT reconnect when the network returns (see registerNetworkCallback).
     private var netCallback: ConnectivityManager.NetworkCallback? = null
@@ -1561,6 +1584,10 @@ class PaneldService : Service() {
             effectiveBrightness = { brightness.getBrightness() },
             onRepairCompanionUrl = { repairCompanionUrl() },
             onInstallComponent = { name, action, version -> installComponent(name, action, version) },
+            // Panel Assistant declares that it owns the ha-paneld update entity on its status poll.
+            onPanelAssistantUpdateOwner = {
+                if (panelAssistantUpdateLease.observe()) runCatching { mqtt.publishSoftwareUpdates() }
+            },
             prepareSelfUpdateChannel = ::prepareSelfUpdateChannel,
             onSelfUpdateChannelCommitted = ::completeSelfUpdateChannelChange,
             powerSafety = { powerSafety.assess(config.keepAwake, config.preventIdleDim) },
@@ -1750,6 +1777,10 @@ class PaneldService : Service() {
                 }
             },
             onSelfUpdateChannelChange = ::launchSelfUpdateChannelChange,
+            softwareUpdateSources = ::softwareUpdateSources,
+            // An admitted update-entity install names one exact catalog tag, so it runs the same
+            // signer-pinned, database-admitted exact-version path as the Install page's version picker.
+            onSoftwareInstall = { component, tag -> installComponent(component.wire, "update", tag) },
             onDashboardTargetChanged = entityLearning::onTargetConfigurationChanged,
             onDirectKioskSetting = { on ->
                 kioskSettings.apply(on)
@@ -3110,6 +3141,44 @@ class PaneldService : Service() {
         mqtt.publishSelfUpdateChannelState()
     }
 
+    private fun attachSoftwareUpdateObservers() {
+        // Targets persisted by an earlier process: a restart keeps reporting the last known release.
+        config.softwareUpdateTargets.let { (paneld, companion) -> UpdateChecker.restoreTargets(paneld, companion) }
+        InstallProgress.observer = softwareProgressObserver
+        UpdateChecker.onChecked = softwareCatalogObserver
+    }
+
+    private fun detachSoftwareUpdateObservers() {
+        if (InstallProgress.observer === softwareProgressObserver) InstallProgress.observer = null
+        if (UpdateChecker.onChecked === softwareCatalogObserver) UpdateChecker.onChecked = null
+    }
+
+    /** One coherent read of everything the MQTT update entities report, taken on MQTT workers. */
+    private fun softwareUpdateSources(): SoftwareUpdateSources {
+        val paneldChannel = config.updateChannel
+        val companionChannel = config.companionUpdateChannel
+        val cap = profile.companionMaxVersion
+        val progress = InstallProgress.presentationSnapshot()
+        fun installed(pkg: String): String? =
+            runCatching { packageManager.getPackageInfo(pkg, 0).versionName ?: "" }.getOrNull()
+        return SoftwareUpdateSources(
+            paneldVersion = BuildConfig.VERSION_NAME,
+            paneldChannel = paneldChannel,
+            paneldTarget = UpdateChecker.paneldTarget(paneldChannel)?.let {
+                SoftwareTarget(it.version, it.tag, it.releaseUrl)
+            },
+            companionMinimalVersion = installed(CompanionInstaller.MINIMAL_PKG),
+            companionFullVersion = installed(CompanionInstaller.FULL_PKG),
+            companionChannel = companionChannel,
+            companionCap = cap,
+            companionTarget = UpdateChecker.companionTarget(companionChannel, cap)?.let {
+                SoftwareTarget(it.version, it.tag, it.releaseUrl, it.capped, it.newestVersion)
+            },
+            runningOperation = progress.component.takeIf { progress.running },
+            panelAssistantOwnsPaneldUpdate = panelAssistantUpdateLease.active(),
+        )
+    }
+
     /** Install/update a managed component from the Install tab (POST /api/v1/install/component). Runs
      *  off-thread; progress is reported via InstallProgress so the web UI can poll. action="reinstall"
      *  forces even when the installed build is already current. Single-slot (InstallProgress.start gates). */
@@ -3222,6 +3291,7 @@ class PaneldService : Service() {
             autoBright.activate()
             brightness.applyPreventIdleDim(config.preventIdleDim, config)
             EntityLearningRuntime.attach(entityLearning)
+            attachSoftwareUpdateObservers()
             // Kiosk is config-owned across boots so every restart retains its deliberate unlocked
             // window. Never let a stale/in-flight HTTP journal bypass that delay or override a newer OFF.
             if (!liveSettingAuthority.discard("kiosk_lock")) {
@@ -4309,6 +4379,7 @@ class PaneldService : Service() {
             closeOwner("screen-on reconciliation") { stopScreenOnReconciliation() }
             closeOwner("WebView rebind watch") { stopWebViewRebindWatch() }
             closeOwner("WebView repair offer") { WebViewRepairRuntime.detach() }
+            closeOwner("update entity observers") { detachSoftwareUpdateObservers() }
             closeOwnerResult("screen reconcile worker") {
                 screenWakeWorker.closeAndJoin(
                     minOf(asyncTeardownDeadline.remainingMs(), WAKE_WORKER_JOIN_MS),

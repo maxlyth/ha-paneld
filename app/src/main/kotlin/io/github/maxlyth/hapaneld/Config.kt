@@ -1334,6 +1334,30 @@ class Config private constructor(
         prefs.edit().putString("last_discovery_version", v).apply()
     }
 
+    // Runtime state for the MQTT update entities, never a user setting. The shape is what Home
+    // Assistant was last told about one entity, so a restart can still recreate it when an attribute
+    // HA cannot unset has gone; the lease is the wall-clock time a Panel Assistant entry last claimed
+    // the ha-paneld update entity (PanelAssistantUpdateLease).
+    fun softwareUpdateDiscoveryShape(component: String): String =
+        prefs.getString("mqtt_update_shape_$component", "") ?: ""
+    fun setSoftwareUpdateDiscoveryShape(component: String, encoded: String) {
+        prefs.edit().putString("mqtt_update_shape_$component", encoded).apply()
+    }
+    // The last catalog targets (UpdateChecker.persistableTargets), kept only so a restart reports them.
+    val softwareUpdateTargets: Pair<String, String> get() =
+        (prefs.getString("update_target_paneld", "") ?: "") to (prefs.getString("update_target_companion", "") ?: "")
+    fun setSoftwareUpdateTargets(targets: Pair<String, String>) {
+        if (targets == softwareUpdateTargets) return
+        prefs.edit()
+            .putString("update_target_paneld", targets.first)
+            .putString("update_target_companion", targets.second)
+            .apply()
+    }
+    val panelAssistantUpdateOwnerSeenMs: Long get() = prefs.getLong("panel_assistant_update_owner_seen_ms", 0L)
+    fun setPanelAssistantUpdateOwnerSeenMs(wallMs: Long) {
+        prefs.edit().putLong("panel_assistant_update_owner_seen_ms", wallMs).apply()
+    }
+
     // Per-panel intended "home" dashboard path (e.g. "/lovelace/0"). When set, a reload keeps the hard
     // restart but re-navigates HERE once the frontend is back up, instead of leaving the Companion on its
     // user-default view. Empty = keep current behaviour (cold-start to the Companion default).

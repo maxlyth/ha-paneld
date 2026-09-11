@@ -65,6 +65,13 @@ import io.github.maxlyth.hapaneld.mqtt.classifyDisconnect
 import io.github.maxlyth.hapaneld.mqtt.mqttFamilyBrokerIdentity
 import io.github.maxlyth.hapaneld.mqtt.AuthRecovery
 import io.github.maxlyth.hapaneld.mqtt.isAuthRecoveryState
+import io.github.maxlyth.hapaneld.mqtt.SoftwareCommandOutcome
+import io.github.maxlyth.hapaneld.mqtt.SoftwareComponent
+import io.github.maxlyth.hapaneld.mqtt.SoftwareDiscoveryShape
+import io.github.maxlyth.hapaneld.mqtt.SoftwareDiscoveryStep
+import io.github.maxlyth.hapaneld.mqtt.SoftwareUpdateEntities
+import io.github.maxlyth.hapaneld.mqtt.SoftwareUpdateInputs
+import io.github.maxlyth.hapaneld.mqtt.SoftwareUpdateSources
 import io.github.maxlyth.hapaneld.util.HelperClient
 import io.github.maxlyth.hapaneld.util.Json
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
@@ -1255,6 +1262,13 @@ internal class MqttBridge(
     // this bridge must not make the preference visible ahead of that proof. False means the shared
     // operation lane was busy, in which case the current state is re-published immediately.
     private val onSelfUpdateChannelChange: (requested: String, previous: String) -> Boolean,
+    // Inputs for the MQTT update entities, sampled on this bridge's workers: installed versions,
+    // same-policy catalog targets, install-lane ownership and Panel Assistant ownership. Install
+    // capability comes from this bridge's own capability snapshot. Null publishes no update entities.
+    private val softwareUpdateSources: (() -> SoftwareUpdateSources)? = null,
+    // One admitted `install` command with its exact catalog tag already bound. False means the shared
+    // destructive-operation lane was busy and nothing started.
+    private val onSoftwareInstall: (SoftwareComponent, String) -> Boolean = { _, _ -> false },
     // Home-dashboard commands change the automatic entity-learning ownership target. Notify only after
     // the normalized path is durably visible so the manager can hide/rebuild the correct subscription.
     private val onDashboardTargetChanged: () -> Unit = {},
@@ -1607,6 +1621,14 @@ internal class MqttBridge(
     @Volatile private var lastTemperature: Float? = null
     @Volatile private var lastHumidity: Float? = null
 
+    private data class SoftwareUpdateDiscoveryContext(val availability: String, val device: String)
+    // Captured by each discovery pass so a later shape change can republish with the same identity.
+    @Volatile private var softwareUpdateDiscovery: SoftwareUpdateDiscoveryContext? = null
+    private val softwareUpdateLock = Any()
+    // What this bridge generation last told Home Assistant, seeded from the persisted shape. Guarded
+    // by softwareUpdateLock.
+    private val softwareShapes = HashMap<SoftwareComponent, SoftwareDiscoveryShape?>()
+
     // Eager ownership removes the extra lazy/not-yet-closed state: every external producer sees the
     // same converger, and retirement can close it before any late callback tries to publish.
     private val announcementReadiness = MqttAnnouncementReadiness()
@@ -1663,6 +1685,19 @@ internal class MqttBridge(
 
         channel("storage_health", stateStorageHealth) {
             known(storageHealth().severity.name.lowercase(Locale.ROOT))
+        }
+        // Retained update-entity state. A withheld ha-paneld entity clears its retained payload rather
+        // than leaving a stale version behind the discovery tombstone.
+        if (softwareUpdateSources != null) for (component in SoftwareComponent.entries) {
+            channel(
+                SoftwareUpdateEntities.stateChannelKey(component),
+                SoftwareUpdateEntities.stateTopic(panel, component),
+            ) {
+                softwareUpdateInputs(component)?.let { inputs ->
+                    if (inputs.suppressed) io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unavailable
+                    else known(SoftwareUpdateEntities.stateJson(inputs))
+                } ?: unknown
+            }
         }
         channel("storage_health_attributes", attrStorageHealth) {
             known(storageHealthMqttAttributes(storageHealth()))
@@ -2721,7 +2756,7 @@ internal class MqttBridge(
                 system.reboot()
             }
             cmdButtons -> if (hasButtonBacklight) handleButtons(payload)
-            cmdUpdateCompanion -> {
+            cmdUpdateCompanion -> handleSoftwareCommand(SoftwareComponent.COMPANION, payload) {
                 authorizeMqttSensitive(
                     SensitiveOperation.APK_INSTALL,
                     "companion\u0000$payload",
@@ -2729,7 +2764,7 @@ internal class MqttBridge(
                 )
                 onUpdateCompanion()
             }
-            cmdUpdatePaneld -> {
+            cmdUpdatePaneld -> handleSoftwareCommand(SoftwareComponent.PANELD, payload) {
                 authorizeMqttSensitive(
                     SensitiveOperation.APK_INSTALL,
                     "paneld\u0000$payload",
@@ -2739,6 +2774,93 @@ internal class MqttBridge(
             }
             cmdCameraEnabled -> handleCameraEnabled(payload)
             else -> Log.d(TAG, "unhandled command topic $topic")
+        }
+    }
+
+    /**
+     * The update topics carry two senders for one release: the legacy button's `PRESS` keeps its
+     * existing behaviour, the update entity's `install` takes strict admission, and every other payload
+     * is refused before anything is resolved, downloaded or approved.
+     */
+    private fun handleSoftwareCommand(component: SoftwareComponent, payload: String, legacy: () -> Unit) {
+        val outcome = SoftwareUpdateEntities.route(
+            payload = payload,
+            inputs = { softwareUpdateInputs(component) },
+            legacy = legacy,
+            authorize = { tag ->
+                authorizeMqttSensitive(
+                    SensitiveOperation.APK_INSTALL,
+                    "${component.wire}\u0000install\u0000$tag",
+                    "Install ${component.entityName} $tag from Home Assistant",
+                )
+            },
+            install = { tag -> onSoftwareInstall(component, tag) },
+        )
+        when (outcome) {
+            SoftwareCommandOutcome.Legacy -> return
+            is SoftwareCommandOutcome.Started ->
+                Log.i(TAG, "${component.wire} install of ${outcome.tag} started from Home Assistant")
+            is SoftwareCommandOutcome.Busy ->
+                Log.w(TAG, "${component.wire} install of ${outcome.tag} not started: another destructive operation is running")
+            is SoftwareCommandOutcome.Refused ->
+                Log.w(TAG, "refusing ${component.wire} update command from Home Assistant: ${outcome.reason} (${payload.length} chars)")
+        }
+        // Home Assistant must see the truth now: progress if it started, unchanged state otherwise.
+        reconcileSoftwareUpdates(announcing = false)
+    }
+
+    /** Re-evaluate both update entities: catalog refreshes, install start and finish, package changes. */
+    fun publishSoftwareUpdates() {
+        dispatchStateWork { reconcileSoftwareUpdates(announcing = false) }
+    }
+
+    private fun softwareUpdateInputs(component: SoftwareComponent): SoftwareUpdateInputs? {
+        val sources = softwareUpdateSources ?: return null
+        val snapshot = try {
+            sources()
+        } catch (e: Exception) {
+            Log.w(TAG, "update entity inputs unavailable", e)
+            return null
+        }
+        return snapshot.inputs(component, discoveryCapabilities.cached()?.canInstallVerifiedApps == true)
+    }
+
+    /**
+     * Converge Home Assistant's view of both update entities. Discovery is republished only when the
+     * entity's shape changes (or on an announcement), and an entity that has lost `latest_version` is
+     * recreated, because Home Assistant keeps a value that a later state message omits.
+     */
+    private fun reconcileSoftwareUpdates(announcing: Boolean) {
+        if (softwareUpdateSources == null) return
+        val discovery = softwareUpdateDiscovery ?: return
+        synchronized(softwareUpdateLock) {
+            for (component in SoftwareComponent.entries) {
+                val inputs = softwareUpdateInputs(component) ?: return
+                val current = SoftwareUpdateEntities.shape(inputs)
+                val previous = if (component in softwareShapes) softwareShapes[component]
+                else SoftwareDiscoveryShape.decode(config.softwareUpdateDiscoveryShape(component.wire))
+                val configTopic = SoftwareUpdateEntities.configTopic(panel, component)
+                val step = SoftwareUpdateEntities.transition(previous, current, announcing)
+                val plan = SoftwareUpdateEntities.discoveryPlan(
+                    panel, inputs, step, discovery.availability, discovery.device,
+                )
+                for (publication in plan) {
+                    if (publication.topic == configTopic) {
+                        // Records the topic for stale-discovery pruning; retains exactly the tombstones.
+                        publishConfig("update", SoftwareUpdateEntities.uniqueId(panel, component), publication.payload)
+                    } else {
+                        publish(publication.topic, publication.payload, retain = publication.retain)
+                    }
+                }
+                softwareShapes[component] = current
+                if (previous != current) {
+                    config.setSoftwareUpdateDiscoveryShape(component.wire, current.encode())
+                }
+                stateConverger.reconcile(
+                    SoftwareUpdateEntities.stateChannelKey(component),
+                    force = announcing || step != SoftwareDiscoveryStep.NONE,
+                )
+            }
         }
     }
 
@@ -3856,6 +3978,10 @@ internal class MqttBridge(
             "button", "${panel}_update_paneld",
             """{"name":"Update ha-paneld","object_id":"${panel}_update_paneld","unique_id":"${panel}_update_paneld","command_topic":"$cmdUpdatePaneld","icon":"mdi:package-up","entity_category":"config",$avail,$device}""",
         )
+        // Update entities for ha-paneld and the Companion app. The buttons above stay for one release
+        // and share these command topics; see SoftwareUpdateEntities.
+        softwareUpdateDiscovery = SoftwareUpdateDiscoveryContext(avail, device)
+        reconcileSoftwareUpdates(announcing = true)
         // System WebView auto-update — advances to the profile's pinned build (webview-mirror) over root.
         // Auto-gated on webViewManaged (removed on Play-updated panels with no recommended pin).
         registryExposable("webview_auto_update") {
@@ -4198,6 +4324,10 @@ internal class MqttBridge(
         // constant and is therefore published only at exposure/reconnect.
         runCatching { syncDiagnostics() }
 
+        // Update entities: a Companion installed or removed outside ha-paneld, an expired Panel
+        // Assistant lease or a changed install route all surface here within one tick.
+        runCatching { reconcileSoftwareUpdates(announcing = false) }
+
         // Architectural safety net: audit every registered state channel from its declared authority.
         // Stable acknowledged values cost no publish; failed sends stay dirty and retry next heartbeat.
         runCatching { stateConverger.reconcileAll() }
@@ -4529,6 +4659,10 @@ internal class MqttDiscoveryCapabilitySource(
     private var latest: Capabilities? = null
     private var latestAtMs = Long.MIN_VALUE
 
+    /** The last snapshot taken, without probing. Null before the first one. */
+    @Synchronized
+    fun cached(): Capabilities? = latest
+
     @Synchronized
     fun snapshot(maxAgeMs: Long = 0L): Capabilities? {
         val source = supplier ?: return null
@@ -4654,6 +4788,7 @@ internal fun mqttKnownConfigTopics(panel: String): Set<String> = listOf(
     "select" to "${panel}_companion_update_channel",
     "switch" to "${panel}_self_update", "select" to "${panel}_update_channel",
     "button" to "${panel}_update_paneld",
+    "update" to "${panel}_ha_paneld_update", "update" to "${panel}_ha_companion_update",
     "switch" to "${panel}_webview_auto_update",
     "switch" to "${panel}_zigbee_router",
     "switch" to "${panel}_auto_brightness", "number" to "${panel}_brightness_bias",

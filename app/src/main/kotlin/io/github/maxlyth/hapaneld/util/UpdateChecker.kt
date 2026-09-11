@@ -54,8 +54,29 @@ object UpdateChecker {
 
     private data class CacheKey(val paneldChannel: String, val companionChannel: String, val companionCap: String?)
 
+    /**
+     * The newest catalog release for one component, kept whether or not it is newer than what is
+     * installed and whether or not the component is installed at all. [available] deliberately omits
+     * up-to-date and absent components, so the MQTT update entities read this instead. Each target
+     * records the policy that resolved it; a reader asking under any other channel or cap gets nothing.
+     */
+    internal data class ResolvedTarget(
+        val version: String,
+        val tag: String,
+        val releaseUrl: String,
+        val channel: String,
+        val cap: String?,
+        val capped: Boolean = false,
+        val newestVersion: String? = null,
+    )
+
     @Volatile var available: List<UpdateInfo> = emptyList()
         private set
+    @Volatile private var resolvedPaneld: ResolvedTarget? = null
+    @Volatile private var resolvedCompanion: ResolvedTarget? = null
+
+    /** Called after every completed [check]; the service republishes the update entities from it. */
+    @Volatile var onChecked: (() -> Unit)? = null
     @Volatile private var lastCheckElapsedMs = -1L
     @Volatile private var cacheKey: CacheKey? = null
     @Volatile private var paneldCacheChannel: String? = null
@@ -92,7 +113,8 @@ object UpdateChecker {
         checkMutex.withLock {
             val previous = available
             val current = BuildConfig.VERSION_NAME
-            val paneldResolution = ComponentUpdater.resolveUpdate(current) { SelfUpdater.resolveTarget(channel) }
+            val paneldResolved = SelfUpdater.resolveTarget(channel)
+            val paneldResolution = ComponentUpdater.resolveUpdate(current) { paneldResolved }
                 .toResolution { target ->
                     UpdateInfo(
                         PANELD_LABEL,
@@ -106,12 +128,14 @@ object UpdateChecker {
                 }
 
             val companion = installedCompanion(context)
+            // Resolved even when no Companion is installed: absent is an installable state for the
+            // update entity. The banner's `available` projection below still ignores an absent app.
+            val companionResolved = CompanionInstaller.target(companionChannel, companionMaxVersion)
             val companionResolution = if (companion == null) {
                 Resolution.Resolved(null)
             } else {
                 ComponentUpdater.resolveUpdate(companion.second, installedNormalize = ::stripVariant) {
-                    CompanionInstaller.target(companionChannel, companionMaxVersion)
-                        ?.let { ComponentUpdater.Target(it.version, it.apkUrl, it.releaseUrl) }
+                    companionResolved?.let { ComponentUpdater.Target(it.version, it.apkUrl, it.releaseUrl) }
                 }.toResolution { target ->
                     UpdateInfo(
                         COMPANION_LABEL,
@@ -135,7 +159,21 @@ object UpdateChecker {
             available = reconciled.available
             paneldCacheChannel = reconciled.paneldCacheChannel
             companionCachePolicy = reconciled.companionCachePolicy
-            if (reconciled.complete) {
+            // A failed lookup keeps the previous target; readers only accept one resolved under their
+            // exact policy, so a target from another channel or cap can never be reused.
+            paneldResolved?.let { resolvedPaneld = paneldResolvedTarget(it, channel) ?: resolvedPaneld }
+            companionResolved?.let {
+                resolvedCompanion = ResolvedTarget(
+                    version = it.version,
+                    tag = it.tag,
+                    releaseUrl = it.releaseUrl,
+                    channel = companionChannel,
+                    cap = companionMaxVersion,
+                    capped = it.capped,
+                    newestVersion = it.newestVersion,
+                )
+            }
+            if (reconciled.complete && companionResolved != null) {
                 cacheKey = CacheKey(channel, companionChannel, companionMaxVersion)
                 lastCheckElapsedMs = SystemClock.elapsedRealtime()
             } else {
@@ -143,7 +181,74 @@ object UpdateChecker {
                 lastCheckElapsedMs = -1L
             }
         }
+        onChecked?.let { runCatching { it() } }
+        Unit
     }
+
+    private fun paneldResolvedTarget(target: ComponentUpdater.Target, channel: String): ResolvedTarget? {
+        val tag = target.tag ?: return null
+        val releaseUrl = SelfUpdater.releaseNotesUrl(tag) ?: return null
+        return ResolvedTarget(target.version, tag, releaseUrl, channel, cap = null)
+    }
+
+    /** The ha-paneld target resolved under [channel], or null. Never triggers a lookup. */
+    internal fun paneldTarget(channel: String): ResolvedTarget? = samePolicy(resolvedPaneld, channel, cap = null)
+
+    /** The Companion target resolved under exactly [channel] and [cap], or null. Never triggers a lookup. */
+    internal fun companionTarget(channel: String, cap: String?): ResolvedTarget? =
+        samePolicy(resolvedCompanion, channel, cap)
+
+    /** A target is reusable only under the exact channel and safety cap that resolved it. */
+    internal fun samePolicy(target: ResolvedTarget?, channel: String, cap: String?): ResolvedTarget? =
+        target?.takeIf { it.channel == channel && it.cap == cap }
+
+    /**
+     * Seed targets persisted by an earlier process, so a restarted panel reports the last known release
+     * instead of briefly reporting none (which would make Home Assistant recreate the update entity).
+     * A target this process has already resolved always wins; the policy check above still applies.
+     */
+    internal fun restoreTargets(paneld: String, companion: String) {
+        if (resolvedPaneld == null) resolvedPaneld = decodeTarget(paneld)
+        if (resolvedCompanion == null) resolvedCompanion = decodeTarget(companion)
+    }
+
+    /** The current targets encoded for [restoreTargets]; blank when a component has none. */
+    internal fun persistableTargets(): Pair<String, String> =
+        (resolvedPaneld?.let(::encodeTarget) ?: "") to (resolvedCompanion?.let(::encodeTarget) ?: "")
+
+    internal fun encodeTarget(target: ResolvedTarget): String = JSONObject()
+        .put("version", target.version)
+        .put("tag", target.tag)
+        .put("release_url", target.releaseUrl)
+        .put("channel", target.channel)
+        .put("cap", target.cap ?: JSONObject.NULL)
+        .put("capped", target.capped)
+        .put("newest", target.newestVersion ?: JSONObject.NULL)
+        .toString()
+
+    /** Persisted input is re-validated as strictly as a fresh resolution; anything odd is absence. */
+    internal fun decodeTarget(raw: String): ResolvedTarget? {
+        if (raw.isBlank() || raw.length > MAX_PERSISTED_TARGET_CHARS) return null
+        return runCatching {
+            val json = JSONObject(raw)
+            fun text(key: String): String? = json.opt(key).takeIf { it is String } as String?
+            val version = text("version")?.takeIf { compareVersions(it, it) != null } ?: return null
+            val tag = text("tag")?.takeIf(ReleaseCatalog::validTag) ?: return null
+            val releaseUrl = text("release_url")?.takeIf { it.startsWith("https://") } ?: return null
+            val channel = text("channel")?.takeIf { it == "stable" || it == "prerelease" } ?: return null
+            ResolvedTarget(
+                version = version,
+                tag = tag,
+                releaseUrl = releaseUrl,
+                channel = channel,
+                cap = text("cap"),
+                capped = json.optBoolean("capped", false),
+                newestVersion = text("newest"),
+            )
+        }.getOrNull()
+    }
+
+    private const val MAX_PERSISTED_TARGET_CHARS = 4_096
 
     /** Map a component's resolve -> compare -> decide [ComponentUpdater.Outcome] onto this checker's cache
      *  [Resolution]: an unresolved lookup is a [Resolution.Failed] (preserve last-known), an up-to-date

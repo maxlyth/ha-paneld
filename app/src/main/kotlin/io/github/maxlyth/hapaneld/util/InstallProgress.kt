@@ -55,9 +55,22 @@ object InstallProgress {
     private var active: Ticket? = null
     private var activeConfigMutation: ConfigMutationTicket? = null
 
+    /**
+     * Told after every claim or release of the visible operation lane, outside this object's monitor.
+     * The service republishes the MQTT update entities' progress from it; this object stays MQTT-free.
+     */
+    @Volatile var observer: (() -> Unit)? = null
+
+    private fun notifyObserver() {
+        observer?.let { runCatching { it() } }
+    }
+
     /** Claim the operation lane for [component]. Returns null if another owner is already in flight. */
+    fun start(component: String, presentation: InstallPresentation? = null): Ticket? =
+        startLocked(component, presentation)?.also { notifyObserver() }
+
     @Synchronized
-    fun start(component: String, presentation: InstallPresentation? = null): Ticket? {
+    private fun startLocked(component: String, presentation: InstallPresentation?): Ticket? {
         if (running || activeConfigMutation != null) return null
         val ticket = Ticket(++generation)
         active = ticket
@@ -92,11 +105,17 @@ object InstallProgress {
      * promote this ticket under the same monitor, and then consume the exact staged APK while every
      * competing install/restore caller continues to observe the lane as owned.
      */
-    @Synchronized
     fun promoteConfigMutation(
         ticket: ConfigMutationTicket,
         component: String,
         presentation: InstallPresentation? = null,
+    ): Ticket? = promoteConfigMutationLocked(ticket, component, presentation)?.also { notifyObserver() }
+
+    @Synchronized
+    private fun promoteConfigMutationLocked(
+        ticket: ConfigMutationTicket,
+        component: String,
+        presentation: InstallPresentation?,
     ): Ticket? {
         if (activeConfigMutation != ticket || running || active != null) return null
         val promoted = Ticket(ticket.id)
@@ -120,19 +139,29 @@ object InstallProgress {
         PresentationSnapshot(generation, running, component, message, presentation)
 
     /** Record [result] only if [ticket] still owns the single progress slot. */
-    @Synchronized
     fun finish(
         ticket: Ticket,
         result: String,
         structured: OperationResult? = null,
         presentation: InstallPresentation? = null,
     ) {
-        if (active != ticket) return
+        if (finishLocked(ticket, result, structured, presentation)) notifyObserver()
+    }
+
+    @Synchronized
+    private fun finishLocked(
+        ticket: Ticket,
+        result: String,
+        structured: OperationResult?,
+        presentation: InstallPresentation?,
+    ): Boolean {
+        if (active != ticket) return false
         this.message = result
         this.result = structured
         this.presentation = presentation
         this.running = false
         this.active = null
+        return true
     }
 
     /** Ensure cancellation before a launched body begins cannot strand the process-global slot busy. */

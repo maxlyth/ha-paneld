@@ -68,6 +68,8 @@ object CompanionInstaller {
         val releaseUrl: String,
         val newestVersion: String,
         val capped: Boolean,
+        /** Exact source tag of [version]'s release, retained so an install can name it. */
+        val tag: String,
     )
 
     private fun catalog(channel: String, limit: Int): List<ReleaseCatalog.Version> =
@@ -98,6 +100,7 @@ object CompanionInstaller {
             releaseUrl = selected.notesUrl,
             newestVersion = newest.version,
             capped = capped,
+            tag = selected.tag,
         )
     }
 
@@ -125,6 +128,7 @@ object CompanionInstaller {
             releaseUrl = "https://github.com/$REPO/releases/tag/${resolved.first}",
             newestVersion = newest.version,
             capped = true,
+            tag = resolved.first,
         )
     }
 

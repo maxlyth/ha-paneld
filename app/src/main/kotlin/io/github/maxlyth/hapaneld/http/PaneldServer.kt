@@ -163,6 +163,7 @@ import io.github.maxlyth.hapaneld.util.GenerationSingleFlight
 import io.github.maxlyth.hapaneld.util.RendererPreparationCoordinator
 import io.github.maxlyth.hapaneld.util.SelfUpdater
 import io.github.maxlyth.hapaneld.util.PanelAssistantDevice
+import io.github.maxlyth.hapaneld.util.PanelAssistantUpdateLease
 import io.github.maxlyth.hapaneld.util.UpdateChecker
 import io.github.maxlyth.hapaneld.util.withStagedFiles
 import io.ktor.http.ContentType
@@ -1489,6 +1490,8 @@ class PaneldServer internal constructor(
     // action ∈ {update, reinstall}; version = a specific release tag to install (blank = channel newest).
     // Runs off-thread; progress is reported via InstallProgress. Injected by the service.
     private val onInstallComponent: (String, String, String) -> Boolean = { _, _, _ -> false },
+    // A Panel Assistant entry declared on its status poll that it owns the ha-paneld update entity.
+    private val onPanelAssistantUpdateOwner: () -> Unit = {},
     // Active channel changes are two-phase: prepare authenticates and database-admits one exact APK
     // without mutation; the server then commits the whole config transaction and hands that same
     // capability back to the service. Null means the admitted change had no APK to install (up to date,
@@ -2900,6 +2903,10 @@ class PaneldServer internal constructor(
                     // variant's Install/health section client-side. ?refresh=1 forces both the GitHub
                     // update check and a serialized SQLite observation for this exact response.
                     get("/status") {
+                        // Only the exact agreed value counts; it hides one MQTT entity and grants nothing.
+                        if (PanelAssistantUpdateLease.declares(call.request.headers[PanelAssistantUpdateLease.HEADER])) {
+                            onPanelAssistantUpdateOwner()
+                        }
                         val updateRefreshRequested = call.request.queryParameters["refresh"] == "1"
                         val observationNonce = call.request.queryParameters["database_observation_nonce"]
                         val refreshRequested = updateRefreshRequested || observationNonce != null

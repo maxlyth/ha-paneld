@@ -22,6 +22,9 @@ object SelfUpdater {
     private const val RELEASES_URL = "https://github.com/maxlyth/ha-paneld/releases"
     private val APK_MATCH: (String) -> Boolean = { it.endsWith(".apk", ignoreCase = true) }
 
+    /** The release-notes page for an exact [tag]; the tag grammar keeps the value inside the URL path. */
+    fun releaseNotesUrl(tag: String): String? = if (ReleaseCatalog.validTag(tag)) "$RELEASES_URL/tag/$tag" else null
+
     /** Up to [limit] recent versions on [channel] for the Install-tab picker (version + release-notes URL). */
     fun versions(channel: String, limit: Int = 10): List<ReleaseCatalog.Version> =
         ReleaseCatalog.list(REPO, channel, limit, APK_MATCH) { it.removePrefix("v") }
