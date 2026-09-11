@@ -17,7 +17,7 @@ metadata:
   license: Apache-2.0
   maturity: draft
   tested_firmware:
-    - LineageOS 8.1.0 (API 27), build OPM7.181205.001, on one contributor-equipped unit; Home Assistant screen off and on confirmed working
+    - LineageOS 8.1.0 (API 27), build OPM7.181205.001, on one contributor unit; Home Assistant screen off/on confirmed
   limitations:
     - Evidence comes from one contributor's ThinkSmart View running a community LineageOS 8.1 image. The profile has not yet been activated on the panel, maintainer-validated or fleet-qualified.
     - This profile does not support the Lenovo firmware supplied with the retail product. Flashing, recovery and maintenance of the community Android image remain outside the ha-paneld project.

@@ -9,7 +9,7 @@ metadata:
   license: Apache-2.0
   maturity: draft
   tested_firmware:
-    - KonstaKANG LineageOS / Android 16, build BP4A.251205.006, on one contributor-assembled unit; touch wake confirmed working with Magisk
+    - KonstaKANG LineageOS / Android 16, build BP4A.251205.006, on one contributor unit; touch wake confirmed with Magisk
   limitations:
     - A Raspberry Pi 4 with a separately sourced HDMI touchscreen is an assembly, not a retail panel. There is no maintainer or fleet qualification.
     - Touch wake on this board requires the HDMI touchscreen to be configured as a platform wake source, which depends on the user's Magisk module configuration. Where the touchscreen is not a wake source, Home Assistant is the only way back.
