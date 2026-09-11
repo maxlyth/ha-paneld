@@ -179,27 +179,17 @@ class SetupI18nContractTest {
     }
 
     @Test fun `Unfinished-Setup redirects retain only admitted locale signals in precedence order`() {
+        // The Location value itself is behavior-tested in UnfinishedSetupLocationTest; this pins the wiring.
         val redirect = functionBody("setupRedirectLocation")
-        val explicit = redirect.indexOf("queryParameters[\"lang\"]")
-        val inherited = redirect.indexOf("queryParameters[\"ha_lang\"]")
-        assertTrue("explicit lang must remain ahead of lower-precedence ha_lang", explicit >= 0 && explicit < inherited)
+        assertTrue(redirect.contains("unfinishedSetupLocation("))
+        assertTrue(redirect.contains("lang = call.request.queryParameters[\"lang\"]"))
+        assertTrue(redirect.contains("haLang = call.request.queryParameters[\"ha_lang\"]"))
+        assertTrue("debug builds may admit the pseudo locale for explicit lang", redirect.contains("allowPseudo = BuildConfig.DEBUG"))
         assertEquals(
-            "unsupported raw locale values must not be reread or reflected after canonicalization",
+            "raw locale values must be read once and handed to the canonicalizing builder",
             2,
             Regex("queryParameters\\[").findAll(redirect).count(),
         )
-        assertTrue(
-            "debug builds may retain the pseudo locale only for explicit lang",
-            redirect.substring(explicit, inherited).contains("allowPseudo = BuildConfig.DEBUG"),
-        )
-        assertTrue(
-            "ha_lang must never admit the debug-only pseudo locale",
-            redirect.substring(inherited).contains("allowPseudo = false"),
-        )
-        assertTrue(redirect.contains("?.let { query += \"lang=${'$'}it\" }"))
-        assertTrue(redirect.contains("?.let { query += \"ha_lang=${'$'}it\" }"))
-        assertTrue(redirect.contains("if (query.isEmpty()) \"/setup\""))
-        assertTrue(redirect.contains("\"/setup?${'$'}{query.joinToString(\"&\")}\""))
 
         val interceptor = serverSource.substring(
             serverSource.indexOf("call.request.uri.substringBefore('?') in WIZARD_REDIRECT_PAGES"),

@@ -1704,16 +1704,12 @@ class PaneldServer internal constructor(
     )
 
     /** Carry admitted browser locale signals through the unfinished-journey redirect without changing
-     * their precedence: `lang` remains explicit, while `ha_lang` remains below the persisted setting.
-     * Canonical values only are reflected into the Location header. */
-    private fun setupRedirectLocation(call: ApplicationCall): String {
-        val query = mutableListOf<String>()
-        AppLocale.canonical(call.request.queryParameters["lang"], allowPseudo = BuildConfig.DEBUG)
-            ?.let { query += "lang=$it" }
-        AppLocale.canonical(call.request.queryParameters["ha_lang"], allowPseudo = false)
-            ?.let { query += "ha_lang=$it" }
-        return if (query.isEmpty()) "/setup" else "/setup?${query.joinToString("&")}"
-    }
+     * their precedence; see [unfinishedSetupLocation]. */
+    private fun setupRedirectLocation(call: ApplicationCall): String = unfinishedSetupLocation(
+        lang = call.request.queryParameters["lang"],
+        haLang = call.request.queryParameters["ha_lang"],
+        allowPseudo = BuildConfig.DEBUG,
+    )
     // Stored as a stop lambda over a type-inferred server local, so we never have to name Ktor's
     // EmbeddedServer<TEngine, TConfiguration> generic type (which shifts between Ktor versions).
     private var stopServer: (() -> Unit)? = null

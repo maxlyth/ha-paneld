@@ -100,6 +100,15 @@ class AppLocaleTest {
         assertEquals("uk", resolveSupported(acceptLanguage = "de;q=.8, ru;q=1", supported = supported))
     }
 
+    @Test fun `the Russian automatic alias is dormant whenever Ukrainian is not supported`() {
+        val withoutUkrainian = AppLocale.RELEASE_LOCALES - AppLocale.UKRAINIAN
+        assertNull(AppLocale.automaticLocaleOverride("ru", withoutUkrainian))
+        assertNull(AppLocale.canonicalAutomatic("ru-RU", withoutUkrainian))
+        assertEquals("fr", resolveSupported(haUser = "ru", deviceLanguageTag = "fr", supported = withoutUkrainian))
+        assertEquals("uk", AppLocale.automatic("ru-RU"))
+        assertNull("an explicit Russian choice never canonicalizes", AppLocale.canonical("ru"))
+    }
+
     @Test fun `supported explicit choices outrank the Russian automatic alias`() {
         val supported = AppLocale.RELEASE_LOCALES + AppLocale.UKRAINIAN
         assertEquals("fr", resolveSupported(explicit = "fr-CA", haUser = "ru", supported = supported))

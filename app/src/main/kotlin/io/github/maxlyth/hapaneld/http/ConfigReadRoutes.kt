@@ -35,6 +35,18 @@ internal fun resolvedRequestStrings(
     return catalogueLoader.strings(locale)
 }
 
+/**
+ * The unfinished-Setup redirect target. `lang` stays explicit; `ha_lang` stays an automatic signal
+ * below the persisted setting, reflected as the release locale it already selects (so `ru` carries
+ * as `uk` once Ukrainian ships). Only canonical release tags reach the Location header.
+ */
+internal fun unfinishedSetupLocation(lang: String?, haLang: String?, allowPseudo: Boolean): String {
+    val query = mutableListOf<String>()
+    AppLocale.canonical(lang, allowPseudo = allowPseudo)?.let { query += "lang=$it" }
+    AppLocale.automatic(haLang)?.let { query += "ha_lang=$it" }
+    return if (query.isEmpty()) "/setup" else "/setup?${query.joinToString("&")}"
+}
+
 /** Production locale negotiation and catalogue selection for the dynamic Configure schema. */
 internal fun localizedConfigSchema(
     call: ApplicationCall,

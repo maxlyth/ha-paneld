@@ -96,7 +96,13 @@ object AppLocale {
         }
     }
 
-    private fun canonicalAutomatic(raw: String?, supportedLocales: Collection<String>): String? {
+    /**
+     * The release locale an automatic signal (Home Assistant user, browser or device language) selects,
+     * including the automatic-only alias. Never use this for an explicit or persisted choice.
+     */
+    fun automatic(raw: String?): String? = canonicalAutomatic(raw, RELEASE_LOCALES)
+
+    internal fun canonicalAutomatic(raw: String?, supportedLocales: Collection<String>): String? {
         automaticLocaleOverride(raw, supportedLocales)?.let { return it }
         return canonicalForSupportedLocales(raw, allowPseudo = false, supportedLocales)
     }
