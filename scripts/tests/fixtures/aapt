@@ -2,8 +2,25 @@
 printf '%s %s\n' "${0##*/}" "$*" >> "${MOCK_CALL_LOG:?MOCK_CALL_LOG is required}"
 database_contract="${MOCK_DB_CANDIDATE_CONTRACT:-hapaneld-db:v1:ha-paneld.db:1:14}"
 aapt2_mode=0
-[ "${0##*/}" != aapt2 ] || aapt2_mode=1
+case "${0##*/}" in aapt2|aapt2.bat|aapt2.cmd) aapt2_mode=1 ;; esac
 case "$*" in
+  version)
+    # Real aapt2 prints its version banner on stderr and nothing on stdout; aapt prints on stdout.
+    if [ "$aapt2_mode" = 1 ]; then
+      printf 'Android Asset Packaging Tool (aapt) 2.19-fixture\n' >&2
+    else
+      printf 'Android Asset Packaging Tool, v0.2-fixture\n'
+    fi
+    ;;
+  --version)
+    # Neither real tool accepts --version: aapt2 exits 1 and aapt exits 2, each with a usage error.
+    if [ "$aapt2_mode" = 1 ]; then
+      printf "unknown option '--version'.\n" >&2
+      exit 1
+    fi
+    printf "ERROR: Unknown command '--version'\n" >&2
+    exit 2
+    ;;
   "dump xmltree "*" AndroidManifest.xml"|"dump xmltree "*" --file AndroidManifest.xml")
     for candidate_arg in "$@"; do
       case "$candidate_arg" in *.apk) printf '%s\n' "$candidate_arg" > "${MOCK_STATE_DIR:?}/candidate-apk-path"; break ;; esac

@@ -1763,11 +1763,12 @@ resolve_apk() {
 # openssl probe below has always required `openssl version` to succeed for exactly this reason; this
 # holds the build tools to the same standard instead of trusting the file to be there. It must also
 # answer: a wrapper can exit 0 without running anything, and a silent apksigner would later read as an
-# APK with no signer, blaming the artifact for the host again (#24).
+# APK with no signer, blaming the artifact for the host again (#24). The answer counts on either stream:
+# apksigner and aapt print their version on stdout, but aapt2 prints its banner on stderr only.
 android_build_tool_runs() {
   local out
-  out="$("$1" version 2>/dev/null)" && [ -n "$out" ] && return 0
-  out="$("$1" --version 2>/dev/null)" && [ -n "$out" ]
+  out="$("$1" version 2>&1)" && [ -n "$out" ] && return 0
+  out="$("$1" --version 2>&1)" && [ -n "$out" ]
 }
 
 # Windows Build-Tools ship apksigner as apksigner.bat. Git Bash's MSYS runtime resolves a bare command
