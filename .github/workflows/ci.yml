@@ -66,11 +66,23 @@ jobs:
             echo "::error::GitHub Action reference is not a full commit SHA: $ref"
             failed=1
           done < <(sed -nE 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*([^[:space:]#]+).*/\1/p' .github/workflows/*.yml)
+          # Every setup-gradle declares its cache provider. Enhanced caching is free for public
+          # repositories and keeps CI fast; the release workflow signs with repository secrets, so it
+          # stays on the open-source basic provider.
           while IFS=: read -r file line _; do
-            if ! sed -n "${line},$((line + 2))p" "$file" | grep -Eq '^[[:space:]]+cache-provider:[[:space:]]+basic([[:space:]]*(#.*)?)?$'; then
-              echo "::error file=$file,line=$line::setup-gradle must select the open-source basic cache provider"
-              failed=1
-            fi
+            provider="$(sed -n "${line},$((line + 2))p" "$file" | sed -nE 's/^[[:space:]]+cache-provider:[[:space:]]+([a-z]+)[[:space:]]*(#.*)?$/\1/p' | head -n 1)"
+            case "${file##*/}:$provider" in
+              release.yml:basic) ;;
+              release.yml:*)
+                echo "::error file=$file,line=$line::the release workflow must use the open-source basic cache provider"
+                failed=1
+                ;;
+              *:enhanced | *:basic) ;;
+              *)
+                echo "::error file=$file,line=$line::setup-gradle must declare cache-provider enhanced or basic"
+                failed=1
+                ;;
+            esac
           done < <(grep -nHE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*gradle/actions/setup-gradle@' .github/workflows/*.yml)
           exit "$failed"
 
@@ -111,7 +123,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          cache-provider: basic
+          cache-provider: enhanced
 
       # The bundled-helper installer tests drive the real staging script, which requires
       # its transaction record to be owned by root exactly as it is on a panel, so the
@@ -378,7 +390,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
-          cache-provider: basic
+          cache-provider: enhanced
 
       - name: Resolve dependency artifacts from a fresh cache
         shell: bash
