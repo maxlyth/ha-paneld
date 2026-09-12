@@ -7,8 +7,11 @@
 repo_url: "https://fdroid.ha-paneld.com/fdroid/repo"
 repo_name: "ha-paneld"
 repo_description: >-
-  Self-hosted F-Droid repository for ha-paneld — the open-source Home Assistant agent for Android wall
-  panels. Add this repo in the F-Droid client to install and auto-update ha-paneld directly on a panel.
+  RETIRED. This repository is no longer updated. It only ever installed the app and could not connect a
+  panel to Home Assistant, so it has been replaced by the Panel Assistant integration for Home
+  Assistant, which installs ha-paneld and connects the panel once the panel's own setup is done. See
+  https://panel-assistant.io. The versions already published here stay available, and nothing on an
+  installed panel stops working.
 
 # Keep every published version available in the main repo (no archive split) — the repo is small.
 archive_older: 0
