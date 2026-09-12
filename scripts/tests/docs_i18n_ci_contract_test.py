@@ -48,6 +48,18 @@ def supported_locales() -> tuple[str, ...]:
 
 LOCALES = supported_locales()
 
+VALIDATE_COMMAND = "npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json"
+
+# Documentation steps validate already-committed files. They must never gain provider access,
+# credentials, repository mutation, or a network-side generation command.
+FORBIDDEN_CAPABILITIES = (
+    "${{ secrets.",
+    "git push",
+    "gh pr",
+    "curl ",
+    "wget ",
+)
+
 
 def named_step(workflow: str, name: str) -> str:
     match = re.search(
@@ -58,6 +70,17 @@ def named_step(workflow: str, name: str) -> str:
     if not match:
         raise AssertionError(f"missing workflow step: {name}")
     return match.group(0)
+
+
+def run_block(step: str) -> str:
+    match = re.search(r"^        run: \|\n(?P<body>(?:^          .*\n?)*)", step, flags=re.MULTILINE)
+    if not match:
+        raise AssertionError("workflow step has no run block")
+    return "".join(line[10:] for line in match.group("body").splitlines(keepends=True))
+
+
+def host_contracts(workflow: str) -> str:
+    return workflow[workflow.index("  host-contracts:") : workflow.index("\n  dependency-integrity:")]
 
 
 def assert_docs_workflow_contract(workflow: str) -> None:
@@ -92,26 +115,31 @@ def assert_docs_workflow_contract(workflow: str) -> None:
         "working-directory: tools/docs-i18n",
         "npm ci --ignore-scripts --audit=false --fund=false",
         "npm test",
-        "npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json",
     )
     for value in required_validation:
         if value not in validation:
             raise AssertionError(f"documentation validation is missing {value}")
-    if host.index(setup) > host.index(validation):
-        raise AssertionError("documentation Node setup must precede validation")
+    # Localized documentation is not part of the built app, so drift must never fail this job.
+    if "npm run validate" in validation:
+        raise AssertionError("documentation drift must not gate the job; validate belongs in the drift report")
 
-    # This step validates already-committed files. It must never gain provider access, credentials,
-    # repository mutation, or a network-side generation command.
-    forbidden = (
-        "${{ secrets.",
-        "git push",
-        "gh pr",
-        "curl ",
-        "wget ",
-    )
-    for value in forbidden:
-        if value.lower() in validation.lower():
-            raise AssertionError(f"documentation validation contains forbidden capability: {value}")
+    report = named_step(host, "Report multilingual documentation drift")
+    if "working-directory: tools/docs-i18n" not in report:
+        raise AssertionError("documentation drift report is missing working-directory: tools/docs-i18n")
+    script = run_block(report)
+    if f"if {VALIDATE_COMMAND}; then" not in script:
+        raise AssertionError("documentation drift report must run the exact validate command only as a condition")
+    if "::warning" not in script:
+        raise AssertionError("documentation drift report must emit a warning annotation")
+    if re.search(r"\bexit\b", script):
+        raise AssertionError("documentation drift report must not fail the job")
+    if not host.index(setup) < host.index(validation) < host.index(report):
+        raise AssertionError("documentation Node setup, validation and drift report must run in that order")
+
+    for step_name, step in (("validation", validation), ("drift report", report)):
+        for value in FORBIDDEN_CAPABILITIES:
+            if value.lower() in step.lower():
+                raise AssertionError(f"documentation {step_name} contains forbidden capability: {value}")
 
 
 def assert_dependabot_contract(config: str) -> None:
@@ -186,11 +214,10 @@ class DocsI18nCiContractTest(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         assert_docs_workflow_contract(workflow)
 
-        host = workflow[
-            workflow.index("  host-contracts:") : workflow.index("\n  dependency-integrity:")
-        ]
+        host = host_contracts(workflow)
         setup = named_step(host, "Set up Node.js for documentation localization")
         validation = named_step(host, "Validate multilingual documentation")
+        report = named_step(host, "Report multilingual documentation drift")
         mutations = (
             workflow.replace("          fetch-depth: 0\n", "", 1),
             workflow.replace(setup, setup.replace("node-version: '20.18.1'", "node-version: '22'")),
@@ -199,13 +226,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
                 validation.replace("npm ci --ignore-scripts --audit=false --fund=false", "npm install"),
             ),
             workflow.replace(validation, validation.replace("npm test", "npm run generate")),
-            workflow.replace(
-                validation,
-                validation.replace(
-                    "npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json",
-                    "npm run validate",
-                ),
-            ),
+            workflow.replace(report, report.replace(VALIDATE_COMMAND, "npm run validate")),
         )
         for mutated in mutations:
             with self.subTest(mutation=mutated):
@@ -219,6 +240,52 @@ class DocsI18nCiContractTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(AssertionError, "forbidden capability"):
             assert_docs_workflow_contract(secret_mutation)
+        report_secret_mutation = workflow.replace(
+            report, report.replace("          fi\n", "          fi\n          echo ${{ secrets.EXTERNAL_SERVICE_KEY }}\n")
+        )
+        with self.assertRaisesRegex(AssertionError, "forbidden capability"):
+            assert_docs_workflow_contract(report_secret_mutation)
+
+    def test_documentation_drift_never_gates_the_job(self) -> None:
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        host = host_contracts(workflow)
+        validation = named_step(host, "Validate multilingual documentation")
+        report = named_step(host, "Report multilingual documentation drift")
+        gating_mutations = {
+            "validate moved into the gating step": workflow.replace(
+                validation, validation.replace("          npm test\n", f"          npm test\n          {VALIDATE_COMMAND}\n")
+            ),
+            "validate run unconditionally": workflow.replace(
+                report, report.replace(f"if {VALIDATE_COMMAND}; then", f"{VALIDATE_COMMAND}\n          if true; then")
+            ),
+            "explicit failure on drift": workflow.replace(report, report.replace("          fi\n", "            exit 1\n          fi\n")),
+            "warning annotation dropped": workflow.replace(report, report.replace("::warning", "::notice")),
+        }
+        for name, mutated in gating_mutations.items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, workflow, name)
+                with self.assertRaises(AssertionError):
+                    assert_docs_workflow_contract(mutated)
+
+    def test_drift_report_exits_zero_whatever_validate_returns(self) -> None:
+        script = run_block(named_step(host_contracts(WORKFLOW.read_text(encoding="utf-8")), "Report multilingual documentation drift"))
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_npm = Path(temporary) / "npm"
+            env = {**os.environ, "PATH": f"{temporary}{os.pathsep}{os.environ['PATH']}"}
+            for validate_exit, expect_warning in ((1, True), (0, False)):
+                fake_npm.write_text(f"#!/bin/sh\nexit {validate_exit}\n", encoding="utf-8")
+                fake_npm.chmod(0o755)
+                # GitHub runs a bash `run` block as: bash --noprofile --norc -eo pipefail {0}
+                result = subprocess.run(
+                    ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                with self.subTest(validate_exit=validate_exit):
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual("::warning" in result.stdout, expect_warning, result.stdout)
 
     def test_dependabot_tracks_exact_docs_tool_directory(self) -> None:
         config = DEPENDABOT.read_text(encoding="utf-8")
