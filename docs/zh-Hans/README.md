@@ -44,9 +44,9 @@ Web 界面提供一个统一的位置，用于配置面板、安装软件以及�
 |---|---|
 | <a href="../img/zh-Hans/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-profile-light.png"><img src="../img/zh-Hans/ui-profile-dark.png" alt="配置文件选项卡" width="420"></picture></a> | <a href="../img/zh-Hans/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/ui-logs-light.png"><img src="../img/zh-Hans/ui-logs-dark.png" alt="日志标签页" width="420"></picture></a> |
 
-| 待机屏幕 | REST API 探索器 |
+| 待机屏幕 | 接近感应设置 |
 |---|---|
-| <img src="../img/zh-Hans/standing-screen.png" alt="显示配置地址和二维码的 ha-paneld 待机屏幕" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/zh-Hans/api-explorer-light.png"><img src="../img/zh-Hans/api-explorer-dark.png" alt="REST API 探索器" width="420"></picture> |
+| <img src="../img/zh-Hans/standing-screen.png" alt="显示配置地址和二维码的 ha-paneld 待机屏幕" width="420"> | <img src="../img/proximity-setup-screen-480.gif" alt="接近感应设置" width="420"> |
 
 </details>
 

@@ -44,9 +44,9 @@ La interfaz web ofrece un único lugar para configurar un panel, instalar softwa
 |---|---|
 | <a href="../img/es/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-profile-light.png"><img src="../img/es/ui-profile-dark.png" alt="Pestaña Perfil" width="420"></picture></a> | <a href="../img/es/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/es/ui-logs-light.png"><img src="../img/es/ui-logs-dark.png" alt="Pestaña Registros" width="420"></picture></a> |
 
-| Pantalla de espera | Explorador de la API REST |
+| Pantalla de espera | Configuración del sensor de proximidad |
 |---|---|
-| <img src="../img/es/standing-screen.png" alt="Pantalla de espera de ha-paneld con la dirección de configuración y el código QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/es/api-explorer-light.png"><img src="../img/es/api-explorer-dark.png" alt="Explorador de la API REST" width="420"></picture> |
+| <img src="../img/es/standing-screen.png" alt="Pantalla de espera de ha-paneld con la dirección de configuración y el código QR" width="420"> | <img src="../img/proximity-setup-screen-480.gif" alt="Configuración del sensor de proximidad" width="420"> |
 
 </details>
 

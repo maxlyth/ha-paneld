@@ -44,9 +44,9 @@ Diese App ist für dedizierte Wandpanels vorgesehen, nicht für persönliche Sma
 |---|---|
 | <a href="../img/de/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-profile-light.png"><img src="../img/de/ui-profile-dark.png" alt="Registerkarte „Profil“" width="420"></picture></a> | <a href="../img/de/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/de/ui-logs-light.png"><img src="../img/de/ui-logs-dark.png" alt="Registerkarte „Protokolle“" width="420"></picture></a> |
 
-| Bereitschaftsbildschirm | REST-API-Explorer |
+| Bereitschaftsbildschirm | Näherungssensor-Einrichtung |
 |---|---|
-| <img src="../img/de/standing-screen.png" alt="ha-paneld-Bereitschaftsbildschirm mit Konfigurationsadresse und QR-Code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/de/api-explorer-light.png"><img src="../img/de/api-explorer-dark.png" alt="REST-API-Explorer" width="420"></picture> |
+| <img src="../img/de/standing-screen.png" alt="ha-paneld-Bereitschaftsbildschirm mit Konfigurationsadresse und QR-Code" width="420"> | <img src="../img/proximity-setup-screen-480.gif" alt="Näherungssensor-Einrichtung" width="420"> |
 
 </details>
 

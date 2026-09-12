@@ -44,9 +44,9 @@ L'interfaccia web offre un unico posto in cui configurare un pannello, installar
 |---|---|
 | <a href="../img/it/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-profile-light.png"><img src="../img/it/ui-profile-dark.png" alt="Scheda Profilo" width="420"></picture></a> | <a href="../img/it/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/it/ui-logs-light.png"><img src="../img/it/ui-logs-dark.png" alt="Scheda Registri" width="420"></picture></a> |
 
-| Schermata di attesa | Esplora API REST |
+| Schermata di attesa | Configurazione del sensore di prossimità |
 |---|---|
-| <img src="../img/it/standing-screen.png" alt="Schermata di attesa di ha-paneld con l'indirizzo di configurazione e il codice QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/it/api-explorer-light.png"><img src="../img/it/api-explorer-dark.png" alt="Esplora API REST" width="420"></picture> |
+| <img src="../img/it/standing-screen.png" alt="Schermata di attesa di ha-paneld con l'indirizzo di configurazione e il codice QR" width="420"> | <img src="../img/proximity-setup-screen-480.gif" alt="Configurazione del sensore di prossimità" width="420"> |
 
 </details>
 

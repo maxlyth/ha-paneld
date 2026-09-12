@@ -44,9 +44,9 @@ L’interface web permet de configurer un écran, d’installer des logiciels et
 |---|---|
 | <a href="../img/fr/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-profile-light.png"><img src="../img/fr/ui-profile-dark.png" alt="Onglet Profil" width="420"></picture></a> | <a href="../img/fr/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/ui-logs-light.png"><img src="../img/fr/ui-logs-dark.png" alt="Onglet des journaux" width="420"></picture></a> |
 
-| Écran d’attente | Explorateur de l’API REST |
+| Écran d’attente | Configuration du capteur de proximité |
 |---|---|
-| <img src="../img/fr/standing-screen.png" alt="Écran d’attente de ha-paneld avec l’adresse de configuration et le code QR" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="../img/fr/api-explorer-light.png"><img src="../img/fr/api-explorer-dark.png" alt="Explorateur de l’API REST" width="420"></picture> |
+| <img src="../img/fr/standing-screen.png" alt="Écran d’attente de ha-paneld avec l’adresse de configuration et le code QR" width="420"> | <img src="../img/proximity-setup-screen-480.gif" alt="Configuration du capteur de proximité" width="420"> |
 
 </details>
 
