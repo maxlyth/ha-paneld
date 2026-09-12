@@ -2029,7 +2029,7 @@
    "state": "machine-draft"
   },
   "dashboard.camera.bitrate.cap": {
-   "text": "· cap {cap} kbps",
+   "text": "· limit {cap} kbps",
    "sourceHash": "747e84d559f969df60a9060b54e4ac8d3beca53410849ce9034c246f8e2ea08a",
    "state": "machine-draft"
   },
@@ -2829,7 +2829,7 @@
    "state": "machine-draft"
   },
   "dashboard.common.entity_count": {
-   "text": "{count} entities",
+   "text": "{count} encji",
    "sourceHash": "7a24f136c7962dbfb2cad102d51fcf50fffb4eacebe8395e9677cfe6d467bfbe",
    "state": "machine-draft"
   },
@@ -3094,7 +3094,7 @@
    "state": "machine-draft"
   },
   "dashboard.fact.proximity": {
-   "text": "Proximity",
+   "text": "Zbliżeniowe",
    "sourceHash": "101194f3e33d01133851120bc7bab9967d2d8988266a7c07ae800f7127e7e3e2",
    "state": "machine-draft"
   },
@@ -3304,7 +3304,7 @@
    "state": "machine-draft"
   },
   "dashboard.performance.peak_core": {
-   "text": "peak core {percent}%",
+   "text": "szczyt rdzenia {percent}%",
    "sourceHash": "0f520be08837255e92703ad37a957c7f2f582b4ac22156400a7c3b48853b6020",
    "state": "machine-draft"
   },
@@ -3414,7 +3414,7 @@
    "state": "machine-draft"
   },
   "dashboard.renderer.janky_percent": {
-   "text": "{percent}% janky",
+   "text": "{percent}% szarpie",
    "sourceHash": "279f2498764ab90aa58b8c0b681a863717d01ebd297d0c1c4b4cd40b0ea3ca18",
    "state": "machine-draft"
   },
@@ -3494,7 +3494,7 @@
    "state": "machine-draft"
   },
   "dashboard.responsiveness.cold_seconds": {
-   "text": "{seconds}s cold",
+   "text": "{seconds}s zimny",
    "sourceHash": "1467955b0b79ab836c5eb1dec40bc78511f0a1a918b3bf0eec69838e0a9699bf",
    "state": "machine-draft"
   },
@@ -4269,7 +4269,7 @@
    "state": "machine-draft"
   },
   "dashboard.value.on": {
-   "text": "on",
+   "text": "wł.",
    "sourceHash": "b8d31e852725afb1e26d53bab6095b2bff1749c9275be13ed1c05a56ed31ec09",
    "state": "machine-draft"
   },
@@ -5354,7 +5354,7 @@
    "state": "machine-draft"
   },
   "entities.table.entity": {
-   "text": "Entity",
+   "text": "Encja",
    "sourceHash": "2ed3bb60c9af04774f0ea421f81bd64e65083c969a43360c5887b6e17d050794",
    "state": "machine-draft"
   },
@@ -10479,7 +10479,7 @@
    "state": "machine-draft"
   },
   "setup.progress.dashboard": {
-   "text": "HA dash",
+   "text": "HA-pulpit",
    "sourceHash": "f4e60256299043246476ebc93bb0a35f178a41494faee700dcfcd2a94e211011",
    "state": "machine-draft"
   },
@@ -11509,7 +11509,7 @@
    "state": "machine-draft"
   },
   "install.tame.action.tame": {
-   "text": "Tame",
+   "text": "Okiełznaj",
    "sourceHash": "c85a15907c0bd6abe4808730c7d422f32a57b8247f11402e47f72ef842b049ed",
    "state": "machine-draft"
   },
@@ -11719,7 +11719,7 @@
    "state": "machine-draft"
   },
   "install.uninstall.tame_link": {
-   "text": "tame",
+   "text": "okiełznaj",
    "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
    "state": "machine-draft"
   },

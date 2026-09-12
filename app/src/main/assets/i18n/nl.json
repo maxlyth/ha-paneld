@@ -304,7 +304,7 @@
    "state": "machine-draft"
   },
   "configure.auto_sleep.interval_count": {
-   "text": "{state} {count} interval(s)",
+   "text": "{state} {count} interval(len)",
    "sourceHash": "3d9afeb488077abafe5bdeecbeeda344c0badb0b23a0fd251198cd1833c3c762",
    "state": "machine-draft"
   },
@@ -2029,7 +2029,7 @@
    "state": "machine-draft"
   },
   "dashboard.camera.bitrate.cap": {
-   "text": "· cap {cap} kbps",
+   "text": "· limiet {cap} kbps",
    "sourceHash": "747e84d559f969df60a9060b54e4ac8d3beca53410849ce9034c246f8e2ea08a",
    "state": "machine-draft"
   },
@@ -3019,7 +3019,7 @@
    "state": "machine-draft"
   },
   "dashboard.fact.http_port": {
-   "text": "HTTP port",
+   "text": "HTTP-poort",
    "sourceHash": "dab12d2ccc22d28d77d15011eb0be2e1dc726358bdec5aa7f8515ddad29e2bc3",
    "state": "machine-draft"
   },
@@ -3304,7 +3304,7 @@
    "state": "machine-draft"
   },
   "dashboard.performance.peak_core": {
-   "text": "peak core {percent}%",
+   "text": "kernpiek {percent}%",
    "sourceHash": "0f520be08837255e92703ad37a957c7f2f582b4ac22156400a7c3b48853b6020",
    "state": "machine-draft"
   },
@@ -3414,7 +3414,7 @@
    "state": "machine-draft"
   },
   "dashboard.renderer.janky_percent": {
-   "text": "{percent}% janky",
+   "text": "{percent}% hapert",
    "sourceHash": "279f2498764ab90aa58b8c0b681a863717d01ebd297d0c1c4b4cd40b0ea3ca18",
    "state": "machine-draft"
   },
@@ -10479,7 +10479,7 @@
    "state": "machine-draft"
   },
   "setup.progress.dashboard": {
-   "text": "HA dash",
+   "text": "HA-dashboard",
    "sourceHash": "f4e60256299043246476ebc93bb0a35f178a41494faee700dcfcd2a94e211011",
    "state": "machine-draft"
   },
@@ -11509,7 +11509,7 @@
    "state": "machine-draft"
   },
   "install.tame.action.tame": {
-   "text": "Tame",
+   "text": "Aanpassen",
    "sourceHash": "c85a15907c0bd6abe4808730c7d422f32a57b8247f11402e47f72ef842b049ed",
    "state": "machine-draft"
   },
@@ -11634,7 +11634,7 @@
    "state": "machine-draft"
   },
   "install.tame.result.taming": {
-   "text": "Taming {package}.",
+   "text": "Aanpassen van {package}.",
    "sourceHash": "db713bae3f079b8dca46e450c757bb590ce42f5b5b9a305bb031ef56876d20e6",
    "state": "machine-draft"
   },
@@ -11719,7 +11719,7 @@
    "state": "machine-draft"
   },
   "install.uninstall.tame_link": {
-   "text": "tame",
+   "text": "aanpassen",
    "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
    "state": "machine-draft"
   },
