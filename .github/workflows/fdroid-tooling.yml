@@ -1,6 +1,8 @@
 name: F-Droid tooling
 run-name: F-Droid tooling · ${{ github.head_ref || github.ref_name }}
 
+# RETIRED 2026-09-12 with the F-Droid channel (see fdroid.yml). It still checks the tooling that
+# publishes the retirement notice, and is removed together with that tooling.
 on:
   push:
     branches: [main]

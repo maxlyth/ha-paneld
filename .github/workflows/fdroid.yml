@@ -1,6 +1,11 @@
 name: F-Droid repo
-run-name: F-Droid repo · ${{ github.event.workflow_run.head_branch || github.event_name }}
+run-name: F-Droid repo (retired) · ${{ github.event_name }}
 
+# RETIRED 2026-09-12. The channel is no longer chained to the Release workflow, so a new release no
+# longer republishes here and the served repository stays where it is. Manual dispatch remains, which
+# is what publishes the retirement notice; the tooling is removed once the notice has served its window.
+#
+# How it worked while it ran:
 # Republishes the release-signed APKs from GitHub Releases as a self-hosted F-Droid repository in a
 # dedicated Cloudflare R2 bucket. STATELESS: every run rebuilds the repo from the current set of release-key-signed *full*
 # GitHub Releases, so the served APK is byte-identical to the release asset and the F-Droid client can
@@ -17,12 +22,6 @@ run-name: F-Droid repo · ${{ github.event.workflow_run.head_branch || github.ev
 #      share the add-repo URL: https://fdroid.ha-paneld.com/fdroid/repo?fingerprint=<FP>
 
 on:
-  # Chain after the Release workflow. We can't use `on: release` — a release created by another
-  # workflow's GITHUB_TOKEN does not emit triggering events, so that would never fire. `workflow_run`
-  # fires regardless of how the upstream run was triggered.
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
   # Manual runs rebuild and publish by default, but can stop after constructing the exact publication
   # artifact for a non-publishing validation run.
   workflow_dispatch:
@@ -46,13 +45,8 @@ jobs:
   preflight:
     runs-on: ubuntu-24.04
     # Match the build admission without entering either credential-bearing environment. A failure here
-    # stops the release before index signing and transitively prevents every R2 write in the deploy job.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       startsWith(github.event.workflow_run.head_branch, 'v') &&
-       !contains(github.event.workflow_run.head_branch, '-'))
+    # stops the publication before index signing and transitively prevents every R2 write in the deploy
+    # job. Manual dispatch is now the only trigger, so there is no release condition left to test.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -65,14 +59,7 @@ jobs:
     needs: preflight
     runs-on: ubuntu-24.04
     environment: release
-    # Run after a successful Release for a FULL version tag (skip rc Release runs, e.g. v0.8.2-rc5);
-    # always allow a manual dispatch. head_branch on a tag-push run is the tag name.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success' &&
-       startsWith(github.event.workflow_run.head_branch, 'v') &&
-       !contains(github.event.workflow_run.head_branch, '-'))
+    # Manual dispatch only, since the channel is retired: a release no longer republishes here.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
