@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.9.7-rc4 - 2026-09-11
+## v0.9.7-rc4 - 2026-09-12
 
 This release candidate makes panel discovery, sleep and proximity controls easier to use, adds three early-access interface languages and records more of what the panel actually did instead of what its profile expected. The changes below are since v0.9.7-rc3.
 
@@ -511,6 +511,8 @@ This release also strengthens dependency and release verification, updates the s
 - **Dashboard startup now shows what the panel is waiting for** — if networking is still coming up after a reboot, the built-in dashboard shows whether it is waiting for network services, a link, an address or a connection instead of looking broken. It learns the panel's typical startup time to give more useful progress on later boots and disappears entirely when networking is already ready.
 
 ### Changed
+
+- **F-Droid channel retired.** Existing releases remain available, but new releases are distributed through the Home Assistant installer.
 
 - **Changes made on the panel now stay in sync with Home Assistant** — screen power, brightness, volume, relays, LEDs and proximity could become stale or briefly jump back after a local or external change. ha-paneld now reports the latest confirmed panel state and keeps pending updates in order.
 - **Installing the APK alone is clearly identified as incomplete setup** — releases now lead with the installer that handles permissions, startup, configuration and verification. The APK remains available for on-device sideloading and manual setups.
