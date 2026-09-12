@@ -41,9 +41,9 @@ The web interface gives you one place to configure a panel, install software and
 |---|---|
 | <a href="docs/img/ui-profile-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-profile-light.png"><img src="docs/img/ui-profile-dark.png" alt="Profile tab" width="420"></picture></a> | <a href="docs/img/ui-logs-light.png"><picture><source media="(prefers-color-scheme: light)" srcset="docs/img/ui-logs-light.png"><img src="docs/img/ui-logs-dark.png" alt="Logs tab" width="420"></picture></a> |
 
-| Standing screen | REST API explorer |
+| Standing screen | Proximity sensor setup |
 |---|---|
-| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen with the configuration address and QR code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/api-explorer-light.png"><img src="docs/img/api-explorer-dark.png" alt="REST API explorer" width="420"></picture> |
+| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen with the configuration address and QR code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/proximity-setup-screen-480.gif"><img src="docs/img/proximity-setup-screen-480.gif" alt="Proximity sensor setup" width="420"></picture> |
 
 </details>
 
