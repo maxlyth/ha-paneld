@@ -64,6 +64,10 @@ dependencyLocking {
     lockAllConfigurations()
 }
 
+// The release identity lives in app/version.properties rather than in this script, so a version bump
+// neither changes the Gradle cache key nor matches the build-file paths that start the emulator tests.
+val appVersion = Properties().apply { file("version.properties").inputStream().use { load(it) } }
+
 android {
     namespace = "io.github.maxlyth.hapaneld"
     compileSdk = 37
@@ -80,8 +84,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the public release; publication remains a separate explicit action.
-        versionCode = 773
-        versionName = "0.9.7-rc4"
+        versionCode = requireNotNull(appVersion.getProperty("versionCode")) { "app/version.properties must define versionCode" }.toInt()
+        versionName = requireNotNull(appVersion.getProperty("versionName")) { "app/version.properties must define versionName" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
