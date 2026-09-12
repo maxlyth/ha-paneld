@@ -7,7 +7,7 @@ on:
       locales:
         description: Comma-separated target locale codes
         required: true
-        default: de,fr,it,es,zh-Hans
+        default: de,fr,it,es,zh-Hans,nl,pl,uk
   push:
     branches: [main]
     paths:
@@ -17,6 +17,9 @@ on:
       - app/src/main/assets/i18n/fr.json
       - app/src/main/assets/i18n/it.json
       - app/src/main/assets/i18n/zh-Hans.json
+      - app/src/main/assets/i18n/nl.json
+      - app/src/main/assets/i18n/pl.json
+      - app/src/main/assets/i18n/uk.json
       - app/src/main/assets/i18n/context/**
       - scripts/i18n_catalogue.py
       - scripts/i18n_deepl.py
@@ -44,7 +47,7 @@ jobs:
         id: plan
         shell: bash
         env:
-          REQUESTED_LOCALES: ${{ github.event_name == 'workflow_dispatch' && inputs.locales || 'de,fr,it,es,zh-Hans' }}
+          REQUESTED_LOCALES: ${{ github.event_name == 'workflow_dispatch' && inputs.locales || 'de,fr,it,es,zh-Hans,nl,pl,uk' }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -53,7 +56,7 @@ jobs:
           locale_args=()
           for locale in "${requested[@]}"; do
             case "$locale" in
-              de|fr|it|es|zh-Hans) ;;
+              de|fr|it|es|zh-Hans|nl|pl|uk) ;;
               *) echo "::error::Unsupported locale selection"; exit 1 ;;
             esac
             if [[ -n "${seen[$locale]:-}" ]]; then

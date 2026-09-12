@@ -18,6 +18,9 @@ body:
         - Italian (it)
         - Spanish (es)
         - Simplified Chinese (zh-Hans)
+        - Dutch (nl)
+        - Polish (pl)
+        - Ukrainian (uk)
     validations:
       required: true
 
