@@ -354,10 +354,13 @@ val verifyBundledRootHelperBuildIdentity = tasks.register("verifyBundledRootHelp
     dependsOn(compileBundledRootHelper)
     inputs.files(bundledRootHelperArm64, bundledRootHelperArm32)
     inputs.property("helperBuildId", helperBuildId)
+    // Capture plain values: an action that reads script-level vals holds a reference to the build
+    // script object, which the configuration cache cannot serialize.
+    val binaries = listOf(bundledRootHelperArm64, bundledRootHelperArm32)
+    val expectedRecord = "BUILDID $helperBuildId"
     doLast {
-        val expectedRecord = "BUILDID $helperBuildId"
         val recordPattern = Regex("""BUILDID [0-9a-f]{64}""")
-        listOf(bundledRootHelperArm64, bundledRootHelperArm32).forEach { binary ->
+        binaries.forEach { binary ->
             val bytes = binary.readBytes()
             check(
                 bytes.size >= 4 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
