@@ -68,11 +68,7 @@ class HelperSocketCompositionTest {
         // GOV writes sysfs directly and fails closed when the cpufreq nodes cannot be written.
         // A privileged run on a host that exposes them can write one, so take the expected reply
         // from the same condition the helper itself tests rather than assuming an outcome.
-        val governorReply =
-            if (java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").canWrite())
-                "OK"
-            else
-                "ERR"
+        val governorReply = if (governorAcceptsWrites()) "OK" else "ERR"
         listOf(
             WireTranscript("VERSION", "HELPER version=1.3.0 proto=1.3"),
             WireTranscript("PING", "OK"),
@@ -312,5 +308,14 @@ class HelperSocketCompositionTest {
         }
 
         fun DaemonLongResult.replyValue(): String? = (this as? DaemonLongResult.Reply)?.value
+
+        // Neither access(2) nor open(2) predicts the helper's result: inside an unprivileged container
+        // /sys is mounted read-only, yet both succeed and only write(2) is refused. Perform the write the
+        // helper performs, with the governor the node already holds, so nothing changes either way.
+        fun governorAcceptsWrites(): Boolean {
+            val node = File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+            val current = runCatching { node.readText().trim() }.getOrNull() ?: return false
+            return runCatching { java.io.FileOutputStream(node).use { it.write(current.toByteArray()) } }.isSuccess
+        }
     }
 }
