@@ -34,7 +34,7 @@
    "state": "machine-draft"
   },
   "api.intro.live": {
-   "text": "У режимі реального часу, на панелі API explorer.",
+   "text": "Оглядач API прямо на панелі, у реальному часі.",
    "sourceHash": "4c6b19a324019c78cd5ff3eccf1f1ecfa7bcab532ec28603dc5c378f28f85fb0",
    "state": "machine-draft"
   },
@@ -544,7 +544,7 @@
    "state": "machine-draft"
   },
   "configure.badge.skunk_works": {
-   "text": "skunk-works",
+   "text": "таємна лабораторія",
    "sourceHash": "a8f2afd0e3e85d2b17b647f2dd1471a8df0c450ce5eeb25c858a7068088d060d",
    "state": "machine-draft"
   },
@@ -849,12 +849,12 @@
    "state": "machine-draft"
   },
   "configure.duration.hours_minutes": {
-   "text": "{hours} h {minutes} min",
+   "text": "{hours} год {minutes} хв",
    "sourceHash": "cf8484035b7fa8c13811a16b0f926ad7f56b4161501e105431231873eae43156",
    "state": "machine-draft"
   },
   "configure.duration.minutes": {
-   "text": "{count} min",
+   "text": "{count} хв",
    "sourceHash": "1829c58ba472520fd39e61f9e337a1b7da27e86299332dde5bfdea355c3895a8",
    "state": "machine-draft"
   },
@@ -1024,7 +1024,7 @@
    "state": "machine-draft"
   },
   "configure.oauth.enter_url": {
-   "text": "Введіть Home Assistant Вкажіть URL-адресу вище, а потім підключіть цю панель.",
+   "text": "Введіть URL-адресу Home Assistant вище, а потім підключіть цю панель.",
    "sourceHash": "731913177c87bd9f3829e7bbb1169127c6092ba3b914de790b4497bc1e377a20",
    "state": "machine-draft"
   },
@@ -1094,17 +1094,17 @@
    "state": "machine-draft"
   },
   "configure.oauth.valid_url_first": {
-   "text": "Введіть дійсний Home Assistant Спочатку URL-адреса.",
+   "text": "Спочатку введіть дійсну URL-адресу Home Assistant.",
    "sourceHash": "4e9962f7c4d9511c28f2357e4d5f6b4e87e25d02aa5780e573e814e49272415e",
    "state": "machine-draft"
   },
   "configure.option.auto": {
-   "text": "auto",
+   "text": "авто",
    "sourceHash": "929260ad9b9ea9fe0f3553dd964f4ff3deb5792efd031a2b90f573fe91f012bb",
    "state": "machine-draft"
   },
   "configure.option.auto_detail": {
-   "text": "auto ({value})",
+   "text": "авто ({value})",
    "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
    "state": "machine-draft"
   },
@@ -1914,7 +1914,7 @@
    "state": "machine-draft"
   },
   "dashboard.banner.setup_needs.rejected_credentials": {
-   "text": "valid MQTT повноваження (брокер їх відхилив)",
+   "text": "дійсні MQTT повноваження (брокер їх відхилив)",
    "sourceHash": "e3bec86a375b717aa06b9ef49db160cda580cfdebfe9a77fc35a6e1bc79d120d",
    "state": "machine-draft"
   },
@@ -1929,7 +1929,7 @@
    "state": "machine-draft"
   },
   "dashboard.banner.setup_needs.valid_credentials": {
-   "text": "valid MQTT повноваження",
+   "text": "дійсні MQTT повноваження",
    "sourceHash": "c3a2944f7904354478c69932bda9ef2ee929ef06cb1728669fc31f31e0524fb3",
    "state": "machine-draft"
   },
@@ -1949,7 +1949,7 @@
    "state": "machine-draft"
   },
   "dashboard.banner.webview_old.explanation": {
-   "text": "the Home Assistant Панель інструментів може відображатися порожньою або з помилками.",
+   "text": "Home Assistant Панель інструментів може відображатися порожньою або з помилками.",
    "sourceHash": "ff191e5d689ffb361fc76cbffb902c16185f7355b227ddccb705d42aed4b54f1",
    "state": "machine-draft"
   },
@@ -2029,7 +2029,7 @@
    "state": "machine-draft"
   },
   "dashboard.camera.bitrate.cap": {
-   "text": "· cap {cap} kbps",
+   "text": "· ліміт {cap} kbps",
    "sourceHash": "747e84d559f969df60a9060b54e4ac8d3beca53410849ce9034c246f8e2ea08a",
    "state": "machine-draft"
   },
@@ -2044,7 +2044,7 @@
    "state": "machine-draft"
   },
   "dashboard.camera.bitrate.of_cap": {
-   "text": "{delivered} з {cap} kbps cap",
+   "text": "{delivered} з {cap} kbps",
    "sourceHash": "c3870e582520e293665259969b9c4cd6009f6e5b9041322ff840fee938485a08",
    "state": "machine-draft"
   },
@@ -2209,12 +2209,12 @@
    "state": "machine-draft"
   },
   "dashboard.camera.frame_rate.delivered": {
-   "text": "{rate} fps delivered",
+   "text": "{rate} fps передано",
    "sourceHash": "fec4f974ab19e874a46eeec270462c45edcf4e54f8658fe9bf1143e9ad60f33b",
    "state": "machine-draft"
   },
   "dashboard.camera.frame_rate.no_frames": {
-   "text": "кадрів немає для {seconds}s",
+   "text": "кадрів немає для {seconds}с",
    "sourceHash": "e76570d9bcd60a396b991fa27f03b918fbf8dc1aa8497b9e286961677e8279e1",
    "state": "machine-draft"
   },
@@ -2304,7 +2304,7 @@
    "state": "machine-draft"
   },
   "dashboard.camera.session.off": {
-   "text": "off",
+   "text": "вимкнено",
    "sourceHash": "b4dc66dde806261bdda8607d8707aa727d308cd80272381a5583f63899918467",
    "state": "machine-draft"
   },
@@ -2384,7 +2384,7 @@
    "state": "machine-draft"
   },
   "dashboard.capability.note.android_sleep": {
-   "text": "Android sleep через KEYCODE_SLEEP; Home Assistant завжди активує пристрій; локальний дотик можливий лише тоді, коли сенсорний екран цієї панелі є джерелом активації платформи",
+   "text": "Android сон через KEYCODE_SLEEP; Home Assistant завжди активує пристрій; локальний дотик можливий лише тоді, коли сенсорний екран цієї панелі є джерелом активації платформи",
    "sourceHash": "e1923775e4c2c360f03fd9f4a5fa04cc2eb3fd63f044804acd8b4ec60250669a",
    "state": "machine-draft"
   },
@@ -2554,7 +2554,7 @@
    "state": "machine-draft"
   },
   "dashboard.capability.note.shizuku_connecting": {
-   "text": "підключення до локально затвердженого Shizuku service",
+   "text": "підключення до локально затвердженої служби Shizuku",
    "sourceHash": "20ee03c32f465fae6c1c11e967e0e84adcc9bbb3020f72c9aeacaa08c27fe72a",
    "state": "machine-draft"
   },
@@ -2634,7 +2634,7 @@
    "state": "machine-draft"
   },
   "dashboard.capability.root_su": {
-   "text": "Root (su)",
+   "text": "Права root (su)",
    "sourceHash": "dca17bff62e8f077eb8628174e0fa236b29c9448343eae86ee89cd0a37e94b63",
    "state": "machine-draft"
   },
@@ -3014,12 +3014,12 @@
    "state": "machine-draft"
   },
   "dashboard.fact.ha_renderer": {
-   "text": "HA renderer",
+   "text": "HA рендерер",
    "sourceHash": "c9f13e2fb6406ed3eab20ce8206c7f55ecdc59f78b71f318f98e5239f4d5849f",
    "state": "machine-draft"
   },
   "dashboard.fact.http_port": {
-   "text": "HTTP port",
+   "text": "HTTP порт",
    "sourceHash": "dab12d2ccc22d28d77d15011eb0be2e1dc726358bdec5aa7f8515ddad29e2bc3",
    "state": "machine-draft"
   },
@@ -3154,7 +3154,7 @@
    "state": "machine-draft"
   },
   "dashboard.footer.api_explorer": {
-   "text": "REST API explorer",
+   "text": "REST API оглядач",
    "sourceHash": "b8f10c9c2dc3f7e68d90cd69f59ce58e14f39f2ec3b1888deaa527b7c2c003a1",
    "state": "machine-draft"
   },
@@ -3289,7 +3289,7 @@
    "state": "machine-draft"
   },
   "dashboard.performance.clock_max": {
-   "text": "/ {gigahertz} GHz max",
+   "text": "/ {gigahertz} GHz макс",
    "sourceHash": "9a07342349be9dfe51fc636bd4625e153fe6459901f3e215591febddf5381f6a",
    "state": "machine-draft"
   },
@@ -3304,7 +3304,7 @@
    "state": "machine-draft"
   },
   "dashboard.performance.peak_core": {
-   "text": "peak core {percent}%",
+   "text": "пік ядра {percent}%",
    "sourceHash": "0f520be08837255e92703ad37a957c7f2f582b4ac22156400a7c3b48853b6020",
    "state": "machine-draft"
   },
@@ -3404,7 +3404,7 @@
    "state": "machine-draft"
   },
   "dashboard.renderer.cpu_proxy": {
-   "text": "renderer CPU проксі",
+   "text": "рендерер CPU проксі",
    "sourceHash": "9276564466d4e271f4eaf21eb582ed78de48fef19518f45eb4e794b7d39457b5",
    "state": "machine-draft"
   },
@@ -3414,7 +3414,7 @@
    "state": "machine-draft"
   },
   "dashboard.renderer.janky_percent": {
-   "text": "{percent}% janky",
+   "text": "{percent}% ривками",
    "sourceHash": "279f2498764ab90aa58b8c0b681a863717d01ebd297d0c1c4b4cd40b0ea3ca18",
    "state": "machine-draft"
   },
@@ -3494,7 +3494,7 @@
    "state": "machine-draft"
   },
   "dashboard.responsiveness.cold_seconds": {
-   "text": "{seconds}s cold",
+   "text": "{seconds}с хол.",
    "sourceHash": "1467955b0b79ab836c5eb1dec40bc78511f0a1a918b3bf0eec69838e0a9699bf",
    "state": "machine-draft"
   },
@@ -3544,7 +3544,7 @@
    "state": "machine-draft"
   },
   "dashboard.responsiveness.reload_seconds": {
-   "text": "· оновити {seconds}s",
+   "text": "· оновити {seconds}с",
    "sourceHash": "d530dc9cb597968d5d0a680d40db823d377490d0b95825faf6fa34c31b1e9f34",
    "state": "machine-draft"
   },
@@ -3679,7 +3679,7 @@
    "state": "machine-draft"
   },
   "dashboard.runtime.convergence": {
-   "text": "{channels} канали · {dirty} dirty · {inFlight} in-flight · {unknown} невідомо · підтвердження {successes}/{failures} · очікується {pending}",
+   "text": "{channels} канали · {dirty} незбережено · {inFlight} в обробці · {unknown} невідомо · підтвердження {successes}/{failures} · очікується {pending}",
    "sourceHash": "bc3a794f1545af2f3efcf5a5edb88b1889648fefb0a843e152e1a603f92d21b7",
    "state": "machine-draft"
   },
@@ -3824,7 +3824,7 @@
    "state": "machine-draft"
   },
   "dashboard.runtime.mqtt.seconds": {
-   "text": "{seconds}s",
+   "text": "{seconds}с",
    "sourceHash": "5307d20dc7c46cc7771e80a1d10417915bcf84ff57f50a15e3f7aea5d1661ed6",
    "state": "machine-draft"
   },
@@ -4129,7 +4129,7 @@
    "state": "machine-draft"
   },
   "dashboard.state_stream.filtered": {
-   "text": "відфільтровано до {count} entities",
+   "text": "відфільтровано до {count} сутностей",
    "sourceHash": "e4299f6547e8811e899fd27c9c0cffe48f1de78d69bff4280f2bcba5fc393117",
    "state": "machine-draft"
   },
@@ -4239,7 +4239,7 @@
    "state": "machine-draft"
   },
   "dashboard.value.auto_detail": {
-   "text": "auto ({value})",
+   "text": "авто ({value})",
    "sourceHash": "e2b9e9791e874c4492bfb91dd1846a5fdcae2b1cf5055b427a39fd201e2f670e",
    "state": "machine-draft"
   },
@@ -4269,7 +4269,7 @@
    "state": "machine-draft"
   },
   "dashboard.value.on": {
-   "text": "on",
+   "text": "увімк.",
    "sourceHash": "b8d31e852725afb1e26d53bab6095b2bff1749c9275be13ed1c05a56ed31ec09",
    "state": "machine-draft"
   },
@@ -4284,7 +4284,7 @@
    "state": "machine-draft"
   },
   "entities.age.hours": {
-   "text": "{count}h тому",
+   "text": "{count} год тому",
    "sourceHash": "520c737ea62430c4aa3e953abb60cf6bf7ecde97f0aef8f5e3fab5a9011db2a0",
    "state": "machine-draft"
   },
@@ -4614,7 +4614,7 @@
    "state": "machine-draft"
   },
   "entities.issue.button-card-dynamic-features.recommendation": {
-   "text": "Замініть їх явним об’єктом IDs та тригери оновлення, або закріпити кожну згенеровану залежність.",
+   "text": "Замініть їх явними ID сутностей і тригерами оновлення, або закріпіть кожну згенеровану залежність.",
    "sourceHash": "aa0acc67b2b36ac03142f453db84a32bcb5e617f8e83e6ff83902d3c55560f6e",
    "state": "machine-draft"
   },
@@ -4624,7 +4624,7 @@
    "state": "machine-draft"
   },
   "entities.issue.button-card-limited-support.reason": {
-   "text": "Статичний об’єкт IDs та targets скануються, але успадкування config-template, JavaScript, розгортання груп та тригери загального оновлення не оцінюються.",
+   "text": "Статичні ID сутностей і цілі скануються, але успадкування config-template, JavaScript, розгортання груп і широкі тригери оновлення не оцінюються.",
    "sourceHash": "3b8cd86cfa82bdd7b08f30ea3fb1d3fd1a1e63964ce92dcddad0c85c087cd254",
    "state": "machine-draft"
   },
@@ -4654,7 +4654,7 @@
    "state": "machine-draft"
   },
   "entities.issue.decluttering-template-expansion.reason": {
-   "text": "Статичний об’єкт IDФайли s та targets скануються, але шаблони, значення за замовчуванням та змінні, на які є посилання, можуть вносити залежності, яких немає у виклику.",
+   "text": "Статичні ID сутностей і цілі скануються, але шаблон, значення за замовчуванням і змінні, на які є посилання, можуть додавати залежності, відсутні у виклику.",
    "sourceHash": "6afdd9a4bbd534c4428d39590daed384b4fdf03273386f1175cca946167c9c5d",
    "state": "machine-draft"
   },
@@ -4739,7 +4739,7 @@
    "state": "machine-draft"
   },
   "entities.issue.kiosk-mode-limited-support.recommendation": {
-   "text": "Для автоматичної фільтрації сутностей використовуйте літеральну сутність IDs in HACS Kiosk Mode JavaScript та уникати перерахування; рендериться на сервері Jinja Налаштування не вимагають залежностей від основних бібліотек.",
+   "text": "Для автоматичної фільтрації сутностей використовуйте буквальні ID сутностей у JavaScript HACS Kiosk Mode та уникайте перерахування; налаштування Jinja, що рендеряться на сервері, не потребують основних залежностей.",
    "sourceHash": "6722add1f9e7bd22036c91f7c5cdb90df36db9da4f5c444dd3db697dc862c2a7",
    "state": "machine-draft"
   },
@@ -4824,7 +4824,7 @@
    "state": "machine-draft"
   },
   "entities.issue.selector-total-budget.summary": {
-   "text": "Обмежені селектори сукупно відповідають {candidate_count} entities",
+   "text": "Обмежені селектори в сукупності відповідають {candidate_count} сутностей",
    "sourceHash": "b9b9031818790fa57e332221654ebb7128f3110f15825ee9040bdd50153d8446",
    "state": "machine-draft"
   },
@@ -4859,7 +4859,7 @@
    "state": "machine-draft"
   },
   "entities.issue.streamline-runtime-coverage.reason": {
-   "text": "Статичний об’єкт IDs виявляються негайно. Інші прямі hass.states залежності визначаються автоматично як Streamline Шаблони виконуються, тому виявлений список об’єктів може залишатися неповним, доки не будуть перевірені всі відповідні види, умовні стани, спливаючі вікна та взаємодії.",
+   "text": "Статичні ID сутностей виявляються негайно. Інші прямі залежності hass.states вивчаються автоматично під час виконання шаблонів Streamline, тому виявлений список сутностей може залишатися неповним, доки не буде перевірено кожен відповідний екран, умовний стан, спливаюче вікно та взаємодію.",
    "sourceHash": "10f83b2d9703e2cee1267ce449bf860a18a6439897fff3d8039cc65516de5f5b",
    "state": "machine-draft"
   },
@@ -6119,7 +6119,7 @@
    "state": "machine-draft"
   },
   "install.presentation.install_deferred_saving_state": {
-   "text": "The {component} Встановлення було відкладено на час збереження стану панелі.",
+   "text": "{component}: встановлення було відкладено на час збереження стану панелі.",
    "sourceHash": "f5e5e68129e50b951c9ec4f983c516610ef233d5f5db66615f14277dea5e225a",
    "state": "machine-draft"
   },
@@ -6129,17 +6129,17 @@
    "state": "machine-draft"
   },
   "install.presentation.install_download_too_large": {
-   "text": "The {component} розмір завантаження перевищує допустимий для панелі.",
+   "text": "{component}: розмір завантаження перевищує допустимий для панелі.",
    "sourceHash": "8457679bc05fc56b2d4f981d49d1ab1d3b1991223a3a416572369a62b6758ccf",
    "state": "machine-draft"
   },
   "install.presentation.install_durable_rejection": {
-   "text": "The {component} Встановлення було відхилено внаслідок ретельної перевірки безпеки.",
+   "text": "{component}: встановлення було відхилено внаслідок ретельної перевірки безпеки.",
    "sourceHash": "9db26fbbcef40ecc31fdf592e4bc29ffc05ab027fb642ce568ab02f9a7805b07",
    "state": "machine-draft"
   },
   "install.presentation.install_guard_db_owned": {
-   "text": "The {component} Встановлення заблоковано, оскільки Guard DB володіє шляхом оновлення.",
+   "text": "{component}: встановлення заблоковано, оскільки Guard DB володіє шляхом оновлення.",
    "sourceHash": "e3c6a60060e2c3e9defd463280b50063329de1fb528dc2cec6ec257e99556b6a",
    "state": "machine-draft"
   },
@@ -6154,7 +6154,7 @@
    "state": "machine-draft"
   },
   "install.presentation.install_retryable_failure": {
-   "text": "The {component} Встановлення не вдалося, але його можна повторити.",
+   "text": "{component}: встановлення не вдалося, але його можна повторити.",
    "sourceHash": "5985a879d82b24f59582a258f4ecb2ee3d198b07e01972d4479098da336e1c49",
    "state": "machine-draft"
   },
@@ -6164,12 +6164,12 @@
    "state": "machine-draft"
   },
   "install.presentation.managed_apk_missing": {
-   "text": "The {component} {version} у цій версії немає компонентів для встановлення APK.",
+   "text": "{component} {version}: у цій версії немає компонентів для встановлення APK.",
    "sourceHash": "cd41f0caa468f58d054916f98e2f3e83a51a6ba6d60cb2bbe7380617a61a561f",
    "state": "machine-draft"
   },
   "install.presentation.managed_attempt_recorded": {
-   "text": "The {component} {version} спроба вже була зареєстрована для встановленої версії {current}.",
+   "text": "{component} {version}: спроба вже була зареєстрована для встановленої версії {current}.",
    "sourceHash": "a6f21db34260241e20331a4677549009928105b1e2306d7f59e5f90320afdf6d",
    "state": "machine-draft"
   },
@@ -6759,7 +6759,7 @@
    "state": "machine-draft"
   },
   "logs.level.debug": {
-   "text": "Debug+",
+   "text": "Налагодження+",
    "sourceHash": "650078a3fdbf539835537f5e636170771cb7f187d982e13c51bf67cb8dd60d75",
    "state": "machine-draft"
   },
@@ -6779,7 +6779,7 @@
    "state": "machine-draft"
   },
   "logs.level.verbose": {
-   "text": "Verbose+",
+   "text": "Докладно+",
    "sourceHash": "f48e7c4847225d28a324d11ea52ca7e3b95594e1796e80ba100908a54d70e620",
    "state": "machine-draft"
   },
@@ -6799,7 +6799,7 @@
    "state": "machine-draft"
   },
   "logs.note.sources": {
-   "text": "App = ha-paneldвласного журналу процесу (без root (необхідно). System = повний пристрій logcat (root).",
+   "text": "Додаток = власний журнал процесу ha-paneld (root не потрібен). Система = повний журнал пристрою logcat (root).",
    "sourceHash": "ec021900e6169b9a82e2d3aacfd2142bd80c0d7c6207659ed43694aa72d6185d",
    "state": "machine-draft"
   },
@@ -8194,7 +8194,7 @@
    "state": "machine-draft"
   },
   "profiles.result.json-content-type-required": {
-   "text": "A JSON Тип вмісту є обов’язковим.",
+   "text": "JSON Тип вмісту є обов’язковим.",
    "sourceHash": "dd44396e1db0e0b4dedc221865522a03d75b3f584bcc5db30c5bdcace40e9635",
    "state": "machine-draft"
   },
@@ -8314,7 +8314,7 @@
    "state": "machine-draft"
   },
   "profiles.result.yaml-content-type-required": {
-   "text": "A YAML Тип вмісту є обов’язковим.",
+   "text": "YAML Тип вмісту є обов’язковим.",
    "sourceHash": "e6d52ad7452e2714e0e4692ed5ecbec08d7559f0b80c12a1e5f0371c2e6f1795",
    "state": "machine-draft"
   },
@@ -8884,7 +8884,7 @@
    "state": "machine-draft"
   },
   "settings.auto_brightness_ha_entity.help": {
-   "text": "Blank використовує датчик освітлення панелі. Виберіть Home Assistant датчик освітленості, якщо панель не має відповідного датчика.",
+   "text": "Порожнє значення використовує датчик освітлення панелі. Виберіть Home Assistant датчик освітленості, якщо панель не має відповідного датчика.",
    "sourceHash": "6880e1fea6dee81c8f92542ee7bca6f70b62aecb909cf29b8b43fc5843fb5f9d",
    "state": "machine-draft"
   },
@@ -9054,7 +9054,7 @@
    "state": "machine-draft"
   },
   "settings.dashboard_entity_learning_applied.help": {
-   "text": "Засувка активації, безпечна для резервного копіювання. Встановлюється після безпечного завантаження з порожньою інсталяцією або явного застосування з Entities API або вкладка.",
+   "text": "Засувка активації, безпечна для резервного копіювання. Встановлюється після безпечного завантаження з порожньою інсталяцією або явного застосування через API сутностей або вкладку.",
    "sourceHash": "052ab9a70854284704fadbbe085ea13ef085793d374e851978fa36b1797119a7",
    "state": "machine-draft"
   },
@@ -9104,7 +9104,7 @@
    "state": "machine-draft"
   },
   "settings.dashboard_overscroll.help": {
-   "text": "Вбудований рендерер: дозволити AndroidЕфект розтягування/світіння при прокручуванні за межі верхньої або нижньої частини панелі інструментів. За замовчуванням вимкнено (панель на стіні рідко прокручується, і цей ефект виглядає недоречно). API-only — встановити true щоб відновити стандартний ефект.",
+   "text": "Вбудований рендерер: дозволити Android ефект розтягування/світіння при прокручуванні за межі верхньої або нижньої частини панелі інструментів. За замовчуванням вимкнено (панель на стіні рідко прокручується, і цей ефект виглядає недоречно). Лише через API — встановити true щоб відновити стандартний ефект.",
    "sourceHash": "d0a5d6b615a514178fc680fc0b8ac051a07ef92da8c0fe490d8236d75d2b792c",
    "state": "machine-draft"
   },
@@ -9139,7 +9139,7 @@
    "state": "machine-draft"
   },
   "settings.dashboard_zoom.label": {
-   "text": "Zoom (%)",
+   "text": "Масштаб (%)",
    "sourceHash": "90f1077218a92f9695c9ee536c9d305ce4904146b19582386ac3b828cafd3a2b",
    "state": "machine-draft"
   },
@@ -9189,7 +9189,7 @@
    "state": "machine-draft"
   },
   "settings.diag_soc_temp.label": {
-   "text": "SoC temperature",
+   "text": "Температура SoC",
    "sourceHash": "9f56b79622b6e3c9b5a678aebaf91708a1eec8921955e86d68a171be2b1e6bbd",
    "state": "machine-draft"
   },
@@ -9199,7 +9199,7 @@
    "state": "machine-draft"
   },
   "settings.diag_wifi_outages_24h.label": {
-   "text": "Wi-Fi перебої (24 h)",
+   "text": "Wi-Fi перебої (24 год)",
    "sourceHash": "ed67a870b93667bed3a06e3ffdaa2d597fb1925bb05fb45a83c0e58c77d4bc12",
    "state": "machine-draft"
   },
@@ -9244,7 +9244,7 @@
    "state": "machine-draft"
   },
   "settings.ha_client_id.help": {
-   "text": "Внутрішнє походження токена зберігається для APIСумісність з імпортом /config. Запозичено Companion токенів використовують Android Companion клієнт; ha-paneld для входу через браузер використовуйте панель HTTP джерело. Не є налаштуванням користувача.",
+   "text": "Походження внутрішнього токена зберігається для сумісності з імпортом API/config. Позичені токени Companion використовують клієнт Android Companion; вхід через браузер ha-paneld використовує джерело HTTP панелі. Це не налаштування користувача.",
    "sourceHash": "ffae29400af4eb9ec15c30c66a9432dd116ddda13f627652a3a57144c0c5f209",
    "state": "machine-draft"
   },
@@ -9254,7 +9254,7 @@
    "state": "machine-draft"
   },
   "settings.ha_refresh_token.help": {
-   "text": "Стан внутрішнього токена зберігається протягом APIСумісність з імпортом /config. Запозичено Companion та ha-paneld-опубліковано OAuth Система автоматично керує входами.",
+   "text": "Стан внутрішнього токена зберігається для сумісності з імпортом API/config. Позичені входи Companion та видані ha-paneld OAuth керують цим автоматично.",
    "sourceHash": "6366b03a354de30d09782192cf07b058b689b63e893c4b6d2c6ca6178ed23795",
    "state": "machine-draft"
   },
@@ -9284,7 +9284,7 @@
    "state": "machine-draft"
   },
   "settings.ha_url.help": {
-   "text": "Вбудований рендерер: Home Assistant base URL, наприклад: http://homeassistant.local:8123. Порожнє поле вимикає цю функцію.",
+   "text": "Вбудований рендерер: Home Assistant базовий URL, наприклад: http://homeassistant.local:8123. Порожнє поле вимикає цю функцію.",
    "sourceHash": "40a81730fa85a59b7700f7979f11fa32decd4fb16d42f44036e4262862a47747",
    "state": "machine-draft"
   },
@@ -9354,7 +9354,7 @@
    "state": "machine-draft"
   },
   "settings.launcher_package.help": {
-   "text": "Кнопка «Запуск» відкриває список додатків. За замовчуванням автоматично вибирається додаток «Blank». Виберіть «Panel admin» (ha-paneld) також створює та зберігає ha-paneld the Android Домашня програма.",
+   "text": "Застосунок, який відкриває кнопка «Запуск». Значення «Blank» вибирає застосунок автоматично. Вибір «Panel admin» (ha-paneld) також робить і залишає ha-paneld головним застосунком Android.",
    "sourceHash": "524f589af2ebe612083fd20f1b6f487d59e929aae5a24cf9cd6bd4792e448395",
    "state": "machine-draft"
   },
@@ -9564,7 +9564,7 @@
    "state": "machine-draft"
   },
   "settings.self_update.label": {
-   "text": "ha-paneld auto-update",
+   "text": "ha-paneld автооновлення",
    "sourceHash": "60970f1d12342ad3487ecf8b0ea233cde2e58a13d677e8e52007dbdc52aed108",
    "state": "machine-draft"
   },
@@ -9729,12 +9729,12 @@
    "state": "machine-draft"
   },
   "settings.webview_auto_update.help": {
-   "text": "Зберегти систему WebView у рекомендованій збірці цієї панелі (з ha-paneld (дзеркало), встановлюючи новішу версію поверх кореневої під час перевірки оновлень. За замовчуванням вимкнено — a WebView Для вступу змін у силу потрібно перезапустити swap. Відображається лише у разі наявності рекомендованої збірки (не на панелях, оновлених через Play).",
+   "text": "Підтримувати системний WebView цієї панелі на рекомендованій збірці (з дзеркала ha-paneld), встановлюючи новішу поверх кореневої під час перевірки оновлень. За замовчуванням вимкнено — заміна WebView потребує перезапуску, щоб набути чинності. Показується лише за наявності рекомендованої збірки (не на панелях, оновлених через Play).",
    "sourceHash": "c213f4530d508c6c3ae53fc24f3ab6654dd3e1618bd68609031c298bf8e903ee",
    "state": "machine-draft"
   },
   "settings.webview_auto_update.label": {
-   "text": "WebView auto-update",
+   "text": "WebView автооновлення",
    "sourceHash": "20c3526cc6dbf1a8fc781ed1e7594a2c71d88903a33862fac77aa849984e2e1d",
    "state": "machine-draft"
   },
@@ -10214,7 +10214,7 @@
    "state": "machine-draft"
   },
   "setup.ha_url.error.scheme": {
-   "text": "The URL повинно починатися з http:// або https://.",
+   "text": "URL повинно починатися з http:// або https://.",
    "sourceHash": "3ee6ebecdcd3c42228a623102aed95334a9d75ee98d8b8658c99aedfba9752a0",
    "state": "machine-draft"
   },
@@ -10479,7 +10479,7 @@
    "state": "machine-draft"
   },
   "setup.progress.dashboard": {
-   "text": "HA dash",
+   "text": "HA-панель",
    "sourceHash": "f4e60256299043246476ebc93bb0a35f178a41494faee700dcfcd2a94e211011",
    "state": "machine-draft"
   },
@@ -10734,7 +10734,7 @@
    "state": "machine-draft"
   },
   "shell.github.title": {
-   "text": "ha-paneld on GitHub",
+   "text": "ha-paneld на GitHub",
    "sourceHash": "69474ee0f60dbce1020a6bcd6db49daaeeeb20bf7601151aba213b6fd98d66a6",
    "state": "machine-draft"
   },
@@ -10819,12 +10819,12 @@
    "state": "machine-draft"
   },
   "shell.runtime.duration_minutes": {
-   "text": "{count} min",
+   "text": "{count} хв",
    "sourceHash": "1829c58ba472520fd39e61f9e337a1b7da27e86299332dde5bfdea355c3895a8",
    "state": "machine-draft"
   },
   "shell.runtime.duration_seconds": {
-   "text": "{count} s",
+   "text": "{count} с",
    "sourceHash": "e4e6c0fbc1a49d45c3bd828a8f1db1b256b17db672e68d19b15d5cf58ca0aa52",
    "state": "machine-draft"
   },
@@ -10899,7 +10899,7 @@
    "state": "machine-draft"
   },
   "shell.setup_progress.publishing": {
-   "text": "MQTT підключено — публікація Home Assistant discovery.",
+   "text": "MQTT підключено — публікація виявлення Home Assistant.",
    "sourceHash": "91badffcf3f64548ae77c2860e1ea840212f96d595e4f00ad17d768e1232c201",
    "state": "machine-draft"
   },
@@ -10949,7 +10949,7 @@
    "state": "machine-draft"
   },
   "configure.enum.dashboard_theme.light": {
-   "text": "Light",
+   "text": "Світла",
    "sourceHash": "dbcd5e7bb7a0f538810de44c3efbd813037ee3fa358747bb71fa58e157af45f7",
    "state": "machine-draft"
   },
@@ -11719,7 +11719,7 @@
    "state": "machine-draft"
   },
   "install.uninstall.tame_link": {
-   "text": "tame",
+   "text": "приручити",
    "sourceHash": "77cf9a363c0fb1f0b9cc1bfe00c819a7abfa9cf339454950669e3f890c155bab",
    "state": "machine-draft"
   },
@@ -11734,7 +11734,7 @@
    "state": "machine-draft"
   },
   "install.warning.no_renderer.prefix": {
-   "text": "Вибрати ha-paneld's вбудований рендерер на",
+   "text": "Виберіть вбудований рендерер ha-paneld на",
    "sourceHash": "1f845c25c53535c6a532ad2f042e006fab10260d70bc16df7b7590cc6c1b17ae",
    "state": "machine-draft"
   },
@@ -11769,7 +11769,7 @@
    "state": "machine-draft"
   },
   "install.warning.webview_old.body": {
-   "text": "The Home Assistant панель може відображатися порожньою або з помилками.",
+   "text": "Home Assistant панель може відображатися порожньою або з помилками.",
    "sourceHash": "cdaa9385ecdff69e20e8fbe71c147fe127a7a896c85f157fd9ac902fb995ebe4",
    "state": "machine-draft"
   },
