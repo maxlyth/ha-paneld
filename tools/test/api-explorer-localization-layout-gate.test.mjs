@@ -230,7 +230,7 @@ test('API Explorer fits every release locale and theme at narrow and wide widths
     await page.close();
   }
 
-  assert.equal(evidence.length, 24, 'complete 6 locale × 2 theme × 2 viewport matrix');
+  assert.equal(evidence.length, 36, 'complete 9 locale × 2 theme × 2 viewport matrix');
   const summary = {
     cells: evidence.length,
     endpointRenderings: evidence.reduce((sum, item) => sum + item.expanded.endpoints, 0),

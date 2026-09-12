@@ -189,7 +189,7 @@ test('Install dynamic states fit every release locale, theme and target viewport
     Object.entries(measured.states).forEach(([state, value]) => assert.ok(value.length > 20, `${cell}: ${state} state was not exercised`));
     evidence.push(measured); await page.close();
   }
-  assert.equal(evidence.length, 60, 'complete 6 locale × 2 theme × 5 viewport matrix');
+  assert.equal(evidence.length, 90, 'complete 9 locale × 2 theme × 5 viewport matrix');
   console.log(`Install localization layout evidence: ${JSON.stringify({ cells: evidence.length, maximumOverflow: Math.max(...evidence.map((item) => item.overflow)), maximumCls: Math.max(...evidence.map((item) => item.cls)) })}`);
 
   const mutant = await browser.newPage({ viewport: VIEWPORTS[0] });
