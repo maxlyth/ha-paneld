@@ -11,12 +11,12 @@ const toolRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const repository = path.dirname(path.dirname(toolRoot));
 const expected = new Map([
   ["docs/hardware/README.md", { owners: 207, fallback: 26 }],
-  ["docs/hardware/nspanel-pro.md", { owners: 167, fallback: 56 }],
+  ["docs/hardware/nspanel-pro.md", { owners: 166, fallback: 55 }],
   ["docs/hardware/tpa10.md", { owners: 104, fallback: 43 }],
   ["docs/hardware/wf1589t.md", { owners: 69, fallback: 16 }],
 ]);
 
-test("hardware guides freeze the reviewed 406-translation and 141-fallback boundary", () => {
+test("hardware guides freeze the reviewed 406-translation and 140-fallback boundary", () => {
   const policy = JSON.parse(fs.readFileSync(
     path.join(repository, "docs/i18n/consequential-segments.json"),
     "utf8",
@@ -40,8 +40,8 @@ test("hardware guides freeze the reviewed 406-translation and 141-fallback bound
     fallback += counts.fallback;
   }
 
-  assert.equal(owners, 547);
-  assert.equal(fallback, 141);
+  assert.equal(owners, 546);
+  assert.equal(fallback, 140);
   assert.equal(owners - fallback, 406);
 });
 

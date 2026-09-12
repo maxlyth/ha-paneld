@@ -230,7 +230,6 @@
     {
       "consequentialSegments": [
         "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1/2:523e1c78e04801b58109e3ff016e72ac18e9e840dbda49229c5cd125c11763c5::paragraph::022bad578936bc2c08309cd2b16836c04ced5b691e68d3fa14b216fcc59982f9::1",
-        "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1/2:523e1c78e04801b58109e3ff016e72ac18e9e840dbda49229c5cd125c11763c5::paragraph::075a784214e9b96ae267b3ae1905fc39dd1a60892e9cdba959879ff3759ae438::1",
         "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1/2:80e9a6a87abd6d9b212f11f567a3c063711057fbc504cceb3135f010b8ea6c7b::paragraph::77a1aa92451a2ef5bd7858bd4ff0783c3fbd2897abaa432783951bf766aa3bb6::1",
         "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1/2:b1bfec3eb57cd5a2871a5b31ac56c13aca0141489e7e76c3eab9697e0a82c054/3:3d6b14580a64bdf1b4bbdbfbfb1a9755345ec4c1b2823f30b79956ef0043e201::paragraph::1a8d97a3ad8623131fadf5b627de40ae6f61e1523f31f7201a87bc623ef1dbea::1",
         "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1/2:b1bfec3eb57cd5a2871a5b31ac56c13aca0141489e7e76c3eab9697e0a82c054/3:3d6b14580a64bdf1b4bbdbfbfb1a9755345ec4c1b2823f30b79956ef0043e201::paragraph::28615b309953e75f413fd2a58eefb08b129caf3ea14351f6aab43e5bf3158f93::1",
@@ -287,8 +286,8 @@
         "docs/hardware/nspanel-pro.md::1:669e307ce6d8cd21a52e8bfddb8bb3e3a828ea9677ebf80ced7393bf66e541f1::paragraph::f60f63906d5592f5c0ea5e0850e17f61f69dd77bdb338aa751828f2be50b41aa::1"
       ],
       "document": "docs/hardware/nspanel-pro.md",
-      "segmentCount": 167,
-      "sourceSha256": "06809e5ea4403a508c0aa688ac0de85b58efca72c3dd05fa44a11dc966ca2fe4"
+      "segmentCount": 166,
+      "sourceSha256": "dd7e1f4143090722f6ab2858be069eeec523807b373719d54573076a89d16f7b"
     },
     {
       "consequentialSegments": [
