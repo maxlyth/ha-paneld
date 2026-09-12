@@ -2,11 +2,11 @@
 
 ha-paneld runs on a panel and talks to your Home Assistant instance. The app does not talk to the project. This page documents the static project-operated infrastructure that exists, so that anyone who wants to check what it does can do so without taking anyone's word for it.
 
-**The ha-paneld app never contacts `ha-paneld.com`.** Installing the app through the optional F-Droid repository causes the separate F-Droid client to fetch repository indexes and APKs from `fdroid.ha-paneld.com`. Once installed, ha-paneld works identically with the domain unreachable or gone.
+**The ha-paneld app never contacts `ha-paneld.com`.** It did not before and it does not now. The optional F-Droid repository, which caused the separate F-Droid client rather than the app to fetch indexes and APKs from `fdroid.ha-paneld.com`, is [retired](fdroid.md) and no longer updated. ha-paneld works identically with the domain unreachable or gone.
 
 ## What exists
 
-Documentation images are stored in a Cloudflare R2 bucket published at `assets.ha-paneld.com`. The optional F-Droid repository is stored in a separate R2 bucket published at `fdroid.ha-paneld.com`. There is no application, database, login or form on either host; they serve static files only.
+Documentation images are stored in a Cloudflare R2 bucket published at `assets.ha-paneld.com`. The retired F-Droid repository is stored in a separate R2 bucket published at `fdroid.ha-paneld.com`, which still serves what was already published. There is no application, database, login or form on either host; they serve static files only.
 
 Every published documentation image is listed in [`docs/img/manifest.txt`](img/manifest.txt) with its SHA-256 hash and its provenance, and the tooling that publishes them is [`tools/docs-assets/`](../tools/docs-assets/) in this repository. The signed F-Droid indexes enumerate APKs copied byte-for-byte from stable GitHub release assets. Between those records and the publishing tools, what is served can be enumerated and checked rather than taken on trust.
 

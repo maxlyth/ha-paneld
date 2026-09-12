@@ -82,7 +82,6 @@ ha-paneld n’est pas distribué via Google Play ; l’installation nécessite d
 
 ### Autres méthodes d’installation
 
-- **F-Droid sur le panneau :** ajoutez [le dépôt F-Droid de ha-paneld](../fdroid.md) pour installer et mettre à jour les versions stables sans ordinateur. F-Droid vous avertit lorsqu’une mise à jour est disponible et vous permet de l’installer sur le panneau ; les versions candidates ne sont pas incluses. Les versions 4.0.0 et ultérieures du micrologiciel Sonoff NSPanel Pro incluent F-Droid. Cette méthode installe l’application, mais les fonctionnalités nécessitant un accès root requièrent toujours les étapes de provisionnement habituelles.
 - **Chargement latéral manuel ou amorçage USB :** utilisez l’APK de la [dernière version](https://github.com/maxlyth/ha-paneld/releases) et suivez [Provisionnement et mises à jour du parc](provisioning.md) pour les autorisations et la configuration restantes.
 
 ## Choisir le mode d’exécution du tableau de bord

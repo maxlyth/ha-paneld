@@ -82,7 +82,6 @@ ha-paneld 不通过 Google Play 分发，因此安装始终需要旁加载。对
 
 ### 其他安装方式
 
-- **面板上的 F-Droid：** 添加 [ha-paneld 的 F-Droid 存储库](../fdroid.md)，无需计算机即可安装和更新稳定版本。有更新可用时，F-Droid 会通知你，并允许你在面板上安装；不包括候选发布版本。Sonoff NSPanel Pro 固件 4.0.0 及更高版本包含 F-Droid。此方式会安装应用，但需要 root 的功能仍需执行常规预配步骤。
 - **手动旁加载或 USB 初始预配：** 使用 [最新版本](https://github.com/maxlyth/ha-paneld/releases) 中的 APK，并按照 [预配和设备群更新](provisioning.md) 完成其余权限授予和设置。
 
 ## 选择仪表盘的运行方式

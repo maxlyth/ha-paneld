@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ha-paneld — F-Droid repository</title>
+<title>ha-paneld F-Droid repository (retired)</title>
 <style>
   body { font-family: system-ui, -apple-system, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.55; color: #1a1a1a; }
   code { background: #f0f0f0; padding: .15em .4em; border-radius: .25em; word-break: break-all; }
@@ -13,17 +13,22 @@
 </style>
 </head>
 <body>
-  <h1>ha-paneld — F-Droid repository</h1>
-  <p><a href="https://github.com/maxlyth/ha-paneld">ha-paneld</a> is an open-source Home Assistant agent
-     for Android wall panels. This is its self-hosted F-Droid repository.</p>
+  <h1>ha-paneld F-Droid repository (retired)</h1>
+  <p>This repository is no longer updated. It could only install the app, not connect a panel to Home Assistant, so it
+     has been replaced by <a href="https://panel-assistant.io">Panel Assistant</a>, the Home Assistant
+     integration that installs ha-paneld and connects the panel once its own setup is done.</p>
 
-  <h2>Add this repo in F-Droid</h2>
-  <p>In the F-Droid app: <em>Settings → Repositories → +</em>, then enter:</p>
-  <p><code>https://fdroid.ha-paneld.com/fdroid/repo?fingerprint=@FINGERPRINT@</code></p>
-  <p>Then install <strong>ha-paneld</strong> and receive updates directly on the panel — no PC or adb
-     needed.</p>
+  <h2>What to do instead</h2>
+  <p>Add Panel Assistant to Home Assistant and give it the panel's address. Home Assistant installs the
+     app over the network and connects the panel once its setup is done, so no computer is needed at the panel. If the panel
+     cannot be reached over the network, Panel Assistant can also install over USB from a browser.</p>
 
-  <p><small>Only full releases are published here; pre-releases (…-rcN) are not. Some panel features
-     require root — see the <a href="https://github.com/maxlyth/ha-paneld#readme">README</a>.</small></p>
+  <h2>If you already added this repository</h2>
+  <p>Nothing on your panel stops working, and the versions published here stay available. You will not
+     receive new versions from this repository, so remove it from the F-Droid client and update the
+     panel from Home Assistant instead.</p>
+
+  <p><small>Source and releases remain at
+     <a href="https://github.com/maxlyth/ha-paneld">github.com/maxlyth/ha-paneld</a>.</small></p>
 </body>
 </html>
