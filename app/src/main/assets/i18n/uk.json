@@ -11879,7 +11879,7 @@
    "state": "machine-draft"
   },
   "profiles.editor.codemirror.regexp": {
-   "text": "regexp",
+   "text": "регулярний вираз",
    "sourceHash": "0af6c667532fcbb3f611e0ef3557f41f62266baaee9b1b7a57ad22c5eb6eab12",
    "state": "machine-draft"
   },
