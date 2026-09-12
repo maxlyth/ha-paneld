@@ -43,7 +43,7 @@ The web interface gives you one place to configure a panel, install software and
 
 | Standing screen | Proximity sensor setup |
 |---|---|
-| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen with the configuration address and QR code" width="420"> | <picture><source media="(prefers-color-scheme: light)" srcset="docs/img/proximity-setup-screen-480.gif"><img src="docs/img/proximity-setup-screen-480.gif" alt="Proximity sensor setup" width="420"></picture> |
+| <img src="docs/img/standing-screen.png" alt="ha-paneld standing screen with the configuration address and QR code" width="420"> | <img src="docs/img/proximity-setup-screen-480.gif" alt="Proximity sensor setup" width="420"> |
 
 </details>
 
