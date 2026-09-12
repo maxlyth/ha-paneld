@@ -1084,6 +1084,45 @@ class CatalogueTest(unittest.TestCase):
                 with self.subTest(key=key), self.assertRaises(i18n.CatalogueError):
                     i18n.validate_target_language(key, text, "zh-Hans", source["strings"][key])
 
+    def test_every_unchanged_english_fallback_target_is_registered_as_an_exception(self):
+        # An english-fallback record whose text is byte-identical to the source is exactly
+        # the shape the translation-candidate pipeline re-offers for regeneration on every
+        # push (it always retries english-fallback records). If the provider returns the
+        # same, correct cognate text again, an unregistered pair fails the candidate bundle
+        # step with nothing catching it beforehand. Ask the real validator, per key, whether
+        # that would happen, rather than guessing from the record shape.
+        catalogue_dir = SCRIPT.parents[1] / "app/src/main/assets/i18n"
+        source = i18n.validate_source(catalogue_dir / "en.json")
+        for locale in sorted(i18n.LOCALES):
+            target = json.loads((catalogue_dir / f"{locale}.json").read_text(encoding="utf-8"))
+            for key, record in target["strings"].items():
+                if record.get("state") != "english-fallback":
+                    continue
+                source_text = source["strings"][key]["text"]
+                if record["text"] != source_text:
+                    continue
+                source_record = source["strings"][key]
+                pair = (locale, key)
+                with self.subTest(locale=locale, key=key):
+                    with mock.patch.dict(i18n.UNCHANGED_TARGET_EXCEPTIONS, {}, clear=False):
+                        i18n.UNCHANGED_TARGET_EXCEPTIONS.pop(pair, None)
+                        try:
+                            i18n.validate_target_language(key, source_text, locale, source_record)
+                        except i18n.CatalogueError:
+                            registration_required = True
+                        else:
+                            registration_required = False
+                    if not registration_required:
+                        continue
+                    self.assertEqual(
+                        source_text,
+                        i18n.UNCHANGED_TARGET_EXCEPTIONS.get(pair),
+                        f"{locale}/{key} carries an unchanged english-fallback text that the "
+                        "validator rejects without a registered exception, so a future "
+                        "regeneration would fail the candidate bundle step unless "
+                        "UNCHANGED_TARGET_EXCEPTIONS carries this exact pair.",
+                    )
+
     def test_install_information_symbol_exception_is_exact_and_key_scoped(self):
         key = "install.presentation.status_no_renderer"
         source_record = {
