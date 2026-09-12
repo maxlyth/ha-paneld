@@ -104,16 +104,16 @@ browserTest('Configure bypasses caches and lets a supported HA language supersed
   const page = await browser.newPage();
   page.setDefaultTimeout(2_000);
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
-  await page.addInitScript(() => localStorage.setItem('selectedLanguage', JSON.stringify('nl-NL')));
+  await page.addInitScript(() => localStorage.setItem('selectedLanguage', JSON.stringify('ja-JP')));
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
   await page.getByText('Anzeigename', { exact: true }).waitFor();
 
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('selectedLanguage'))), 'nl-NL');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('selectedLanguage'))), 'ja-JP');
   assert.deepEqual(await page.locator('#cfg-ui_language option').allTextContents(),
     ['Automatic', 'English', 'Deutsch', 'Français', 'Italiano', 'Español', '简体中文']);
   assert.deepEqual(reads.filter((read) => read.path === '/api/v1/config/schema').map((read) => read.url), [
-    '/api/v1/config/schema?lang=nl-NL',
-    '/api/v1/config/schema?lang=nl-NL&ha_lang=de-DE',
+    '/api/v1/config/schema?lang=ja-JP',
+    '/api/v1/config/schema?lang=ja-JP&ha_lang=de-DE',
   ]);
   for (const read of reads) assert.equal(read.cacheControl, 'no-cache');
 });
