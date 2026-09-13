@@ -87,15 +87,18 @@ class LiveSettingAuthorityTest {
         data class Publication(val payload: String, val retain: Boolean, val done: (Boolean) -> Unit)
         val publications = mutableListOf<Publication>()
         var actual = false
-        val converger = StateConverger(
-            sender = { _, payload, retain, done -> publications += Publication(payload, retain, done) },
-            schedule = { it() },
-        )
-        converger.register(StateConverger.Channel(
+        val mqtt = mqttStateChannel(
             "touch_sound",
             "touch/state",
             observe = { StateConverger.Observation.Known(if (actual) "ON" else "OFF") },
-        ))
+        )
+        val converger = StateConverger(
+            sender = { _, observation, done ->
+                publications += Publication(mqttStatePayload(observation), mqtt.route.retain, done)
+            },
+            schedule = { it() },
+        )
+        converger.register(mqtt.channel)
         converger.reconcile("touch_sound")
         publications.last().done(true)
 

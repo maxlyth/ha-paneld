@@ -8,32 +8,41 @@ import io.github.maxlyth.hapaneld.util.MonotonicDeadline
 import io.github.maxlyth.hapaneld.util.RetirableMutationGate
 
 /**
- * Registry-driven state convergence. Every state-bearing MQTT entity supplies one authoritative
- * observation; commands, reconnects, local events and periodic audits all flow through this class.
- * Publication state advances only after the broker acknowledges the exact generation that was sent.
+ * One destination for converged observations, addressed by transport-neutral channel id. [done] reports
+ * true only when this destination acknowledged the exact observation on the connection that sent it.
+ * A sink must return promptly: it runs on the convergence pump.
+ */
+typealias StateSink = (channel: String, observation: StateConverger.Observation.Reportable, done: (Boolean) -> Unit) -> Unit
+
+/**
+ * Registry-driven state convergence. Every state-bearing entity supplies one authoritative observation
+ * under a transport-neutral channel id; commands, reconnects, local events and periodic audits all flow
+ * through this class. Publication state advances only after [sender] acknowledges the exact generation
+ * that was sent. Transport addressing (topics, retain) belongs to the sink, never to the channel.
  */
 class StateConverger(
-    private val sender: (topic: String, payload: String, retain: Boolean, done: (Boolean) -> Unit) -> Unit,
+    private val sender: StateSink,
     private val schedule: (() -> Unit) -> Unit = ::dispatch,
     private val featureCosts: FeatureCostRegistry = FeatureCosts.registry,
     private val monotonicMs: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
     sealed interface Observation {
-        data class Known(val payload: String) : Observation
+        /** What a sink may receive. Unknown publishes nothing, so it is never reported. */
+        sealed interface Reportable : Observation
+        data class Known(val payload: String) : Reportable
         data object Unknown : Observation
-        data object Unavailable : Observation
+        data object Unavailable : Reportable
     }
 
     data class Channel(
+        /** Transport-neutral channel id matching [CHANNEL_ID]; equal to today's MQTT topic leaf. */
         val key: String,
-        val topic: String,
-        val retain: Boolean = true,
         val observe: () -> Observation,
         val equivalent: (acknowledged: String, observed: String) -> Boolean = String::equals,
         /** Whether a known payload is meaningful enough to repeat solely for freshness. Semantic
          *  changes still publish normally even when this returns false. */
         val refreshEligible: (String) -> Boolean = { true },
-        /** Maximum broker-acknowledged silence for this state topic. Null keeps change-only
+        /** Maximum acknowledged silence for this channel. Null keeps change-only
          *  publication. The deadline never republishes Unknown or Unavailable observations. */
         val maxSilenceMs: Long? = null,
     )
@@ -61,6 +70,7 @@ class StateConverger(
     @Synchronized
     fun register(channel: Channel) {
         check(!closed) { "state converger is closed" }
+        require(CHANNEL_ID.matches(channel.key)) { "invalid state channel id ${channel.key}" }
         check(channel.key !in channels) { "duplicate state channel ${channel.key}" }
         require(channel.maxSilenceMs == null || channel.maxSilenceMs > 0L) {
             "maxSilenceMs must be positive"
@@ -80,7 +90,8 @@ class StateConverger(
 
     private fun reconcileAdmitted(key: String, force: Boolean, admit: () -> Boolean) {
         val runtime = synchronized(this) { if (closed) null else channels[key] } ?: return
-        val observedPayload = when (val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)) {
+        val observation = runCatching { runtime.channel.observe() }.getOrDefault(Observation.Unknown)
+        val observedPayload = when (observation) {
             is Observation.Known -> observation.payload.also {
                 synchronized(this) {
                     if (closed) return
@@ -184,8 +195,11 @@ class StateConverger(
             cost.outcome(if (success) FeatureCostOutcome.SUCCESS else FeatureCostOutcome.FAILURE).close()
             if (pump) schedule { reconcileDirty() }
         }
+        // Unavailable never takes the cadence path (it marks the channel unknown), so an unavailable
+        // observation always sends itself; every other admitted payload is a known value.
+        val reported = if (observation is Observation.Unavailable) Observation.Unavailable else Observation.Known(payload)
         try {
-            sender(runtime.channel.topic, payload, runtime.channel.retain, completion)
+            sender(runtime.channel.key, reported, completion)
         } catch (_: Exception) {
             completion(false)
         }
@@ -289,6 +303,8 @@ class StateConverger(
     }
 
     companion object {
+        /** Protocol §7 channel identity; a colon can never appear, so `http:<key>` keys cannot collide. */
+        val CHANNEL_ID = Regex("^[a-z][a-z0-9_]{0,47}$")
         private const val MAX_IN_FLIGHT = 4
         private val ALWAYS_ADMIT: () -> Boolean = { true }
         private val PUMP = java.util.concurrent.Executors.newSingleThreadExecutor { r ->

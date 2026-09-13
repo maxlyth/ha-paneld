@@ -133,7 +133,7 @@ class ConfigPostProductionRouteTest {
             setField(
                 bridge,
                 "stateConverger",
-                StateConverger(sender = { _, _, _, _ -> error("no state channel should publish") }),
+                StateConverger(sender = { _, _, _ -> error("no state channel should publish") }),
             )
         }
 
