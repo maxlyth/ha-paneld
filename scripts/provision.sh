@@ -1053,10 +1053,12 @@ read_config_schema() {
     [ "$attempt" -lt 4 ] || return 0
     # Pause for one second more on each attempt, and only when a request of at least one second still
     # fits before the deadline after that pause (curl reads --max-time 0 as no limit).
-    request_timeout=$((deadline - SECONDS - attempt))
-    [ "$request_timeout" -ge 1 ] || return 0
+    [ $((deadline - SECONDS - attempt)) -ge 1 ] || return 0
     sleep "$attempt"
     attempt=$((attempt + 1))
+    # A pause can overrun, so the next request's budget is measured after it; none starts late.
+    request_timeout=$((deadline - SECONDS))
+    [ "$request_timeout" -ge 1 ] || return 0
   done
 }
 
