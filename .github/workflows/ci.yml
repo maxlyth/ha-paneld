@@ -153,9 +153,14 @@ jobs:
           # account cannot delete, so the next checkout wiped the working copy,
           # found no repository and stopped before any step of ours ran.
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
+          # The configuration cache lets Gradle run tasks of this single module in parallel, so a
+          # split that names several tasks uses every core. It is a flag here rather than a
+          # gradle.properties default because a local build configured with keystore.properties would
+          # store those signing passwords in its cache entry, and release.yml keeps its build unchanged.
           sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
             ./gradlew ${{ matrix.tasks }} \
+              --configuration-cache \
               --stacktrace
 
       - name: Verify supported Android and ABI floors
