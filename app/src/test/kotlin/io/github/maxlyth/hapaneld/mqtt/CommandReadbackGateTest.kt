@@ -1,6 +1,7 @@
 package io.github.maxlyth.hapaneld.mqtt
 
 import io.github.maxlyth.hapaneld.MqttCommandDispatcher
+import io.github.maxlyth.hapaneld.mqttStatePayload
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostRegistry
 import io.github.maxlyth.hapaneld.util.MonotonicDeadline
@@ -83,14 +84,14 @@ class CommandReadbackGateTest {
         val pump = ManualPump()
         val published = Collections.synchronizedList(mutableListOf<String>())
         val converger = StateConverger(
-            sender = { _, payload, _, done -> published += payload; done(true) },
+            sender = { _, observation, done -> published += mqttStatePayload(observation); done(true) },
             schedule = { it() },
         )
         val hardware = java.util.concurrent.atomic.AtomicReference("ON")
         val observeEntered = CountDownLatch(1)
         val observeRelease = CountDownLatch(1)
         converger.register(
-            StateConverger.Channel("relay1", "relay1/state", observe = {
+            StateConverger.Channel("relay1", observe = {
                 val snapshot = hardware.get()   // captured BEFORE blocking — stale once released
                 observeEntered.countDown()
                 assertTrue(observeRelease.await(5, TimeUnit.SECONDS))

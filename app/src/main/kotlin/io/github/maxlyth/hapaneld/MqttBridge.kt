@@ -361,29 +361,6 @@ internal fun mqttMeasurementRefreshAfterAckMs(key: String): Long? =
 internal fun mqttMeasurementPayloadIsRefreshable(payload: String): Boolean =
     payload.toDoubleOrNull()?.isFinite() == true
 
-internal fun mqttStateChannel(
-    key: String,
-    topic: String,
-    retain: Boolean = true,
-    equivalent: (String, String) -> Boolean = String::equals,
-    observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
-): io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel {
-    val refreshAfterAckMs = mqttMeasurementRefreshAfterAckMs(key)
-    return io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(
-        key = key,
-        topic = topic,
-        retain = retain,
-        observe = observe,
-        equivalent = equivalent,
-        refreshEligible = if (refreshAfterAckMs != null) {
-            ::mqttMeasurementPayloadIsRefreshable
-        } else {
-            { true }
-        },
-        maxSilenceMs = refreshAfterAckMs,
-    )
-}
-
 private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
 
 /** Whether the published count is a total or a known lower bound, so HA never records a floor as exact. */
@@ -1314,12 +1291,12 @@ internal class MqttBridge(
     // holds one — otherwise a queued callback from a superseded broker session mutates whichever
     // coordinator happens to be installed when it finally runs.
     private val haLifecycleLease: HaLifecycleRuntime.MqttLease? = null,
+    private val transport: MqttTransport = HiveMqTransport(),
 ) : LiveSettingHandlers {
     private enum class CommandKind { LATEST, ACTION }
 
     private val haLinkResolutionThread = AtomicReference<Thread?>()
     @Volatile private var reloadNavigationFuture: ScheduledFuture<*>? = null
-    private val transport: MqttTransport = HiveMqTransport()
     private val discoveryCapabilities = MqttDiscoveryCapabilitySource(
         supplier = capabilities,
         onFailure = { error ->
@@ -1632,6 +1609,12 @@ internal class MqttBridge(
     // Eager ownership removes the extra lazy/not-yet-closed state: every external producer sees the
     // same converger, and retirement can close it before any late callback tries to publish.
     private val announcementReadiness = MqttAnnouncementReadiness()
+    // The MQTT edge: each channel's topic and retain policy, recorded before the channel is registered so
+    // no reconcile can reach the sink for a channel without its route. Declared ahead of the converger,
+    // whose construction registers channels.
+    private val mqttStateRoutes = java.util.concurrent.ConcurrentHashMap<String, MqttStateRoute>()
+    // The converger's sender. MQTT is the primary, whose acknowledgement alone drives convergence.
+    private val stateSinks = io.github.maxlyth.hapaneld.mqtt.StateSinkFanOut(::publishStateObservation)
     private val stateConverger = createStateConverger()
     private val zigbeeActuation = MqttZigbeeActuationCoordinators.forController(zigbee)
     private val zigbeeLease = zigbeeActuation.activate()
@@ -1664,15 +1647,7 @@ internal class MqttBridge(
         val known = { payload: String -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known(payload) }
         val unknown = io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unknown
         val c = io.github.maxlyth.hapaneld.mqtt.StateConverger(
-            sender = { topic, payload, retain, done ->
-                val generation = connectionGeneration.currentOrNull()
-                publish(topic, payload, retain) { acknowledged ->
-                    if (acknowledged && generation != null && connectionGeneration.isCurrent(generation)) {
-                        completeAnnouncementIfReady(announcementReadiness.acknowledgeState(generation))
-                    }
-                    done(acknowledged)
-                }
-            },
+            sender = stateSinks,
             schedule = ::dispatchStateWork,
         )
         fun channel(
@@ -1681,7 +1656,7 @@ internal class MqttBridge(
             retain: Boolean = true,
             equivalent: (String, String) -> Boolean = String::equals,
             observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
-        ) = c.register(mqttStateChannel(key, topic, retain, equivalent, observe))
+        ) = registerStateChannel(c, mqttStateChannel(key, topic, retain, equivalent, observe))
 
         channel("storage_health", stateStorageHealth) {
             known(storageHealth().severity.name.lowercase(Locale.ROOT))
@@ -1832,6 +1807,31 @@ internal class MqttBridge(
         return c
     }
 
+    private fun registerStateChannel(
+        converger: io.github.maxlyth.hapaneld.mqtt.StateConverger,
+        mqtt: MqttStateChannel,
+    ) {
+        // A duplicate keeps the first route, and the converger then refuses the duplicate channel.
+        mqttStateRoutes.putIfAbsent(mqtt.channel.key, mqtt.route)
+        converger.register(mqtt.channel)
+    }
+
+    /** The primary state sink: derives the topic, retain flag and payload bytes from the channel. */
+    private fun publishStateObservation(
+        channel: String,
+        observation: io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Reportable,
+        done: (Boolean) -> Unit,
+    ) {
+        val route = checkNotNull(mqttStateRoutes[channel]) { "no MQTT route for state channel $channel" }
+        val generation = connectionGeneration.currentOrNull()
+        publish(route.topic, mqttStatePayload(observation), route.retain) { acknowledged ->
+            if (acknowledged && generation != null && connectionGeneration.isCurrent(generation)) {
+                completeAnnouncementIfReady(announcementReadiness.acknowledgeState(generation))
+            }
+            done(acknowledged)
+        }
+    }
+
     /**
      * Add newly confirmed hardware channels without replacing the bridge. The possible shape never
      * shrinks, while each observer checks the latest live snapshot and reports unavailable rather than
@@ -1859,7 +1859,13 @@ internal class MqttBridge(
                 observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
             ) {
                 if (key !in registered) {
-                    converger.register(io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(key, topic, observe = observe))
+                    registerStateChannel(
+                        converger,
+                        MqttStateChannel(
+                            io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(key, observe = observe),
+                            MqttStateRoute(topic, retain = true),
+                        ),
+                    )
                 }
             }
 
@@ -2629,7 +2635,9 @@ internal class MqttBridge(
             return
         }
         val kind = commandKind(topic)
-        if (kind == null || payloadBytes.size > MAX_COMMAND_PAYLOAD_BYTES) {
+        // State commands conflate by their transport-neutral channel, derived here at the MQTT edge.
+        val channel = if (kind == CommandKind.LATEST) mqttCommandChannel(panel, topic) else null
+        if (kind == null || kind == CommandKind.LATEST && channel == null || payloadBytes.size > MAX_COMMAND_PAYLOAD_BYTES) {
             FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_COMMAND_DISPATCH)
             return
         }
@@ -2639,7 +2647,7 @@ internal class MqttBridge(
         val payload = payloadBytes.copyOf()
         val command = { consumeCommand(topic, payload) }
         val admission = when (kind) {
-            CommandKind.LATEST -> commandDispatcher.submitLatest(topic, command)
+            CommandKind.LATEST -> commandDispatcher.submitLatest(requireNotNull(channel), command)
             CommandKind.ACTION -> commandDispatcher.submitAction(command)
         }
         recordCommandAdmission(admission)
