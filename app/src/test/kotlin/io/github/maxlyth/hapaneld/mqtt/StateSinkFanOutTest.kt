@@ -108,6 +108,22 @@ class StateSinkFanOutTest {
         assertEquals(0, c.status().dirty)
     }
 
+    @Test fun anAddedSinkErrorStillReachesThePrimarySoTheOutboxSlotIsFreed() {
+        val primary = Recording()
+        val fanOut = StateSinkFanOut(primary)
+        fanOut.add { _, _, _ -> throw OutOfMemoryError("added sink") }
+        val c = converger(fanOut)
+        c.register(StateConverger.Channel("screen", observe = { Observation.Known("ON") }))
+
+        val escaped = runCatching { c.reconcile("screen") }.exceptionOrNull()
+
+        assertTrue("an Error is not swallowed", escaped is OutOfMemoryError)
+        assertEquals("the primary still received the observation", 1, primary.seen.size)
+        primary.done.single()(true)
+        assertEquals(0, c.status().inFlight)
+        assertEquals(1L, c.status().successes)
+    }
+
     @Test fun aSilentAddedSinkNeverWithholdsThePrimaryAcknowledgement() {
         val primary = Recording()
         val silent = Recording()

@@ -26,15 +26,19 @@ class StateSinkFanOut(private val primary: StateSink) : StateSink {
         observation: StateConverger.Observation.Reportable,
         done: (Boolean) -> Unit,
     ) {
-        for (sink in added) {
-            try {
-                sink(channel, observation, IGNORED)
-            } catch (_: Exception) {
-                // An added sink never affects the primary's outcome or the other sinks.
+        try {
+            for (sink in added) {
+                try {
+                    sink(channel, observation, IGNORED)
+                } catch (_: Exception) {
+                    // An added sink never affects the primary's outcome or the other sinks.
+                }
             }
+        } finally {
+            // Even an Error from an added sink reaches the primary, whose completion frees the channel's
+            // outbox slot. A primary failure propagates; the converger turns it into done(false).
+            primary(channel, observation, done)
         }
-        // A primary failure propagates; the converger turns it into done(false).
-        primary(channel, observation, done)
     }
 
     private companion object {
