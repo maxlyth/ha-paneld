@@ -52,6 +52,7 @@ class StateSinkFanOutTest {
         c.register(StateConverger.Channel("screen", observe = { Observation.Known("ON") }))
 
         c.reconcile("screen")
+        assertEquals("the added sink saw the observation", 1, second.done.size)
         second.done.single()(true)
         assertEquals("an added sink's acknowledgement is not convergence", 1, c.status().inFlight)
         assertEquals(0L, c.status().successes)
