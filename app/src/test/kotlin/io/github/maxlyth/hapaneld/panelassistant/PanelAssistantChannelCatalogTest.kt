@@ -1,0 +1,152 @@
+package io.github.maxlyth.hapaneld.panelassistant
+
+import io.github.maxlyth.hapaneld.testsupport.TestSources
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.util.Base64
+
+class PanelAssistantChannelCatalogTest {
+
+    @Test fun everyConvergerChannelIsDescribedOrFolded() {
+        val keys = convergerChannels()
+        // The scan must find the channels it exists to guard, or an empty scan would pass vacuously.
+        assertTrue("scan found only ${keys.size} channels: $keys", keys.size >= 40)
+        assertTrue(keys.containsAll(listOf("screen", "relay1", "button_led64", "cpu_governor", "room_humidity", "diag_wifi_outages_attributes")))
+        val undescribed = keys.filter { key ->
+            val wire = PanelAssistantChannelCatalog.wireChannel(key)
+            if (wire == null) key !in PanelAssistantChannelCatalog.FOLDED else PanelAssistantChannelCatalog.describe(wire) == null
+        }
+        assertEquals("converger channels with no descriptor", emptyList<String>(), undescribed)
+        assertNull(PanelAssistantChannelCatalog.describe("future_leaf"))
+    }
+
+    @Test fun attributeChannelsFoldIntoTheirParentsAndUpdateChannelsTakeTheirWireIds() {
+        assertNull(PanelAssistantChannelCatalog.wireChannel("storage_health_attributes"))
+        assertNull(PanelAssistantChannelCatalog.wireChannel("diag_wifi_outages_attributes"))
+        assertEquals("storage_health", PanelAssistantChannelCatalog.FOLDED["storage_health_attributes"])
+        assertEquals("diag_wifi_outages_24h", PanelAssistantChannelCatalog.FOLDED["diag_wifi_outages_attributes"])
+        assertEquals("update_paneld", PanelAssistantChannelCatalog.wireChannel("software_update_paneld"))
+        assertEquals("update_companion", PanelAssistantChannelCatalog.wireChannel("software_update_companion"))
+        assertEquals("screen", PanelAssistantChannelCatalog.wireChannel("screen"))
+    }
+
+    @Test fun descriptorsMatchTheMqttDiscoveryTheGoldenFixturePins() {
+        val announced = goldenDiscovery()
+        val checked = mutableListOf<String>()
+        for (key in convergerChannels()) {
+            val wire = PanelAssistantChannelCatalog.wireChannel(key) ?: continue
+            val descriptor = requireNotNull(PanelAssistantChannelCatalog.describe(wire)) { wire }
+            val discovery = announced[descriptor.uniqueSuffix] ?: continue
+            checked += wire
+            assertEquals("$wire platform", discovery.component, descriptor.platform)
+            val config = discovery.config ?: continue
+            assertEquals("$wire entity_category", config.optString("entity_category").ifEmpty { null }, descriptor.entityCategory)
+            assertEquals("$wire force_update", config.optBoolean("force_update", false), descriptor.forceUpdate)
+            assertEquals("$wire device_class", config.optString("device_class").ifEmpty { null }, descriptor.deviceClass)
+            assertEquals("$wire unit", config.optString("unit_of_measurement").ifEmpty { null }, descriptor.unit)
+            assertEquals("$wire state_class", config.optString("state_class").ifEmpty { null }, descriptor.stateClass)
+            assertEquals("$wire min", config.opt("min"), descriptor.min)
+            assertEquals("$wire max", config.opt("max"), descriptor.max)
+            config.optJSONArray("options")?.let { labels ->
+                val codes = (0 until labels.length()).map { PanelAssistantChannelCatalog.optionCode(labels.getString(it)) }
+                assertTrue("$wire options $codes not in ${descriptor.options}", descriptor.options.orEmpty().containsAll(codes))
+            }
+            config.optJSONArray("effect_list")?.let { effects ->
+                assertEquals("$wire effects", (0 until effects.length()).map(effects::getString), descriptor.options)
+            }
+        }
+        // Discovery or a tombstone in the fixture names every converger channel except the families
+        // beyond the fixture's hardware, so the cross-check covers the hand-written literals too.
+        assertTrue("only $checked were cross-checked", checked.containsAll(listOf(
+            "screen", "led", "buttons", "navigate", "home_dashboard", "storage_health", "update_paneld",
+            "update_companion", "voice_enabled", "navbar", "relay1", "button_led1", "watchdog", "update_channel",
+            "zigbee_router", "cpu_governor", "network_adb", "room_temp", "diag_wifi_outages_24h", "volume",
+        )))
+    }
+
+    @Test fun uniqueSuffixIsTheMqttUniqueIdAfterThePanelPrefix() {
+        assertEquals("ha_paneld_update", PanelAssistantChannelCatalog.describe("update_paneld")?.uniqueSuffix)
+        assertEquals("ha_companion_update", PanelAssistantChannelCatalog.describe("update_companion")?.uniqueSuffix)
+        assertEquals("voice_assistant", PanelAssistantChannelCatalog.describe("voice_enabled")?.uniqueSuffix)
+        assertEquals("navbar", PanelAssistantChannelCatalog.describe("navbar")?.uniqueSuffix)
+    }
+
+    @Test fun familiesCarryTheirFamilyAndIndexAndShareOneTranslationKey() {
+        val relay = requireNotNull(PanelAssistantChannelCatalog.describe("relay3"))
+        assertEquals(listOf("switch", "relay", "relay", "3", "relay3"), listOf(relay.platform, relay.translationKey, relay.family, relay.index.toString(), relay.uniqueSuffix))
+        val led = requireNotNull(PanelAssistantChannelCatalog.describe("button_led2"))
+        assertEquals(listOf("light", "button_led", "button_led", "2"), listOf(led.platform, led.translationKey, led.family, led.index.toString()))
+        assertNull(PanelAssistantChannelCatalog.describe("relay0"))
+    }
+
+    @Test fun selectsAndClosedSensorsCarrySnakeCaseOptionCodes() {
+        assertEquals(listOf("off", "always_on", "swipe_reveal", "native"), PanelAssistantChannelCatalog.describe("navbar")?.options)
+        assertEquals(listOf("stable", "prerelease"), PanelAssistantChannelCatalog.describe("update_channel")?.options)
+        assertEquals(listOf("stable", "prerelease"), PanelAssistantChannelCatalog.describe("companion_update_channel")?.options)
+        assertEquals(listOf("performance", "efficiency", "auto"), PanelAssistantChannelCatalog.describe("cpu_governor")?.options)
+        assertEquals(listOf("off", "idle", "listening", "processing", "responding", "error"), PanelAssistantChannelCatalog.describe("voice_state")?.options)
+        assertEquals(listOf("unchecked", "healthy", "warning", "critical", "database_failure"), PanelAssistantChannelCatalog.describe("storage_health")?.options)
+        assertEquals(PanelAssistantValueKind.TEXT, PanelAssistantChannelCatalog.describe("diag_wifi_ssid")?.kind)
+        assertEquals(PanelAssistantValueKind.NUMBER, PanelAssistantChannelCatalog.describe("diag_wifi_rssi")?.kind)
+    }
+
+    @Test fun enabledDefaultFollowsTheExposureDefaultAndWireOnlySettingsStartDisabled() {
+        assertEquals(false, PanelAssistantChannelCatalog.describe("diag_cpu")?.enabledDefault)
+        assertEquals(false, PanelAssistantChannelCatalog.describe("camera_enabled")?.enabledDefault)
+        assertEquals(false, PanelAssistantChannelCatalog.describe("watchdog")?.enabledDefault)
+        assertEquals(true, PanelAssistantChannelCatalog.describe("relay1")?.enabledDefault)
+        assertNotNull(PanelAssistantChannelCatalog.describe("illuminance")?.takeIf { it.enabledDefault })
+    }
+
+    @Test fun descriptorJsonHasEveryRequiredFieldWithTheIntegrationsGrammar() {
+        val code = Regex("^[a-z][a-z0-9_]{0,63}$")
+        val suffix = Regex("^[a-z0-9][a-z0-9_]{0,47}$")
+        for (key in convergerChannels()) {
+            val wire = PanelAssistantChannelCatalog.wireChannel(key) ?: continue
+            val json = requireNotNull(PanelAssistantChannelCatalog.describe(wire)).toJson()
+            assertTrue(json.toString(), code.matches(json.getString("translation_key")))
+            assertTrue(json.toString(), suffix.matches(json.getString("unique_suffix")))
+            assertEquals(json.toString(), json.isNull("family"), json.isNull("index"))
+            if (json.getString("platform") == "select") assertTrue(json.toString(), !json.isNull("options"))
+        }
+    }
+
+    private class Discovery(val component: String, val config: JSONObject?)
+
+    /** Every discovery config and tombstone in the golden fixture, keyed by unique id after the panel prefix. */
+    private fun goldenDiscovery(): Map<String, Discovery> {
+        val fixture = requireNotNull(javaClass.getResourceAsStream("/mqtt-wire-golden/bridge.txt")).bufferedReader().readLines()
+        val topic = Regex("^homeassistant/([a-z_]+)/golden_([a-z0-9_]+)/config$")
+        return fixture.mapNotNull { line ->
+            val parts = line.split('\t')
+            if (parts.size != 3) return@mapNotNull null
+            val match = topic.matchEntire(parts[1]) ?: return@mapNotNull null
+            val payload = if (parts[2] == "-") "" else String(Base64.getDecoder().decode(parts[2]))
+            match.groupValues[2] to Discovery(match.groupValues[1], payload.takeIf(String::isNotEmpty)?.let(::JSONObject))
+        }.toMap()
+    }
+
+    companion object {
+        /** Every channel the bridge registers with its converger, read from the registration sites. */
+        fun convergerChannels(): List<String> {
+            val bridge = TestSources.kotlin("MqttBridge.kt").readText()
+            val converger = bridge.substringAfter("private fun createStateConverger()").substringBefore("private fun registerStateChannel(")
+            val capabilities = bridge.substringAfter("private fun ensureCapabilityChannels(").substringBefore("fun start()")
+            fun list(name: String) = Regex("""\"([a-z0-9_]+)\"""").findAll(
+                bridge.substringAfter("private val $name = listOf(").substringBefore(")"),
+            ).map { it.groupValues[1] }.toList()
+            val literals = Regex("""channel\(\s*"([a-z0-9_]+)"""").findAll(converger).map { it.groupValues[1] }.toList()
+            require(converger.contains("SoftwareUpdateEntities.stateChannelKey(component)"))
+            val families = Regex("""register\("([a-z_]+?)(\${'$'}n)?"""").findAll(capabilities).flatMap { match ->
+                if (match.groupValues[2].isEmpty()) sequenceOf(match.groupValues[1])
+                else sequenceOf("${match.groupValues[1]}1", "${match.groupValues[1]}64")
+            }.toList()
+            return (literals + list("DIAG_KEYS") + list("ROOM_KEYS") + families +
+                listOf("software_update_paneld", "software_update_companion")).distinct()
+        }
+    }
+}

@@ -41,6 +41,16 @@ internal sealed interface PanelAssistantSessionEvent {
     data class Ignored(val kind: String) : PanelAssistantSessionEvent
 }
 
+/** The result answering one `report_state` request, correlated by its parsed message id. */
+internal sealed interface PanelAssistantReportResult {
+    val id: Long
+
+    /** Every observation in the batch was applied, except those [rejected] by channel with a code. */
+    data class Acknowledged(override val id: Long, val rejected: Map<String, String>) : PanelAssistantReportResult
+
+    data class Failed(override val id: Long, val code: String) : PanelAssistantReportResult
+}
+
 /**
  * Wire vocabulary for the native transport's handshake, bound by the protocol specification's
  * sections 5 and 6. Pure: every function here is a translation between JSON text and typed values,
@@ -50,6 +60,16 @@ internal object PanelAssistantTransportProtocol {
     const val PROTOCOL_MIN = 1
     const val PROTOCOL_MAX = 1
     const val COMMAND_HELLO = "panel_assistant/hello"
+    const val COMMAND_REPORT_STATE = "panel_assistant/report_state"
+
+    const val AUTHORITY_SHADOW = "shadow"
+    const val CAPABILITY_STATE = "state"
+
+    const val SYNC_FULL_BEGIN = "full_begin"
+    const val SYNC_DELTA = "delta"
+    const val SYNC_FULL_END = "full_end"
+    const val STATE_KNOWN = "known"
+    const val STATE_UNAVAILABLE = "unavailable"
 
     const val CODE_UNKNOWN_COMMAND = "unknown_command"
     const val CODE_UNKNOWN_PANEL = "unknown_panel"
@@ -57,15 +77,15 @@ internal object PanelAssistantTransportProtocol {
     const val CODE_PANEL_USER_MISMATCH = "panel_user_mismatch"
     const val CODE_PANEL_IDENTITY_UNAVAILABLE = "panel_identity_unavailable"
     const val CODE_INVALID_FORMAT = "invalid_format"
+    const val CODE_SESSION_UNKNOWN = "session_unknown"
 
     const val REASON_SUPERSEDED = "superseded"
 
     /**
-     * Capabilities this build serves. Empty on purpose: this build reports no state, no events and
-     * accepts no commands, and advertising a capability it cannot serve would leave the integration
-     * waiting for a full sync that never comes.
+     * Capabilities this build serves: state reporting only. It reports no events and accepts no commands,
+     * and advertising a capability it cannot serve would leave the integration waiting for it.
      */
-    val CAPABILITIES: List<String> = emptyList()
+    val CAPABILITIES: List<String> = listOf(CAPABILITY_STATE)
 
     /**
      * The handshake contract this build implements, in canonical form. The specification's shared
@@ -73,7 +93,7 @@ internal object PanelAssistantTransportProtocol {
      * text, so a change to the handshake vocabulary changes the digest the integration records.
      */
     internal const val CANONICAL_CONTRACT: String =
-        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello"],"capabilities":[]}"""
+        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello","panel_assistant/report_state"],"capabilities":["state"]}"""
 
     val CONTRACT_DIGEST: String = MessageDigest.getInstance("SHA-256")
         .digest(CANONICAL_CONTRACT.toByteArray(Charsets.UTF_8))
@@ -84,7 +104,12 @@ internal object PanelAssistantTransportProtocol {
     private const val MAX_SESSION_TOKEN_CHARS = 64
     private const val MAX_CAPABILITIES = 16
 
-    fun hello(id: Long, identity: PanelAssistantHelloIdentity): String = JSONObject()
+    fun hello(
+        id: Long,
+        identity: PanelAssistantHelloIdentity,
+        capabilities: List<String> = emptyList(),
+        channels: List<PanelAssistantChannelDescriptor> = emptyList(),
+    ): String = JSONObject()
         .put("id", id)
         .put("type", COMMAND_HELLO)
         .put("protocol", JSONObject().put("min", PROTOCOL_MIN).put("max", PROTOCOL_MAX))
@@ -94,9 +119,41 @@ internal object PanelAssistantTransportProtocol {
             JSONObject().put("version", identity.appVersion).put("version_code", identity.appVersionCode),
         )
         .put("contract_digest", CONTRACT_DIGEST)
-        .put("capabilities", JSONArray(CAPABILITIES))
-        .put("channels", JSONArray())
+        .put("capabilities", JSONArray(capabilities))
+        .put("channels", JSONArray(channels.map { it.toJson() }))
         .toString()
+
+    fun reportState(id: Long, session: String, sync: String, observations: JSONArray): String = JSONObject()
+        .put("id", id)
+        .put("type", COMMAND_REPORT_STATE)
+        .put("session", session)
+        .put("sync", sync)
+        .put("observations", observations)
+        .toString()
+
+    /**
+     * Interpret a result frame as a `report_state` answer; null for any frame that is not a result. The
+     * caller decides whether its id names an outstanding request. A per-observation rejection whose
+     * channel or code is malformed is dropped: it cannot name a channel this panel sent.
+     */
+    fun reportResult(frame: JSONObject): PanelAssistantReportResult? {
+        if (frame.optString("type") != "result") return null
+        val id = messageId(frame) ?: return null
+        if (frame.opt("success") != true) {
+            val code = frame.optJSONObject("error")?.opt("code") as? String
+            return PanelAssistantReportResult.Failed(id, code?.takeIf(CODE::matches) ?: CODE_INVALID_FORMAT)
+        }
+        val rejected = LinkedHashMap<String, String>()
+        val list = frame.optJSONObject("result")?.optJSONArray("rejected")
+        if (list != null) {
+            for (index in 0 until list.length()) {
+                val item = list.optJSONObject(index) ?: continue
+                val channel = (item.opt("channel") as? String)?.takeIf(CODE::matches) ?: continue
+                rejected[channel] = (item.opt("code") as? String)?.takeIf(CODE::matches) ?: CODE_INVALID_FORMAT
+            }
+        }
+        return PanelAssistantReportResult.Acknowledged(id, rejected)
+    }
 
     fun ping(id: Long): String = JSONObject().put("id", id).put("type", "ping").toString()
 
@@ -115,7 +172,11 @@ internal object PanelAssistantTransportProtocol {
      * that result. A success result whose body breaks the contract is a protocol failure, reported
      * as an exception so the caller retries rather than holding a session it cannot describe.
      */
-    fun helloOutcome(frame: JSONObject, helloId: Long): PanelAssistantHelloOutcome? {
+    fun helloOutcome(
+        frame: JSONObject,
+        helloId: Long,
+        offered: List<String> = CAPABILITIES,
+    ): PanelAssistantHelloOutcome? {
         if (frame.optString("type") != "result" || messageId(frame) != helloId) return null
         if (frame.opt("success") != true) {
             val code = frame.optJSONObject("error")?.opt("code") as? String
@@ -141,7 +202,7 @@ internal object PanelAssistantTransportProtocol {
             (capabilityArray.opt(index) as? String)?.takeIf(CODE::matches)
                 ?: throw PanelAssistantProtocolException("hello result has a malformed capability")
         }
-        if (!CAPABILITIES.containsAll(capabilities)) {
+        if (!offered.containsAll(capabilities)) {
             throw PanelAssistantProtocolException("hello result grants a capability the panel did not offer")
         }
         val integrationVersion = (result.optJSONObject("integration")?.opt("version") as? String)

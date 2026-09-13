@@ -10,20 +10,30 @@ import org.junit.Test
 
 class PanelAssistantTransportProtocolTest {
 
-    @Test fun `hello offers protocol 1, no capabilities, no channels and a contract digest`() {
-        val hello = JSONObject(PanelAssistantTransportProtocol.hello(1L, IDENTITY))
+    @Test fun `hello offers protocol 1, the given capabilities and channels and a contract digest`() {
+        val bare = JSONObject(PanelAssistantTransportProtocol.hello(1L, IDENTITY))
+        assertEquals(0, bare.getJSONArray("capabilities").length())
+        assertEquals(0, bare.getJSONArray("channels").length())
+        val hello = JSONObject(
+            PanelAssistantTransportProtocol.hello(
+                1L, IDENTITY, PanelAssistantTransportProtocol.CAPABILITIES,
+                listOfNotNull(PanelAssistantChannelCatalog.describe("relay3")),
+            ),
+        )
         assertEquals(1, hello.getJSONObject("protocol").getInt("min"))
         assertEquals(1, hello.getJSONObject("protocol").getInt("max"))
         assertTrue(Regex("^[0-9a-f]{64}$").matches(hello.getString("contract_digest")))
-        assertEquals(0, hello.getJSONArray("capabilities").length())
-        assertEquals(0, hello.getJSONArray("channels").length())
+        assertEquals("state", hello.getJSONArray("capabilities").getString(0))
+        assertEquals(1, hello.getJSONArray("capabilities").length())
+        val relay = hello.getJSONArray("channels").getJSONObject(0)
+        assertEquals(listOf("relay3", "switch", "relay", "relay3", "relay", "3"), listOf("channel", "platform", "translation_key", "unique_suffix", "family", "index").map { relay.get(it).toString() })
     }
 
     @Test fun `the contract digest is pinned to the canonical handshake text`() {
         // Pinned as a literal: a digest derived from JSON serialisation could differ between the
         // device's org.json and the JVM's, and the integration records whatever the panel sends.
         assertEquals(
-            "ddacd8f9971532ece71687883b01f00e404ac3b381865c921e4132e3434a6164",
+            "93d4e8501c53d53a9933bda5785f3ac811cf143f2cf2bc5f3979a9b2a5fe99a3",
             PanelAssistantTransportProtocol.CONTRACT_DIGEST,
         )
     }
@@ -61,6 +71,37 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(
             PanelAssistantSessionEvent.Closed("superseded"),
             PanelAssistantTransportProtocol.sessionEvent(closed(id = 1), 1L),
+        )
+    }
+
+    @Test fun `a report_state result acknowledges by parsed id and lists rejections by channel`() {
+        val acknowledged = JSONObject().put("id", 12).put("type", "result").put("success", true)
+            .put("result", JSONObject().put("rejected", JSONArray()
+                .put(JSONObject().put("channel", "diag_ip").put("code", "invalid_value"))
+                .put(JSONObject().put("channel", "Not A Channel").put("code", "unknown_channel"))))
+        assertEquals(
+            PanelAssistantReportResult.Acknowledged(12L, mapOf("diag_ip" to "invalid_value")),
+            PanelAssistantTransportProtocol.reportResult(acknowledged),
+        )
+        assertEquals(
+            PanelAssistantReportResult.Failed(13L, "session_unknown"),
+            PanelAssistantTransportProtocol.reportResult(refused("session_unknown").put("id", 13)),
+        )
+        assertNull(PanelAssistantTransportProtocol.reportResult(acknowledged.put("id", "12")))
+        assertNull(PanelAssistantTransportProtocol.reportResult(JSONObject().put("id", 12).put("type", "pong")))
+    }
+
+    @Test fun `a granted capability the panel did not offer is a protocol failure`() {
+        val frame = accepted()
+        frame.getJSONObject("result").put("capabilities", JSONArray().put("state"))
+        try {
+            PanelAssistantTransportProtocol.helloOutcome(frame, 1L, offered = emptyList())
+            fail("state was granted without being offered")
+        } catch (expected: PanelAssistantProtocolException) {
+        }
+        assertEquals(
+            listOf("state"),
+            (PanelAssistantTransportProtocol.helloOutcome(frame, 1L) as PanelAssistantHelloOutcome.Accepted).session.capabilities,
         )
     }
 

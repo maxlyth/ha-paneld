@@ -11,9 +11,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.onTimeout
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
@@ -109,7 +113,8 @@ internal data class PanelAssistantTransportStatus(
  * interval.
  *
  * Credentials come from the shared [HaApiSessionProvider]; this owner holds no token cache. It sends
- * `hello` and protocol pings only: no observations, no events, no commands.
+ * `hello`, protocol pings and, only on a session the integration accepts with the `shadow` authority and
+ * the `state` capability, the [shadow] reporter's `report_state` requests. No events, no commands.
  */
 internal class PanelAssistantTransportOwner(
     private val scope: CoroutineScope,
@@ -128,6 +133,8 @@ internal class PanelAssistantTransportOwner(
     private val helloTimeoutMs: Long = 15_000L,
     private val closeTimeoutMs: Long = 2_000L,
     private val log: (String) -> Unit = { message -> Log.i(TAG, message) },
+    /** Null reports no state and offers no capability, exactly as the handshake-only slice did. */
+    private val shadow: PanelAssistantShadowReporter? = null,
 ) : AutoCloseable {
     private val lock = Any()
     private val generation = AtomicLong()
@@ -204,7 +211,9 @@ internal class PanelAssistantTransportOwner(
                         val opened = connector.connect(session.baseUrl, token)
                         connection = opened
                         publish(run, PanelAssistantTransportStatus(PanelAssistantTransportPhase.HANDSHAKING, attempt))
-                        when (val outcome = handshake(opened, demand.identity)) {
+                        val offered = if (shadow != null) PanelAssistantTransportProtocol.CAPABILITIES else emptyList()
+                        val described = shadow?.descriptors().orEmpty()
+                        when (val outcome = handshake(opened, demand.identity, offered, described)) {
                             is PanelAssistantHelloOutcome.Accepted -> {
                                 attempt = 0
                                 authRefreshed = false
@@ -213,9 +222,15 @@ internal class PanelAssistantTransportOwner(
                                     session = outcome.session,
                                 ))
                                 hadSession = true
+                                val reporting = shadow?.takeIf {
+                                    outcome.session.authority == PanelAssistantTransportProtocol.AUTHORITY_SHADOW &&
+                                        PanelAssistantTransportProtocol.CAPABILITY_STATE in outcome.session.capabilities
+                                }
                                 val reason = try {
-                                    holdSession(opened)
+                                    reporting?.open(described)
+                                    holdSession(opened, outcome.session, reporting)
                                 } finally {
+                                    reporting?.close()
                                     // Every way an accepted session ends reopens the window: a Core
                                     // restart is a bare socket close, never a session_closed event.
                                     warmUntil = monotonicMillis() + warmupWindowMs
@@ -295,27 +310,62 @@ internal class PanelAssistantTransportOwner(
     private suspend fun handshake(
         connection: PanelAssistantTransportConnection,
         identity: PanelAssistantHelloIdentity,
+        offered: List<String>,
+        described: List<PanelAssistantChannelDescriptor>,
     ): PanelAssistantHelloOutcome {
-        connection.send(PanelAssistantTransportProtocol.hello(HELLO_ID, identity))
+        connection.send(PanelAssistantTransportProtocol.hello(HELLO_ID, identity, offered, described))
         val deadline = monotonicMillis() + helloTimeoutMs
         while (true) {
             val remaining = deadline - monotonicMillis()
             if (remaining <= 0) throw PanelAssistantProtocolException("hello was not answered")
             val text = connection.receive(remaining)
                 ?: throw PanelAssistantProtocolException("hello was not answered")
-            PanelAssistantTransportProtocol.helloOutcome(parse(text), HELLO_ID)?.let { return it }
+            PanelAssistantTransportProtocol.helloOutcome(parse(text), HELLO_ID, offered)?.let { return it }
         }
     }
 
     /**
-     * Hold an accepted session until it ends. Returns the `session_closed` reason; throws when the
-     * socket fails or stops answering. Pings go out on a fixed cadence, and a ping with no inbound
-     * frame of any kind within [pongTimeoutMs] means the socket is dead.
+     * Hold an accepted session until it ends. Returns the `session_closed` reason, or a local reason when
+     * this panel ends it; throws when the socket fails or stops answering. Pings go out on a fixed
+     * cadence, and a ping with no inbound frame of any kind within [pongTimeoutMs] means the socket is dead.
+     *
+     * This coroutine is the only sender on the connection, so message ids strictly increase in send order.
+     * A child only receives frames; [reporting], when present, is asked for its next request whenever an
+     * observation, a result or a deadline may have made one due.
      */
-    private suspend fun holdSession(connection: PanelAssistantTransportConnection): String {
+    private suspend fun holdSession(
+        connection: PanelAssistantTransportConnection,
+        session: PanelAssistantSession,
+        reporting: PanelAssistantShadowReporter?,
+    ): String = coroutineScope {
+        val frames = Channel<String>(Channel.UNLIMITED)
+        val reader = launch {
+            try {
+                while (true) connection.receive(pingIntervalMs)?.let { frames.send(it) }
+            } catch (failure: Exception) {
+                // Ktor reports a socket Home Assistant closed as a CancellationException too; only this
+                // child's own cancellation is the end of the session rather than a lost socket.
+                if (failure is CancellationException && !isActive) throw failure
+                frames.close(failure)
+            }
+        }
+        try {
+            sessionLoop(connection, session, reporting, frames)
+        } finally {
+            reader.cancel()
+        }
+    }
+
+    private suspend fun sessionLoop(
+        connection: PanelAssistantTransportConnection,
+        session: PanelAssistantSession,
+        reporting: PanelAssistantShadowReporter?,
+        frames: Channel<String>,
+    ): String {
         var nextMessageId = HELLO_ID + 1
         var nextPingAt = monotonicMillis() + pingIntervalMs
         var pongDeadline: Long? = null
+        if (reporting != null) log("native transport shadow reporting started")
         while (true) {
             val now = monotonicMillis()
             val awaiting = pongDeadline
@@ -328,13 +378,37 @@ internal class PanelAssistantTransportOwner(
                 nextPingAt = now + pingIntervalMs
                 continue
             }
-            val text = connection.receive((awaiting ?: nextPingAt) - now) ?: continue
+            if (reporting != null) {
+                reporting.expire(now)
+                if (reporting.descriptorsChanged()) return REASON_DESCRIPTORS_CHANGED
+                val request = reporting.next(nextMessageId, session.token, now)
+                if (request != null) {
+                    connection.send(request)
+                    nextMessageId++
+                    continue
+                }
+            }
+            val due = listOfNotNull(awaiting ?: nextPingAt, reporting?.nextDeadline(now)).min()
+            val text = select<String?> {
+                frames.onReceive { it }
+                reporting?.wake?.onReceive { null }
+                onTimeout((due - now).coerceAtLeast(0L)) { null }
+            } ?: continue
             pongDeadline = null
             val frame = parse(text)
             when (val event = PanelAssistantTransportProtocol.sessionEvent(frame, HELLO_ID)) {
                 is PanelAssistantSessionEvent.Closed -> return event.reason
                 is PanelAssistantSessionEvent.Ignored -> log("native transport ignored event kind ${event.kind}")
                 null -> Unit
+            }
+            if (reporting != null && PanelAssistantTransportProtocol.messageId(frame) != HELLO_ID) {
+                val result = PanelAssistantTransportProtocol.reportResult(frame)
+                if (result is PanelAssistantReportResult.Failed &&
+                    result.code == PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN
+                ) {
+                    return PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN
+                }
+                result?.let { reporting.onResult(it, monotonicMillis()) }
             }
         }
     }
@@ -369,7 +443,7 @@ internal class PanelAssistantTransportOwner(
     }
 
     companion object {
-        private const val TAG = "PanelAssistantTransport"
+        internal const val TAG = "PanelAssistantTransport"
         private const val HELLO_ID = 1L
         private const val MAX_ATTEMPT = 1_000
         private const val MIN_DELAY_MS = 250L
@@ -380,5 +454,8 @@ internal class PanelAssistantTransportOwner(
         const val REFUSAL_SESSION_CLOSED = "session_closed"
         const val REFUSAL_SESSION_SUPERSEDED = "session_superseded"
         const val REFUSAL_TRANSPORT = "transport_failure"
+
+        /** Local session end: the bridge's channel set moved, so the session must be described again. */
+        const val REASON_DESCRIPTORS_CHANGED = "descriptors_changed"
     }
 }

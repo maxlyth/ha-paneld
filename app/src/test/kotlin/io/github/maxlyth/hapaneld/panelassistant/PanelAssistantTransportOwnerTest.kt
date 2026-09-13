@@ -295,7 +295,94 @@ class PanelAssistantTransportOwnerTest {
         assertNull(panelAssistantTransportDemand(OWNER, accessTokenPresent = true, IDENTITY.copy(did = null)))
     }
 
+    @Test fun aShadowSessionReportsAFullSyncThenDeltasWithIdsIncreasingAcrossPings() = runTest {
+        val shadow = Shadow(listOf("relay1", "screen"))
+        shadow.sink("relay1", "ON")
+        val connection = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state")))
+        val harness = harness(connection, shadow = shadow.reporter)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+
+        val hello = JSONObject(connection.sent.first())
+        assertEquals(listOf("state"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
+        assertEquals(listOf("relay1", "screen"), hello.getJSONArray("channels").let { (0 until it.length()).map { i -> it.getJSONObject(i).getString("channel") } })
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), connection.sent.map(::kind))
+        assertEquals("opaque-session", JSONObject(connection.sent[1]).getString("session"))
+
+        advanceTimeBy(45_000L)
+        runCurrent()
+        shadow.sink("screen", """{"state":"OFF"}""")
+        runCurrent()
+        advanceTimeBy(40_000L)
+        runCurrent()
+        shadow.sink("relay1", "OFF")
+        runCurrent()
+
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end", "ping", "delta", "ping", "delta"), connection.sent.map(::kind))
+        val ids = connection.sent.map { JSONObject(it).getLong("id") }
+        assertEquals((1L..ids.size.toLong()).toList(), ids)
+        assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+        harness.owner.close()
+    }
+
+    @Test fun anMqttAuthorityOrAnUngrantedStateCapabilityReportsNothing() = runTest {
+        for ((authority, capabilities) in listOf("mqtt" to listOf("state"), "shadow" to emptyList())) {
+            val shadow = Shadow(listOf("relay1"))
+            shadow.sink("relay1", "ON")
+            val connection = FakeConnection(Ha.accepting(authority = authority, capabilities = capabilities))
+            val harness = harness(connection, shadow = shadow.reporter)
+            harness.owner.replaceDemand(DEMAND)
+            runCurrent()
+            shadow.sink("relay1", "OFF")
+            advanceTimeBy(31_000L)
+            runCurrent()
+            assertEquals("$authority $capabilities", listOf("panel_assistant/hello", "ping"), connection.sent.map(::kind))
+            harness.owner.close()
+        }
+    }
+
+    @Test fun aNewChannelDuringAShadowSessionEndsItAndHelloesAgainPromptly() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        val first = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state")))
+        val second = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state")))
+        val harness = harness(first, second, shadow = shadow.reporter)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        shadow.keys += "relay2"
+        shadow.sink("relay2", "ON")
+        runCurrent()
+        assertTrue(first.closed)
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), first.sent.map(::kind))
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        val hello = JSONObject(second.sent.first())
+        assertEquals(2, hello.getJSONArray("channels").length())
+        assertEquals(listOf("relay2"), JSONObject(second.sent[1]).getJSONArray("observations").let { (0 until it.length()).map { i -> it.getJSONObject(i).getString("channel") } })
+        harness.owner.close()
+    }
+
+    @Test fun sessionUnknownOnAReportEndsTheSession() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "ON")
+        val connection = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state"), reportError = "session_unknown"))
+        val harness = harness(connection, FakeConnection(Ha.accepting()), shadow = shadow.reporter)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertTrue(connection.closed)
+        assertEquals(PanelAssistantTransportOwner.REFUSAL_SESSION_CLOSED, harness.owner.status.refusal)
+        harness.owner.close()
+    }
+
     // ---- harness ---------------------------------------------------------------------------------
+
+    private class Shadow(initial: List<String>) {
+        val keys = initial.toMutableList()
+        val reporter = PanelAssistantShadowReporter(log = {})
+        private val bound = reporter.bind { keys.toList() }
+
+        fun sink(channel: String, payload: String) = bound(channel, io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known(payload)) {}
+    }
 
     private class Harness(val owner: PanelAssistantTransportOwner, val connector: FakeConnector, val forces: List<Boolean>) {
         var credential: HaAuthOwner = OWNER
@@ -306,6 +393,7 @@ class PanelAssistantTransportOwnerTest {
         vararg script: Any,
         repeating: (() -> FakeConnection)? = null,
         repeatingFailure: (() -> Exception)? = null,
+        shadow: PanelAssistantShadowReporter? = null,
     ): Harness {
         val connector = FakeConnector(this, script.toMutableList(), repeating, repeatingFailure)
         val forces = mutableListOf<Boolean>()
@@ -321,6 +409,7 @@ class PanelAssistantTransportOwnerTest {
             monotonicMillis = { testScheduler.currentTime },
             jitter = { bound -> bound },
             log = {},
+            shadow = shadow,
         )
         harness = Harness(owner, connector, forces)
         return harness
@@ -372,7 +461,12 @@ class PanelAssistantTransportOwnerTest {
     }
 
     private object Ha {
-        fun accepting(answerPings: Boolean = true): (JSONObject, FakeConnection) -> Unit = { frame, connection ->
+        fun accepting(
+            answerPings: Boolean = true,
+            authority: String = "mqtt",
+            capabilities: List<String> = emptyList(),
+            reportError: String? = null,
+        ): (JSONObject, FakeConnection) -> Unit = { frame, connection ->
             when (frame.getString("type")) {
                 "panel_assistant/hello" -> connection.inbound.trySend(
                     JSONObject()
@@ -384,12 +478,21 @@ class PanelAssistantTransportOwnerTest {
                             JSONObject()
                                 .put("protocol", 1)
                                 .put("session", "opaque-session")
-                                .put("authority", "mqtt")
-                                .put("capabilities", JSONArray())
+                                .put("authority", authority)
+                                .put("capabilities", JSONArray(capabilities))
                                 .put("integration", JSONObject().put("version", "0.3.0"))
                                 .put("channels", JSONObject().put("accepted", 0).put("unknown", JSONArray())),
                         )
                         .toString(),
+                )
+                "panel_assistant/report_state" -> connection.inbound.trySend(
+                    if (reportError != null) {
+                        JSONObject().put("id", frame.getLong("id")).put("type", "result").put("success", false)
+                            .put("error", JSONObject().put("code", reportError).put("message", "x")).toString()
+                    } else {
+                        JSONObject().put("id", frame.getLong("id")).put("type", "result").put("success", true)
+                            .put("result", JSONObject().put("rejected", JSONArray())).toString()
+                    },
                 )
                 "ping" -> if (answerPings) {
                     connection.inbound.trySend(JSONObject().put("id", frame.getLong("id")).put("type", "pong").toString())
@@ -416,6 +519,9 @@ class PanelAssistantTransportOwnerTest {
     }
 
     private companion object {
+        /** A sent frame's command type, or its `sync` for a `report_state`. */
+        fun kind(text: String): String = JSONObject(text).let { it.optString("sync").ifEmpty { it.getString("type") } }
+
         val OWNER = HaAuthOwner(
             url = "https://ha.example",
             refreshToken = "refresh",

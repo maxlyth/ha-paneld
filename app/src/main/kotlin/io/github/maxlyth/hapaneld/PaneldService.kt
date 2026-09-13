@@ -139,6 +139,7 @@ import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
 import io.github.maxlyth.hapaneld.panelassistant.KtorPanelAssistantTransportConnector
 import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantHelloIdentity
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantShadowReporter
 import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantTransportOwner
 import io.github.maxlyth.hapaneld.panelassistant.panelAssistantTransportDemand
 import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
@@ -974,6 +975,9 @@ class PaneldService : Service() {
     private lateinit var haAmbientLux: HaAmbientLuxSubscriber
     private lateinit var haExactEntityStream: HaExactEntityStreamOwner
     private lateinit var panelAssistantTransport: PanelAssistantTransportOwner
+    // Outlives bridge generations: each new bridge binds its converger here, and the transport owner
+    // reports what it records only on a session Panel Assistant accepts in shadow mode.
+    private val panelAssistantShadow = PanelAssistantShadowReporter()
     private lateinit var haLifecycle: HaLifecycleCoordinator
     private lateinit var haNetworkPath: HaNetworkPathMonitor
     private lateinit var haPathProbe: PathProbeMonitor
@@ -1213,6 +1217,7 @@ class PaneldService : Service() {
                 socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
             ),
             monotonicMillis = haSocketClock,
+            shadow = panelAssistantShadow,
         )
         haLifecycle = HaLifecycleCoordinator(
             // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to
@@ -1826,7 +1831,7 @@ class PaneldService : Service() {
             // This bridge generation's lease, registered with the runtime as the live broker channel
             // just below. A bridge that outlives its service OR its own replacement cannot report.
             haLifecycleLease = lease,
-        )
+        ).also { bridge -> bridge.addStateSink(panelAssistantShadow.bind(bridge::stateChannelKeys)) }
     }
 
     private fun buildMdns(identity: NetworkRuntimeIdentity): MdnsAdvertiser = MdnsAdvertiser(

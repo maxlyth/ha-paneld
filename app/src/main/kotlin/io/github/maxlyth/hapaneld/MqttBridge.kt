@@ -1816,6 +1816,12 @@ internal class MqttBridge(
         converger.register(mqtt.channel)
     }
 
+    /** Report every admitted observation to [sink] too; only MQTT's acknowledgement drives convergence. */
+    internal fun addStateSink(sink: io.github.maxlyth.hapaneld.mqtt.StateSink) = stateSinks.add(sink)
+
+    /** The converger's registered channels, which grow as hardware capabilities are confirmed. */
+    internal fun stateChannelKeys(): Set<String> = stateConverger.keys()
+
     /** The primary state sink: derives the topic, retain flag and payload bytes from the channel. */
     private fun publishStateObservation(
         channel: String,
