@@ -50,7 +50,9 @@ jobs:
             tasks: ":app:assembleDebug :app:assembleDebugAndroidTest"
             apks: "debug"
           - name: assemble release
-            tasks: ":app:assembleRelease"
+            # The lint split analyses the same sources in full, and release.yml still runs the release
+            # lint pass before publishing, so CI skips it here.
+            tasks: ":app:assembleRelease -x :app:lintVitalRelease"
             apks: "release"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -160,6 +162,10 @@ jobs:
           # used to skip this and leave a root-owned workspace that the runner
           # account cannot delete, so the next checkout wiped the working copy,
           # found no repository and stopped before any step of ours ran.
+          #
+          # --no-daemon lets the root Gradle process finish its cache housekeeping before this hands the
+          # Gradle home back. A daemon left running rewrote root-owned files after the handback, so the
+          # cache save hit EACCES and the split never stored its own state for the next run.
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
           # The configuration cache lets Gradle run tasks of this single module in parallel, so a
           # split that names several tasks uses every core. It is a flag here rather than a
@@ -169,6 +175,7 @@ jobs:
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
             ./gradlew ${{ matrix.tasks }} \
               --configuration-cache \
+              --no-daemon \
               --stacktrace
 
       - name: Verify supported Android and ABI floors
