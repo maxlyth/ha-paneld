@@ -26,6 +26,7 @@ class PanelAssistantShadowReporterTest {
         assertEquals(listOf("relay1", "screen", "storage_health"), channels(begin))
         val storage = observation(begin, "storage_health")
         assertEquals("healthy", storage.getString("value"))
+        assertTrue("attributes were not folded into $storage", storage.has("attributes"))
         assertEquals("ok", storage.getJSONObject("attributes").getString("quick_check"))
         assertFalse(storage.getJSONObject("attributes").has("nested"))
         assertNull("nothing is sent until full_begin is acknowledged", h.reporter.next(3, TOKEN, 0))
@@ -52,7 +53,7 @@ class PanelAssistantShadowReporterTest {
         h.sink("diag_wifi_outages_attributes", """{"is_lower_bound":true}""")
         val delta = h.next(11)
         assertEquals(listOf("diag_wifi_outages_24h"), channels(delta))
-        assertTrue(observation(delta, "diag_wifi_outages_24h").getJSONObject("attributes").getBoolean("is_lower_bound"))
+        assertTrue(observation(delta, "diag_wifi_outages_24h").optJSONObject("attributes")?.optBoolean("is_lower_bound") == true)
     }
 
     @Test fun updateChannelsReportUnderTheirWireIds() {
@@ -91,7 +92,7 @@ class PanelAssistantShadowReporterTest {
         assertFalse(observation(first, "diag_cpu").has("refresh"))
         h.ack(10)
         h.sink("diag_cpu", "12")
-        assertTrue(observation(h.next(11), "diag_cpu").getBoolean("refresh"))
+        assertTrue(observation(h.next(11), "diag_cpu").optBoolean("refresh"))
     }
 
     @Test fun anUnansweredRequestTimesOutAfterFifteenSecondsAndRetriesTheSameChannels() {

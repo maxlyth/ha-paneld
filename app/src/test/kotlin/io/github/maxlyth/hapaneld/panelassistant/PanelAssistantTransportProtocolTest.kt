@@ -23,8 +23,7 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(1, hello.getJSONObject("protocol").getInt("min"))
         assertEquals(1, hello.getJSONObject("protocol").getInt("max"))
         assertTrue(Regex("^[0-9a-f]{64}$").matches(hello.getString("contract_digest")))
-        assertEquals("state", hello.getJSONArray("capabilities").getString(0))
-        assertEquals(1, hello.getJSONArray("capabilities").length())
+        assertEquals(listOf("state"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
         val relay = hello.getJSONArray("channels").getJSONObject(0)
         assertEquals(listOf("relay3", "switch", "relay", "relay3", "relay", "3"), listOf("channel", "platform", "translation_key", "unique_suffix", "family", "index").map { relay.get(it).toString() })
     }
@@ -99,10 +98,8 @@ class PanelAssistantTransportProtocolTest {
             fail("state was granted without being offered")
         } catch (expected: PanelAssistantProtocolException) {
         }
-        assertEquals(
-            listOf("state"),
-            (PanelAssistantTransportProtocol.helloOutcome(frame, 1L) as PanelAssistantHelloOutcome.Accepted).session.capabilities,
-        )
+        val offered = runCatching { PanelAssistantTransportProtocol.helloOutcome(frame, 1L) }
+        assertEquals(listOf("state"), (offered.getOrNull() as? PanelAssistantHelloOutcome.Accepted)?.session?.capabilities)
     }
 
     @Test fun `a success result that breaks the contract is a protocol failure`() {
