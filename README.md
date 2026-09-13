@@ -84,11 +84,9 @@ ha-paneld is not distributed through Google Play, so installation always involve
 
 ## Choose how the dashboard runs
 
-Use the built-in renderer when you want dashboard entity filtering. It also supports signing in from another browser, selecting a specific dashboard tab, and faster startup and recovery. After an app restart, it can reopen the last verified account-default dashboard while it refreshes Home Assistant's dashboard list in the background.
+The built-in renderer is by far the preferred choice, and the one guided setup uses. It is the only route with dashboard entity filtering, and it also supports signing in from another browser, selecting a specific dashboard tab, and faster startup and recovery. After an app restart, it can reopen the last verified account-default dashboard while it refreshes Home Assistant's dashboard list in the background.
 
-The official [Home Assistant Companion app](https://github.com/home-assistant/android) is also supported. Use it when the panel needs more than one Home Assistant server, Assist voice control or native notifications. On a panel without Google Play and with a supported install method, use ha-paneld's Install tab. The picker applies the compatibility limit for that panel instead of assuming the newest Companion release will run on it.
-
-Both choices remain supported. Dashboard entity filtering only works with ha-paneld's built-in renderer.
+The official [Home Assistant Companion app](https://github.com/home-assistant/android) is still supported as an option, for example when a panel needs more than one Home Assistant server, Assist voice control or native notifications. On a panel without Google Play and with a supported install method, use ha-paneld's Install tab. The picker applies the compatibility limit for that panel instead of assuming the newest Companion release will run on it.
 
 <a id="panels-and-support-status"></a>
 
