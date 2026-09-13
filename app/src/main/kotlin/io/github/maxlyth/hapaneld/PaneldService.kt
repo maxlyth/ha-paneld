@@ -137,6 +137,10 @@ import io.github.maxlyth.hapaneld.sensors.HaPresenceSourceManager
 import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
+import io.github.maxlyth.hapaneld.panelassistant.KtorPanelAssistantTransportConnector
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantHelloIdentity
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantTransportOwner
+import io.github.maxlyth.hapaneld.panelassistant.panelAssistantTransportDemand
 import io.github.maxlyth.hapaneld.sensors.KtorHaExactEntityStreamTransport
 import io.github.maxlyth.hapaneld.storage.StorageDatabaseFailureKind
 import io.github.maxlyth.hapaneld.storage.StorageHealthObservation
@@ -719,6 +723,7 @@ internal data class ConfigOwnerRefreshPlan(
     val rendererTarget: Boolean,
     val haLifecycle: Boolean,
     val camera: Boolean,
+    val panelAssistantTransport: Boolean,
 )
 
 internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefreshPlan {
@@ -737,6 +742,8 @@ internal fun configOwnerRefreshPlan(changedKeys: Set<String>): ConfigOwnerRefres
         haLifecycle = changedKeys.any((ha + "dashboard_package")::contains),
         // The master switch closes a live session on this lane too, not only on the watchdog tick.
         camera = "camera_enabled" in changedKeys,
+        // Credentials only; the owner itself ignores a change that leaves the credential identity equal.
+        panelAssistantTransport = changedKeys.any(ha::contains),
     )
 }
 
@@ -966,6 +973,7 @@ class PaneldService : Service() {
     private lateinit var autoSleep: AutoSleepController
     private lateinit var haAmbientLux: HaAmbientLuxSubscriber
     private lateinit var haExactEntityStream: HaExactEntityStreamOwner
+    private lateinit var panelAssistantTransport: PanelAssistantTransportOwner
     private lateinit var haLifecycle: HaLifecycleCoordinator
     private lateinit var haNetworkPath: HaNetworkPathMonitor
     private lateinit var haPathProbe: PathProbeMonitor
@@ -1193,6 +1201,16 @@ class PaneldService : Service() {
                 socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
                 monotonicMillis = haSocketClock,
                 onRouteConnected = { address -> haPathProbe.onRouteConnected(address) },
+            ),
+            monotonicMillis = haSocketClock,
+        )
+        // The native transport's own long-lived socket, on the same credential authority as the stream
+        // above and the same address-family policy as every other Home Assistant socket.
+        panelAssistantTransport = PanelAssistantTransportOwner(
+            scope = scope,
+            auth = haSessionAuthority,
+            connector = KtorPanelAssistantTransportConnector(
+                socketFamilyPolicy = { MqttAddressFamilyPolicy.fromConfig(config.mqttAddressFamily) },
             ),
             monotonicMillis = haSocketClock,
         )
@@ -2482,6 +2500,7 @@ class PaneldService : Service() {
         }
         if (ownerRefresh.haLifecycle) runCatching { refreshHaLifecycleWatch() }
         if (ownerRefresh.camera && ::camera.isInitialized) runCatching { camera.onEnabledChanged() }
+        if (ownerRefresh.panelAssistantTransport) runCatching { refreshPanelAssistantTransport() }
         // A camera switch moved on the Configure page, by a bundle import or by provisioning must reach
         // Home Assistant too; otherwise its switch keeps a position the panel has already left.
         if (ownerRefresh.camera) runCatching { mqtt.publishCameraState() }
@@ -2491,6 +2510,23 @@ class PaneldService : Service() {
      * Start or stop the lifecycle watch to match the current renderer and credentials. Safe to call
      * repeatedly: an unchanged demand is a no-op inside the stream owner.
      */
+    /** Start, keep or stop the native transport to match the current credential and panel identity. */
+    private fun refreshPanelAssistantTransport() {
+        if (!::panelAssistantTransport.isInitialized) return
+        val auth = config.haAuthSnapshot()
+        panelAssistantTransport.replaceDemand(
+            panelAssistantTransportDemand(
+                credential = auth.stableOwner(),
+                accessTokenPresent = auth.accessToken.isNotBlank(),
+                identity = PanelAssistantHelloIdentity(
+                    did = panelAssistantDiscoveryId(config.androidId),
+                    appVersion = BuildConfig.VERSION_NAME,
+                    appVersionCode = BuildConfig.VERSION_CODE,
+                ),
+            ),
+        )
+    }
+
     private fun refreshHaLifecycleWatch() {
         if (!::haExactEntityStream.isInitialized || !::system.isInitialized) return
         val wanted = haLifecycleWatchWanted(
@@ -3636,6 +3672,7 @@ class PaneldService : Service() {
             }
         }, "service-startup-health").apply { isDaemon = true; start() }
         registerNetworkCallback()
+        runCatching { refreshPanelAssistantTransport() }
         return START_STICKY
     }
 
@@ -3903,6 +3940,7 @@ class PaneldService : Service() {
                 // authoritative onCapabilitiesChanged, and crediting an episode from it invents or
                 // discards outages on stale information.
                 wifiOutageTracker.onDefaultAvailable(network.hashCode().toLong())
+                if (::panelAssistantTransport.isInitialized) panelAssistantTransport.nudge()
                 observeTransport(network, capabilities)
                 mdnsRuntimeReconciler.networkChanged(
                     cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address },
@@ -4429,6 +4467,9 @@ class PaneldService : Service() {
                 voiceForegroundRetry = null
                 config.unregisterChangeListener(voicePrefsListener)
                 closeOwnerResult("voice assistant") { voice.shutdown(asyncTeardownDeadline.remainingMs()) }
+            }
+            if (::panelAssistantTransport.isInitialized) {
+                closeOwner("Panel Assistant transport") { panelAssistantTransport.close() }
             }
             if (::haExactEntityStream.isInitialized) {
                 closeOwner("HA exact entity stream") { haExactEntityStream.close() }
