@@ -747,7 +747,10 @@ class ServiceProcessBoundaryContractTest {
         val controller = source("control/AutoSleepController.kt")
 
         assertTrue(owner.contains("val haSocketClock: () -> Long = { android.os.SystemClock.elapsedRealtime() }"))
-        assertTrue(owner.split("monotonicMillis = haSocketClock").size == 3)
+        val streamConstruction = owner
+            .substringAfter("haExactEntityStream = HaExactEntityStreamOwner(", missingDelimiterValue = "")
+            .substringBefore("\n        )", missingDelimiterValue = "")
+        assertEquals(2, Regex("monotonicMillis = haSocketClock").findAll(streamConstruction).count())
         assertTrue(controller.contains("elapsedRealtime: () -> Long = SystemClock::elapsedRealtime"))
     }
 

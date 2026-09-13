@@ -34,7 +34,10 @@ class HaNetworkPathSurfaceContractTest {
         // Teardown is identity-gated and re-pokes the renderer only when it actually cleared.
         assertTrue(service.contains("HaNetworkPathRuntime.uninstall(haNetworkPath)"))
         // The socket owner and its transport share one clock, or the round trip is two clocks apart.
-        assertEquals(2, Regex("monotonicMillis = haSocketClock").findAll(service).count())
+        val streamConstruction = service
+            .substringAfter("haExactEntityStream = HaExactEntityStreamOwner(", missingDelimiterValue = "")
+            .substringBefore("\n        )", missingDelimiterValue = "")
+        assertEquals(2, Regex("monotonicMillis = haSocketClock").findAll(streamConstruction).count())
     }
 
     @Test fun everySurfaceReadsTheHolderAndNothingReadsTheRing() {
