@@ -56,7 +56,7 @@ class PanelAssistantTransportOwnerTest {
         assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
 
         val closedAt = testScheduler.currentTime
-        first.inbound.send(Ha.sessionClosed("entry_unloaded"))
+        first.inbound.trySend(Ha.sessionClosed("entry_unloaded"))
         runCurrent()
         assertEquals(PanelAssistantTransportPhase.WAITING, harness.owner.status.phase)
         assertEquals(1, harness.owner.status.attempt)
@@ -106,7 +106,7 @@ class PanelAssistantTransportOwnerTest {
         // Well outside the window opened when demand started.
         advanceTimeBy(20L * 60_000L)
         runCurrent()
-        accepted.inbound.send(Ha.sessionClosed("entry_unloaded"))
+        accepted.inbound.trySend(Ha.sessionClosed("entry_unloaded"))
         runCurrent()
 
         advanceTimeBy(5L * 60_000L)
@@ -138,7 +138,7 @@ class PanelAssistantTransportOwnerTest {
         val harness = harness(first, FakeConnection(Ha.accepting()))
         harness.owner.replaceDemand(DEMAND)
         runCurrent()
-        first.inbound.send(Ha.sessionClosed("superseded"))
+        first.inbound.trySend(Ha.sessionClosed("superseded"))
         runCurrent()
 
         assertTrue(harness.owner.status.slowRetry)
