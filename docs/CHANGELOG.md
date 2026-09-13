@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.9.7-rc5 - 2026-09-13
+
+This release candidate makes provisioning verification reliable straight after the app restarts and adds a community profile for the Portworld YC-SM10P. The changes below are since v0.9.7-rc4.
+
+### Added
+
+- **An import-only community profile for the Portworld YC-SM10P.** It covers the 10.1-inch Rockchip RK3566 panel on Android 11 userdebug and records its verified screen-off route. It is not bundled or selected automatically; owners who can confirm the hardware can import it.
+
+### Fixed
+
+- **Provisioning no longer fails a healthy panel whose web server is still starting.** Verification that runs straight after the app restarts retries the configuration schema read when no answer arrives, within a 12 second limit, instead of stopping on the first attempt. A malformed answer still fails immediately.
+
 ## v0.9.7-rc4 - 2026-09-12
 
 This release candidate makes panel discovery, sleep and proximity controls easier to use, adds three early-access interface languages and records more of what the panel actually did instead of what its profile expected. The changes below are since v0.9.7-rc3.
