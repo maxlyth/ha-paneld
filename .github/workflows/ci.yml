@@ -237,32 +237,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 0
-
-      - name: Set up Node.js for documentation localization
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '20.18.1'
-          cache: npm
-          cache-dependency-path: tools/docs-i18n/package-lock.json
-
-      - name: Validate multilingual documentation
-        working-directory: tools/docs-i18n
-        run: |
-          npm ci --ignore-scripts --audit=false --fund=false
-          npm test
-
-      - name: Report multilingual documentation drift
-        # Localized documentation is not part of the built app and is refreshed in planned
-        # translation passes, so drift between it and the English sources is reported as a
-        # warning and never fails this job. The tooling tests in the previous step still gate.
-        working-directory: tools/docs-i18n
-        run: |
-          if npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json; then
-            echo "Localized documentation matches its English sources."
-          else
-            echo "::warning title=Localized documentation out of date::docs-i18n validate reported drift. Localized documentation is refreshed in planned translation passes and does not gate a release."
-          fi
 
       - name: Test firmware index tooling
         run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
@@ -297,6 +271,43 @@ jobs:
             --source app/src/main/assets/i18n/en.json \
             --target-dir app/src/main/assets/i18n
 
+
+  # The documentation-localization tooling tests take about as long as the shell contracts they used
+  # to precede, so they run beside them instead. Only this job needs the complete Git history.
+  docs-localization:
+    name: Documentation localization
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Node.js for documentation localization
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20.18.1'
+          cache: npm
+          cache-dependency-path: tools/docs-i18n/package-lock.json
+
+      - name: Validate multilingual documentation
+        working-directory: tools/docs-i18n
+        run: |
+          npm ci --ignore-scripts --audit=false --fund=false
+          npm test
+
+      - name: Report multilingual documentation drift
+        # Localized documentation is not part of the built app and is refreshed in planned
+        # translation passes, so drift between it and the English sources is reported as a
+        # warning and never fails this job. The tooling tests in the previous step still gate.
+        working-directory: tools/docs-i18n
+        run: |
+          if npm run validate -- --repository ../.. --manifest ../../docs/i18n/manifest.json; then
+            echo "Localized documentation matches its English sources."
+          else
+            echo "::warning title=Localized documentation out of date::docs-i18n validate reported drift. Localized documentation is refreshed in planned translation passes and does not gate a release."
+          fi
 
   # 23 of this workflow's 26 minutes was the provisioning contract as one
   # serial step. It already ships as fourteen isolated shards, and running
@@ -347,7 +358,7 @@ jobs:
     # Keep the stable check name consumed by release.yml. It turns green only when
     # the shell contracts and the complete provisioning aggregate both pass.
     name: Host contracts
-    needs: [provisioning, host-contracts]
+    needs: [provisioning, host-contracts, docs-localization]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -369,9 +380,11 @@ jobs:
       - name: Require host and provisioning jobs
         env:
           HOST_RESULT: ${{ needs.host-contracts.result }}
+          DOCS_RESULT: ${{ needs.docs-localization.result }}
           PROVISIONING_RESULT: ${{ needs.provisioning.result }}
         run: |
           test "$HOST_RESULT" = success
+          test "$DOCS_RESULT" = success
           test "$PROVISIONING_RESULT" = success
 
   dependency-integrity:

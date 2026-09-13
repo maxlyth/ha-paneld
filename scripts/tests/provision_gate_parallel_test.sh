@@ -239,11 +239,11 @@ provisioning_job="$(awk '/^  provisioning:$/ { in_job=1 } /^  provisioning-aggre
 aggregate_job="$(awk '/^  provisioning-aggregate:$/ { in_job=1 } /^  dependency-integrity:$/ { exit } in_job' "$CI_WORKFLOW")"
 build_job="$(awk '/^  build:$/ { in_job=1 } /^  android-build:$/ { exit } in_job' "$CI_WORKFLOW")"
 android_build_job="$(awk '/^  android-build:$/ { in_job=1 } /^  host-contracts:$/ { exit } in_job' "$CI_WORKFLOW")"
-host_job="$(awk '/^  host-contracts:$/ { in_job=1 } /^  provisioning:$/ { exit } in_job' "$CI_WORKFLOW")"
+host_job="$(awk '/^  host-contracts:$/ { in_job=1 } /^  docs-localization:$/ { exit } in_job' "$CI_WORKFLOW")"
 if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$results" "${{ matrix.shard }}"' <<<"$provisioning_job" &&
    grep -Fq 'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' <<<"$provisioning_job" &&
    grep -Fq 'name: provisioning-${{ matrix.shard }}' <<<"$provisioning_job" &&
-   grep -Fqx '    needs: [provisioning, host-contracts]' <<<"$aggregate_job" &&
+   grep -Fqx '    needs: [provisioning, host-contracts, docs-localization]' <<<"$aggregate_job" &&
    grep -Fqx '    name: Host contracts' <<<"$aggregate_job" &&
    grep -Fq 'uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' <<<"$aggregate_job" &&
    grep -Fq 'pattern: provisioning-*' <<<"$aggregate_job" &&
@@ -251,6 +251,8 @@ if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$r
    grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --aggregate "$RUNNER_TEMP/provisioning-results"' <<<"$aggregate_job" &&
    grep -Fq 'HOST_RESULT: ${{ needs.host-contracts.result }}' <<<"$aggregate_job" &&
    grep -Fq 'PROVISIONING_RESULT: ${{ needs.provisioning.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'DOCS_RESULT: ${{ needs.docs-localization.result }}' <<<"$aggregate_job" &&
+   grep -Fq 'test "$DOCS_RESULT" = success' <<<"$aggregate_job" &&
    grep -Fq 'test "$HOST_RESULT" = success' <<<"$aggregate_job" &&
    grep -Fq 'test "$PROVISIONING_RESULT" = success' <<<"$aggregate_job" &&
    grep -Fqx '    name: Host shell contracts' <<<"$host_job"; then

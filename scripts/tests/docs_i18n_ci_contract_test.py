@@ -79,15 +79,15 @@ def run_block(step: str) -> str:
     return "".join(line[10:] for line in match.group("body").splitlines(keepends=True))
 
 
-def host_contracts(workflow: str) -> str:
-    return workflow[workflow.index("  host-contracts:") : workflow.index("\n  dependency-integrity:")]
+def docs_localization(workflow: str) -> str:
+    return workflow[workflow.index("  docs-localization:") : workflow.index("\n  provisioning:")]
 
 
 def assert_docs_workflow_contract(workflow: str) -> None:
-    host_start = workflow.find("  host-contracts:")
-    host_end = workflow.find("\n  dependency-integrity:", host_start)
+    host_start = workflow.find("  docs-localization:")
+    host_end = workflow.find("\n  provisioning:", host_start)
     if host_start < 0 or host_end < 0:
-        raise AssertionError("host-contracts job boundary is missing")
+        raise AssertionError("docs-localization job boundary is missing")
     host = workflow[host_start:host_end]
 
     checkout = (
@@ -214,7 +214,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         assert_docs_workflow_contract(workflow)
 
-        host = host_contracts(workflow)
+        host = docs_localization(workflow)
         setup = named_step(host, "Set up Node.js for documentation localization")
         validation = named_step(host, "Validate multilingual documentation")
         report = named_step(host, "Report multilingual documentation drift")
@@ -248,7 +248,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
 
     def test_documentation_drift_never_gates_the_job(self) -> None:
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        host = host_contracts(workflow)
+        host = docs_localization(workflow)
         validation = named_step(host, "Validate multilingual documentation")
         report = named_step(host, "Report multilingual documentation drift")
         gating_mutations = {
@@ -268,7 +268,7 @@ class DocsI18nCiContractTest(unittest.TestCase):
                     assert_docs_workflow_contract(mutated)
 
     def test_drift_report_exits_zero_whatever_validate_returns(self) -> None:
-        script = run_block(named_step(host_contracts(WORKFLOW.read_text(encoding="utf-8")), "Report multilingual documentation drift"))
+        script = run_block(named_step(docs_localization(WORKFLOW.read_text(encoding="utf-8")), "Report multilingual documentation drift"))
         with tempfile.TemporaryDirectory() as temporary:
             fake_npm = Path(temporary) / "npm"
             env = {**os.environ, "PATH": f"{temporary}{os.pathsep}{os.environ['PATH']}"}
