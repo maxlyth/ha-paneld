@@ -47,9 +47,14 @@ jobs:
           - name: lint
             tasks: ":app:lintDebug"
             apks: "no"
-          - name: assemble
-            tasks: ":app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease"
-            apks: "yes"
+          # The debug and release APKs share almost no tasks and each compiles its own native
+          # libraries, so building them on separate runners halves the longest Android split.
+          - name: assemble debug
+            tasks: ":app:assembleDebug :app:assembleDebugAndroidTest"
+            apks: "debug"
+          - name: assemble release
+            tasks: ":app:assembleRelease"
+            apks: "release"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,6 +130,22 @@ jobs:
         with:
           cache-provider: enhanced
 
+      # The vendored microWakeWord sources take about three minutes per ABI to compile and the Gradle
+      # build cache does not cover native builds. ccache keeps the objects between runs; the key
+      # changes only with the native sources or the build script, and the NDK version is pinned in
+      # both the key and the compiler check because sdkmanager reinstalls the NDK on every run.
+      - name: Install native compiler cache
+        if: matrix.apks != 'no'
+        run: command -v ccache >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ccache; }
+
+      - name: Restore native compiler cache
+        if: matrix.apks != 'no'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ccache-${{ matrix.apks }}-ndk-27.0.12077973-${{ hashFiles('app/src/main/cpp/**', 'app/build.gradle.kts') }}
+          restore-keys: ccache-${{ matrix.apks }}-ndk-27.0.12077973-
+
       # The bundled-helper installer tests drive the real staging script, which requires
       # its transaction record to be owned by root exactly as it is on a panel, so the
       # whole invocation runs as root and hands the tree back afterwards. Splitting it
@@ -147,34 +168,47 @@ jobs:
       # 2026-09-06: without this, four BundledHelperInstallerTest cases and
       # HelperSocketCompositionTest fail as the runner account.
       - name: Run ${{ matrix.name }}
+        env:
+          CCACHE_DIR: ${{ runner.temp }}/ccache
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_COMPILERCHECK: string:ndk-27.0.12077973
+          CCACHE_MAXSIZE: 1G
+          NATIVE_LAUNCHER: ${{ matrix.apks != 'no' && '-Phapaneld.nativeCompilerLauncher=ccache' || '' }}
         run: |
           # Hand the tree back on EVERY exit, not just success. A failing Gradle
           # used to skip this and leave a root-owned workspace that the runner
           # account cannot delete, so the next checkout wiped the working copy,
           # found no repository and stopped before any step of ours ran.
-          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" "$CCACHE_DIR" 2>/dev/null || true' EXIT
           # The configuration cache lets Gradle run tasks of this single module in parallel, so a
           # split that names several tasks uses every core. It is a flag here rather than a
           # gradle.properties default because a local build configured with keystore.properties would
           # store those signing passwords in its cache entry, and release.yml keeps its build unchanged.
           sudo -E env "PATH=$PATH" "JAVA_HOME=$JAVA_HOME" "ANDROID_HOME=$ANDROID_HOME" \
             "GRADLE_USER_HOME=${GRADLE_USER_HOME:-$HOME/.gradle}" \
-            ./gradlew ${{ matrix.tasks }} \
+            "CCACHE_DIR=$CCACHE_DIR" "CCACHE_BASEDIR=$CCACHE_BASEDIR" \
+            "CCACHE_COMPILERCHECK=$CCACHE_COMPILERCHECK" "CCACHE_MAXSIZE=$CCACHE_MAXSIZE" \
+            ./gradlew ${{ matrix.tasks }} $NATIVE_LAUNCHER \
               --configuration-cache \
               --stacktrace
 
       - name: Verify supported Android and ABI floors
-        if: matrix.apks == 'yes'
+        if: matrix.apks != 'no'
+        env:
+          APK_VARIANT: ${{ matrix.apks }}
         run: |
           build_tools="$ANDROID_HOME/build-tools/36.0.0"
-          debug_apk=app/build/outputs/apk/debug/app-debug.apk
-          release_apk=app/build/outputs/apk/release/app-release-unsigned.apk
-          for apk in "$debug_apk" "$release_apk"; do
-            badging="$("$build_tools/aapt" dump badging "$apk")"
-            grep -Fq "compileSdkVersion='37'" <<<"$badging"
-            grep -Fq "sdkVersion:'26'" <<<"$badging"
-            grep -Fq "targetSdkVersion:'35'" <<<"$badging"
-          done
+          case "$APK_VARIANT" in
+            debug) apk=app/build/outputs/apk/debug/app-debug.apk ;;
+            release) apk=app/build/outputs/apk/release/app-release-unsigned.apk ;;
+            *) echo "unknown APK variant: $APK_VARIANT" >&2; exit 1 ;;
+          esac
+          badging="$("$build_tools/aapt" dump badging "$apk")"
+          grep -Fq "compileSdkVersion='37'" <<<"$badging"
+          grep -Fq "sdkVersion:'26'" <<<"$badging"
+          grep -Fq "targetSdkVersion:'35'" <<<"$badging"
+          [ "$APK_VARIANT" = release ] || exit 0
+          release_apk="$apk"
           release_files="$(unzip -Z1 "$release_apk")"
           grep -Fxq 'lib/arm64-v8a/libhapaneld_led.so' <<<"$release_files"
           grep -Fxq 'lib/armeabi-v7a/libhapaneld_led.so' <<<"$release_files"
@@ -200,11 +234,11 @@ jobs:
           done
 
       - name: Verify V4 release signature sidecar contract
-        if: matrix.apks == 'yes'
+        if: matrix.apks == 'release'
         run: scripts/tests/release_idsig_test.sh
 
       - name: Upload debug APK
-        if: matrix.apks == 'yes'
+        if: matrix.apks == 'debug'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ha-paneld-debug

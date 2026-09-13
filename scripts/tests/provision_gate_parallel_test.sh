@@ -262,7 +262,7 @@ else
 fi
 if awk '
      /- name: Upload debug APK/ { in_step=1; next }
-     in_step && /if: matrix\.apks == '\''yes'\''/ { guarded=1 }
+     in_step && /if: matrix\.apks == '\''debug'\''/ { guarded=1 }
      in_step && /uses: actions\/upload-artifact@/ { uploaded=1; exit }
      END { exit !(guarded && uploaded) }
    ' <<<"$build_job"; then
