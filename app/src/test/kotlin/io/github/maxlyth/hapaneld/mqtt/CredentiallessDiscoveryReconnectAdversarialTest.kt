@@ -12,10 +12,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The transport behavior is executable here. A complete bridge-level behavioral test needs the seam
- * already promised by MqttTransport's documentation: MqttBridge must accept an MqttTransport constructor
- * parameter instead of constructing HiveMqTransport in a private property. Until then, the source guard
- * below pins the bridge's anonymous-discovery selection while the broker test proves what false does.
+ * The transport behavior is executable here. MqttBridge now accepts an MqttTransport constructor
+ * parameter (see MqttWireGoldenTest for a bridge driven through it), but no bridge-level behavioral test
+ * of the anonymous-discovery selection exists yet, so the source guard below still pins that selection
+ * while the broker test proves what false does.
  */
 class CredentiallessDiscoveryReconnectAdversarialTest {
     @Test(timeout = 15_000)

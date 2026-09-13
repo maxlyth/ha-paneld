@@ -1314,12 +1314,12 @@ internal class MqttBridge(
     // holds one — otherwise a queued callback from a superseded broker session mutates whichever
     // coordinator happens to be installed when it finally runs.
     private val haLifecycleLease: HaLifecycleRuntime.MqttLease? = null,
+    private val transport: MqttTransport = HiveMqTransport(),
 ) : LiveSettingHandlers {
     private enum class CommandKind { LATEST, ACTION }
 
     private val haLinkResolutionThread = AtomicReference<Thread?>()
     @Volatile private var reloadNavigationFuture: ScheduledFuture<*>? = null
-    private val transport: MqttTransport = HiveMqTransport()
     private val discoveryCapabilities = MqttDiscoveryCapabilitySource(
         supplier = capabilities,
         onFailure = { error ->

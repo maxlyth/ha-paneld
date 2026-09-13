@@ -1,0 +1,774 @@
+package io.github.maxlyth.hapaneld.mqtt
+
+import android.content.ContentResolver
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import android.content.res.Resources
+import android.media.AudioManager
+import io.github.maxlyth.hapaneld.BuildConfig
+import io.github.maxlyth.hapaneld.Config
+import io.github.maxlyth.hapaneld.MqttAddressFamily
+import io.github.maxlyth.hapaneld.MqttBridge
+import io.github.maxlyth.hapaneld.config.Capabilities
+import io.github.maxlyth.hapaneld.control.AdbController
+import io.github.maxlyth.hapaneld.control.AutoBrightnessController
+import io.github.maxlyth.hapaneld.control.BootChimeController
+import io.github.maxlyth.hapaneld.control.BootChimeHardware
+import io.github.maxlyth.hapaneld.control.BootChimeState
+import io.github.maxlyth.hapaneld.control.BootChimeStateStore
+import io.github.maxlyth.hapaneld.control.BrightnessController
+import io.github.maxlyth.hapaneld.control.ControlApplyOutcome
+import io.github.maxlyth.hapaneld.control.CpuController
+import io.github.maxlyth.hapaneld.control.FakeBacklight
+import io.github.maxlyth.hapaneld.control.FakeDaemon
+import io.github.maxlyth.hapaneld.control.FakeRootShell
+import io.github.maxlyth.hapaneld.control.FakeScreenPower
+import io.github.maxlyth.hapaneld.control.FakeSystemEnv
+import io.github.maxlyth.hapaneld.control.FakeWakeTap
+import io.github.maxlyth.hapaneld.control.LedEffectController
+import io.github.maxlyth.hapaneld.control.NavbarController
+import io.github.maxlyth.hapaneld.control.NavigateController
+import io.github.maxlyth.hapaneld.control.RelayController
+import io.github.maxlyth.hapaneld.control.ScreenController
+import io.github.maxlyth.hapaneld.control.SystemController
+import io.github.maxlyth.hapaneld.control.TouchSoundController
+import io.github.maxlyth.hapaneld.control.VolumeController
+import io.github.maxlyth.hapaneld.control.WatchdogController
+import io.github.maxlyth.hapaneld.control.WifiOutageCounts
+import io.github.maxlyth.hapaneld.control.ZigbeeController
+import io.github.maxlyth.hapaneld.control.fakeProfile
+import io.github.maxlyth.hapaneld.device.ScreenOff
+import io.github.maxlyth.hapaneld.hardware.LedController
+import io.github.maxlyth.hapaneld.platform.RootShell
+import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
+import io.github.maxlyth.hapaneld.storage.StorageHealthSnapshot
+import io.github.maxlyth.hapaneld.storage.StorageQuickCheck
+import io.github.maxlyth.hapaneld.testsupport.TestSources
+import io.github.maxlyth.hapaneld.util.MonotonicDeadline
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.junit.Test
+import java.io.File
+import java.lang.reflect.Proxy
+import java.nio.file.Files
+import java.util.Base64
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+/**
+ * Captures the complete MQTT wire output of the REAL [MqttBridge] — a full connect announcement, a
+ * representative burst of Home Assistant commands and local sensor updates, and retirement — and
+ * compares it byte for byte against a checked-in golden fixture. It exists so a refactor of the state
+ * converger wiring or the command dispatcher can prove it changed no topic, payload, retain flag,
+ * subscription or publication order.
+ *
+ * Only the broker client is replaced: a recording [MqttTransport] injected through the bridge's
+ * constructor seam. Everything the bridge decides — discovery, cleanup, pruning, state convergence,
+ * command dispatch — runs as in production against fake hardware.
+ *
+ * Wire facts that are not captured: QoS is fixed at 1 inside [HiveMqTransport] and is not part of the
+ * [MqttTransport] interface, so it cannot vary through the bridge and is not recorded. Connect options
+ * are recorded from [MqttConnectConfig], excluding the route planner object.
+ *
+ * Determinism. The bridge publishes from several threads (connect announcement, command worker and the
+ * process-wide state-convergence pump) and the state converger admits at most four unacknowledged
+ * publications, so the order of later publications depends on when acknowledgements arrive. The fake
+ * therefore HOLDS every acknowledgement. The test waits until the bridge is quiescent, then releases
+ * every held acknowledgement in FIFO order from a task on the convergence pump itself, so all follow-up
+ * work those acknowledgements schedule queues behind the release and runs in one fixed order. Rounds
+ * repeat until a quiet round has nothing held.
+ *
+ * Normalisation: the Home Assistant device `sw_version` embeds the app version name and build code,
+ * which change with every release; that exact string is replaced by [SW_VERSION_TOKEN], and the test
+ * asserts the token never appears on a `/state` topic so normalisation cannot mask a state byte.
+ *
+ * Fixture: `mqtt-wire-golden/bridge.txt` on the test classpath (the test resources directory), one line
+ * per wire event in order: `retain<TAB>topic<TAB>base64(payload)` for publications (`-` for an empty
+ * payload, which base64 cannot produce), `subscribe<TAB>filter`
+ * and `connect<TAB>…` for session setup, with `# announce`, `# burst` and `# final` section markers.
+ * Re-record with `HAPANELD_RECORD_MQTT_GOLDEN=1`; record mode writes the source-tree copy. Compare mode
+ * reads the classpath copy, which Gradle fingerprints as a test input, so the source-tree path is only
+ * ever written and is assembled from segments rather than spelled as one runtime-read literal.
+ */
+class MqttWireGoldenTest {
+
+    @Test(timeout = 180_000)
+    fun `bridge wire output matches the golden fixture`() {
+        val problems = mutableListOf<String>()
+        val actual = capture(problems)
+        println(summarise(actual))
+        if (System.getenv(RECORD_ENV) != "1") {
+            val stream = javaClass.getResourceAsStream("/$FIXTURE")
+                ?: error("missing golden fixture /$FIXTURE; record it with $RECORD_ENV=1")
+            val expected = stream.bufferedReader().use { it.readLines() }.filter { it.isNotEmpty() }
+            // The wire comparison comes first so a changed byte is reported as a readable diff even when
+            // it also derails a scenario step; scenario problems are appended to the same failure.
+            if (expected != actual) fail(renderDiff(expected, actual) + problems.joinToString("") { "\nscenario: $it" })
+        }
+        assertEquals("scenario problems", emptyList<String>(), problems)
+
+        val swVersion = jsonEscaped(io.github.maxlyth.hapaneld.mqttDeviceSoftwareVersion(Config.VERSION, BuildConfig.VERSION_CODE))
+        actual.filter { it.isPublication() && it.topic().endsWith("/state") }.forEach { line ->
+            assertFalse(
+                "normalisation token reached a state topic: ${line.topic()}",
+                line.decodedPayload().contains(SW_VERSION_TOKEN),
+            )
+        }
+        assertTrue("the device software version was never normalised", actual.any { it.isPublication() && it.decodedPayload().contains(SW_VERSION_TOKEN) })
+        assertFalse("un-normalised software version leaked", actual.any { it.isPublication() && it.decodedPayload().contains(swVersion) })
+
+        if (System.getenv(RECORD_ENV) == "1") {
+            // Never bake a derailed scenario into the golden.
+            assertEquals(
+                "scenario markers in a recording",
+                emptyList<String>(),
+                actual.filter { it.startsWith("# timed out") || it.startsWith("# dropped") },
+            )
+            val target = sourceFixture()
+            target.parentFile.mkdirs()
+            target.writeText(actual.joinToString("\n", postfix = "\n"))
+            println("recorded ${actual.size} lines to ${target.absolutePath}")
+        }
+    }
+
+    // ---- scenario ----
+
+    private fun capture(problems: MutableList<String>): List<String> {
+        fun check(condition: Boolean, message: String) {
+            if (!condition) problems += message
+        }
+        val tmp = Files.createTempDirectory("mqtt-wire-golden").toFile()
+        val prefs = MemoryPreferences()
+        val context = FakeContext(tmp, prefs)
+        val config = newConfig(prefs, context.contentResolver)
+        config.setHardware("Golden Manufacturing", "Golden Panel")
+        config.setAutoSleep(true)
+        // Most config entities are opt-in. Expose a representative set so their discovery payloads, not
+        // only their tombstones, are on the wire. Host-metric diagnostics stay hidden: they read /proc.
+        listOf(
+            "diag_wifi_outages_24h", "voice_state", "voice_enabled", "wake_on_wave", "auto_sleep",
+            "auto_sleep_activity", "touch_sound", "kiosk_lock", "auto_brightness", "navbar_mode",
+            "companion_auto_update", "companion_update_channel", "webview_auto_update",
+        ).forEach { config.setHaExposed(it, true) }
+
+        val transport = RecordingTransport()
+        val sysfs = SysfsRootShell()
+        val relay = RelayController(
+            fakeProfile(relayBase = RELAY_BASE, buttonLedGpioBase = LED_GPIO_BASE),
+            sysfs,
+        )
+        val brightness = BrightnessController(context, FakeRootShell(), FakeDaemon())
+        val screen = ScreenController(
+            FakeBacklight(160), FakeScreenPower(), FakeRootShell(), FakeDaemon(), FakeWakeTap(),
+            ScreenOff.BRIGHTNESS_ZERO, nap = {},
+        )
+        val system = SystemController(FakeSystemEnv(), FakeRootShell(), FakeDaemon(), builtinForeground = { false })
+        val led = object : LedController {
+            override fun available() = true
+            override fun colorCapable() = true
+            override fun setRgb(r: Int, g: Int, b: Int) = true
+            override fun off() = true
+        }
+        val bootChime = BootChimeController(
+            configured = { false },
+            setConfigured = {},
+            stateStore = object : BootChimeStateStore {
+                override fun load(): BootChimeState? = null
+                override fun save(state: BootChimeState) = true
+                override fun clear() = true
+            },
+            hardware = object : BootChimeHardware {
+                override fun capture(): BootChimeState? = null
+                override fun silence() = ControlApplyOutcome.APPLIED
+                override fun restore(state: BootChimeState) = ControlApplyOutcome.APPLIED
+            },
+        )
+        val capabilities = Capabilities(
+            hasProximity = true,
+            hasLearnedProximity = true,
+            hasLight = true,
+            hasTemperature = true,
+            hasHumidity = true,
+            hasButtonBacklight = true,
+            hasMicrophone = true,
+            buttonsEnabled = true,
+            relays = 2,
+            buttonLeds = 1,
+            canInstallVerifiedApps = true,
+            hasWifi = true,
+            companionInstalled = true,
+            webViewManaged = true,
+        )
+        val storage = java.util.concurrent.atomic.AtomicReference(storageSnapshot(StorageHealthSeverity.HEALTHY, walBytes = 4_096))
+        val autoSleepConfigChanges = AtomicInteger()
+        val companionUpdateRequests = AtomicInteger()
+
+        val bridge = MqttBridge(
+            config = config,
+            brightness = brightness,
+            screen = screen,
+            led = led,
+            ledEffect = LedEffectController(led),
+            navigate = NavigateController(context),
+            volume = VolumeController(context),
+            system = system,
+            // Never reached by the scenario: the navbar command below takes the capability refusal path.
+            navbar = allocate(NavbarController::class.java),
+            watchdog = WatchdogController(system, config),
+            // Never reached: touch_sound needs an Android audio stack, so no touch_sound command is sent.
+            touchSound = allocate(TouchSoundController::class.java),
+            bootChime = bootChime,
+            zigbee = ZigbeeController(fakeProfile(), FakeRootShell()),
+            relay = relay,
+            // Not reached: the capability snapshot reports no CPU governors.
+            cpu = allocate(CpuController::class.java),
+            // Only its best-effort reconnect reassertion runs, on a worker that logs and discards failure.
+            adb = allocate(AdbController::class.java),
+            buttonsEnabled = true,
+            hasEvdevButtons = false,
+            capabilities = { capabilities },
+            hasLight = true,
+            hasProximity = true,
+            hasTemperature = true,
+            hasHumidity = true,
+            hasCht8305 = false,
+            hasButtonBacklight = true,
+            hasMicrophone = true,
+            // Never reached: no screen brightness or auto-brightness command is sent.
+            autoBright = allocate(AutoBrightnessController::class.java),
+            configUrl = { "http://192.0.2.10:8888/" },
+            onUpdateCompanion = { companionUpdateRequests.incrementAndGet() },
+            onSelfUpdateChannelChange = { _, _ -> false },
+            softwareUpdateSources = {
+                SoftwareUpdateSources(
+                    paneldVersion = "1.2.3",
+                    paneldChannel = "stable",
+                    paneldTarget = SoftwareTarget("1.2.4", "v1.2.4", "https://example.invalid/releases/v1.2.4"),
+                    companionMinimalVersion = "2026.1.1-minimal",
+                    companionFullVersion = null,
+                    companionChannel = "stable",
+                    companionCap = null,
+                    companionTarget = null,
+                    runningOperation = null,
+                    panelAssistantOwnsPaneldUpdate = false,
+                )
+            },
+            onDirectKioskSetting = { true },
+            storageHealth = { storage.get() },
+            wifiOutages = { WifiOutageCounts(last24h = 3) },
+            learnedProximityEligibility = { true },
+            onAutoSleepConfigChanged = { autoSleepConfigChanges.incrementAndGet() },
+            runtimePanelId = PANEL,
+            runtimeFriendlyName = "Golden panel",
+            runtimeBroker = "tcp://127.0.0.1:1883",
+            runtimeMqttUser = "panel-user",
+            runtimeMqttPassword = "panel-password",
+            runtimeMqttAddressFamily = "Automatic",
+            transport = transport,
+        )
+
+        try {
+            // ---- connect announcement ----
+            transport.mark("# announce")
+            bridge.start()
+            transport.awaitPublication(0, "availability online", timeoutSeconds = 60) { it.topic() == "ha-paneld/$PANEL/availability" && it.decodedPayload() == "online" }
+            transport.drain()
+            check(awaitCondition { bridge.isConnected() }, "announcement was never acknowledged")
+            transport.drain()
+
+            // ---- command and local-update burst ----
+            transport.mark("# burst")
+            command("screen", """{"state":"OFF"}""", transport)
+            command("volume", "35", transport)
+            command("auto_sleep", "OFF", transport)
+            command("update_channel", "Pre-release", transport)
+            // This panel has no native navigation bar: the refusal republishes the canonical mode.
+            command("navbar", "Native", transport)
+            command("relay1", "ON", transport)
+            command("button_led1", "ON", transport)
+
+            // Genuine coalescence: hold the command worker inside a relay1 write, queue two relay2
+            // commands behind it, and prove only the newest one ever reaches the hardware.
+            val relay2Node = "$RELAY_BASE/relay2"
+            sysfs.blockNextWrite("$RELAY_BASE/relay1")
+            val before = transport.size()
+            transport.deliver("ha-paneld/$PANEL/relay1/set", "OFF")
+            check(sysfs.blockEntered.await(10, TimeUnit.SECONDS), "relay1 write never started")
+            val relay2WritesBefore = sysfs.writes.count { it.startsWith(relay2Node) }
+            transport.deliver("ha-paneld/$PANEL/relay2/set", "ON")
+            transport.deliver("ha-paneld/$PANEL/relay2/set", "OFF")
+            sysfs.blockRelease.countDown()
+            transport.awaitPublication(before, "relay2 state") { it.topic() == "ha-paneld/$PANEL/relay2/state" }
+            transport.drain()
+            val relay2Writes = sysfs.writes.filter { it.startsWith(relay2Node) }.drop(relay2WritesBefore)
+            check(
+                relay2Writes == listOf("$relay2Node=0"),
+                "the queued relay2 ON was not coalesced into the newer OFF: $relay2Writes",
+            )
+            println("coalescence: relay2 ON superseded by OFF while relay1 write was held; relay2 writes ${sysfs.writes.filter { it.startsWith(relay2Node) }}")
+
+            // An ACTION: never conflated. The legacy PRESS publishes nothing itself, so its execution is
+            // proven by the injected callback, and a LATEST command queued behind it on the same worker
+            // is the ordering barrier.
+            val actionMark = transport.size()
+            transport.deliver("ha-paneld/$PANEL/update_companion/set", "PRESS")
+            command("companion_update_channel", "Pre-release", transport, from = actionMark)
+
+            // Local producers reconciled through the bridge's public update methods.
+            local(transport, "ha-paneld/$PANEL/illuminance/state") { bridge.publishLight(120) }
+            local(transport, "ha-paneld/$PANEL/temperature/state") { bridge.publishTemperature(21.46f) }
+            local(transport, "ha-paneld/$PANEL/humidity/state") { bridge.publishHumidity(40.4f) }
+            local(transport, "ha-paneld/$PANEL/proximity_level/state") { bridge.publishProximity(true, 50) }
+            storage.set(storageSnapshot(StorageHealthSeverity.WARNING, walBytes = 65_536))
+            local(transport, "ha-paneld/$PANEL/storage_health/attributes") { bridge.publishStorageHealth() }
+
+            // ---- retirement ----
+            transport.mark("# final")
+            val retirement = bridge.stop(MonotonicDeadline(30_000), publishOffline = true)
+            check(retirement.ownersDrained.get(40, TimeUnit.SECONDS), "bridge owners did not drain")
+            retirement.finalization.get(40, TimeUnit.SECONDS)
+            check(transport.heldCount() == 0, "publications stayed unacknowledged after retirement")
+            check(autoSleepConfigChanges.get() == 1, "auto_sleep command ran ${autoSleepConfigChanges.get()} times, not once")
+            check(companionUpdateRequests.get() == 1, "update_companion action ran ${companionUpdateRequests.get()} times, not once")
+            println("commands delivered: ${transport.delivered.get()}")
+        } finally {
+            runCatching { bridge.stop(MonotonicDeadline(1_000)) }
+            tmp.deleteRecursively()
+        }
+        return transport.snapshot()
+    }
+
+    private fun command(
+        name: String,
+        payload: String,
+        transport: RecordingTransport,
+        from: Int = transport.size(),
+    ) {
+        transport.deliver("ha-paneld/$PANEL/$name/set", payload)
+        transport.awaitPublication(from, "$name state") { it.topic() == "ha-paneld/$PANEL/$name/state" }
+        transport.drain()
+    }
+
+    private fun local(transport: RecordingTransport, expectTopic: String, action: () -> Unit) {
+        val from = transport.size()
+        action()
+        transport.awaitPublication(from, expectTopic) { it.topic() == expectTopic }
+        transport.drain()
+    }
+
+    // ---- recording transport ----
+
+    private class RecordingTransport : MqttTransport {
+        private val lock = Object()
+        private val lines = ArrayList<String>()
+        private val held = ArrayList<(Boolean) -> Unit>()
+        private val subscriptions = LinkedHashMap<String, (String, ByteArray, Boolean) -> Unit>()
+        private var lease: MqttConnectionLease? = null
+        @Volatile private var lastActivityNanos = System.nanoTime()
+        val delivered = AtomicInteger()
+
+        private fun touch() {
+            lastActivityNanos = System.nanoTime()
+        }
+
+        fun mark(section: String) = synchronized(lock) { lines += section; touch() }
+
+        fun size(): Int = synchronized(lock) { lines.size }
+
+        fun snapshot(): List<String> = synchronized(lock) { lines.toList() }
+
+        fun heldCount(): Int = synchronized(lock) { held.size }
+
+        override fun connect(config: MqttConnectConfig, callbacks: MqttCallbacks) {
+            val connection = MqttConnectionLease()
+            synchronized(lock) {
+                lines += listOf(
+                    "connect",
+                    "host=${config.host}",
+                    "port=${config.port}",
+                    "tls=${config.tls}",
+                    "clientId=${config.clientId}",
+                    "user=${config.user}",
+                    "password=${config.password}",
+                    "keepAlive=${config.keepAliveSeconds}",
+                    "will=${config.willTopic}:${config.willPayload}",
+                    "automaticReconnect=${config.automaticReconnect}",
+                ).joinToString("\t")
+                lease = connection
+                touch()
+            }
+            callbacks.onConnected(connection, MqttAddressFamily.IPV4)
+        }
+
+        override fun disconnectDetached(): CompletableFuture<Unit> {
+            synchronized(lock) { lease = null; touch() }
+            return CompletableFuture.completedFuture(Unit)
+        }
+
+        override fun publishThenDisconnect(
+            publications: List<MqttFinalPublish>,
+            timeoutMs: Long,
+        ): CompletableFuture<Unit> {
+            synchronized(lock) {
+                publications.forEach { lines += line(it.topic, it.payload, it.retain) }
+                lease = null
+                touch()
+            }
+            return CompletableFuture.completedFuture(Unit)
+        }
+
+        override fun publish(
+            topic: String,
+            payload: ByteArray,
+            retain: Boolean,
+            expectedConnection: MqttConnectionLease?,
+            onComplete: ((Boolean) -> Unit)?,
+        ) {
+            val admitted = synchronized(lock) {
+                val current = lease
+                if (current == null || (expectedConnection != null && expectedConnection !== current)) {
+                    lines += "# dropped\t$topic"
+                    false
+                } else {
+                    lines += line(topic, payload, retain)
+                    onComplete?.let { held += it }
+                    true
+                }.also { touch() }
+            }
+            if (!admitted) onComplete?.invoke(false)
+        }
+
+        override fun subscribe(
+            topicFilter: String,
+            expectedConnection: MqttConnectionLease?,
+            onMessage: (topic: String, payload: ByteArray, retained: Boolean) -> Unit,
+        ) {
+            synchronized(lock) {
+                lines += "subscribe\t$topicFilter"
+                subscriptions[topicFilter] = onMessage
+                touch()
+            }
+        }
+
+        override fun isCurrent(connection: MqttConnectionLease): Boolean =
+            synchronized(lock) { lease === connection }
+
+        /** Deliver a fresh (non-retained) inbound message to the matching subscription, as the broker does. */
+        fun deliver(topic: String, payload: String) {
+            val handler = synchronized(lock) {
+                subscriptions.entries.firstOrNull { matches(it.key, topic) }?.value
+            } ?: error("no subscription matches $topic")
+            touch()
+            delivered.incrementAndGet()
+            handler(topic, payload.toByteArray(Charsets.UTF_8), false)
+        }
+
+        /** Wait for an expected publication. A timeout is recorded as a wire line, so it surfaces in the
+         * golden diff instead of aborting the capture. */
+        fun awaitPublication(from: Int, label: String, timeoutSeconds: Long = 10, predicate: (String) -> Boolean) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds)
+            while (System.nanoTime() < deadline) {
+                if (synchronized(lock) { lines.drop(from).any { it.isPublication() && predicate(it) } }) return
+                Thread.sleep(10)
+            }
+            mark("# timed out waiting for $label")
+        }
+
+        /** Release held acknowledgements in rounds until a quiet round has nothing left to release. */
+        fun drain() {
+            repeat(MAX_ROUNDS) {
+                awaitQuiet()
+                val batch = synchronized(lock) { held.toList().also { held.clear() } }
+                if (batch.isEmpty()) return
+                val done = CountDownLatch(1)
+                StateConverger.dispatch {
+                    try {
+                        batch.forEach { it(true) }
+                    } finally {
+                        // Queued behind every task the acknowledgements themselves scheduled.
+                        StateConverger.dispatch { done.countDown() }
+                    }
+                }
+                check(done.await(30, TimeUnit.SECONDS)) { "acknowledgement release did not finish" }
+                touch()
+            }
+            error("publications never settled after $MAX_ROUNDS acknowledgement rounds")
+        }
+
+        private fun awaitQuiet() {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60)
+            while (true) {
+                val pumpIdle = CountDownLatch(1)
+                StateConverger.dispatch { pumpIdle.countDown() }
+                check(pumpIdle.await(30, TimeUnit.SECONDS)) { "state convergence pump wedged" }
+                val idleNanos = System.nanoTime() - lastActivityNanos
+                if (idleNanos >= TimeUnit.MILLISECONDS.toNanos(QUIET_MS)) return
+                check(System.nanoTime() < deadline) { "bridge never became quiet" }
+                Thread.sleep(25)
+            }
+        }
+
+        private fun matches(filter: String, topic: String): Boolean {
+            val f = filter.split('/')
+            val t = topic.split('/')
+            if (f.size != t.size) return false
+            return f.indices.all { f[it] == "+" || f[it] == t[it] }
+        }
+
+        private fun line(topic: String, payload: ByteArray, retain: Boolean): String {
+            val normalised = String(payload, Charsets.UTF_8).let { text ->
+                check(text.toByteArray(Charsets.UTF_8).contentEquals(payload)) { "non-UTF-8 payload on $topic" }
+                text.replace(SW_VERSION, SW_VERSION_TOKEN)
+            }
+            // Base64 never yields "-", so it unambiguously marks an empty payload without a trailing tab.
+            val encoded = if (normalised.isEmpty()) EMPTY_PAYLOAD else Base64.getEncoder().encodeToString(normalised.toByteArray(Charsets.UTF_8))
+            return "$retain\t$topic\t$encoded"
+        }
+
+        companion object {
+            const val MAX_ROUNDS = 200
+            const val QUIET_MS = 400L
+        }
+    }
+
+    // ---- fakes ----
+
+    /** Relay and button-LED sysfs nodes whose reads reflect writes; one write can be held on a latch. */
+    private class SysfsRootShell : RootShell {
+        private val nodes = ConcurrentHashMap(
+            mapOf(
+                "$RELAY_BASE/relay1" to "0",
+                "$RELAY_BASE/relay2" to "1",
+                "/sys/class/gpio/gpio$LED_GPIO_BASE/value" to "0",
+            ),
+        )
+        val writes = CopyOnWriteArrayList<String>()
+        @Volatile private var blockPath: String? = null
+        val blockEntered = CountDownLatch(1)
+        val blockRelease = CountDownLatch(1)
+
+        fun blockNextWrite(path: String) {
+            blockPath = path
+        }
+
+        override fun available() = true
+        override fun run(cmd: String) = true
+        override fun runOutput(cmd: String): String? = null
+        override fun runBytes(cmd: String): ByteArray? = null
+        override fun fireAndForget(cmd: String) = true
+        override fun listSysfs(path: String): String? = if (path == RELAY_BASE) "relay1 relay2" else null
+        override fun readSysfs(path: String): String? = nodes[path]
+        override fun prepareOutputGpio(gpio: Int) = true
+        override fun writeSysfs(path: String, value: String): Boolean {
+            if (path == blockPath) {
+                blockPath = null
+                blockEntered.countDown()
+                check(blockRelease.await(30, TimeUnit.SECONDS)) { "blocked write never released" }
+            }
+            writes += "$path=$value"
+            nodes[path] = value
+            return true
+        }
+    }
+
+    private class FakeContext(
+        private val files: File,
+        private val prefs: SharedPreferences,
+    ) : ContextWrapper(null) {
+        private val audio = allocate(AudioManager::class.java)
+        private val resolver = object : ContentResolver(null) {}
+        override fun getApplicationContext(): Context = this
+        override fun getSystemService(name: String): Any? = if (name == Context.AUDIO_SERVICE) audio else null
+        override fun getContentResolver(): ContentResolver = resolver
+        override fun getNoBackupFilesDir(): File = files
+        override fun getFilesDir(): File = files
+        override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences = prefs
+        override fun getPackageName(): String = "io.github.maxlyth.hapaneld"
+    }
+
+    /** Thread-safe in-memory preferences whose commits always succeed. */
+    private class MemoryPreferences : SharedPreferences by proxy(ConcurrentHashMap())
+
+    // ---- rendering ----
+
+    private fun summarise(lines: List<String>): String {
+        val sections = LinkedHashMap<String, MutableList<String>>()
+        var current = "# preamble"
+        lines.forEach { line ->
+            if (line.startsWith("# ") && !line.startsWith("# dropped")) current = line
+            else sections.getOrPut(current) { mutableListOf() } += line
+        }
+        val publications = lines.filter { it.isPublication() }
+        return buildString {
+            appendLine("MQTT wire golden summary")
+            sections.forEach { (name, body) -> appendLine("$name: ${body.count { it.isPublication() }} publications, ${body.size} lines") }
+            appendLine("discovery configs: ${publications.count { it.topic().startsWith("homeassistant/") }}")
+            appendLine("state topics: ${publications.map { it.topic() }.filter { it.endsWith("/state") }.toSet().size}")
+            appendLine("relay/button_led topics: ${publications.map { it.topic() }.filter { it.contains("/relay") || it.contains("/button_led") }.toSortedSet()}")
+            appendLine("software update topics: ${publications.map { it.topic() }.filter { it.contains("/update/") || it.startsWith("homeassistant/update/") }.toSortedSet()}")
+            appendLine("attributes topics: ${publications.map { it.topic() }.filter { it.endsWith("/attributes") }.toSortedSet()}")
+            appendLine("retain=false publications: ${publications.count { it.startsWith("false\t") }}")
+            appendLine("retain=false state topics: ${publications.filter { it.startsWith("false\t") && it.topic().endsWith("/state") }.map { it.topic() }.toSortedSet()}")
+            appendLine("dropped: ${lines.count { it.startsWith("# dropped") }}")
+        }
+    }
+
+    private fun renderDiff(expected: List<String>, actual: List<String>): String {
+        val first = expected.indices.firstOrNull { it >= actual.size || expected[it] != actual[it] } ?: expected.size
+        return buildString {
+            appendLine("MQTT wire output differs from $FIXTURE (expected ${expected.size} lines, actual ${actual.size}); first difference at line ${first + 1}:")
+            var shown = 0
+            var index = first
+            while (shown < 20 && (index < expected.size || index < actual.size)) {
+                val e = expected.getOrNull(index)
+                val a = actual.getOrNull(index)
+                if (e != a) {
+                    appendLine("  line ${index + 1}")
+                    appendLine("    expected: ${e?.let(::render) ?: "<none>"}")
+                    appendLine("    actual:   ${a?.let(::render) ?: "<none>"}")
+                    shown++
+                }
+                index++
+            }
+        }
+    }
+
+    private companion object {
+        const val PANEL = "golden"
+        const val RELAY_BASE = "/sys/class/strelay"
+        const val LED_GPIO_BASE = 147
+        const val FIXTURE = "mqtt-wire-golden/bridge.txt"
+        const val RECORD_ENV = "HAPANELD_RECORD_MQTT_GOLDEN"
+        const val SW_VERSION_TOKEN = "@@SW_VERSION@@"
+        const val EMPTY_PAYLOAD = "-"
+        val SW_VERSION: String = jsonEscaped(
+            io.github.maxlyth.hapaneld.mqttDeviceSoftwareVersion(Config.VERSION, BuildConfig.VERSION_CODE),
+        )
+
+        fun jsonEscaped(value: String): String = io.github.maxlyth.hapaneld.util.Json.esc(value)
+
+        fun sourceFixture(): File = TestSources.appDir("src").resolve("test").resolve("resources")
+            .resolve("mqtt-wire-golden").resolve("bridge.txt")
+
+        fun String.isPublication(): Boolean = startsWith("true\t") || startsWith("false\t")
+        fun String.topic(): String = split('\t')[1]
+        fun String.decodedPayload(): String = split('\t')[2].let { encoded ->
+            if (encoded == EMPTY_PAYLOAD) "" else String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
+        }
+        fun render(line: String): String =
+            if (line.isPublication()) "retain=${line.substringBefore('\t')} ${line.topic()} ${line.decodedPayload()}" else line
+
+        fun awaitCondition(condition: () -> Boolean): Boolean {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (!condition()) {
+                if (System.nanoTime() >= deadline) return false
+                Thread.sleep(10)
+            }
+            return true
+        }
+
+        fun storageSnapshot(severity: StorageHealthSeverity, walBytes: Long) = StorageHealthSnapshot(
+            severity = severity,
+            pressureSeverity = severity,
+            checkedAtMillis = 1_700_000_000_000L,
+            usableBytes = 6_000_000_000L,
+            totalBytes = 8_000_000_000L,
+            usedPercent = 25.0,
+            mainDatabaseBytes = 1_048_576L,
+            walBytes = walBytes,
+            sidecarBytes = 32_768L,
+            pageSizeBytes = 4_096L,
+            pageCount = 256L,
+            freelistCount = 3L,
+            schemaVersion = 7,
+            quickCheck = StorageQuickCheck.OK,
+        )
+
+        fun newConfig(prefs: SharedPreferences, resolver: ContentResolver): Config {
+            // The production constructor opens SQLite; the internal JVM seam has no content resolver,
+            // which the discovery device block needs for serial_number.
+            val constructor = Config::class.java.declaredConstructors.single {
+                it.parameterTypes.contentEquals(
+                    arrayOf(
+                        SharedPreferences::class.java,
+                        ContentResolver::class.java,
+                        SharedPreferences::class.java,
+                        SharedPreferences::class.java,
+                        Resources::class.java,
+                    ),
+                )
+            }
+            constructor.isAccessible = true
+            return constructor.newInstance(prefs, resolver, prefs, prefs, null) as Config
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        fun <T> allocate(type: Class<T>): T {
+            val unsafeClass = Class.forName("sun.misc.Unsafe")
+            val field = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }
+            return unsafeClass.getMethod("allocateInstance", Class::class.java).invoke(field.get(null), type) as T
+        }
+
+        fun proxy(values: MutableMap<String, Any>): SharedPreferences =
+            Proxy.newProxyInstance(
+                SharedPreferences::class.java.classLoader,
+                arrayOf(SharedPreferences::class.java),
+            ) { _, method, args ->
+                when (method.name) {
+                    "getAll" -> synchronized(values) { values.toMap() }
+                    "getString", "getInt", "getLong", "getFloat", "getBoolean", "getStringSet" ->
+                        values[args!![0] as String] ?: args[1]
+                    "contains" -> values.containsKey(args!![0] as String)
+                    "edit" -> editor(values)
+                    "registerOnSharedPreferenceChangeListener",
+                    "unregisterOnSharedPreferenceChangeListener",
+                    -> null
+                    "toString" -> "MemoryPreferences"
+                    "hashCode" -> System.identityHashCode(values)
+                    "equals" -> false
+                    else -> error("unexpected SharedPreferences call: ${method.name}")
+                }
+            } as SharedPreferences
+
+        fun editor(values: MutableMap<String, Any>): SharedPreferences.Editor {
+            val writes = LinkedHashMap<String, Any?>()
+            val removals = LinkedHashSet<String>()
+            var clear = false
+            lateinit var editor: SharedPreferences.Editor
+            editor = Proxy.newProxyInstance(
+                SharedPreferences.Editor::class.java.classLoader,
+                arrayOf(SharedPreferences.Editor::class.java),
+            ) { _, method, args ->
+                when (method.name) {
+                    "putString", "putInt", "putLong", "putFloat", "putBoolean", "putStringSet" -> editor.also {
+                        writes[args!![0] as String] = args[1]
+                        removals.remove(args[0] as String)
+                    }
+                    "remove" -> editor.also {
+                        writes.remove(args!![0] as String)
+                        removals.add(args[0] as String)
+                    }
+                    "clear" -> editor.also { clear = true }
+                    "commit", "apply" -> {
+                        synchronized(values) {
+                            if (clear) values.clear()
+                            removals.forEach { values.remove(it) }
+                            writes.forEach { (k, v) -> if (v == null) values.remove(k) else values[k] = v }
+                        }
+                        if (method.name == "commit") true else null
+                    }
+                    "toString" -> "MemoryPreferencesEditor"
+                    else -> error("unexpected Editor call: ${method.name}")
+                }
+            } as SharedPreferences.Editor
+            return editor
+        }
+    }
+}
