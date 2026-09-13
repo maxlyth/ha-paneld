@@ -431,7 +431,13 @@ val unitTestRuntimeReadFiles = listOf(
 // their names only, never their bytes, so a recompiled binary must not invalidate the test task.
 val unitTestGeneratedAssetExcludes = listOf("cdprelay-arm*", "hapaneld-helper-arm*")
 
+// The JVM suites are fork-safe: debug and release running concurrently with three forks each pass on the
+// project runner. Half the cores, capped at three, was the measured knee there; hapaneld.testForks overrides.
+val unitTestForks = providers.gradleProperty("hapaneld.testForks").map { it.toInt() }
+    .orElse((Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 3))
+
 tasks.withType<Test>().configureEach {
+    maxParallelForks = unitTestForks.get()
     if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
         dependsOn(buildHelperSocketTestServer)
         systemProperty("hapaneld.helper.socketTestServer", helperSocketTestServer.absolutePath)
