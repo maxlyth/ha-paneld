@@ -269,7 +269,7 @@ run_provision() {
   : > "$MSYS_ARGV_LOG"
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
-  rm -f "$TMP/diag-attempts" "$TMP/config-schema-probes" "$TMP"/write-settings-granted*"$TMP/accessibility-services" "$TMP/accessibility-enabled"
+  rm -f "$TMP/diag-attempts" "$TMP/config-schema-probes" "$TMP"/write-settings-granted* "$TMP/accessibility-services" "$TMP/accessibility-enabled"
   # Runtime-permission grant state is per-run for the same reason: left behind, a run that never
   # granted anything would still verify green off the previous run's grant.
   rm -f "$TMP"/record-audio-granted* "$TMP"/post-notifications-granted*
@@ -1616,6 +1616,24 @@ assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never i
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start|monkey -p io\.github\.maxlyth\.hapaneld))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
 
 assert_count "$(grep -c -- '--max-time 5 .*/api/v1/config/schema$' "$MOCK_CALL_LOG")" 1 "a ready Configuration schema is read once within a five-second request"
+
+# Grant state left by an earlier case would let a later case pass without granting anything, so every
+# run starts without it. A read-only verify creates none, which isolates the reset itself.
+printf '1\n' > "$TMP/write-settings-granted"
+printf '1\n' > "$TMP/write-settings-granted.stale"
+printf 'stale/.Service\n' > "$TMP/accessibility-services"
+printf '1\n' > "$TMP/accessibility-enabled"
+run_provision "$MOCK_TARGET" --verify
+if [ ! -e "$TMP/write-settings-granted" ] && [ ! -e "$TMP/write-settings-granted.stale" ]; then
+  pass "each run starts without WRITE_SETTINGS grant state from an earlier case"
+else
+  fail_test "each run starts without WRITE_SETTINGS grant state from an earlier case"
+fi
+if [ ! -e "$TMP/accessibility-services" ] && [ ! -e "$TMP/accessibility-enabled" ]; then
+  pass "each run starts without accessibility grant state from an earlier case"
+else
+  fail_test "each run starts without accessibility grant state from an earlier case"
+fi
 
 # A verify straight after a deploy can reach the app during its HTTP startup race; that read retries
 # after a short pause, recorded here by a sleep that logs instead of waiting.
