@@ -442,8 +442,23 @@ JSON
     esac
     ;;
   */api/v1/config/schema)
+    # `ready-after-2` models a verify that reaches the server during its startup race; `hang` consumes
+    # the probe's --max-time, so the verifier's total deadline is what ends the wait.
     case "${MOCK_CONFIG_SCHEMA:-ok}" in
       transport-fail) exit 22 ;;
+      empty) exit 0 ;;
+      hang)
+        case "$max_time" in ''|*[!0-9]*|0) exit 2 ;; esac
+        /bin/sleep "$max_time"
+        exit 28
+        ;;
+      ready-after-2)
+        probe_file="${MOCK_STATE_DIR:?}/config-schema-probes"
+        probes=0; [ ! -f "$probe_file" ] || probes="$(cat "$probe_file")"
+        probes=$((probes + 1)); printf '%s\n' "$probes" > "$probe_file"
+        [ "$probes" -ge 2 ] || exit 7
+        printf '[{"key":"panel_id","label":"Panel ID","labelLanguage":"en","help":"","helpLanguage":null}]\n'
+        ;;
       malformed) printf 'not-json\n' ;;
       invalid-fields) printf '[{"key":,"label":}]\n' ;;
       reordered) printf '[{"label":"Panel ID","key":"panel_id","helpLanguage":null,"help":"","labelLanguage":"en"}]\n' ;;
