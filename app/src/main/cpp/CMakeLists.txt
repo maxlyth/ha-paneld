@@ -9,5 +9,7 @@ add_library(hapaneld_led SHARED led_jni.c)
 find_library(log-lib log)
 target_link_libraries(hapaneld_led ${log-lib})
 
-# libhapaneld_mww.so — micro-wake-word scorer, loaded by assist/wakeword/NativeMicroWakeWord.kt.
-add_subdirectory(microwakeword)
+# libhapaneld_mww.so, the micro-wake-word scorer loaded by assist/wakeword/NativeMicroWakeWord.kt, is not
+# built here. Its vendored TFLite Micro sources took minutes to compile per ABI and rarely change, so the
+# stripped library is committed under app/src/main/jniLibs/ and rebuilt with
+# tools/wakeword/build-prebuilt.sh, which records and verifies it against these sources.

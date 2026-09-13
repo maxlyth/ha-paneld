@@ -14,7 +14,8 @@
 #   vendor-upstream.sh check            re-derive into a temp dir and diff against the committed tree
 #
 # Bumping an upstream: change the pins below (keep the tflite-micro / flatbuffers / gemmlowp / ruy set
-# consistent with tflite-micro's own third_party pins), run `derive`, then `apply`, then commit.
+# consistent with tflite-micro's own third_party pins), run `derive`, then `apply`, then
+# tools/wakeword/build-prebuilt.sh build to refresh the committed libraries, then commit.
 #
 # Requires: curl, tar, cmake (>= 3.22), ninja, clang (tflite-micro does not compile under GCC). `derive` additionally uses the
 # Android NDK when ANDROID_NDK (or ANDROID_HOME/ndk/<ndkVersion from app/build.gradle.kts>) exists.
