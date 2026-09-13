@@ -1,5 +1,65 @@
 # Changelog
 
+## v0.9.7 - 2026-09-13
+
+0.9.7 makes panels get back to their dashboards faster, recover from Home Assistant outages by themselves and explain what they are waiting for when they cannot. It adds Home Assistant update entities, local discovery, proximity calibration wizard, a nine-language interface and camera streaming, and makes installs and rooted upgrades far easier to diagnose.
+
+### Added
+
+- **Proximity can be calibrated and used from the panel itself.** Guided setup separates presence from wave detection, calibrated presence can drive auto sleep, and a single hand approach can wake the display. Panels without usable proximity hardware do not show these actions.
+
+- **The interface is available in nine languages.** English, German, French, Italian, Spanish and Simplified Chinese, plus early-access Dutch, Polish and Ukrainian. Automatic follows the browser or panel language, with English fallback where a string is not translated. The translations are machine-drafted.
+
+- **Camera streaming and snapshots.** An off-by-default Camera setting serves a video-only H.264 stream at `rtsp://<panel>:8554/live` and a JPEG snapshot. Enabling it from Home Assistant needs approval on the panel, the camera stays closed unless a client is reading it, and a mandatory on-screen or LED indicator shows whenever it is open.
+
+- **Sign-in and reauthentication can be handed to a phone** with a code that opens the panel's own sign-in setting.
+
+- **Network diagnostics.** Runtime diagnostics, `/api/v1/status` and `/api/v1/diag` report Home Assistant response time separately from the network path, the IPv4 or IPv6 family in use, whether the built-in dashboard connected and why it failed, and a 24-hour Wi-Fi outage count. No addresses or network names are included.
+
+- **Native Android navbar support** on panels with a verified native navbar, currently the Electron WF1589T.
+
+- **Hardware support.** ZHICAI SMT1019 screen off, temperature, humidity and experimental proximity; an import-only community profile for the Portworld YC-SM10P; updated Lenovo ThinkSmart View and Raspberry Pi 4 KonstaKANG wake profiles; and the NSPanel Pro firmware index now includes 4.8.0.
+
+- **Specific dashboard tabs.** Choose a tab path in guided setup or Configure. Scripted installs can set the dashboard with `--home-dashboard` and the entity filter with `--entity-filter` before the first load.
+
+### Changed
+
+- **Faster dashboard startup and recovery.** With the account default dashboard, the built-in renderer reopens the last verified dashboard while it checks Home Assistant's dashboard list in the background. Temporary failures retry with a visible countdown; problems that need a new sign-in or an update still wait for you.
+
+- **Home Assistant restart status.** The built-in renderer shows when Home Assistant is stopping, starting or offline and clears the message when it is ready again.
+
+- **Automatic IPv4 and IPv6 fallback.** MQTT and the Home Assistant WebSocket try the other address family when the first route does not connect, under the existing `Automatic`, `Prefer IPv4` and `Force IPv4` setting.
+
+- **Clearer status and recovery screens.** Startup, setup and error pages identify themselves as ha-paneld, fit 480×480 panels, and say whether a problem will retry by itself or needs a repair in Configure, Entities, Home Assistant or Android System WebView.
+
+- **A useful auto-brightness Sensitivity range.** Existing values are converted automatically, and the auto-brightness minimum can be set as high as 99%.
+
+### Fixed
+
+- **Dashboard entity filters survive upgrades, dashboard changes and restarts.** Filters saved before this release keep working, pins and exclusions survive a dashboard switch, and a panel that starts before Home Assistant retries its dashboard check instead of waiting for you. [Issue #113](https://github.com/maxlyth/ha-paneld/issues/113)
+
+- **Android System WebView problems can be repaired without reinstalling ha-paneld.** An updated WebView is picked up by restarting the renderer, a panel with a pinned known-good WebView can reinstall it, and the screens name the fix that actually works.
+
+- **Rooted upgrades and helper replacements say exactly what failed.** The installer checks the target before replacing the helper, stops a helper that will not exit, verifies the helper belongs to the APK, and reports that nothing changed when an upgrade did not start. [Issue #120](https://github.com/maxlyth/ha-paneld/issues/120)
+
+- **Installation is more reliable across computers and panels.** Git Bash on Windows keeps panel-side paths literal and finds Android Build-Tools, the newest usable build-tools are preferred, slow package managers are no longer refused, a missing Java runtime is reported as such, and a time-zone mismatch between panel and computer is warned about. [Issue #24](https://github.com/maxlyth/ha-paneld/issues/24)
+
+- **Screen and navbar.** A redundant Screen On no longer dims a lit panel, the reload button returns to your dashboard again, and the `Always on` navbar can be switched off again on newer Android panels. [Issue #137](https://github.com/maxlyth/ha-paneld/issues/137)
+
+- **Smaller fixes.** Reboot requests are verified and fall back to the next method; temporary database-busy errors no longer leave storage marked failed; database maintenance can return unused pages to the filesystem; Smatek S9E relay and button-LED commands respond promptly; `auto_brightness_sensitivity` is accepted again by `POST /api/v1/config`; entity search reports its matches [Issue #114](https://github.com/maxlyth/ha-paneld/issues/114); sandboxed panels get root-helper guidance; and the Wi-Fi stability row and diagnostics dump agree.
+
+## v0.9.7-rc5 - 2026-09-13
+
+This release candidate makes provisioning verification reliable straight after the app restarts and adds a community profile for the Portworld YC-SM10P. The changes below are since v0.9.7-rc4.
+
+### Added
+
+- **An import-only community profile for the Portworld YC-SM10P.** It covers the 10.1-inch Rockchip RK3566 panel on Android 11 userdebug and records its verified screen-off route. It is not bundled or selected automatically; owners who can confirm the hardware can import it.
+
+### Fixed
+
+- **Provisioning no longer fails a healthy panel whose web server is still starting.** Verification that runs straight after the app restarts retries the configuration schema read when no answer arrives, within a 12 second limit, instead of stopping on the first attempt. A malformed answer still fails immediately.
+
 ## v0.9.7-rc4 - 2026-09-12
 
 This release candidate makes panel discovery, sleep and proximity controls easier to use, adds three early-access interface languages and records more of what the panel actually did instead of what its profile expected. The changes below are since v0.9.7-rc3.
