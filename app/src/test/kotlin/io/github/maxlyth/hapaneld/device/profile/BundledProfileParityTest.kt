@@ -884,12 +884,14 @@ class BundledProfileParityTest {
             "community.lenovo-thinksmart-view-lineageos",
             "community.rpi4-konstakang-lineageos",
             "community.sunworld-yc-sm55p-p76s01",
+            "community.yc-sm10p",
         )
         val EXPECTED_UNOFFICIAL_FILENAMES = setOf(
             "community-cronos-lineageos18.yaml",
             "community-lenovo-thinksmart-view-lineageos.yaml",
             "community-rpi4-konstakang-lineageos.yaml",
             "community-sunworld-yc-sm55p-p76s01.yaml",
+            "community-yc-sm10p.yaml",
         )
         val EXPECTED_UNOFFICIAL_SHA256 = mapOf(
             "community-cronos-lineageos18.yaml" to
@@ -900,6 +902,8 @@ class BundledProfileParityTest {
                 "a0dec39058b37b008c66e64462cd58f25f8827097bd56001f194db95db02658c",
             "community-sunworld-yc-sm55p-p76s01.yaml" to
                 "e2ff5c96d633251fa01731016484c8c53d8d7fb952bf8e28e481bd8a98268e5c",
+            "community-yc-sm10p.yaml" to
+                "b51545efff1936aae12d8467440a20c128b45605262ef2df9ca5a039efa72aac",
         )
 
         /** Branch-level collisions belong here; matrix-level cross-profile collisions are pinned above. */

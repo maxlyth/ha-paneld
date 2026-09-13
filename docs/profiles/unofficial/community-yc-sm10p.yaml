@@ -1,0 +1,69 @@
+schema: 2
+id: community.yc-sm10p
+version: 0.1.1
+display_name: Portworld YC-SM10P
+soc_class: rk3566
+soc:
+  model: Rockchip RK3566
+  cpu_cores:
+    - architecture: Arm Cortex-A55
+      count: 4
+metadata:
+  author: Community contributor
+  source: https://github.com/maxlyth/ha-paneld/issues/138
+  license: MIT
+  maturity: draft
+  tested_firmware:
+    - C06-V21.3-YC-10.1MIPI-TV101WXM-NM1-SW0.6-20231013-270 (Android 11, userdebug, rk3566_r)
+  limitations:
+    - 'Screen off was verified through su-blpower: asleep, /sys/class/backlight/backlight/bl_power is 4 and brightness is 0; on wake they return to 0 and 120.'
+    - No ambient-light or proximity sensor is available. The device tree declares EM3071x nodes at I2C bus 4, address 0x24, but the part does not answer; i2cget -f -y 4 0x24 0x00 returns ENXIO.
+    - 'No user LED is available. /sys/class/leds contains only the mmc2:: card-activity entry.'
+    - No physical buttons are present. The firmware declares adc-keys, but the enclosure has none.
+    - No CHT8305 temperature or humidity sensor is available.
+    - No camera is exposed to Android, although the device tree lists a GC2145 node.
+    - The bundled root helper cannot persist on this panel because dm-verity is enforcing and /system is full; direct app-accessible su is the reported route.
+requires:
+  drivers:
+    - access.android-su
+    - screen.su-blpower
+match:
+  priority: 500
+  fallback: false
+  any:
+    - priority: 900
+      all:
+        - field: model
+          op: equals
+          values:
+            - sm10p
+        - field: device
+          op: equals
+          values:
+            - rk3566_r
+platform:
+  su_form: android
+  app_can_su: true
+  has_recents: true
+hardware:
+  led:
+    mechanism: none
+    transfer: rk3576-four-bit
+  screen_off: su-blpower
+  has_button_backlight: false
+sensors:
+  cht8305: false
+  room_temp_offset_c: 0.0
+identity:
+  manufacturer: Portworld
+  model: YC-SM10P
+  model_label_strategy: display-name
+input:
+  evdev_buttons: []
+cpu: {}
+display: {}
+provisioning:
+  software: {}
+  display: {}
+  packages: []
+  recipes: []

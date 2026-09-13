@@ -297,6 +297,7 @@ class ProfileAuthoritySourceContractTest {
             "community.lenovo-thinksmart-view-lineageos",
             "community.rpi4-konstakang-lineageos",
             "community.sunworld-yc-sm55p-p76s01",
+            "community.yc-sm10p",
         )
         val PRODUCTION_TEXT_EXTENSIONS = setOf(
             "aidl",
