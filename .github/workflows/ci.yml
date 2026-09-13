@@ -166,7 +166,9 @@ jobs:
           # --no-daemon lets the root Gradle process finish its cache housekeeping before this hands the
           # Gradle home back. A daemon left running rewrote root-owned files after the handback, so the
           # cache save hit EACCES and the split never stored its own state for the next run.
-          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" || true' EXIT
+          # setup-gradle's init script also has Gradle write build results under RUNNER_TEMP, which the
+          # post step must be able to read and rename.
+          trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "${GRADLE_USER_HOME:-$HOME/.gradle}" "$RUNNER_TEMP" || true' EXIT
           # The configuration cache lets Gradle run tasks of this single module in parallel, so a
           # split that names several tasks uses every core. It is a flag here rather than a
           # gradle.properties default because a local build configured with keystore.properties would
