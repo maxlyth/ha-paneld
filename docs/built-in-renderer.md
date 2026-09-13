@@ -1,6 +1,6 @@
 # The built-in dashboard renderer
 
-The built-in renderer is the primary supported way to show a Home Assistant dashboard on a panel, and the one guided setup chooses. A separate dashboard app such as the HA Companion app is the alternative only when a panel needs something the renderer does not provide: more than one Home Assistant server, Assist voice control or native notifications (see [Limits](#limits)).
+The built-in renderer is the primary supported way to show a Home Assistant dashboard on a panel, and the one guided setup chooses. A separate dashboard app such as the HA Companion app is an alternative when a panel needs capabilities the renderer does not provide, such as more than one Home Assistant server, Assist voice control or native notifications (see [Limits](#limits)).
 
 ha-paneld displays the Home Assistant dashboard in its own WebView instead of handing it to a separate dashboard app. This helps the panel return to its dashboard with less delay after an app restart. It can reopen the last dashboard that Home Assistant verified for the same server, account and Home dashboard setting while it checks the current dashboard list in the background. If Home Assistant reports that the dashboard was removed or the account default changed, the panel moves to the current choice.
 
