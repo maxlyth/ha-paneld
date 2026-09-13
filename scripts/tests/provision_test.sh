@@ -269,7 +269,7 @@ run_provision() {
   : > "$MSYS_ARGV_LOG"
   [ "${RUN_UNSIGNED_ACK:-1}" != 1 ] || unsigned_ack=(--allow-unsigned-helper)
   : > "$MOCK_CALL_LOG"
-  rm -f "$TMP/diag-attempts" "$TMP"/write-settings-granted* "$TMP/accessibility-services" "$TMP/accessibility-enabled"
+  rm -f "$TMP/diag-attempts" "$TMP/config-schema-probes" "$TMP"/write-settings-granted* "$TMP/accessibility-services" "$TMP/accessibility-enabled"
   # Runtime-permission grant state is per-run for the same reason: left behind, a run that never
   # granted anything would still verify green off the previous run's grant.
   rm -f "$TMP"/record-audio-granted* "$TMP"/post-notifications-granted*
@@ -1615,13 +1615,85 @@ assert_log_contains '^curl .* /api/v1/provisioning/plan\.txt$|^curl .*http://pan
 assert_not_contains '^adb .* install( |$)' "$MOCK_CALL_LOG" "verify-only never installs an APK"
 assert_not_contains '^adb .* (install|shell (settings put|appops set|pm grant|am start|monkey -p io\.github\.maxlyth\.hapaneld))|^curl .* (-X POST|--data|--data-urlencode)' "$MOCK_CALL_LOG" "verify-only performs no panel mutation"
 
+assert_count "$(grep -c -- '--max-time 5 .*/api/v1/config/schema$' "$MOCK_CALL_LOG")" 1 "a ready Configuration schema is read once within a five-second request"
+
+# Grant state left by an earlier case would let a later case pass without granting anything, so every
+# run starts without it. A read-only verify creates none, which isolates the reset itself.
+printf '1\n' > "$TMP/write-settings-granted"
+printf '1\n' > "$TMP/write-settings-granted.stale"
+printf 'stale/.Service\n' > "$TMP/accessibility-services"
+printf '1\n' > "$TMP/accessibility-enabled"
+run_provision "$MOCK_TARGET" --verify
+if [ ! -e "$TMP/write-settings-granted" ] && [ ! -e "$TMP/write-settings-granted.stale" ]; then
+  pass "each run starts without WRITE_SETTINGS grant state from an earlier case"
+else
+  fail_test "each run starts without WRITE_SETTINGS grant state from an earlier case"
+fi
+if [ ! -e "$TMP/accessibility-services" ] && [ ! -e "$TMP/accessibility-enabled" ]; then
+  pass "each run starts without accessibility grant state from an earlier case"
+else
+  fail_test "each run starts without accessibility grant state from an earlier case"
+fi
+
+# A verify straight after a deploy can reach the app during its HTTP startup race; that read retries
+# after a short pause, recorded here by a sleep that logs instead of waiting.
+SCHEMA_SLEEP_DIR="$TMP/schema-retry-sleep"
+mkdir -p "$SCHEMA_SLEEP_DIR"
+printf '#!/usr/bin/env bash\nprintf "sleep %%s\\n" "$*" >> "%s/calls"\n' "$SCHEMA_SLEEP_DIR" > "$SCHEMA_SLEEP_DIR/sleep"
+chmod +x "$SCHEMA_SLEEP_DIR/sleep"
+: > "$SCHEMA_SLEEP_DIR/calls"
+PATH="$SCHEMA_SLEEP_DIR:$PATH" MOCK_CONFIG_SCHEMA=ready-after-2 run_provision "$MOCK_TARGET" --verify
+assert_success "verify-only accepts a Configuration schema that answers on the second attempt"
+assert_contains 'Configuration schema: ready' "a schema that answers after the startup race is ready"
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 2 "an unanswered schema read is retried until it answers"
+assert_count "$(grep -c '^sleep 1$' "$SCHEMA_SLEEP_DIR/calls")" 1 "the schema retry pauses before its second attempt"
+
 MOCK_CONFIG_SCHEMA=transport-fail run_provision "$MOCK_TARGET" --verify
 assert_failure "verify-only rejects an unavailable Configuration schema"
 assert_contains 'Configuration schema: unavailable or malformed' "schema transport failure names the broken user surface"
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 4 "a schema that never answers stops after the bounded attempts"
+
+MOCK_CONFIG_SCHEMA=empty run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects an empty Configuration schema after its retries"
+assert_contains 'Configuration schema: unavailable or malformed' "an empty schema names the broken user surface"
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 4 "an empty schema body is retried like an unanswered read"
+
+schema_hang_started=$SECONDS
+CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS=3 MOCK_CONFIG_SCHEMA=hang run_provision "$MOCK_TARGET" --verify
+schema_hang_elapsed=$((SECONDS - schema_hang_started))
+assert_failure "verify-only rejects a Configuration schema that never responds"
+assert_contains 'Configuration schema: unavailable or malformed' "a hanging schema names the broken user surface"
+schema_hang_budget="$(grep '/api/v1/config/schema$' "$MOCK_CALL_LOG" | sed -n 's/.*--max-time \([0-9]*\) .*/\1/p' | awk '{ total += $1 } END { print total + 0 }')"
+if [ "$schema_hang_budget" -ge 1 ] && [ "$schema_hang_budget" -le 4 ] && [ "$schema_hang_elapsed" -le 10 ]; then
+  pass "a hanging schema read is ended by the total verify deadline"
+else
+  fail_test "a hanging schema read is ended by the total verify deadline (request budget ${schema_hang_budget}s, run ${schema_hang_elapsed}s)"
+fi
+
+# A pause is taken only when a one-second request still fits after it. With a two-second deadline and
+# pauses that return at once, the first pause fits and the second would leave no time. The retry's
+# pauses are whole seconds; the adb deadline helper's 0.1 s polls also reach this shim.
+: > "$SCHEMA_SLEEP_DIR/calls"
+PATH="$SCHEMA_SLEEP_DIR:$PATH" CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS=2 MOCK_CONFIG_SCHEMA=transport-fail \
+  run_provision "$MOCK_TARGET" --verify
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 2 "the schema retry stops when no request would fit after the next pause"
+assert_count "$(grep -cE '^sleep [123]$' "$SCHEMA_SLEEP_DIR/calls")" 1 "the schema retry never pauses when no request would fit afterwards"
+
+# A pause that overruns must not let a request start after the deadline: this pause fits on paper but
+# really takes the whole three-second budget.
+SCHEMA_OVERRUN_DIR="$TMP/schema-retry-overrun"
+mkdir -p "$SCHEMA_OVERRUN_DIR"
+printf '#!/usr/bin/env bash\ncase "$1" in 1|2|3) /bin/sleep 3 ;; *) /bin/sleep "$1" ;; esac\n' > "$SCHEMA_OVERRUN_DIR/sleep"
+chmod +x "$SCHEMA_OVERRUN_DIR/sleep"
+PATH="$SCHEMA_OVERRUN_DIR:$PATH" CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS=3 MOCK_CONFIG_SCHEMA=transport-fail \
+  run_provision "$MOCK_TARGET" --verify
+assert_failure "verify-only rejects a schema still unavailable when an overrunning pause ends"
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 1 "no schema request starts after an overrunning pause reaches the deadline"
 
 MOCK_CONFIG_SCHEMA=malformed run_provision "$MOCK_TARGET" --verify
 assert_failure "verify-only rejects a malformed Configuration schema"
 assert_contains 'Configuration schema: unavailable or malformed' "malformed schema names the broken user surface"
+assert_count "$(grep -c '/api/v1/config/schema$' "$MOCK_CALL_LOG")" 1 "a malformed schema fails without further requests"
 
 MOCK_CONFIG_SCHEMA=invalid-fields run_provision "$MOCK_TARGET" --verify
 assert_failure "verify-only rejects schema entries without string keys and labels"

@@ -450,11 +450,16 @@ STORAGE_HEALTH_PACKAGE_QUERY_SECONDS="${STORAGE_HEALTH_PACKAGE_QUERY_SECONDS:-15
 # may have been held open indefinitely. Slightly longer than the pre-install probe because the panel
 # has been idle in the meantime, and short enough that a wedged panel cannot stall a confirmed reset.
 RESET_RECHECK_PACKAGE_QUERY_SECONDS="${RESET_RECHECK_PACKAGE_QUERY_SECONDS:-10}"
+# Total deadline for reading the Configure settings schema during verification. A verify that follows
+# an app restart can reach the HTTP server a moment before it answers, so an unanswered read is
+# retried a few times inside this bound instead of failing a healthy panel.
+CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS="${CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS:-12}"
 for timeout_name in HA_AUTH_CONNECT_TIMEOUT_SECONDS HA_AUTH_TIMEOUT_SECONDS \
     PANEL_POST_CONNECT_TIMEOUT_SECONDS PANEL_POST_TIMEOUT_SECONDS PANEL_RESTORE_TIMEOUT_SECONDS \
     APK_INSTALL_TIMEOUT_SECONDS APP_LAUNCH_COMMAND_TIMEOUT_SECONDS APP_LAUNCH_PROBE_SECONDS \
     APP_HEALTH_TIMEOUT_SECONDS STORAGE_HEALTH_VERIFY_ATTEMPTS \
-    STORAGE_HEALTH_PACKAGE_QUERY_SECONDS RESET_RECHECK_PACKAGE_QUERY_SECONDS; do
+    STORAGE_HEALTH_PACKAGE_QUERY_SECONDS RESET_RECHECK_PACKAGE_QUERY_SECONDS \
+    CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS; do
   timeout_value="${!timeout_name}"
   case "$timeout_value" in
     ''|*[!0-9]*|0)
@@ -1031,6 +1036,32 @@ preflight_storage_health() {
   esac
 }
 
+# Read the Configure settings schema for verification. Only a read that returns nothing (no connection,
+# timeout, HTTP error or empty body) is retried, at most four attempts inside the total deadline. Any
+# body that arrives is returned at once for the caller to judge, so a malformed schema fails closed
+# without further requests. Giving up returns no body, which the caller's schema check rejects.
+read_config_schema() {
+  local attempt=1 request_timeout="$CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS" deadline body
+  deadline=$((SECONDS + CONFIG_SCHEMA_VERIFY_TIMEOUT_SECONDS))
+  while :; do
+    [ "$request_timeout" -le 5 ] || request_timeout=5
+    body="$(curl -fsS --max-time "$request_timeout" "$URL/api/v1/config/schema" 2>/dev/null || true)"
+    if [ -n "$body" ]; then
+      printf '%s' "$body"
+      return 0
+    fi
+    [ "$attempt" -lt 4 ] || return 0
+    # Pause for one second more on each attempt, and only when a request of at least one second still
+    # fits before the deadline after that pause (curl reads --max-time 0 as no limit).
+    [ $((deadline - SECONDS - attempt)) -ge 1 ] || return 0
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+    # A pause can overrun, so the next request's budget is measured after it; none starts late.
+    request_timeout=$((deadline - SECONDS))
+    [ "$request_timeout" -ge 1 ] || return 0
+  done
+}
+
 verify() {
   step "🔎 verifying" "${D}$URL${X}"
   local health diag cfg schema schema_flat rc=0 write_settings_state="" a11y_state="" a11y_enabled_state="" a11y_granted=""
@@ -1077,7 +1108,7 @@ verify() {
     esac
   fi
   cfg="$(curl -fsS --max-time 3 "$URL/api/v1/config" 2>/dev/null || true)"
-  schema="$(curl -fsS --max-time 5 "$URL/api/v1/config/schema" 2>/dev/null || true)"
+  schema="$(read_config_schema)"
   schema_flat="$(printf '%s' "$schema" | tr -d '\r\n\t ')"
   if printf '%s' "$cfg" | grep -Eq '"ha_auth"[[:space:]]*:[[:space:]]*\{[^}]*"oauth"[[:space:]]*:[[:space:]]*true'; then
     HA_OAUTH_CONFIGURED=1
