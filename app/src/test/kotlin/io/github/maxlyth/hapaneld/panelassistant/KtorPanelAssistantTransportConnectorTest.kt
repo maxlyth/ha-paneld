@@ -86,12 +86,16 @@ class KtorPanelAssistantTransportConnectorTest {
         val server = FakePanelAssistantServer(rejectToken = true).apply { start() }
         try {
             runBlocking {
-                try {
+                val failure = try {
                     KtorPanelAssistantTransportConnector { MqttAddressFamilyPolicy.AUTOMATIC }
                         .connect(server.baseUrl, "token")
-                    fail("a rejected token connected")
-                } catch (expected: HaAuthenticationException) {
+                    null
+                } catch (thrown: Exception) {
+                    thrown
                 }
+                // The owner refreshes once and then slows only for this type; a transport failure
+                // would retry the rejected token on every backoff step.
+                assertTrue("expected an authentication failure, got $failure", failure is HaAuthenticationException)
             }
         } finally {
             server.stop()
