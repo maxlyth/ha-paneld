@@ -1,9 +1,8 @@
 # The built-in dashboard renderer
 
-> [!NOTE]
-> **Experimental (0.9).** The built-in renderer is the integrated path for dashboard entity filtering. The HA Companion app remains supported when a panel needs more than one Home Assistant server, Assist voice control or native notifications.
+The built-in renderer is the primary supported way to show a Home Assistant dashboard on a panel, and the one guided setup chooses. A separate dashboard app such as the HA Companion app is the alternative only when a panel needs something the renderer does not provide: more than one Home Assistant server, Assist voice control or native notifications (see [Limits](#limits)).
 
-ha-paneld can display the Home Assistant dashboard in its own WebView instead of handing it to a separate dashboard app. This helps the panel return to its dashboard with less delay after an app restart. It can reopen the last dashboard that Home Assistant verified for the same server, account and Home dashboard setting while it checks the current dashboard list in the background. If Home Assistant reports that the dashboard was removed or the account default changed, the panel moves to the current choice.
+ha-paneld displays the Home Assistant dashboard in its own WebView instead of handing it to a separate dashboard app. This helps the panel return to its dashboard with less delay after an app restart. It can reopen the last dashboard that Home Assistant verified for the same server, account and Home dashboard setting while it checks the current dashboard list in the background. If Home Assistant reports that the dashboard was removed or the account default changed, the panel moves to the current choice.
 
 Once the dashboard is running, ha-paneld can detect a stalled connection, release accumulated WebView memory and contain renderer crashes. The built-in connection also enables dashboard entity filtering. The panel remains a single-app appliance, with one APK to install, update and provision.
 
@@ -43,7 +42,7 @@ How Android System WebView is updated by hand depends on the panel: some take it
 
 The built-in renderer does not fall back to the older, less isolated bridge. Another renderer may help when Home Assistant itself cannot be upgraded. The Companion app uses the same system WebView, so it cannot bypass an obsolete WebView on the panel.
 
-## Turning it on
+## Setting it up
 
 On a new or reset panel, open `http://<panel>:8888/setup` from a laptop or phone, or select **Set up** on the panel itself. The guided journey chooses the renderer, signs in to Home Assistant, selects the account default, a dashboard or a specific dashboard tab, and asks about the entity filter before the first dashboard load. Authorization happens in the administrator's browser, so credentials do not need to be typed on the panel.
 
@@ -186,9 +185,9 @@ One case it cannot override: if this Home Assistant user has explicitly chosen L
 
 The `:8888` web interface is separate from all of this and always follows the browser you are viewing it in.
 
-## Reverting
+## Using a separate dashboard app instead
 
-Open Configure, select an installed Home Assistant Companion app under **Dashboard app** and save the change. The switch takes effect immediately. Do not select **Auto** for this purpose because Auto uses the built-in renderer when it is ready.
+If a panel needs one of the capabilities listed under [Limits](#limits), open Configure, select an installed Home Assistant Companion app under **Dashboard app** and save the change. The switch takes effect immediately. Do not select **Auto** for this purpose because Auto uses the built-in renderer when it is ready.
 
 ## Limits
 
