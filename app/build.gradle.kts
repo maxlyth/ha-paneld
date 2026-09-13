@@ -98,6 +98,17 @@ android {
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
         }
+
+        // The vendored microWakeWord sources take about three minutes to compile per ABI on a hosted runner
+        // and rarely change. CI passes -Phapaneld.nativeCompilerLauncher=ccache to reuse those objects; the
+        // compiler, flags and outputs are unchanged, and a build without the property is unaffected.
+        providers.gradleProperty("hapaneld.nativeCompilerLauncher").orNull?.let { launcher ->
+            externalNativeBuild {
+                cmake {
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$launcher", "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher")
+                }
+            }
+        }
     }
 
     androidResources {
