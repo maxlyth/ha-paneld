@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.panelassistant
 import io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -80,6 +81,7 @@ class PanelAssistantValueTranslationTest {
         val flat = PanelAssistantValueTranslation.attributes(
             Observation.Known("""{"is_lower_bound":false,"used_percent":25.5,"failure_operation":null,"quick_check":"ok","nested":{"a":1},"list":[1],"Bad Key":1,"usable_bytes":6000000000}"""),
         )
+        assertNotNull(flat)
         assertEquals(
             mapOf("is_lower_bound" to false, "used_percent" to 25.5, "failure_operation" to JSONObject.NULL, "quick_check" to "ok", "usable_bytes" to 6_000_000_000L),
             flat!!.keys().asSequence().associateWith { flat.get(it) },
@@ -91,7 +93,10 @@ class PanelAssistantValueTranslationTest {
     private fun translate(channel: String, payload: String) = translate(channel, Observation.Known(payload))
 
     private fun translate(channel: String, observation: Observation.Reportable): PanelAssistantWireValue? =
-        PanelAssistantValueTranslation.translate(requireNotNull(PanelAssistantChannelCatalog.describe(channel)), observation)
+        PanelAssistantChannelCatalog.describe(channel).let { descriptor ->
+            assertNotNull("no descriptor for $channel", descriptor)
+            PanelAssistantValueTranslation.translate(descriptor!!, observation)
+        }
 
     private fun known(value: Any) = PanelAssistantWireValue.Known(value)
 

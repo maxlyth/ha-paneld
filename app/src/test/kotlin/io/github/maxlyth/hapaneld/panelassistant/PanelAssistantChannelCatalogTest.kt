@@ -39,7 +39,7 @@ class PanelAssistantChannelCatalogTest {
         val checked = mutableListOf<String>()
         for (key in convergerChannels()) {
             val wire = PanelAssistantChannelCatalog.wireChannel(key) ?: continue
-            val descriptor = requireNotNull(PanelAssistantChannelCatalog.describe(wire)) { wire }
+            val descriptor = described(wire)
             val discovery = announced[descriptor.uniqueSuffix] ?: continue
             checked += wire
             assertEquals("$wire platform", discovery.component, descriptor.platform)
@@ -76,9 +76,9 @@ class PanelAssistantChannelCatalogTest {
     }
 
     @Test fun familiesCarryTheirFamilyAndIndexAndShareOneTranslationKey() {
-        val relay = requireNotNull(PanelAssistantChannelCatalog.describe("relay3"))
+        val relay = described("relay3")
         assertEquals(listOf("switch", "relay", "relay", "3", "relay3"), listOf(relay.platform, relay.translationKey, relay.family, relay.index.toString(), relay.uniqueSuffix))
-        val led = requireNotNull(PanelAssistantChannelCatalog.describe("button_led2"))
+        val led = described("button_led2")
         assertEquals(listOf("light", "button_led", "button_led", "2"), listOf(led.platform, led.translationKey, led.family, led.index.toString()))
         assertNull(PanelAssistantChannelCatalog.describe("relay0"))
     }
@@ -107,12 +107,19 @@ class PanelAssistantChannelCatalogTest {
         val suffix = Regex("^[a-z0-9][a-z0-9_]{0,47}$")
         for (key in convergerChannels()) {
             val wire = PanelAssistantChannelCatalog.wireChannel(key) ?: continue
-            val json = requireNotNull(PanelAssistantChannelCatalog.describe(wire)).toJson()
+            val json = described(wire).toJson()
             assertTrue(json.toString(), code.matches(json.getString("translation_key")))
             assertTrue(json.toString(), suffix.matches(json.getString("unique_suffix")))
             assertEquals(json.toString(), json.isNull("family"), json.isNull("index"))
             if (json.getString("platform") == "select") assertTrue(json.toString(), !json.isNull("options"))
         }
+    }
+
+    /** Asserts before dereferencing, so a missing descriptor fails as an assertion rather than an error. */
+    private fun described(wire: String): PanelAssistantChannelDescriptor {
+        val descriptor = PanelAssistantChannelCatalog.describe(wire)
+        assertNotNull("no descriptor for $wire", descriptor)
+        return descriptor!!
     }
 
     private class Discovery(val component: String, val config: JSONObject?)
