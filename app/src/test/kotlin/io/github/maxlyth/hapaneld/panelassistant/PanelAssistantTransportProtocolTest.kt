@@ -19,6 +19,15 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(0, hello.getJSONArray("channels").length())
     }
 
+    @Test fun `the contract digest is pinned to the canonical handshake text`() {
+        // Pinned as a literal: a digest derived from JSON serialisation could differ between the
+        // device's org.json and the JVM's, and the integration records whatever the panel sends.
+        assertEquals(
+            "ddacd8f9971532ece71687883b01f00e404ac3b381865c921e4132e3434a6164",
+            PanelAssistantTransportProtocol.CONTRACT_DIGEST,
+        )
+    }
+
     @Test fun `a panel without identity sends a null did rather than omitting it`() {
         val hello = JSONObject(PanelAssistantTransportProtocol.hello(1L, IDENTITY.copy(did = null)))
         assertTrue(hello.has("did"))

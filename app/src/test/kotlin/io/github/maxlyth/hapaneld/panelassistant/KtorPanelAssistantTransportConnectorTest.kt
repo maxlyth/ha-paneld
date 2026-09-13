@@ -65,6 +65,15 @@ class KtorPanelAssistantTransportConnectorTest {
             awaitCondition("reconnected after restart") {
                 server.hellos.size == 2 && owner.status.phase == PanelAssistantTransportPhase.CONNECTED
             }
+
+            // A clean WebSocket close straight after auth_ok lands while hello is being sent, which
+            // Ktor reports as a CancellationException. The owner must retry rather than end.
+            server.closeAfterAuth.set(2)
+            server.restart(downForMs = 0L)
+            awaitCondition("reconnected after clean closes") {
+                server.closeAfterAuth.get() == 0 && server.hellos.size == 3 &&
+                    owner.status.phase == PanelAssistantTransportPhase.CONNECTED
+            }
             assertTrue("refused dials while down: ${policyReads.get()}", policyReads.get() >= 3)
             owner.close()
         } finally {
@@ -89,7 +98,7 @@ class KtorPanelAssistantTransportConnectorTest {
         }
     }
 
-    @Test fun `a receive timeout takes no frame and an oversized frame fails the connection`() {
+    @Test fun `a receive timeout returns null, a later frame still arrives and an oversized frame fails the connection`() {
         val server = FakePanelAssistantServer().apply { start() }
         try {
             runBlocking {
@@ -130,6 +139,8 @@ class KtorPanelAssistantTransportConnectorTest {
     private class FakePanelAssistantServer(private val rejectToken: Boolean = false) {
         val hellos = CopyOnWriteArrayList<JSONObject>()
         val tokens = CopyOnWriteArrayList<String>()
+        /** The next this many connections are closed with a close frame immediately after auth_ok. */
+        val closeAfterAuth = AtomicInteger()
         private val listener = ServerSocket(0, 16, InetAddress.getLoopbackAddress())
         val baseUrl = "http://127.0.0.1:${listener.localPort}"
         private val pool = Executors.newCachedThreadPool()
@@ -184,6 +195,10 @@ class KtorPanelAssistantTransportConnectorTest {
                             "auth" -> {
                                 tokens += json.getString("access_token")
                                 send(JSONObject().put("type", if (rejectToken) "auth_invalid" else "auth_ok").toString())
+                                if (!rejectToken && closeAfterAuth.getAndUpdate { if (it > 0) it - 1 else 0 } > 0) {
+                                    synchronized(output) { writeFrame(output, 0x8, byteArrayOf(0x03, 0xE8.toByte())) }
+                                    return
+                                }
                             }
                             "panel_assistant/hello" -> {
                                 hellos += json

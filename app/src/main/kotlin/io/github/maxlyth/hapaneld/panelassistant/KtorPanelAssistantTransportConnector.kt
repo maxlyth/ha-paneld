@@ -10,10 +10,8 @@ import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
 import org.json.JSONObject
@@ -28,27 +26,30 @@ internal class KtorPanelAssistantTransportConnector(
     /** Read at every connect, so a changed `mqtt_address_family` applies to the next attempt. */
     private val socketFamilyPolicy: () -> MqttAddressFamilyPolicy,
 ) : PanelAssistantTransportConnector {
-    override suspend fun connect(baseUrl: String, accessToken: String): PanelAssistantTransportConnection =
-        withContext(Dispatchers.IO) {
-            val policy = socketFamilyPolicy()
-            val client = HaWebSocketClients.client(
-                preferIpv4 = policy.initialPreferIpv4,
-                ipv4Only = policy.ipv4Only,
-            )
-            var socket: DefaultClientWebSocketSession? = null
-            try {
-                val active = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
-                    HaWebSocketClients.open(client, EntityFilterProtocol.upstreamWebSocketUrl(baseUrl), MAX_INBOUND_FRAME_BYTES)
-                } ?: throw IOException("Home Assistant WebSocket connect timed out")
-                socket = active
-                authenticate(active, accessToken)
-                KtorConnection(client, active)
-            } catch (failure: Throwable) {
-                runCatching { socket?.close() }
-                client.close()
-                throw failure
-            }
+    /**
+     * Runs on the caller's dispatcher (the owner's IO worker). Switching context here would let a
+     * cancellation that lands as the call returns discard a connection that was already opened.
+     */
+    override suspend fun connect(baseUrl: String, accessToken: String): PanelAssistantTransportConnection {
+        val policy = socketFamilyPolicy()
+        val client = HaWebSocketClients.client(
+            preferIpv4 = policy.initialPreferIpv4,
+            ipv4Only = policy.ipv4Only,
+        )
+        var socket: DefaultClientWebSocketSession? = null
+        try {
+            val active = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
+                HaWebSocketClients.open(client, EntityFilterProtocol.upstreamWebSocketUrl(baseUrl), MAX_INBOUND_FRAME_BYTES)
+            } ?: throw IOException("Home Assistant WebSocket connect timed out")
+            socket = active
+            authenticate(active, accessToken)
+            return KtorConnection(client, active)
+        } catch (failure: Throwable) {
+            runCatching { socket?.close() }
+            client.close()
+            throw failure
         }
+    }
 
     private suspend fun authenticate(socket: DefaultClientWebSocketSession, accessToken: String) {
         val completed = withTimeoutOrNull(AUTH_TIMEOUT_MS) {

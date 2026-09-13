@@ -2506,10 +2506,6 @@ class PaneldService : Service() {
         if (ownerRefresh.camera) runCatching { mqtt.publishCameraState() }
     }
 
-    /**
-     * Start or stop the lifecycle watch to match the current renderer and credentials. Safe to call
-     * repeatedly: an unchanged demand is a no-op inside the stream owner.
-     */
     /** Start, keep or stop the native transport to match the current credential and panel identity. */
     private fun refreshPanelAssistantTransport() {
         if (!::panelAssistantTransport.isInitialized) return
@@ -2527,6 +2523,10 @@ class PaneldService : Service() {
         )
     }
 
+    /**
+     * Start or stop the lifecycle watch to match the current renderer and credentials. Safe to call
+     * repeatedly: an unchanged demand is a no-op inside the stream owner.
+     */
     private fun refreshHaLifecycleWatch() {
         if (!::haExactEntityStream.isInitialized || !::system.isInitialized) return
         val wanted = haLifecycleWatchWanted(

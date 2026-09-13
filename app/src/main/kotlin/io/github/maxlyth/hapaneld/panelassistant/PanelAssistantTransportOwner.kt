@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -140,18 +142,19 @@ internal class PanelAssistantTransportOwner(
 
     /** Start, replace or stop the session to match [next]. An equal demand is a no-op. */
     fun replaceDemand(next: PanelAssistantTransportDemand?) {
+        val run: Long
         synchronized(lock) {
             if (stopped) return
             if (next == demand && (next == null || job?.isActive == true)) return
             job?.cancel()
             job = null
             demand = next
-            val run = generation.incrementAndGet()
+            run = generation.incrementAndGet()
             if (next != null) {
                 job = scope.launch(workerDispatcher) { runSource(run, next) }
             }
         }
-        if (next == null) publish(generation.get(), PanelAssistantTransportStatus())
+        if (next == null) publish(run, PanelAssistantTransportStatus())
     }
 
     /** End any pending wait now; used when the default network becomes available. */
@@ -184,6 +187,7 @@ internal class PanelAssistantTransportOwner(
         var authRefreshed = false
         var warmUntil = monotonicMillis() + warmupWindowMs
         while (generation.get() == run) {
+            var hadSession = false
             var connection: PanelAssistantTransportConnection? = null
             val retry: Retry = try {
                 publish(run, PanelAssistantTransportStatus(PanelAssistantTransportPhase.CONNECTING, attempt))
@@ -208,10 +212,22 @@ internal class PanelAssistantTransportOwner(
                                     PanelAssistantTransportPhase.CONNECTED,
                                     session = outcome.session,
                                 ))
-                                val reason = holdSession(opened)
+                                hadSession = true
+                                val reason = try {
+                                    holdSession(opened)
+                                } finally {
+                                    // Every way an accepted session ends reopens the window: a Core
+                                    // restart is a bare socket close, never a session_closed event.
+                                    warmUntil = monotonicMillis() + warmupWindowMs
+                                }
                                 log("native transport session closed: ${reason.ifEmpty { "unspecified" }}")
-                                warmUntil = monotonicMillis() + warmupWindowMs
-                                Retry.Fast(REFUSAL_SESSION_CLOSED)
+                                // Another connection took this panel's session. Coming straight back
+                                // would take it back, and two claimants would trade it every second.
+                                if (reason == PanelAssistantTransportProtocol.REASON_SUPERSEDED) {
+                                    Retry.Slow(REFUSAL_SESSION_SUPERSEDED)
+                                } else {
+                                    Retry.Fast(REFUSAL_SESSION_CLOSED)
+                                }
                             }
                             is PanelAssistantHelloOutcome.Refused ->
                                 refusalRetry(outcome.code, monotonicMillis() < warmUntil)
@@ -219,7 +235,13 @@ internal class PanelAssistantTransportOwner(
                     }
                 }
             } catch (cancelled: CancellationException) {
-                throw cancelled
+                // Ktor also throws CancellationException from a send on a socket Home Assistant has
+                // just closed. Only this coroutine's own cancellation ends the owner; anything else is
+                // a lost socket and retries like one.
+                currentCoroutineContext().ensureActive()
+                Retry.Fast(REFUSAL_TRANSPORT).also {
+                    log("native transport attempt failed: ${cancelled.javaClass.simpleName}")
+                }
             } catch (rejected: HaAuthenticationException) {
                 if (authRefreshed) {
                     Retry.Slow(REFUSAL_AUTH_INVALID)
@@ -258,7 +280,7 @@ internal class PanelAssistantTransportOwner(
                 slowRetry = retry is Retry.Slow,
             ))
             // A nudge that arrived while connected describes a network that is already in use.
-            nudges.tryReceive()
+            if (hadSession) nudges.tryReceive()
             withTimeoutOrNull(delayMs) { nudges.receive() }
         }
     }
@@ -336,8 +358,12 @@ internal class PanelAssistantTransportOwner(
             if (generation.get() != run) return
             val previous = status
             status = next
-            previous.phase != next.phase || previous.refusal != next.refusal ||
-                previous.slowRetry != next.slowRetry || previous.session != next.session
+            // Attempts cycle through connecting and handshaking; only an outcome is worth a line.
+            next.phase != PanelAssistantTransportPhase.CONNECTING &&
+                next.phase != PanelAssistantTransportPhase.HANDSHAKING &&
+                (previous.refusal != next.refusal || previous.slowRetry != next.slowRetry ||
+                    previous.session != next.session || (previous.phase == PanelAssistantTransportPhase.STOPPED) !=
+                    (next.phase == PanelAssistantTransportPhase.STOPPED))
         }
         if (changed) log("native transport ${next.describe()}")
     }
@@ -352,6 +378,7 @@ internal class PanelAssistantTransportOwner(
         const val REFUSAL_CREDENTIAL_REJECTED = "credential_rejected"
         const val REFUSAL_CREDENTIAL_UNAVAILABLE = "credential_unavailable"
         const val REFUSAL_SESSION_CLOSED = "session_closed"
+        const val REFUSAL_SESSION_SUPERSEDED = "session_superseded"
         const val REFUSAL_TRANSPORT = "transport_failure"
     }
 }

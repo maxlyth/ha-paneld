@@ -116,6 +116,74 @@ class PanelAssistantTransportOwnerTest {
         harness.owner.close()
     }
 
+    @Test fun `a Core restart that just drops the socket also reopens the warm-up window`() = runTest {
+        val accepted = FakeConnection(Ha.accepting())
+        val harness = harness(accepted, repeating = { FakeConnection(Ha.refusing("unknown_command")) })
+        harness.owner.replaceDemand(DEMAND)
+        advanceTimeBy(20L * 60_000L)
+        runCurrent()
+        // No session_closed event: Core closes the socket and the next receive fails.
+        accepted.inbound.close()
+        runCurrent()
+
+        advanceTimeBy(5L * 60_000L)
+        runCurrent()
+        assertEquals("unknown_command", harness.owner.status.refusal)
+        assertFalse(harness.owner.status.slowRetry)
+        harness.owner.close()
+    }
+
+    @Test fun `a superseded session waits on the slow schedule instead of taking the session back`() = runTest {
+        val first = FakeConnection(Ha.accepting())
+        val harness = harness(first, FakeConnection(Ha.accepting()))
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        first.inbound.send(Ha.sessionClosed("superseded"))
+        runCurrent()
+
+        assertTrue(harness.owner.status.slowRetry)
+        assertEquals(PanelAssistantTransportOwner.REFUSAL_SESSION_SUPERSEDED, harness.owner.status.refusal)
+        advanceTimeBy(10L * 60_000L)
+        runCurrent()
+        assertEquals(1, harness.connector.times.size)
+        harness.owner.close()
+    }
+
+    @Test fun `a CancellationException from a closing socket is a lost socket, not the end of the owner`() = runTest {
+        val closing = FakeConnection { _, _ -> throw java.util.concurrent.CancellationException("socket closed") }
+        val harness = harness(closing, FakeConnection(Ha.accepting()))
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals(PanelAssistantTransportPhase.WAITING, harness.owner.status.phase)
+        assertEquals(PanelAssistantTransportOwner.REFUSAL_TRANSPORT, harness.owner.status.refusal)
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(2, harness.connector.times.size)
+        assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+        harness.owner.close()
+    }
+
+    @Test fun `a rejected credential waits slowly and a credential that moved retries on backoff`() = runTest {
+        val rejected = harness()
+        rejected.session = { HaApiSession("https://ha.example", null, rejected = true) }
+        rejected.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertTrue(rejected.owner.status.slowRetry)
+        assertEquals(PanelAssistantTransportOwner.REFUSAL_CREDENTIAL_REJECTED, rejected.owner.status.refusal)
+        assertEquals(0, rejected.connector.times.size)
+        rejected.owner.close()
+
+        val moved = harness()
+        moved.session = { HaApiSession("https://ha.example", "token", owner = OWNER.copy(refreshToken = "newer")) }
+        moved.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertFalse(moved.owner.status.slowRetry)
+        assertEquals(PanelAssistantTransportOwner.REFUSAL_CREDENTIAL_UNAVAILABLE, moved.owner.status.refusal)
+        assertEquals(0, moved.connector.times.size)
+        moved.owner.close()
+    }
+
     @Test fun `a refusal retrying cannot change waits on the slow schedule until the network returns`() = runTest {
         val harness = harness(repeating = { FakeConnection(Ha.refusing("panel_user_mismatch")) })
         harness.owner.replaceDemand(DEMAND)
@@ -231,6 +299,7 @@ class PanelAssistantTransportOwnerTest {
 
     private class Harness(val owner: PanelAssistantTransportOwner, val connector: FakeConnector, val forces: List<Boolean>) {
         var credential: HaAuthOwner = OWNER
+        var session: (() -> HaApiSession)? = null
     }
 
     private fun TestScope.harness(
@@ -245,7 +314,7 @@ class PanelAssistantTransportOwnerTest {
             scope = backgroundScope,
             auth = HaApiSessionProvider { force ->
                 forces += force
-                HaApiSession("https://ha.example", "token", owner = harness.credential)
+                harness.session?.invoke() ?: HaApiSession("https://ha.example", "token", owner = harness.credential)
             },
             connector = connector,
             workerDispatcher = StandardTestDispatcher(testScheduler),

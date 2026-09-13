@@ -19,7 +19,12 @@ internal data class PanelAssistantSession(
     val authority: String,
     val capabilities: List<String>,
     val integrationVersion: String,
-)
+) {
+    /** The session token is a bearer for this session's requests; keep it out of logs. */
+    override fun toString(): String =
+        "PanelAssistantSession(protocol=$protocol, authority=$authority, capabilities=$capabilities, " +
+            "integrationVersion=$integrationVersion)"
+}
 
 internal sealed interface PanelAssistantHelloOutcome {
     data class Accepted(val session: PanelAssistantSession) : PanelAssistantHelloOutcome
@@ -53,7 +58,7 @@ internal object PanelAssistantTransportProtocol {
     const val CODE_PANEL_IDENTITY_UNAVAILABLE = "panel_identity_unavailable"
     const val CODE_INVALID_FORMAT = "invalid_format"
 
-    const val REASON_ENTRY_UNLOADED = "entry_unloaded"
+    const val REASON_SUPERSEDED = "superseded"
 
     /**
      * Capabilities this build serves. Empty on purpose: this build reports no state, no events and
@@ -67,11 +72,8 @@ internal object PanelAssistantTransportProtocol {
      * contract file does not exist yet; until it does, the digest the panel sends covers exactly this
      * text, so a change to the handshake vocabulary changes the digest the integration records.
      */
-    private val CANONICAL_CONTRACT: String = JSONObject()
-        .put("protocol", JSONObject().put("min", PROTOCOL_MIN).put("max", PROTOCOL_MAX))
-        .put("commands", JSONArray().put(COMMAND_HELLO))
-        .put("capabilities", JSONArray(CAPABILITIES))
-        .toString()
+    internal const val CANONICAL_CONTRACT: String =
+        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello"],"capabilities":[]}"""
 
     val CONTRACT_DIGEST: String = MessageDigest.getInstance("SHA-256")
         .digest(CANONICAL_CONTRACT.toByteArray(Charsets.UTF_8))
