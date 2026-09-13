@@ -7,9 +7,13 @@ import io.github.maxlyth.hapaneld.testsupport.TestSources
 import java.io.File
 import java.net.SocketAddress
 import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
@@ -68,11 +72,7 @@ class HelperSocketCompositionTest {
         // GOV writes sysfs directly and fails closed when the cpufreq nodes cannot be written.
         // A privileged run on a host that exposes them can write one, so take the expected reply
         // from the same condition the helper itself tests rather than assuming an outcome.
-        val governorReply =
-            if (java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").canWrite())
-                "OK"
-            else
-                "ERR"
+        val governorReply = if (governorAcceptsWrites()) "OK" else "ERR"
         listOf(
             WireTranscript("VERSION", "HELPER version=1.3.0 proto=1.3"),
             WireTranscript("PING", "OK"),
@@ -283,6 +283,7 @@ class HelperSocketCompositionTest {
     private companion object {
         lateinit var socketPath: Path
         lateinit var server: Process
+        lateinit var fixtureLock: FileLock
 
         @JvmStatic
         @BeforeClass
@@ -291,6 +292,13 @@ class HelperSocketCompositionTest {
             assumeTrue("native UNIX-socket composition requires a Linux host", executablePath != null)
             val executable = File(requireNotNull(executablePath))
             assertTrue(executable.isFile, "native socket test server was not built")
+            // The server keeps its guard fixtures at fixed /tmp paths behind an exclusive owner lock, so a
+            // second server started by a concurrent test JVM (the other build variant, or another fork)
+            // exits before READY. Hold a machine-wide lock for the life of the class instead.
+            val lockPath = Path.of("/tmp", "hapaneld-helper-socket-composition.lock")
+            fixtureLock = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE).lock()
+            // CI runs this suite as root; leave the lock usable by a later unprivileged run.
+            runCatching { Files.setPosixFilePermissions(lockPath, PosixFilePermissions.fromString("rw-rw-rw-")) }
             socketPath = Path.of(System.getProperty("java.io.tmpdir"), "hapaneld-helper-${UUID.randomUUID()}.sock")
             server = ProcessBuilder(executable.absolutePath, socketPath.toString())
                 .redirectErrorStream(true)
@@ -309,8 +317,18 @@ class HelperSocketCompositionTest {
             }
             if (::socketPath.isInitialized) Files.deleteIfExists(socketPath)
             Files.deleteIfExists(Path.of("/tmp/hapaneld-helper-install-stream-test.apk"))
+            if (::fixtureLock.isInitialized) fixtureLock.channel().close()
         }
 
         fun DaemonLongResult.replyValue(): String? = (this as? DaemonLongResult.Reply)?.value
+
+        // Neither access(2) nor open(2) predicts the helper's result: inside an unprivileged container
+        // /sys is mounted read-only, yet both succeed and only write(2) is refused. Perform the write the
+        // helper performs, with the governor the node already holds, so nothing changes either way.
+        fun governorAcceptsWrites(): Boolean {
+            val node = File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+            val current = runCatching { node.readText().trim() }.getOrNull() ?: return false
+            return runCatching { java.io.FileOutputStream(node).use { it.write(current.toByteArray()) } }.isSuccess
+        }
     }
 }

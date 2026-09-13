@@ -64,6 +64,10 @@ dependencyLocking {
     lockAllConfigurations()
 }
 
+// The release identity lives in app/version.properties rather than in this script, so a version bump
+// neither changes the Gradle cache key nor matches the build-file paths that start the emulator tests.
+val appVersion = Properties().apply { file("version.properties").inputStream().use { load(it) } }
+
 android {
     namespace = "io.github.maxlyth.hapaneld"
     compileSdk = 37
@@ -80,8 +84,8 @@ android {
         targetSdk = 35
         // versionCode bumps on EVERY internal build (it drives upgrades + the /health build token);
         // versionName identifies the public release; publication remains a separate explicit action.
-        versionCode = 774
-        versionName = "0.9.7-rc5"
+        versionCode = requireNotNull(appVersion.getProperty("versionCode")) { "app/version.properties must define versionCode" }.toInt()
+        versionName = requireNotNull(appVersion.getProperty("versionName")) { "app/version.properties must define versionName" }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // Local paired performance runs can build an otherwise identical no-op arm with
         // `-PfeatureCosts=false`; release/default builds retain the fixed-key event counters.
@@ -93,6 +97,17 @@ android {
         // Only the fleet's ARM ABIs — bounds the native LED lib (libhapaneld_led.so) + APK size.
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
+
+        // The vendored microWakeWord sources take about three minutes to compile per ABI on a hosted runner
+        // and rarely change. CI passes -Phapaneld.nativeCompilerLauncher=ccache to reuse those objects; the
+        // compiler, flags and outputs are unchanged, and a build without the property is unaffected.
+        providers.gradleProperty("hapaneld.nativeCompilerLauncher").orNull?.let { launcher ->
+            externalNativeBuild {
+                cmake {
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$launcher", "-DCMAKE_CXX_COMPILER_LAUNCHER=$launcher")
+                }
+            }
         }
     }
 
@@ -350,10 +365,13 @@ val verifyBundledRootHelperBuildIdentity = tasks.register("verifyBundledRootHelp
     dependsOn(compileBundledRootHelper)
     inputs.files(bundledRootHelperArm64, bundledRootHelperArm32)
     inputs.property("helperBuildId", helperBuildId)
+    // Capture plain values: an action that reads script-level vals holds a reference to the build
+    // script object, which the configuration cache cannot serialize.
+    val binaries = listOf(bundledRootHelperArm64, bundledRootHelperArm32)
+    val expectedRecord = "BUILDID $helperBuildId"
     doLast {
-        val expectedRecord = "BUILDID $helperBuildId"
         val recordPattern = Regex("""BUILDID [0-9a-f]{64}""")
-        listOf(bundledRootHelperArm64, bundledRootHelperArm32).forEach { binary ->
+        binaries.forEach { binary ->
             val bytes = binary.readBytes()
             check(
                 bytes.size >= 4 && bytes[0] == 0x7f.toByte() && bytes[1] == 'E'.code.toByte() &&
@@ -402,6 +420,7 @@ val unitTestRuntimeReadDirectories = listOf(
 )
 val unitTestRuntimeReadFiles = listOf(
     "build.gradle.kts",
+    "version.properties", // ReleaseIdentityContractTest compares BuildConfig with the declared release identity
     "src/main/AndroidManifest.xml",
     "../settings.gradle.kts",
     "../gradle/libs.versions.toml",
@@ -424,7 +443,13 @@ val unitTestRuntimeReadFiles = listOf(
 // their names only, never their bytes, so a recompiled binary must not invalidate the test task.
 val unitTestGeneratedAssetExcludes = listOf("cdprelay-arm*", "hapaneld-helper-arm*")
 
+// The JVM suites are fork-safe: debug and release running concurrently with three forks each pass on the
+// project runner. Half the cores, capped at three, was the measured knee there; hapaneld.testForks overrides.
+val unitTestForks = providers.gradleProperty("hapaneld.testForks").map { it.toInt() }
+    .orElse((Runtime.getRuntime().availableProcessors() / 2).coerceIn(1, 3))
+
 tasks.withType<Test>().configureEach {
+    maxParallelForks = unitTestForks.get()
     if (System.getProperty("os.name").startsWith("Linux", ignoreCase = true)) {
         dependsOn(buildHelperSocketTestServer)
         systemProperty("hapaneld.helper.socketTestServer", helperSocketTestServer.absolutePath)
