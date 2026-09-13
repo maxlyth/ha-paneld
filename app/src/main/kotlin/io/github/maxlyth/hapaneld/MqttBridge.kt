@@ -1861,9 +1861,8 @@ internal class MqttBridge(
         converger: io.github.maxlyth.hapaneld.mqtt.StateConverger,
         mqtt: MqttStateChannel,
     ) {
-        check(mqttStateRoutes.putIfAbsent(mqtt.channel.key, mqtt.route) == null) {
-            "duplicate MQTT state route ${mqtt.channel.key}"
-        }
+        // A duplicate keeps the first route, and the converger then refuses the duplicate channel.
+        mqttStateRoutes.putIfAbsent(mqtt.channel.key, mqtt.route)
         converger.register(mqtt.channel)
     }
 
