@@ -74,7 +74,7 @@ This watchdog defect is distinct from a stable `zgateway` busy-looping against a
 
 Home Assistant's frontend normally subscribes to the state of every entity visible to the signed-in user. The panel must receive and process those states even when its dashboard uses only a small subset. ha-paneld's built-in renderer can add the dashboard's learned entity set to that native subscription, so Home Assistant filters the stream before serializing and sending it. The panel keeps its ordinary authenticated Home Assistant connection; no proxy or additional server is involved.
 
-The automatic filter is opt-in and applies only to the built-in renderer:
+The entity filter applies only to the built-in renderer. Guided setup asks whether to turn it on before the first dashboard load; on a panel that is already set up:
 
 1. In `:8888` open **Configure → Dashboard**, select **Built-in renderer (ha-paneld)**, then enable **Entity filtering**.
 2. Open the **Entities** tab and select **Scan dashboard now**.
@@ -87,7 +87,7 @@ Automatic learning cannot prove every custom card or dynamic template dependency
 
 If old learned evidence or manual choices no longer describe the dashboard, use **Reset learned data** on the Entities page. The confirmed reset clears learned membership, pins/exclusions and ignored safety decisions, preserves the known-good active filter and starts a replacement scan. The filter therefore stays as the rollback boundary while the candidate is rebuilt; use the stronger API reset documented below only when the stored filter itself must also be removed.
 
-Advanced testers can supply and inspect an exact list through the API. The UI workflow, manual API format, runtime status and rollback commands are documented in [The built-in dashboard renderer](built-in-renderer.md#experimental-entity-filter).
+Advanced users can supply and inspect an exact list through the API. The UI workflow, manual API format, runtime status and rollback commands are documented in [The built-in dashboard renderer](built-in-renderer.md#entity-filter).
 
 ### 2. Lighten the dashboard itself
 

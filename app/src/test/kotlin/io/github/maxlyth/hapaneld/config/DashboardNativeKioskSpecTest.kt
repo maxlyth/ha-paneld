@@ -59,7 +59,7 @@ class DashboardNativeKioskSpecTest {
         assertTrue(guide.contains("Hide Home Assistant navigation (native)"))
         assertTrue(guide.contains("Hide Android system bars"))
         assertTrue(guide.contains("Lock Android to dashboard (experimental)"))
-        assertFalse(guide.substringBefore("## Experimental entity filter").contains("HACS"))
+        assertFalse(guide.substringBefore("## Entity filter").contains("HACS"))
         assertTrue(guide.contains("does not fall back"))
     }
 }

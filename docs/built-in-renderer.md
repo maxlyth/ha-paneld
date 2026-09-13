@@ -1,6 +1,6 @@
 # The built-in dashboard renderer
 
-The built-in renderer is the primary supported way to show a Home Assistant dashboard on a panel, and the one guided setup chooses. A separate dashboard app such as the HA Companion app is an alternative when a panel needs capabilities the renderer does not provide, such as more than one Home Assistant server, Assist voice control or native notifications (see [Limits](#limits)).
+The built-in renderer is by far the preferred way to show a Home Assistant dashboard on a panel, and the one guided setup chooses. The HA Companion app is still supported as an option, for example when a panel needs more than one Home Assistant server, Assist voice control or native notifications (see [Limits](#limits)).
 
 ha-paneld displays the Home Assistant dashboard in its own WebView instead of handing it to a separate dashboard app. This helps the panel return to its dashboard with less delay after an app restart. It can reopen the last dashboard that Home Assistant verified for the same server, account and Home dashboard setting while it checks the current dashboard list in the background. If Home Assistant reports that the dashboard was removed or the account default changed, the panel moves to the current choice.
 
@@ -75,10 +75,10 @@ Advanced Configure exposes three independent controls. Each affects a different 
 
 For a cleaner dashboard, start with **Hide Home Assistant navigation (native)** and/or **Hide Android system bars**. Enable **Lock Android to dashboard** only when discouraging casual escape from the app is required and you have tested the documented release routes: Configure, the Home Assistant switch, adb, seven rapid taps in the top-left corner, or the unlocked window after reboot.
 
-## Experimental entity filter
+## Entity filter
 
 > [!WARNING]
-> This is an opt-in tester feature. Automatic learning cannot prove every custom-card or dynamic-template dependency, and an incomplete entity set can leave cards missing or stale. Review it on a non-critical panel first and keep the filter-disable rollback available.
+> Automatic learning cannot prove every custom-card or dynamic-template dependency, and an incomplete entity set can leave cards missing or stale. Review the learned set after changing a dashboard, and keep the filter-disable rollback available.
 
 The filter applies only to ha-paneld's built-in renderer. It changes the frontend's Home Assistant subscription, so Home Assistant filters the states before serializing and sending them to the panel. The Companion app and other dashboard applications are unaffected.
 
@@ -118,7 +118,7 @@ The stronger API reset below can also remove the stored active filter by sending
 
 ### Manual exact list
 
-Advanced testers can bypass automatic learning and supply an exact list through the API. Create a JSON file containing every entity required by every dashboard tab, including entities referenced indirectly by custom cards or templates:
+Advanced users can bypass automatic learning and supply an exact list through the API. Create a JSON file containing every entity required by every dashboard tab, including entities referenced indirectly by custom cards or templates:
 
 ```json
 {
