@@ -7,9 +7,13 @@ import io.github.maxlyth.hapaneld.testsupport.TestSources
 import java.io.File
 import java.net.SocketAddress
 import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.channels.FileLock
 import java.nio.channels.SocketChannel
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import kotlin.test.assertContentEquals
@@ -279,6 +283,7 @@ class HelperSocketCompositionTest {
     private companion object {
         lateinit var socketPath: Path
         lateinit var server: Process
+        lateinit var fixtureLock: FileLock
 
         @JvmStatic
         @BeforeClass
@@ -287,6 +292,13 @@ class HelperSocketCompositionTest {
             assumeTrue("native UNIX-socket composition requires a Linux host", executablePath != null)
             val executable = File(requireNotNull(executablePath))
             assertTrue(executable.isFile, "native socket test server was not built")
+            // The server keeps its guard fixtures at fixed /tmp paths behind an exclusive owner lock, so a
+            // second server started by a concurrent test JVM (the other build variant, or another fork)
+            // exits before READY. Hold a machine-wide lock for the life of the class instead.
+            val lockPath = Path.of("/tmp", "hapaneld-helper-socket-composition.lock")
+            fixtureLock = FileChannel.open(lockPath, StandardOpenOption.CREATE, StandardOpenOption.WRITE).lock()
+            // CI runs this suite as root; leave the lock usable by a later unprivileged run.
+            runCatching { Files.setPosixFilePermissions(lockPath, PosixFilePermissions.fromString("rw-rw-rw-")) }
             socketPath = Path.of(System.getProperty("java.io.tmpdir"), "hapaneld-helper-${UUID.randomUUID()}.sock")
             server = ProcessBuilder(executable.absolutePath, socketPath.toString())
                 .redirectErrorStream(true)
@@ -305,6 +317,7 @@ class HelperSocketCompositionTest {
             }
             if (::socketPath.isInitialized) Files.deleteIfExists(socketPath)
             Files.deleteIfExists(Path.of("/tmp/hapaneld-helper-install-stream-test.apk"))
+            if (::fixtureLock.isInitialized) fixtureLock.channel().close()
         }
 
         fun DaemonLongResult.replyValue(): String? = (this as? DaemonLongResult.Reply)?.value
