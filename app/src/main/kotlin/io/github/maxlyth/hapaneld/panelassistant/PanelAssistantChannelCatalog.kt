@@ -8,6 +8,7 @@ import io.github.maxlyth.hapaneld.storage.StorageHealthSeverity
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
 /** How an MQTT state payload becomes a typed value on the native transport (protocol section 7). */
 internal enum class PanelAssistantValueKind { BOOLEAN, NUMBER, OPTION, TEXT, LIGHT, UPDATE }
@@ -107,8 +108,18 @@ internal object PanelAssistantChannelCatalog {
         .replace(Regex("[^a-z0-9]+"), "_")
         .trim('_')
 
-    /** The descriptor of a wire channel, or null when this build does not know it. */
-    fun describe(wire: String): PanelAssistantChannelDescriptor? {
+    /** Built descriptors by wire channel, [UNDESCRIBED] for a channel this build does not know. */
+    private val built = ConcurrentHashMap<String, Any>()
+    private val UNDESCRIBED = Any()
+
+    /**
+     * The descriptor of a wire channel, or null when this build does not know it. A descriptor is fixed for
+     * the build, and the session loop asks for every channel on each pass, so each is built once.
+     */
+    fun describe(wire: String): PanelAssistantChannelDescriptor? =
+        built.getOrPut(wire) { build(wire) ?: UNDESCRIBED } as? PanelAssistantChannelDescriptor
+
+    private fun build(wire: String): PanelAssistantChannelDescriptor? {
         FAMILY.matchEntire(wire)?.let { match ->
             val family = match.groupValues[1]
             val relay = family == "relay"
