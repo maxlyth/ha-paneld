@@ -361,56 +361,6 @@ internal fun mqttMeasurementRefreshAfterAckMs(key: String): Long? =
 internal fun mqttMeasurementPayloadIsRefreshable(payload: String): Boolean =
     payload.toDoubleOrNull()?.isFinite() == true
 
-/** Where one converger channel lands on MQTT. Known only to the MQTT edge, never to the converger. */
-internal data class MqttStateRoute(val topic: String, val retain: Boolean)
-
-internal data class MqttStateChannel(
-    val channel: io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel,
-    val route: MqttStateRoute,
-)
-
-internal fun mqttStateChannel(
-    key: String,
-    topic: String,
-    retain: Boolean = true,
-    equivalent: (String, String) -> Boolean = String::equals,
-    observe: () -> io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation,
-): MqttStateChannel {
-    val refreshAfterAckMs = mqttMeasurementRefreshAfterAckMs(key)
-    return MqttStateChannel(
-        io.github.maxlyth.hapaneld.mqtt.StateConverger.Channel(
-            key = key,
-            observe = observe,
-            equivalent = equivalent,
-            refreshEligible = if (refreshAfterAckMs != null) {
-                ::mqttMeasurementPayloadIsRefreshable
-            } else {
-                { true }
-            },
-            maxSilenceMs = refreshAfterAckMs,
-        ),
-        MqttStateRoute(topic, retain),
-    )
-}
-
-/** An observation's exact MQTT payload: unavailable clears the retained value with an empty payload. */
-internal fun mqttStatePayload(observation: io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Reportable): String =
-    when (observation) {
-        is io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Known -> observation.payload
-        io.github.maxlyth.hapaneld.mqtt.StateConverger.Observation.Unavailable -> ""
-    }
-
-/**
- * The dispatcher conflation key of a state command topic: its protocol §7 channel, the leaf between
- * `ha-paneld/<panel>/` and `/set`. Null for any topic outside that shape.
- */
-internal fun mqttCommandChannel(panel: String, topic: String): String? {
-    val prefix = "ha-paneld/$panel/"
-    if (topic.length <= prefix.length + 4 || !topic.startsWith(prefix) || !topic.endsWith("/set")) return null
-    return topic.substring(prefix.length, topic.length - 4)
-        .takeIf(io.github.maxlyth.hapaneld.mqtt.StateConverger.CHANNEL_ID::matches)
-}
-
 private val WIFI_DIAGNOSTIC_KEYS = setOf("diag_wifi_ssid", "diag_wifi_rssi")
 
 /** Whether the published count is a total or a known lower bound, so HA never records a floor as exact. */

@@ -8,7 +8,11 @@ import java.util.concurrent.CopyOnWriteArrayList
  * Only the primary's acknowledgement reaches the converger, so convergence keeps its single authority
  * and the primary's own acknowledgement rule. An added sink sees the same observations but owns its own
  * delivery: its acknowledgement is discarded, and a throwing or silent added sink can neither withhold
- * nor duplicate the primary's completion. Each sink is isolated from the others' exceptions.
+ * nor duplicate the primary's completion. Each added sink is isolated from the others' exceptions.
+ *
+ * Added sinks receive an observation before the primary. The primary's acknowledgement frees the
+ * channel for its next observation, possibly before it returns; delivering to added sinks afterwards
+ * could hand them an older value behind a newer one, and the protocol carries no sequence number.
  */
 class StateSinkFanOut(private val primary: StateSink) : StateSink {
     private val added = CopyOnWriteArrayList<StateSink>()
@@ -22,12 +26,6 @@ class StateSinkFanOut(private val primary: StateSink) : StateSink {
         observation: StateConverger.Observation.Reportable,
         done: (Boolean) -> Unit,
     ) {
-        val primaryFailure = try {
-            primary(channel, observation, done)
-            null
-        } catch (failure: Exception) {
-            failure
-        }
         for (sink in added) {
             try {
                 sink(channel, observation, IGNORED)
@@ -35,8 +33,8 @@ class StateSinkFanOut(private val primary: StateSink) : StateSink {
                 // An added sink never affects the primary's outcome or the other sinks.
             }
         }
-        // Rethrown after every sink has seen the observation; the converger turns it into done(false).
-        primaryFailure?.let { throw it }
+        // A primary failure propagates; the converger turns it into done(false).
+        primary(channel, observation, done)
     }
 
     private companion object {

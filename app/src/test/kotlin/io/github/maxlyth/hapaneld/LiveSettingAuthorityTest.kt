@@ -84,21 +84,19 @@ class LiveSettingAuthorityTest {
     }
 
     @Test fun `persisted desired and retained actual converge only after successful replay`() {
-        data class Publication(val payload: String, val retain: Boolean, val done: (Boolean) -> Unit)
+        // The retain flag is no longer something the converger hands its sender: the MQTT edge owns it,
+        // and MqttWireGoldenTest pins touch_sound/state as retained on the wire.
+        data class Publication(val payload: String, val done: (Boolean) -> Unit)
         val publications = mutableListOf<Publication>()
         var actual = false
-        val mqtt = mqttStateChannel(
-            "touch_sound",
-            "touch/state",
-            observe = { StateConverger.Observation.Known(if (actual) "ON" else "OFF") },
-        )
         val converger = StateConverger(
-            sender = { _, observation, done ->
-                publications += Publication(mqttStatePayload(observation), mqtt.route.retain, done)
-            },
+            sender = { _, observation, done -> publications += Publication(mqttStatePayload(observation), done) },
             schedule = { it() },
         )
-        converger.register(mqtt.channel)
+        converger.register(StateConverger.Channel(
+            "touch_sound",
+            observe = { StateConverger.Observation.Known(if (actual) "ON" else "OFF") },
+        ))
         converger.reconcile("touch_sound")
         publications.last().done(true)
 
@@ -113,7 +111,6 @@ class LiveSettingAuthorityTest {
         converger.reconcile("touch_sound", force = true)
         publications.last().done(true)
         assertEquals("OFF", publications.last().payload)
-        assertTrue(publications.last().retain)
         assertEquals("true", journal.values.getValue("touch_sound").value)
 
         authority.replayKeys(setOf("touch_sound")) { _, _, _, _ -> LiveSettingApplyResult.FAILED }
@@ -126,7 +123,6 @@ class LiveSettingAuthorityTest {
         publications.last().done(true)
 
         assertEquals("ON", publications.last().payload)
-        assertTrue(publications.last().retain)
         assertTrue(authority.pendingSnapshot().isEmpty())
         assertTrue(journal.values.isEmpty())
     }

@@ -87,7 +87,8 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * Normalisation: the Home Assistant device `sw_version` embeds the app version name and build code,
  * which change with every release; that exact string is replaced by [SW_VERSION_TOKEN], and the test
- * asserts the token never appears on a `/state` topic so normalisation cannot mask a state byte.
+ * asserts the token appears only in `homeassistant/` discovery configs so normalisation cannot mask a
+ * state or attributes byte.
  *
  * Fixture: `mqtt-wire-golden/bridge.txt` on the test classpath (the test resources directory), one line
  * per wire event in order: `retain<TAB>topic<TAB>base64(payload)` for publications (`-` for an empty
@@ -115,9 +116,9 @@ class MqttWireGoldenTest {
         assertEquals("scenario problems", emptyList<String>(), problems)
 
         val swVersion = jsonEscaped(io.github.maxlyth.hapaneld.mqttDeviceSoftwareVersion(Config.VERSION, BuildConfig.VERSION_CODE))
-        actual.filter { it.isPublication() && it.topic().endsWith("/state") }.forEach { line ->
+        actual.filter { it.isPublication() && !it.topic().startsWith("homeassistant/") }.forEach { line ->
             assertFalse(
-                "normalisation token reached a state topic: ${line.topic()}",
+                "normalisation token reached a non-discovery topic: ${line.topic()}",
                 line.decodedPayload().contains(SW_VERSION_TOKEN),
             )
         }

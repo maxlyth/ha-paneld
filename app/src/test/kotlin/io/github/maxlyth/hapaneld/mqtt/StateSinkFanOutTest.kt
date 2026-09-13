@@ -45,6 +45,31 @@ class StateSinkFanOutTest {
         assertEquals(primary.seen, second.seen)
     }
 
+    @Test fun aSynchronouslyAcknowledgingPrimaryCannotReorderAnAddedSinksObservations() {
+        val second = Recording()
+        var screen: Observation = Observation.Known("ON")
+        lateinit var c: StateConverger
+        val primary: StateSink = { _, observation, done ->
+            // The broker acknowledges before publish returns, and a newer value is reconciled at once.
+            if (observation == Observation.Known("ON")) {
+                screen = Observation.Known("OFF")
+                done(true)
+                c.reconcile("screen")
+            } else {
+                done(true)
+            }
+        }
+        c = converger(StateSinkFanOut(primary).also { it.add(second) })
+        c.register(StateConverger.Channel("screen", observe = { screen }))
+
+        c.reconcile("screen")
+
+        assertEquals(
+            listOf(Seen("screen", Observation.Known("ON")), Seen("screen", Observation.Known("OFF"))),
+            second.seen,
+        )
+    }
+
     @Test fun onlyThePrimaryAcknowledgementDrivesConvergence() {
         val primary = Recording()
         val second = Recording()

@@ -21,7 +21,7 @@ class MqttStateEdgeTest {
         assertEquals("screen", mqttCommandChannel("p", "ha-paneld/p/screen/set"))
         assertEquals("relay3", mqttCommandChannel("p", "ha-paneld/p/relay3/set"))
         assertEquals("button_led3", mqttCommandChannel("p", "ha-paneld/p/button_led3/set"))
-        assertEquals("update_paneld", mqttCommandChannel("office", "ha-paneld/office/update_paneld/set"))
+        assertEquals("companion_update_channel", mqttCommandChannel("hall", "ha-paneld/hall/companion_update_channel/set"))
     }
 
     @Test fun topicsOutsideTheCommandShapeHaveNoChannel() {
@@ -33,12 +33,12 @@ class MqttStateEdgeTest {
             "ha-paneld/p/a/b/set",
             "ha-paneld/p/Screen/set",
             "xha-paneld/p/screen/set",
+            // An index in non-ASCII digits was once admitted by the relay topic check; it has no channel.
+            "ha-paneld/p/relay٣/set",
         ).forEach { assertNull(it, mqttCommandChannel("p", it)) }
     }
 
     @Test fun anMqttChannelKeyCanNeverCollideWithAnHttpLiveSettingKey() {
-        val http = "http:screen"
-        assertEquals(null, mqttCommandChannel("p", "ha-paneld/p/$http/set"))
-        assertTrue(mqttCommandChannel("p", "ha-paneld/p/screen/set") != http)
+        assertNull(mqttCommandChannel("p", "ha-paneld/p/http:screen/set"))
     }
 }
