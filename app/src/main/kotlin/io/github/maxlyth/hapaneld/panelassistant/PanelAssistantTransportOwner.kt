@@ -18,6 +18,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
@@ -139,6 +141,13 @@ internal class PanelAssistantTransportOwner(
     private val lock = Any()
     private val generation = AtomicLong()
     private val nudges = Channel<Unit>(Channel.CONFLATED)
+
+    /**
+     * Held for a generation's whole run, teardown included. The shadow reporter has no session identity, so
+     * a replaced generation still closing it must finish before the next one opens it, or its late close
+     * would switch reporting off for the new session. A generation cancelled while waiting never takes it.
+     */
+    private val sessions = Mutex()
     private var demand: PanelAssistantTransportDemand? = null
     private var job: Job? = null
     private var stopped = false
@@ -158,7 +167,7 @@ internal class PanelAssistantTransportOwner(
             demand = next
             run = generation.incrementAndGet()
             if (next != null) {
-                job = scope.launch(workerDispatcher) { runSource(run, next) }
+                job = scope.launch(workerDispatcher) { sessions.withLock { runSource(run, next) } }
             }
         }
         if (next == null) publish(run, PanelAssistantTransportStatus())

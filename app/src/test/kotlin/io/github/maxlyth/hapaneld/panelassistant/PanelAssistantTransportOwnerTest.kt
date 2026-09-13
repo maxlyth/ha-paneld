@@ -4,6 +4,9 @@ import io.github.maxlyth.hapaneld.HaAuthOwner
 import io.github.maxlyth.hapaneld.sensors.HaApiSession
 import io.github.maxlyth.hapaneld.sensors.HaApiSessionProvider
 import io.github.maxlyth.hapaneld.sensors.HaAuthenticationException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
@@ -12,6 +15,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -374,6 +378,32 @@ class PanelAssistantTransportOwnerTest {
         harness.owner.close()
     }
 
+    @Test fun aReplacedSessionFinishingLateCannotStopTheNewSessionsReporting() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "ON")
+        val release = CompletableDeferred<Unit>()
+        val first = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state"))).apply { holdReadAfterCancel = release }
+        val second = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state")))
+        val harness = harness(first, second, shadow = shadow.reporter)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), first.sent.map(::kind))
+
+        // The retired session's socket read outlives its cancellation, so its teardown ends only when released.
+        harness.owner.replaceDemand(DEMAND.copy(identity = IDENTITY.copy(appVersionCode = 791)))
+        runCurrent()
+        assertFalse(first.closed)
+        release.complete(Unit)
+        runCurrent()
+        shadow.sink("relay1", "OFF")
+        runCurrent()
+
+        assertTrue(first.closed)
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end", "delta"), second.sent.map(::kind))
+        assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+        harness.owner.close()
+    }
+
     // ---- harness ---------------------------------------------------------------------------------
 
     private class Shadow(initial: List<String>) {
@@ -443,15 +473,23 @@ class PanelAssistantTransportOwnerTest {
         val sent = mutableListOf<String>()
         var closed = false
 
+        /** When set, a read cancelled mid-wait returns only once this completes, as a slow socket might. */
+        var holdReadAfterCancel: CompletableDeferred<Unit>? = null
+
         override suspend fun send(text: String) {
             check(!closed) { "send on a closed connection" }
             sent += text
             respond(JSONObject(text), this)
         }
 
-        override suspend fun receive(timeoutMs: Long): String? = select {
-            inbound.onReceive { it }
-            onTimeout(timeoutMs) { null }
+        override suspend fun receive(timeoutMs: Long): String? = try {
+            select {
+                inbound.onReceive { it }
+                onTimeout(timeoutMs) { null }
+            }
+        } catch (cancelled: CancellationException) {
+            holdReadAfterCancel?.let { withContext(NonCancellable) { it.await() } }
+            throw cancelled
         }
 
         override suspend fun close() {
