@@ -22,7 +22,7 @@ class DashboardPlacementContractTest {
     /** The responsive header must settle before page content is laid out. */
     @Test fun headerFitScriptIsEmittedBeforeThePageBody() {
         val shell = serverSource.readText()
-        val script = shell.indexOf("""<script src="/assets/switcher.js"></script>""")
+        val script = shell.indexOf("""<script src="assets/switcher.js"></script>""")
         val verbar = shell.indexOf("""<div id="verbar" class="setup"""")
         val body = shell.indexOf("\n\$body\n")
         assertTrue("switcher.js is not emitted in the page shell", script > 0)

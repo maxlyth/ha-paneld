@@ -149,7 +149,7 @@ class LogsFleetI18nContractTest {
             )
             assertTrue(
                 "/$route must pass its request-localized Strings through page()",
-                Regex("page\\(\"$route\"[\\s\\S]*?,\\s*strings\\)").containsMatchIn(routeSource),
+                Regex("page\\(\"$route\"[\\s\\S]*?,\\s*strings,\\s*call\\.embedMode\\(\\)\\)").containsMatchIn(routeSource),
             )
         }
 

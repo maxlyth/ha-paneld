@@ -14,7 +14,7 @@ class PaneldServerConfigWiringTest {
         val configure = File("src/main/assets/configure.js").readText()
         assertTrue(source.contains("get(\"/config/home-dashboards\")"))
         assertTrue(source.contains("entityLearning.homeDashboardCatalog()"))
-        assertTrue(configure.contains("fetch(\"/api/v1/config/home-dashboards\""))
+        assertTrue(configure.contains("fetch(\"api/v1/config/home-dashboards\""))
         assertTrue(configure.contains("if (f.picker === \"ha_dashboard\")"))
         // Deliberately a NATIVE select on this form (a custom popup was tried and was a bust on hardware
         // review — see the branch comment); HA's grouping survives as optgroups, Auto stays first and
@@ -35,7 +35,7 @@ class PaneldServerConfigWiringTest {
             "val proximityLearningEnabled = sensors.hasProximity()", admission.trim())
         assertFalse("disabled wake must not hide the calibration entry", configure.contains("wakeOnWave"))
         assertTrue(configure.contains("if (proximityLearningEnabled) \"\"\"<div id=\"proximity-learning-mount\""))
-        assertTrue(configure.contains("if (proximityLearningEnabled) \"\"\"<script src=\"/assets/proximity-learning.js\""))
+        assertTrue(configure.contains("if (proximityLearningEnabled) \"\"\"<script src=\"assets/proximity-learning.js\""))
         assertTrue(configure.contains("${'$'}proximityMount</div>"))
         assertTrue(configure.contains("${'$'}proximityScript"))
     }

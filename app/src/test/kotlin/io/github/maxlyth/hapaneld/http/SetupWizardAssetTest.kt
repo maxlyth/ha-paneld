@@ -35,14 +35,14 @@ class SetupWizardAssetTest {
         // wiped a panel's credentials. The wizard's guarantee is structural: it never fetches it at all —
         // its reads are the journey and the read-only discovery suggestions, nothing else.
         val fetchTargets = Regex("""fetch\((\"[^\"]*\"|[A-Za-z_]+)""").findAll(js).map { it.groupValues[1] }.toSet()
-        assertTrue(fetchTargets.contains("\"/api/v1/setup\""))
-        assertTrue(fetchTargets.contains("\"/api/v1/config/discovery\""))
+        assertTrue(fetchTargets.contains("\"api/v1/setup\""))
+        assertTrue(fetchTargets.contains("\"api/v1/config/discovery\""))
         assertTrue("POSTs must flow through the one helper", fetchTargets.contains("path"))
-        assertFalse("the wizard must never GET /api/v1/config", fetchTargets.contains("\"/api/v1/config\""))
+        assertFalse("the wizard must never GET /api/v1/config", fetchTargets.contains("\"api/v1/config\""))
         // The config literal may appear only as a postForm destination.
-        Regex("\"/api/v1/config\"").findAll(js).forEach { m ->
+        Regex("\"api/v1/config\"").findAll(js).forEach { m ->
             val lead = js.substring(maxOf(0, m.range.first - 12), m.range.first)
-            assertTrue("\"/api/v1/config\" used outside postForm(", lead.contains("postForm("))
+            assertTrue("\"api/v1/config\" used outside postForm(", lead.contains("postForm("))
         }
     }
 
@@ -50,7 +50,7 @@ class SetupWizardAssetTest {
         val journeyFetch = js.substring(js.indexOf("function getJourney()"))
             .substringBefore("function postForm(")
         assertTrue(journeyFetch.contains("\"X-ha-paneld-setup-presence\": \"active\""))
-        assertTrue(journeyFetch.contains("fetch(\"/api/v1/setup\""))
+        assertTrue(journeyFetch.contains("fetch(\"api/v1/setup\""))
     }
 
     @Test fun aBlankPasswordIsNeverSentAndNeverPrefilled() {
@@ -130,7 +130,7 @@ class SetupWizardAssetTest {
         // beat both. Grouping survives as optgroups; icons did not, by design.
         assertTrue(js.contains("function homeDashboardCard()"))
         assertTrue(js.contains("Select the HA dashboard for this panel"))
-        assertTrue(js.contains("fetch(\"/api/v1/config/home-dashboards\""))
+        assertTrue(js.contains("fetch(\"api/v1/config/home-dashboards\""))
         assertTrue(js.contains("el(\"optgroup\""))
         assertFalse("the custom picker widget is deleted, not dormant", js.contains("haDashboardPicker"))
         assertFalse(
@@ -151,7 +151,7 @@ class SetupWizardAssetTest {
             .substringBefore("/* ---------- step 5")
         assertTrue(
             "the config POST must precede the answer POST",
-            answer.indexOf("/api/v1/config") < answer.indexOf("/api/v1/setup/home-dashboard"),
+            answer.indexOf("api/v1/config") < answer.indexOf("api/v1/setup/home-dashboard"),
         )
         // An empty dashboard list means "could not ask Home Assistant", never a dead end.
         assertTrue(js.contains("Couldn’t fetch the dashboard list from Home Assistant yet"))
@@ -176,7 +176,7 @@ class SetupWizardAssetTest {
         // area field only to an admin session or for a device with no area yet (where the request seeds
         // suggested_area at first registration); otherwise it shows the honest read-only sentence. Both
         // UIs treat HA's value as canonical.
-        assertTrue(js.contains("fetch(\"/api/v1/config/ha-area\""))
+        assertTrue(js.contains("fetch(\"api/v1/config/ha-area\""))
         assertTrue(js.contains("var editable = hdArea.admin || !current;"))
         assertTrue(js.contains("This panel is already registered in Home Assistant"))
         assertTrue(js.contains("Set the HA Area that your panel is in"))
@@ -192,7 +192,7 @@ class SetupWizardAssetTest {
             File("app/src/main/assets/configure.js"),
         ).first { it.isFile }.readText()
         assertTrue(configure.contains("if (f.picker === \"ha_area\")"))
-        assertTrue(configure.contains("fetch(\"/api/v1/config/ha-area\""))
+        assertTrue(configure.contains("fetch(\"api/v1/config/ha-area\""))
         assertTrue(configure.contains("var areaTouched = false;"))
         assertTrue(configure.contains("if (!areaTouched && !haAreaUserOverride && haArea"))
         assertTrue(configure.contains("areaTouched = true;"))
@@ -292,7 +292,7 @@ class SetupWizardAssetTest {
             .substringBefore("/* ---------- step 6")
         assertTrue(
             "the config POST must precede the answer POST",
-            answer.indexOf("/api/v1/config") < answer.indexOf("/api/v1/setup/entity-filter"),
+            answer.indexOf("api/v1/config") < answer.indexOf("api/v1/setup/entity-filter"),
         )
     }
 
@@ -305,7 +305,7 @@ class SetupWizardAssetTest {
         // The wrong turn people take next. Both renderers draw into the one system WebView.
         assertTrue(card.contains("will not help"))
         // Reuses the existing heal endpoint rather than inventing a second install path.
-        assertTrue(card.contains("/api/v1/webview/heal"))
+        assertTrue(card.contains("api/v1/webview/heal"))
         // With no pinned build for the model, explain instead of offering a button that cannot work.
         assertTrue(card.contains("no known-good engine bundled"))
         assertTrue(card.indexOf("if (fixable)") < card.indexOf("no known-good engine bundled"))

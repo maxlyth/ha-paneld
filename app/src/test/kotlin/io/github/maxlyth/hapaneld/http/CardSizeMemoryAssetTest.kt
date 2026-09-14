@@ -116,9 +116,9 @@ class CardSizeMemoryAssetTest {
             assertTrue("missing stable Dashboard layout key $key", server.contains("data-layout-key=\"$key\"") || key in listOf("infotbl", "nettbl", "proftbl", "contexttbl", "captbl", "livetbl", "behavtbl", "disptbl", "updtbl"))
         }
         assertTrue(server.contains("data-layout-key=\"${'$'}id\""))
-        val memory = server.indexOf("/assets/card-size-memory.js")
-        val alignment = server.indexOf("/assets/card-column-alignment.js", memory)
-        val dashboard = server.indexOf("/info.js", alignment)
+        val memory = server.indexOf("assets/card-size-memory.js")
+        val alignment = server.indexOf("assets/card-column-alignment.js", memory)
+        val dashboard = server.indexOf("info.js", alignment)
         assertTrue(memory >= 0 && alignment > memory && dashboard > alignment)
         assertTrue(server.contains("data-card-size-restore=\"1\""))
         val memoryAsset = File(assetsDir, "card-size-memory.js").readText()

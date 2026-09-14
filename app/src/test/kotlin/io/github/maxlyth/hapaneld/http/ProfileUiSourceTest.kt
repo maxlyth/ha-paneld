@@ -13,7 +13,7 @@ class ProfileUiSourceTest {
 
     @Test
     fun profileTabIsPrimaryFullWidthLocalAndRestartExplicit() {
-        assertTrue("tab(\"profiles\", \"/profiles\", strings.get(\"shell.nav.profile\"))" in server)
+        assertTrue("tab(\"profiles\", \"profiles\", strings.get(\"shell.nav.profile\"))" in server)
         assertTrue("get(\"/profiles\")" in server)
         assertTrue("profile-workspace" in server)
         assertTrue("t(\"profiles.action.confirm_restart\", \"Confirm and restart\")" in script)

@@ -65,7 +65,7 @@ class CameraSurfaceContractTest {
         }
         assertTrue(
             "the snapshot link must be the real route",
-            configureJs.contains("\"/api/v1/camera/snapshot.jpg\""),
+            configureJs.contains("\"api/v1/camera/snapshot.jpg\""),
         )
     }
 

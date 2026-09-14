@@ -35,7 +35,7 @@ class AutoSleepUiContractTest {
         assertFalse("manual source picker must not ship", "ha_binary_sensors" in source)
         assertFalse("source catalog endpoint must not ship", "/api/v1/auto-sleep/sources" in source)
         assertFalse("auto sleep must not run a polling timer", "AUTO_SLEEP_REFRESH_MS" in source || "scheduleAutoSleepRefresh" in source)
-        assertTrue("selected history period must be requested", "/api/v1/auto-sleep/history?hours=" in source && "autoSleepHistoryHours" in source)
+        assertTrue("selected history period must be requested", "api/v1/auto-sleep/history?hours=" in source && "autoSleepHistoryHours" in source)
         assertTrue("timeline must default to 24 hours", "var autoSleepHistoryHours = 24;" in source)
         assertTrue("timeline must be rendered on panel", "auto-sleep-chart" in source && "drawAutoSleepChart" in source)
         assertTrue(
@@ -59,7 +59,7 @@ class AutoSleepUiContractTest {
             .substringBefore("function invalidateAutoSleepHistory")
         assertTrue(
             "history must wait for typed status readiness",
-            statusLoad.indexOf("fetch(\"/api/v1/auto-sleep\"") in 0 until
+            statusLoad.indexOf("fetch(\"api/v1/auto-sleep\"") in 0 until
                 statusLoad.indexOf("if (autoSleepHistoryReady(autoSleepStatus))"),
         )
         assertTrue(
@@ -165,7 +165,7 @@ class AutoSleepUiContractTest {
         assertTrue(
             "source rows must expose a persistent include toggle",
                 "function toggleAutoSleepSource(source)" in source &&
-                "fetch(\"/api/v1/auto-sleep/source\"" in source &&
+                "fetch(\"api/v1/auto-sleep/source\"" in source &&
                 "area_key: areaKey, source_key: sourceKey, included: !included" in source &&
                 "autoSleepSourceUpdating[sourceKey]" in source &&
                 "aria-pressed" in source && "aria-disabled" in source && "Suppressed" in source &&
@@ -241,7 +241,7 @@ class AutoSleepUiContractTest {
         )
         assertTrue(
             "OFF to ON must wait for a fresh Home Assistant Area prerequisite",
-            "/api/v1/auto-sleep/prerequisite" in source &&
+            "api/v1/auto-sleep/prerequisite" in source &&
                 "autoSleepPrerequisite.eligible !== true" in source &&
                 "Assign this panel to a Home Assistant Area before enabling Auto sleep." in source &&
                 "Checking this panel’s Home Assistant Area…" in source,

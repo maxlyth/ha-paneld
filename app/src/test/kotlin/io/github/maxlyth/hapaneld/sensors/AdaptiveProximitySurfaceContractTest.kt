@@ -42,7 +42,7 @@ class AdaptiveProximitySurfaceContractTest {
         assertTrue(script.contains("Set up proximity on panel"))
         assertTrue(script.contains("Follow the instructions on the panel"))
         assertTrue(script.contains("Its detection distance cannot be adjusted"))
-        assertTrue(script.contains("/api/v1/proximity/calibration"))
+        assertTrue(script.contains("api/v1/proximity/calibration"))
         assertTrue(script.contains("request(\"heartbeat\", id)"))
         assertTrue(script.contains("if (error.opaque) result.setAttribute(\"lang\", \"en\")"))
         assertTrue(script.contains("start.disabled = busy || d.present === false || (!available && d.canCalibrate !== true)"))

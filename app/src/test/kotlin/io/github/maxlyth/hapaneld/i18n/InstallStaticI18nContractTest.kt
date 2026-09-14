@@ -82,12 +82,12 @@ class InstallStaticI18nContractTest {
         val displayRoute = server.substring(server.indexOf("post(\"/display/density\")"), server.indexOf("get(\"/inspect\")"))
 
         assertTrue(tameRoute.contains("val strings = requestStrings(call)"))
-        assertTrue(tameRoute.contains("localizedHref(\"/install#cfg-tame\", strings)"))
+        assertTrue(tameRoute.contains("localizedHref(\"install#cfg-tame\", strings)"))
         assertTrue("browser failures must use the localized mini-page helper", tameRoute.contains("respondInstallFormError("))
-        assertTrue(tameCard.contains("localizedHref(\"/api/v1/tame/suggest\", strings)"))
-        assertTrue(tameCard.contains("localizedHref(\"/api/v1/tame\", strings)"))
+        assertTrue(tameCard.contains("localizedHref(\"api/v1/tame/suggest\", strings)"))
+        assertTrue(tameCard.contains("localizedHref(\"api/v1/tame\", strings)"))
         assertTrue(displayRoute.contains("val strings = requestStrings(call)"))
-        assertTrue(displayRoute.contains("localizedHref(\"/install#cfg-display\", strings)"))
+        assertTrue(displayRoute.contains("localizedHref(\"install#cfg-display\", strings)"))
 
         val failureHelper = server.substring(server.indexOf("private suspend fun respondInstallFormError"), server.indexOf("private fun localizedSetupNeeds"))
         assertTrue("JSON clients must retain the stable machine token", failureHelper.contains("call.respondText(\"\$machineText\\n\", status = status)"))

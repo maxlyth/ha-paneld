@@ -91,7 +91,7 @@ class ApiRouteSpecContractTest {
         val script = asset("api.js").readText()
         assertTrue(
             "the explorer behavior must load from its shipped external script",
-            html.contains("<script src=\"/assets/api.js\"></script>"),
+            html.contains("<script src=\"assets/api.js\"></script>"),
         )
         assertTrue("path parameters must be substituted", "where === \"path\"" in script)
         assertTrue("query parameters must be encoded", "where === \"query\"" in script)
@@ -112,7 +112,7 @@ class ApiRouteSpecContractTest {
 
     @Test fun installConfigImportConsumesPreviewHash() {
         val source = asset("install.js").readText()
-        assertTrue("import must preview before applying", "/api/v1/config/import?dry_run=1" in source)
+        assertTrue("import must preview before applying", "api/v1/config/import?dry_run=1" in source)
         assertTrue("apply must carry the preview config hash", "expected_cfg=" in source && "dry.expected_cfg" in source)
         assertTrue("stale apply must require a fresh preview", "response.status === 409" in source)
     }

@@ -262,7 +262,7 @@ class ManagementObservationContractTest {
 
         val compactInstallRoute = installRoute.replace(Regex("\\s+"), " ")
         assertTrue(compactInstallRoute.contains(
-            "withContext(Dispatchers.IO) { page(\"install\", strings.get(\"shell.nav.install\"), installBody(strings), strings) }",
+            "withContext(Dispatchers.IO) { page(\"install\", strings.get(\"shell.nav.install\"), installBody(strings), strings, call.embedMode()) }",
         ))
         assertTrue(statusRoute.contains("withContext(Dispatchers.IO)"))
         assertTrue(statusRoute.contains("statusJson("))

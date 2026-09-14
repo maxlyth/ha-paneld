@@ -161,7 +161,7 @@ class DiagCapabilityPolicyTest {
         assertTrue(server.contains("\\\"labelLanguage\\\":${'$'}{s(label.language)}"))
         assertTrue(server.contains("\\\"helpLanguage\\\":${'$'}helpLanguageJson"))
         assertTrue(configure.contains("f.displaySizingAvailable === true"))
-        assertTrue(configure.contains("href: localizedPageHref(\"/install#cfg-display\"), text: i18nText(\"configure.display.sizing\", \"Display Sizing\")"))
+        assertTrue(configure.contains("href: localizedPageHref(\"install#cfg-display\"), text: i18nText(\"configure.display.sizing\", \"Display Sizing\")"))
         assertTrue(server.contains("val displaySizingAvailable = caps.canSetDisplay"))
         assertTrue(server.contains("spec.key == \"dashboard_zoom\" && displaySizingAvailable"))
         assertTrue(server.contains("""<div class="cards" id="install-cards" data-card-size-page="install"""))
@@ -331,13 +331,13 @@ class DiagCapabilityPolicyTest {
             assertFalse(it in configure)
             assertTrue(it in install)
         }
-        assertTrue("/assets/proximity-learning.js" in configure)
+        assertTrue("assets/proximity-learning.js" in configure)
         assertFalse("/assets/prox.js" in source)
         assertFalse("proximityCardHtml()" in source)
         assertTrue("configImport(this)" in source.substring(source.indexOf("private fun backupCardHtml"), source.indexOf("private fun apkCardHtml")))
         assertTrue("""installIcon("cfg-display", strings)""" in source)
         assertTrue("""cfgIcon("cfg-wake_on_wave", strings)""" in source)
-        assertTrue("/install#cfg-tame" in source)
+        assertTrue("install#cfg-tame" in source)
     }
 
     @Test fun proximityHasNoProfileSpecificTuningSurface() {

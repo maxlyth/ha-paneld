@@ -122,16 +122,16 @@ class CardColumnAlignmentAssetTest {
             assertTrue(
                 "$pageScript must load after the shared alignment authority",
                 server.contains(
-                    """<script src="/assets/card-column-alignment.js"></script>
-<script src="/assets/$pageScript"></script>""",
+                    """<script src="assets/card-column-alignment.js"></script>
+<script src="assets/$pageScript"></script>""",
                 ),
             )
         }
         assertTrue(
             "info.js must load after the shared alignment authority",
             server.contains(
-                """<script src="/assets/card-column-alignment.js"></script>
-<script src="/info.js"></script>""",
+                """<script src="assets/card-column-alignment.js"></script>
+<script src="info.js"></script>""",
             ),
         )
     }

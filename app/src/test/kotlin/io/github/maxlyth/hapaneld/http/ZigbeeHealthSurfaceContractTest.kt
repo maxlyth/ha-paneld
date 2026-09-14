@@ -41,7 +41,7 @@ class ZigbeeHealthSurfaceContractTest {
         val bridge = source("MqttBridge.kt")
         assertTrue(js.contains("id: \"cfg-zigbee_join\""))
         assertTrue(js.contains("Permit join is enabled — request join?"))
-        assertTrue(js.contains("fetch(\"/api/v1/radio/join\", { method: \"POST\" })"))
+        assertTrue(js.contains("fetch(\"api/v1/radio/join\", { method: \"POST\" })"))
         assertTrue(js.contains("text: i18nText(\"configure.zigbee.request_join\", \"Request join\")"))
         assertTrue(js.contains("request.disabled = !enabled || joined || coolingDown"))
         assertTrue(js.contains("recomputeDirty();\n        loadRadio();\n        restampConfigWatchBaseline();"))

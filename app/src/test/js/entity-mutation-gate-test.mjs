@@ -79,14 +79,14 @@ assert.ok(issueButton, 'issue-ignore control was not created');
 
 const resetRun = ids['entity-reset'].fire('click');
 await settle();
-assert.deepEqual(posts, ['/api/v1/dashboard/entities/reset']);
+assert.deepEqual(posts, ['api/v1/dashboard/entities/reset']);
 await ids['entity-sync'].fire('click');
 await ids['entity-activate'].fire('click');
 await ids['entity-auto-static'].fire('change');
 await body.fire('change', {target: overrideSelect});
 await allCandidates.fire('click');
 await issueButton.fire('click');
-assert.deepEqual(posts, ['/api/v1/dashboard/entities/reset'], 'a competing mutation escaped while reset owned the gate');
+assert.deepEqual(posts, ['api/v1/dashboard/entities/reset'], 'a competing mutation escaped while reset owned the gate');
 
 resetResolve(response({ok:true,sync_started:false}));
 await resetRun;
@@ -112,7 +112,7 @@ assert.equal(ids['entity-auto-static'].disabled, false, 'policy remained disable
 deferPolicy = true;
 const policyRun = ids['entity-auto-static'].fire('change');
 await settle();
-assert.equal(posts.at(-1), '/api/v1/dashboard/entities/policy');
+assert.equal(posts.at(-1), 'api/v1/dashboard/entities/policy');
 const resetCount = posts.filter(url => url.endsWith('/reset')).length;
 await ids['entity-reset'].fire('click');
 assert.equal(posts.filter(url => url.endsWith('/reset')).length, resetCount, 'reset escaped while policy owned the gate');

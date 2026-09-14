@@ -139,14 +139,14 @@ class SetupI18nContractTest {
         )
         assertFalse("Setup must not report unconditional English after full promotion", route.contains("+ AppLocale.ENGLISH"))
         assertTrue(route.contains("translationPrefixes = setOf(\"shell.\", \"setup.\", \"runtime.\")"))
-        assertTrue(route.contains("setupBody(strings, preserveExplicitEnglish)"))
+        assertTrue(route.contains("setupBody(strings, preserveExplicitEnglish, embedded = call.embedMode() != null)"))
     }
 
     @Test fun `Setup server frame retains exact catalogue and localized link mappings`() {
         val body = functionBody("setupBody")
         assertTrue(body.contains("aria-label=\"${'$'}{esc(strings.get(\"setup.frame.progress_label\"))}\""))
         assertTrue(body.contains("${'$'}{esc(strings.get(\"setup.frame.loading\"))}"))
-        assertTrue(body.contains("${'$'}{setupHref(\"/configure\", strings, preserveExplicitEnglish)}"))
+        assertTrue(body.contains("${'$'}{setupHref(\"configure\", strings, preserveExplicitEnglish)}"))
         assertTrue(body.contains("${'$'}{esc(strings.get(\"setup.frame.skip_exit\"))}"))
         listOf("Setup progress", "Loading setup", "Skip and exit the wizard").forEach { formerEnglish ->
             assertFalse("setupBody still hard-codes visible English: $formerEnglish", body.contains(formerEnglish))
@@ -157,7 +157,7 @@ class SetupI18nContractTest {
         val route = routeBody("setup")
         assertTrue(route.contains("call.request.queryParameters[\"lang\"]"))
         assertTrue(route.contains("== AppLocale.ENGLISH"))
-        assertTrue(route.contains("setupBody(strings, preserveExplicitEnglish)"))
+        assertTrue(route.contains("setupBody(strings, preserveExplicitEnglish, embedded = call.embedMode() != null)"))
         assertTrue(route.contains("preserveExplicitEnglish = preserveExplicitEnglish"))
 
         val href = functionBody("setupHref")
@@ -209,7 +209,7 @@ class SetupI18nContractTest {
         assertTrue(helper.contains("url.searchParams.set(\"lang\", lang)"))
         assertTrue(helper.contains("url.origin !== location.origin"))
 
-        setOf("/", "/configure", "/configure#cfg-dashboard_package", "/install").forEach { path ->
+        setOf("./", "configure", "configure#cfg-dashboard_package", "install").forEach { path ->
             assertTrue(
                 "Setup-authored route $path must preserve the selected language",
                 setupJs.contains("internalHref(\"$path\")"),

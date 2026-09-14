@@ -104,23 +104,28 @@ class HardenedApprovalAssetContractTest {
         assertTrue(install.contains("response.status === 202 && body && body.error === 'approval-required'"))
         assertTrue(install.indexOf("if (r.status === 202)") < install.indexOf("if (r.ok) return r.blob()"))
         assertTrue(install.contains(".then(approvalAwareJson).then(function (d)"))
-        assertTrue(install.contains("path !== '/api/v1/tame' && path !== '/api/v1/display/density'"))
+        assertTrue(
+            "the tame/density form target must be compared as a resolved URL, not a root-absolute literal",
+            install.contains("tame = new URL('api/v1/tame', document.baseURI).href;") &&
+                install.contains("density = new URL('api/v1/display/density', document.baseURI).href;") &&
+                install.contains("if (path !== tame && path !== density) return;"),
+        )
         listOf(
-            "/api/v1/install/component",
-            "/api/v1/webview/heal",
-            "/api/v1/companion/repair-url",
-            "/api/v1/install/apk/commit",
-            "/api/v1/install/apk/from-url",
-            "/api/v1/uninstall",
-            "/api/v1/backup",
-            "/api/v1/restore",
-            "/api/v1/config/import",
+            "api/v1/install/component",
+            "api/v1/webview/heal",
+            "api/v1/companion/repair-url",
+            "api/v1/install/apk/commit",
+            "api/v1/install/apk/from-url",
+            "api/v1/uninstall",
+            "api/v1/backup",
+            "api/v1/restore",
+            "api/v1/config/import",
         ).forEach { assertTrue("install.js must handle $it", install.contains(it)) }
 
         val configure = asset("configure.js")
         assertTrue(configure.contains("response.status === 202 && body && body.error === \"approval-required\""))
-        assertTrue(configure.contains("fetch(\"/api/v1/config\""))
-        assertTrue(configure.contains("fetch(\"/api/v1/dashboard/clear-storage\""))
+        assertTrue(configure.contains("fetch(\"api/v1/config\""))
+        assertTrue(configure.contains("fetch(\"api/v1/dashboard/clear-storage\""))
         assertTrue(configure.contains("? approvalMessage(e.body)"))
         assertFalse(configure.contains("? e.message"))
         assertTrue(configure.contains("keep_awake: true"))
@@ -140,8 +145,8 @@ class HardenedApprovalAssetContractTest {
 
         val info = asset("info.js")
         assertTrue(info.contains("response.status===202&&body&&body.error==='approval-required'"))
-        assertTrue(info.contains("fetch('/api/v1/inspect/start'"))
-        assertTrue(info.contains("fetch('/api/v1/action'"))
+        assertTrue(info.contains("fetch('api/v1/inspect/start'"))
+        assertTrue(info.contains("fetch('api/v1/action'"))
         assertTrue(info.contains("var error=new Error(approvalMessage())"))
         assertFalse(info.contains("error&&error.message?error.message"))
     }
@@ -190,7 +195,7 @@ class HardenedApprovalAssetContractTest {
         assertTrue(source.contains("Approve this request physically on the panel, then retry it; it cannot be approved remotely."))
         assertTrue(
             "API explorer behavior must load from its shipped external script",
-            apiHtml.contains("<script src=\"/assets/api.js\"></script>"),
+            apiHtml.contains("<script src=\"assets/api.js\"></script>"),
         )
         assertTrue(
             "API approval narrative must follow the endpoint catalog",
@@ -315,7 +320,7 @@ class HardenedApprovalAssetContractTest {
         assertFalse(devtools.contains("hardenedApprovalAttrs"))
         val profileDelete = source.substringAfter("id=\"profile-delete\"").substringBefore("</div>")
         assertFalse(profileDelete.contains("hardenedApprovalAttrs"))
-        assertTrue(source.contains("<a class=\"pbtn\" href=\"/api/v1/config/export\">⭳ \${esc(strings.get(\"install.backup.config_bundle.export\"))}</a>"))
+        assertTrue(source.contains("<a class=\"pbtn\" href=\"api/v1/config/export\">⭳ \${esc(strings.get(\"install.backup.config_bundle.export\"))}</a>"))
     }
 
     @Test fun backupApprovalJsonIsNeverSavedAsAnArchive() {
@@ -335,7 +340,7 @@ class HardenedApprovalAssetContractTest {
               addEventListener(){},
               createElement(tag){return {tagName:tag.toUpperCase(),remove(){},click(){clicks++}}}
             };
-            global.fetch=(url)=>Promise.resolve(url==='/api/v1/backup'?{
+            global.fetch=(url)=>Promise.resolve(url==='api/v1/backup'?{
               status:202,ok:true,json:()=>Promise.resolve({ok:false,error:'approval-required',approval_id:'abc',message:'Approve this request on the panel, then retry it.'}),
               blob:()=>{blobReads++;return Promise.resolve(new Blob(['wrong']))}
             }:{status:200,ok:true,json:()=>Promise.resolve({present:false})});

@@ -60,7 +60,7 @@ class ApiExplorerI18nContractTest {
         assertTrue(route.contains("HttpHeaders.AcceptLanguage"))
         assertTrue(route.contains("HttpHeaders.ContentLanguage"))
         assertTrue(route.contains("+ AppLocale.ENGLISH"))
-        assertTrue(route.contains("localizedHref(\"/\", strings)"))
+        assertTrue(route.contains("localizedHref(\"./\", strings)"))
         assertTrue(route.contains("browserI18nPayload(strings, projectionPrefixes)"))
         assertTrue(route.contains("strings.requestedLocale"))
     }
@@ -81,8 +81,8 @@ class ApiExplorerI18nContractTest {
         assertTrue(html.contains("<html lang=\"__API_LANG__\""))
         assertTrue(html.contains("href=\"__API_BACK_HREF__\""))
         assertTrue(html.contains("__API_I18N_PAYLOAD__"))
-        assertTrue(html.contains("<script src=\"/assets/i18n.js\"></script>"))
-        assertTrue(html.contains("<script src=\"/assets/api.js\"></script>"))
+        assertTrue(html.contains("<script src=\"assets/i18n.js\"></script>"))
+        assertTrue(html.contains("<script src=\"assets/api.js\"></script>"))
         assertFalse("API application logic must remain external and lintable", html.contains("function endpoint("))
     }
 
@@ -101,7 +101,7 @@ class ApiExplorerI18nContractTest {
         assertTrue(script.contains("JSON.stringify(operation.responses || {}).indexOf(\"ApprovalRequired\")"))
         assertTrue(script.contains("configure.hardened.action_approval"))
         assertTrue(script.contains("shell.hardened.key"))
-        assertEquals(1, Regex("/api/v1/openapi\\.json").findAll(script).count())
+        assertEquals(1, Regex("api/v1/openapi\\.json").findAll(script).count())
         assertFalse("OpenAPI compatibility prose stays in the machine specification", english.strings.keys.any { it.startsWith("openapi.") })
     }
 }

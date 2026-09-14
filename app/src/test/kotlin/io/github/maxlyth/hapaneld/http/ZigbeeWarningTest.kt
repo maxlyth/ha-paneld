@@ -17,7 +17,7 @@ class ZigbeeWarningTest {
         assertTrue(warning.contains("consume substantial CPU"))
         assertTrue(warning.contains("coordinator"))
         assertTrue(warning.contains("switch OFF"))
-        assertTrue(warning.contains("/configure#cfg-zigbee_join"))
+        assertTrue(warning.contains("configure#cfg-zigbee_join"))
     }
 
     @Test fun unconfiguredVendorGatewayDoesNotReceiveConfigurationNag() {

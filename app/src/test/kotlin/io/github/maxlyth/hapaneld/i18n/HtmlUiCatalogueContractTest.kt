@@ -62,13 +62,13 @@ class HtmlUiCatalogueContractTest {
             catalogue.getJSONObject(key).getString("surface") in promotedSurfaces
         }
 
-        assertEquals("the complete source catalogue is a reviewed release contract", 2430, source.strings.size)
-        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 2012, expected.size)
+        assertEquals("the complete source catalogue is a reviewed release contract", 2438, source.strings.size)
+        assertEquals("the declared promoted HTML UI preview scope must not shrink silently", 2020, expected.size)
         releaseTargetLocales.forEach { locale ->
             val target = TargetCatalogue.parse(File(assets, "i18n/$locale.json").readText(), source)
             assertEquals(
                 "$locale must contain the complete release catalogue",
-                2430,
+                2438,
                 target.strings.size,
             )
             assertEquals(
@@ -186,15 +186,15 @@ class HtmlUiCatalogueContractTest {
     @Test fun `shared shell installs localized payload and helper before page scripts`() {
         val source = server.readText()
         val payload = source.indexOf("<script id=\"ha-i18n\"")
-        val helper = source.indexOf("<script src=\"/assets/i18n.js\"></script>")
-        val pageScripts = source.indexOf("${'$'}extraScripts<script src=\"/assets/power-safety.js\"></script>")
+        val helper = source.indexOf("<script src=\"assets/i18n.js\"></script>")
+        val pageScripts = source.indexOf("${'$'}extraScripts<script src=\"assets/power-safety.js\"></script>")
         assertTrue("localized JSON payload must precede the helper", payload >= 0 && payload < helper)
         assertTrue("the helper must precede info.js and configure.js supplied through page content", helper < pageScripts)
 
         val dashboard = functionBody(source, "infoHtml")
         val configure = functionBody(source, "configureBody")
-        assertTrue(dashboard.contains("<script src=\"/info.js\"></script>"))
-        assertTrue(configure.contains("<script src=\"/assets/configure.js\"></script>"))
+        assertTrue(dashboard.contains("<script src=\"info.js\"></script>"))
+        assertTrue(configure.contains("<script src=\"assets/configure.js\"></script>"))
     }
 
     @Test fun `requested locale is emitted on the document and propagated to navigation and dashboard hydration`() {

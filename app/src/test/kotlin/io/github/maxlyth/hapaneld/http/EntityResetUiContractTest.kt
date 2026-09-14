@@ -30,7 +30,7 @@ class EntityResetUiContractTest {
         val handler = script.substringAfter("resetButton.addEventListener('click'")
             .substringBefore("async function savePolicy")
 
-        assertTrue(handler.indexOf("confirm(t('entities.reset.confirm'") < handler.indexOf("mutationRequest(claim,'/api/v1/dashboard/entities/reset'"))
+        assertTrue(handler.indexOf("confirm(t('entities.reset.confirm'") < handler.indexOf("mutationRequest(claim,'api/v1/dashboard/entities/reset'"))
         assertTrue(handler.contains("JSON.stringify({confirm:true,clear_filter:false})"))
         assertFalse(handler.contains("clear_filter:true"))
         assertTrue(handler.contains("entity-discovery safety ignore decisions"))
@@ -76,13 +76,13 @@ class EntityResetUiContractTest {
         assertTrue(script.contains("finally{releaseMutation(claim)}"))
 
         listOf(
-            "'/api/v1/dashboard/entities/sync'",
-            "'/api/v1/dashboard/entities/activate'",
-            "'/api/v1/dashboard/entities/policy'",
-            "'/api/v1/dashboard/entities/override'",
-            "'/api/v1/dashboard/entities/overrides'",
-            "'/api/v1/dashboard/entities/issues'",
-            "'/api/v1/dashboard/entities/reset'",
+            "'api/v1/dashboard/entities/sync'",
+            "'api/v1/dashboard/entities/activate'",
+            "'api/v1/dashboard/entities/policy'",
+            "'api/v1/dashboard/entities/override'",
+            "'api/v1/dashboard/entities/overrides'",
+            "'api/v1/dashboard/entities/issues'",
+            "'api/v1/dashboard/entities/reset'",
         ).forEach { endpoint -> assertTrue("missing guarded mutation $endpoint", "mutationRequest(claim,$endpoint" in script) }
         assertTrue(script.contains("refreshMutationControls();return d"))
         assertTrue(script.contains("selectedMsg.textContent=state.selected.size?t('entities.selection.count'"))

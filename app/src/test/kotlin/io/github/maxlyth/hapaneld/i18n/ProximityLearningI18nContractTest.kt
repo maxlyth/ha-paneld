@@ -61,7 +61,7 @@ class ProximityLearningI18nContractTest {
         assertTrue(source.strings.getValue("$PREFIX.setup.follow").text.contains("instructions on the panel"))
         assertTrue(source.strings.getValue("$PREFIX.setup.binary").text.contains("distance cannot be adjusted"))
         assertTrue(script.contains("X-Proximity-UI"))
-        assertTrue(script.contains("/api/v1/proximity/calibration"))
+        assertTrue(script.contains("api/v1/proximity/calibration"))
         assertFalse(script.contains("Teach a wave"))
         assertFalse(script.contains("Learning has restarted"))
     }

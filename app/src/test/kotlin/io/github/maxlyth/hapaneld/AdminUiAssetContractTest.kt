@@ -61,7 +61,7 @@ class AdminUiAssetContractTest {
             "../app/src/main/kotlin/io/github/maxlyth/hapaneld/http/PaneldServer.kt",
         ).map(::File).first { it.isFile }.readText()
         assertTrue(server.contains("onclick=\"configExport(true,this)\""))
-        assertFalse(server.contains("href=\"/api/v1/config/export?include_secrets=1\""))
+        assertFalse(server.contains("href=\"api/v1/config/export?include_secrets=1\""))
     }
 
     @Test fun installOwnedFormsHaveTruthfulStructuredContractsAndLocalReturns() {
@@ -73,8 +73,8 @@ class AdminUiAssetContractTest {
         assertTrue(server.contains("\"apply-failed\""))
         assertTrue(server.contains("val responseStatus = if (ok) HttpStatusCode.OK else HttpStatusCode.InternalServerError"))
         assertFalse(server.contains("density unchanged"))
-        assertTrue(server.contains("""val returnTo = localizedHref("/install#cfg-tame", strings)"""))
-        assertTrue(server.contains("""val returnTo = localizedHref("/install#cfg-display", strings)"""))
+        assertTrue(server.contains("""val returnTo = localizedHref("install#cfg-tame", strings)"""))
+        assertTrue(server.contains("""val returnTo = localizedHref("install#cfg-display", strings)"""))
     }
 
     @Test fun hardenedModeBlocksDevToolsBeforeApprovalAndDisablesTheControl() {

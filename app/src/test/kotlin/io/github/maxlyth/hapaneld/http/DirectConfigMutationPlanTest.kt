@@ -153,7 +153,7 @@ class DirectConfigMutationPlanTest {
         assertTrue(configMutationWantsJson("*/*", "application/json; charset=utf-8"))
         assertFalse(configMutationWantsJson("text/html", "application/x-www-form-urlencoded"))
         assertEquals(
-            "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=/configure'>" +
+            "<!doctype html><base href=\"/\"><meta charset=utf-8><meta http-equiv=refresh content='2;url=configure'>" +
                 "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                 "Saved &amp; pending &lt;touch&gt;</body>",
             configMutationHtml("Saved & pending <touch>"),

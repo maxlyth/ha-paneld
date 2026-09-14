@@ -22,10 +22,10 @@ class HaOAuthUiContractTest {
         assertTrue("callback completion must preserve unrelated unsaved values", "savedValues.ha_url = haOauthTargetUrl" in source && "recomputeDirty(); updateSaveUi(); render();" in source)
         assertTrue("OAuth must supersede a typed token which could overwrite it later", "savedValues.ha_token = \"\"" in source)
         val startHandler = source.substringAfter("function startHaOAuth()").substringBefore("function haOAuthRow()")
-        assertTrue("private-window sign-in must clear a typed token before the request", startHandler.indexOf("values.ha_token = \"\"") < startHandler.indexOf("fetch(\"/api/v1/ha/oauth/start\""))
+        assertTrue("private-window sign-in must clear a typed token before the request", startHandler.indexOf("values.ha_token = \"\"") < startHandler.indexOf("fetch(\"api/v1/ha/oauth/start\""))
         assertTrue("failed links must be removed before retry", "openLink.removeAttribute(\"href\")" in source)
         assertTrue("browser sign-in must follow the HA URL instead of the token fallback", "f.key === \"ha_url\") card.appendChild(haOAuthRow())" in source)
-        assertTrue("connection status must remain a one-shot no-store probe", "fetch(\"/api/v1/ha/oauth/status\"" in source && "cache: \"no-store\"" in source)
+        assertTrue("connection status must remain a one-shot no-store probe", "fetch(\"api/v1/ha/oauth/status\"" in source && "cache: \"no-store\"" in source)
         assertTrue("the authenticated display name must identify the current connection", "Connected as " in source)
         assertTrue("unrelated saves must preserve the current identity without another HA probe", "}, haConnectionInputsChanged);" in source && "if (haConnectionChanged) loadHaUserStatus();" in source)
         assertTrue(

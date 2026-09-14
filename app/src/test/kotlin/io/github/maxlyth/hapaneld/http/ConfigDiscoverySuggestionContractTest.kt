@@ -28,7 +28,7 @@ class ConfigDiscoverySuggestionContractTest {
     }
 
     @Test fun delayedSuggestionsFillOnlyAnUntouchedBlankFormAndBecomeUnsavedChanges() {
-        assertTrue(configure.contains("fetch(\"/api/v1/config/discovery\", { cache: \"no-store\" })"))
+        assertTrue(configure.contains("fetch(\"api/v1/config/discovery\", { cache: \"no-store\" })"))
         assertTrue(configure.contains("if (request !== configDiscoveryRequest || dirty) return;"))
         assertTrue(configure.contains("configDiscoveryRequest++;"))
         assertTrue(configure.contains("if (!suggestion || values[key] || savedValues[key] || dirtyValues[key]) return;"))

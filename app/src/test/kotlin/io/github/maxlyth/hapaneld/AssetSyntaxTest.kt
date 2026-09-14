@@ -85,6 +85,8 @@ class AssetSyntaxTest {
             const labels=source.slice(labelsStart,labelsEnd+5);
             const data={};
             const location={search:'?lang=zh_CN&theme=dark',pathname:'/configure',hash:'#language'};
+            global.document={baseURI:'http://panel.test/',body:{hasAttribute:function(){return false}}};
+            global.EMBEDDED=false;
             global.window={location,localStorage:{
               setItem(k,v){data[k]=v},getItem(k){return Object.prototype.hasOwnProperty.call(data,k)?data[k]:null},removeItem(k){delete data[k]}
             },history:{replaceState(_a,_b,url){
@@ -94,18 +96,18 @@ class AssetSyntaxTest {
             global.URLSearchParams=URLSearchParams;
             vm.runInThisContext(labels+'\n'+['validLanguageTag','admittedBrowserLanguage','storeBrowserLanguage','stripLanguageQuery','browserLanguageChoice','configSchemaUrl'].map(take).join('\n'));
             if(browserLanguageChoice()!=='zh_CN'||data.selectedLanguage!=='"zh_CN"')process.exit(2);
-            if(configSchemaUrl('fr')!=='/api/v1/config/schema?lang=zh_CN&ha_lang=fr')process.exit(3);
+            if(configSchemaUrl('fr')!=='api/v1/config/schema?lang=zh_CN&ha_lang=fr')process.exit(3);
             location.search='?lang=auto&theme=dark';
             if(browserLanguageChoice()!==''||data.selectedLanguage!==undefined||location.search!=='?theme=dark')process.exit(4);
             data.selectedLanguage='"fr"';location.search='';
-            if(browserLanguageChoice()!=='fr'||configSchemaUrl('de')!=='/api/v1/config/schema?lang=fr&ha_lang=de')process.exit(5);
+            if(browserLanguageChoice()!=='fr'||configSchemaUrl('de')!=='api/v1/config/schema?lang=fr&ha_lang=de')process.exit(5);
             delete data.selectedLanguage;
-            if(configSchemaUrl('zh-Hans')!=='/api/v1/config/schema?ha_lang=zh-Hans')process.exit(6);
+            if(configSchemaUrl('zh-Hans')!=='api/v1/config/schema?ha_lang=zh-Hans')process.exit(6);
             data.selectedLanguage='"bad language"';
-            if(configSchemaUrl('de')!=='/api/v1/config/schema?ha_lang=de')process.exit(7);
+            if(configSchemaUrl('de')!=='api/v1/config/schema?ha_lang=de')process.exit(7);
             data.selectedLanguage='"sv-SE"';
             if(browserLanguageChoice()!=='sv-SE'||admittedBrowserLanguage(browserLanguageChoice())!==false||
-               configSchemaUrl('de')!=='/api/v1/config/schema?lang=sv-SE&ha_lang=de')process.exit(8);
+               configSchemaUrl('de')!=='api/v1/config/schema?lang=sv-SE&ha_lang=de')process.exit(8);
             data.selectedLanguage='"de-DE"';
             if(admittedBrowserLanguage(browserLanguageChoice())!==true)process.exit(9);
             for(const locale of Object.keys(UI_LANGUAGE_LABELS).filter((value)=>value!=='auto')){
@@ -161,12 +163,12 @@ class AssetSyntaxTest {
             let statuses=Array.from({length:12},()=>preparing).concat([live]);
             let statusCalls=0,historyCalls=0,historyResults=[],historyResolve=null,readinessDelayMs=0;
             global.fetch=url=>{
-              if(url==='/api/v1/auto-sleep'){
+              if(url==='api/v1/auto-sleep'){
                 statusCalls++;const body=statuses.shift()||live;
                 if(body&&body.httpStatus)return Promise.resolve({ok:false,status:body.httpStatus});
                 return Promise.resolve({ok:true,json:()=>Promise.resolve(body)});
               }
-              if(String(url).startsWith('/api/v1/auto-sleep/history?hours=')){
+              if(String(url).startsWith('api/v1/auto-sleep/history?hours=')){
                 historyCalls++;
                 const result=historyResults.shift();
                 if(result&&result.deferred)return new Promise(resolve=>{historyResolve=resolve});
@@ -322,9 +324,9 @@ class AssetSyntaxTest {
         val info = File(dir, "info.js").readText()
         assertFalse("screenshot URL must not be copied from DOM text", info.contains("im.src=im.getAttribute('data-src')"))
         assertTrue("hydration must use the server-provided fixed same-origin cached screenshot URL", info.contains("showAndRefreshScreenshot(sc,d.shotCached)"))
-        assertTrue("every dashboard visit must request a fresh screenshot", info.contains("url='/api/v1/screenshot.png?t='+Date.now()"))
+        assertTrue("every dashboard visit must request a fresh screenshot", info.contains("url='api/v1/screenshot.png?t='+Date.now()"))
         assertTrue("the current screenshot must remain visible until the fresh image loads", info.contains("var next=new Image()"))
-        assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='/api/v1/screenshot.png?cached='+id"))
+        assertTrue("a fresh capture must seed its immutable placeholder URL for the next tab visit", info.contains("seed.src='api/v1/screenshot.png?cached='+id"))
         assertTrue(
             "a cold shell must not refresh until hydration confirms screenshot access",
             info.contains("sc.getAttribute('data-capture-ok')==='1'"),
@@ -433,7 +435,7 @@ class AssetSyntaxTest {
             function element(tag){
               const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,parentNode:null,
                 classList:{toggle(){},add(){},remove(){}},
-                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){v.parentNode=this;this.children.push(v);return v},
+                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]??null},hasAttribute(k){return this[k]!=null},addEventListener(k,v){this.handlers[k]=v},appendChild(v){v.parentNode=this;this.children.push(v);return v},
                 insertBefore(v,current){v.parentNode=this;const i=current?this.children.indexOf(current):-1;if(i<0)this.children.push(v);else this.children.splice(i,0,v);return v},
                 remove(){if(!this.parentNode)return;const i=this.parentNode.children.indexOf(this);if(i>=0)this.parentNode.children.splice(i,1);this.parentNode=null},
                 replaceChild(next,current){next.parentNode=this;this.children=this.children.map(v=>v===current?next:v);navNode=next;navEnabled=next.tag==='a'},
@@ -455,11 +457,11 @@ class AssetSyntaxTest {
             ];
             global.fetch=(url,opts)=>{
               if(opts&&opts.method==='POST'){posted=String(opts.body||'');return Promise.resolve({ok:true,json:()=>Promise.resolve({})})}
-              if(url==='/api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
-              if(url==='/api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:initiallyEnabled?'true':'false'},ha_expose:{}})});
-              if(url==='/api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
-              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
-              if(url==='/health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=entity-tab-test')});
+              if(url==='api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
+              if(url==='api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:initiallyEnabled?'true':'false'},ha_expose:{}})});
+              if(url==='api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
+              if(url==='api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=entity-tab-test')});
               return Promise.reject(new Error('unexpected fetch '+url));
             };
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
@@ -501,7 +503,7 @@ class AssetSyntaxTest {
             function element(tag){
               const e={tag:tag||'',style:{},dataset:{},handlers:{},children:[],className:'',textContent:'',innerHTML:'',value:'',disabled:false,parentNode:null,
                 classList:{toggle(){},add(){},remove(){}},
-                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]},addEventListener(k,v){this.handlers[k]=v},
+                setAttribute(k,v){this[k]=v},getAttribute(k){return this[k]},hasAttribute(k){return this[k]!=null},addEventListener(k,v){this.handlers[k]=v},
                 appendChild(v){v.parentNode=this;this.children.push(v);return v},
                 insertBefore(v,current){v.parentNode=this;const i=current?this.children.indexOf(current):-1;if(i<0)this.children.push(v);else this.children.splice(i,0,v);return v},
                 remove(){if(!this.parentNode)return;const i=this.parentNode.children.indexOf(this);if(i>=0)this.parentNode.children.splice(i,1);this.parentNode=null},
@@ -522,11 +524,11 @@ class AssetSyntaxTest {
             ];
             global.fetch=(url,opts)=>{
               if(opts&&opts.method==='POST'){posted=String(opts.body||'');return new Promise(resolve=>{postResolve=resolve})}
-              if(url==='/api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
-              if(url==='/api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:false},ha_expose:{}})});
-              if(url==='/api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
-              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
-              if(url==='/health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=new-baseline')});
+              if(url==='api/v1/config/schema')return Promise.resolve({json:()=>Promise.resolve(schema)});
+              if(url==='api/v1/config')return Promise.resolve({json:()=>Promise.resolve({settings:{dashboard_package:'builtin',dashboard_entity_learning:false},ha_expose:{}})});
+              if(url==='api/v1/apps')return Promise.resolve({json:()=>Promise.resolve({apps:[]})});
+              if(url==='api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='health')return Promise.resolve({text:()=>Promise.resolve('ok cfg=new-baseline')});
               return Promise.reject(new Error('unexpected fetch '+url));
             };
             vm.runInThisContext(fs.readFileSync(process.argv[1],'utf8'));
@@ -560,13 +562,13 @@ class AssetSyntaxTest {
               appendChild(v){this.children.push(v);return v},querySelector(){return null},setAttribute(){},removeAttribute(){},addEventListener(){}}}
             const note=element('p'),submit=element('button');
             const form=element('form');form.action='http://panel/api/v1/'+(mode==='failure'?'display/density':'tame');form.querySelector=sel=>sel==='.protected-form-result'?note:null;form.appendChild=v=>v;
-            global.window=global;global.location={href:'http://panel/install'};
-            global.document={title:'Panel',body:element('body'),getElementById(){return null},querySelector(){return null},querySelectorAll(){return []},
+            global.window=global;global.location={href:'http://panel/install',search:''};
+            global.document={title:'Panel',baseURI:'http://panel/',body:element('body'),getElementById(){return null},querySelector(){return null},querySelectorAll(){return []},
               createElement:tag=>element(tag),addEventListener(k,v){if(k==='submit')submitHandler=v}};
             global.FormData=class{*[Symbol.iterator](){yield ['density','240']}};
             global.setTimeout=fn=>{setImmediate(fn);return 1};
             global.fetch=(url,opts)=>{
-              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
               if(mode==='failure')return Promise.resolve({status:500,ok:false,json:()=>Promise.resolve({ok:false,status:'apply-failed',message:'Display command was rejected.'})});
               return Promise.resolve({status:200,ok:true,json:()=>Promise.resolve({ok:true,status:'started',message:'Taming started.'})});
             };
@@ -575,7 +577,7 @@ class AssetSyntaxTest {
             setImmediate(()=>setImmediate(()=>{
               if(mode==='failure'){
                 if(note.textContent!=='Display command was rejected.'||location.href!=='http://panel/install'||submit.disabled)process.exit(2);
-              }else if(location.href!=='/install#cfg-tame'||!note.textContent.includes('Taming started.'))process.exit(3);
+              }else if(location.href!=='install#cfg-tame'||!note.textContent.includes('Taming started.'))process.exit(3);
             }));
         """.trimIndent()
         for (mode in listOf("failure", "success")) {
@@ -597,7 +599,7 @@ class AssetSyntaxTest {
               querySelector(){return null},querySelectorAll(){return []},createElement:tag=>element(tag),addEventListener(){}};
             global.URL={createObjectURL:()=> 'blob:test',revokeObjectURL(){}};
             global.fetch=url=>{
-              if(url==='/api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
+              if(url==='api/v1/radio')return Promise.resolve({json:()=>Promise.resolve({present:false})});
               if(mode==='approval')return Promise.resolve({status:202,ok:true,json:()=>Promise.resolve({error:'approval-required',message:'Approve exact export on the panel.'})});
               return Promise.resolve({status:200,ok:true,blob:()=>Promise.resolve({size:10})});
             };

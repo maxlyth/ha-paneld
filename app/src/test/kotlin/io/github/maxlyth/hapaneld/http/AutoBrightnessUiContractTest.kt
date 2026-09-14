@@ -10,7 +10,7 @@ class AutoBrightnessUiContractTest {
         val source = asset("configure.js").readText()
 
         assertTrue("schema picker must have a dedicated control", "f.picker === \"ha_illuminance\"" in source)
-        assertTrue("candidate catalog must be queried", "/api/v1/auto-brightness/sources?q=" in source)
+        assertTrue("candidate catalog must be queried", "api/v1/auto-brightness/sources?q=" in source)
         assertTrue("catalog loading must wait for focus", "input.addEventListener(\"focus\"" in source)
         assertTrue("blank must explain local-sensor fallback", "Blank uses the panel sensor" in source)
         assertFalse("picker must not delegate placement to a native datalist", "el(\"datalist\"" in source)
@@ -29,7 +29,7 @@ class AutoBrightnessUiContractTest {
         val source = asset("configure.js").readText()
         val service = projectFile("app/src/main/kotlin/io/github/maxlyth/hapaneld/PaneldService.kt").readText()
 
-        assertTrue("history is bounded to seven days", "/api/v1/auto-brightness/history?hours=168" in source)
+        assertTrue("history is bounded to seven days", "api/v1/auto-brightness/history?hours=168" in source)
         assertTrue("calendar metadata must use the panel timezone", "put(\"time_zone\", zone.id)" in service && "put(\"localDay\", localDay)" in service)
         assertTrue("rolling history must omit the zero-opacity eighth date", "point.dayAge < 7" in source)
         assertTrue("chart must use a fixed 24-hour axis", "p.minuteOfDay / 1440" in source && "\"24:00\"" in source)
@@ -101,8 +101,8 @@ class AutoBrightnessUiContractTest {
         assertTrue("chart must retain the spike envelope", "min_lux" in source && "max_lux" in source)
         assertTrue("sensitivity preview must draw proposed brightness", "proposedBrightness" in source && "yBrightness" in source)
         assertTrue("brightness axis must use user-facing percentages", "ctx.fillText(\"100%\"" in source && "ctx.fillText(\"0%\"" in source)
-        assertTrue("learned history reset must be explicit", "/api/v1/auto-brightness/reset" in source)
-        assertTrue("manual pause hand-back must be explicit", "/api/v1/auto-brightness/resume" in source)
+        assertTrue("learned history reset must be explicit", "api/v1/auto-brightness/reset" in source)
+        assertTrue("manual pause hand-back must be explicit", "api/v1/auto-brightness/resume" in source)
         assertTrue("history reset must require confirmation", "Delete the seven-day ambient-light history" in source)
         assertTrue("saving a changed adaptive setting must refresh runtime truth", "hasOwnProperty.call(submittedValues, \"auto_brightness_ha_entity\")" in source)
         assertTrue(
@@ -121,7 +121,7 @@ class AutoBrightnessUiContractTest {
     @Test fun `adaptive history refresh is source consistent and transition polling is bounded`() {
         val source = asset("configure.js").readText()
 
-        assertTrue("status must bypass browser caches", "fetch(\"/api/v1/auto-brightness\", { cache: \"no-store\" })" in source)
+        assertTrue("status must bypass browser caches", "fetch(\"api/v1/auto-brightness\", { cache: \"no-store\" })" in source)
         assertTrue("history must bypass browser caches", "minimumSuffix, { cache: \"no-store\" })" in source)
         assertTrue("status and history must be bound by their opaque source revision", "statusRevision === historyRevision" in source)
         assertTrue("a matching old pair must not satisfy a newly selected entity", "autoBrightnessStatusMatchesSelection(result[0])" in source && "actual === expected" in source)

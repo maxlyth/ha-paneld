@@ -77,7 +77,7 @@ class PowerSafetyPresentationTest {
 
         assertTrue(warning.contains(assessment.summary))
         assertTrue(banner.contains("method=\"post\""))
-        assertTrue(banner.contains("action=\"/api/v1/power-safety/repair\""))
+        assertTrue(banner.contains("action=\"api/v1/power-safety/repair\""))
         assertTrue(banner.contains("data-power-safety-repair"))
         assertTrue(banner.contains("Repair power safety"))
         assertTrue(banner.contains("never reboots"))
@@ -91,7 +91,7 @@ class PowerSafetyPresentationTest {
         val banner = PowerSafetyPresentation.bannerHtml(offered, inlineRepair = true)
         val json = JSONObject(PowerSafetyPresentation.json(offered))
 
-        assertTrue(banner.contains("action=\"/api/v1/power-safety/acknowledge\""))
+        assertTrue(banner.contains("action=\"api/v1/power-safety/acknowledge\""))
         assertTrue(banner.contains("data-power-safety-acknowledge"))
         assertTrue(banner.contains("Hide this caution"))
         assertTrue(banner.contains("data-hardened-approval"))
@@ -153,7 +153,7 @@ class PowerSafetyPresentationTest {
         assertTrue(server.contains("PowerSafetyAdvisoryPolicy.admitAcknowledgement"))
         assertTrue(server.contains("exactHttpApprovalPayload(call, parameters.canonicalDigest())"))
         assertTrue(diagnostic.contains("PowerSafetyPresentation.diagnosticLine(it)"))
-        assertTrue(server.contains("/assets/power-safety.js"))
+        assertTrue(server.contains("assets/power-safety.js"))
         assertTrue(interaction.contains("form[data-power-safety-repair]"))
         assertTrue(interaction.contains("form[data-power-safety-acknowledge]"))
         assertTrue(interaction.contains("body.error === 'approval-required'"))
