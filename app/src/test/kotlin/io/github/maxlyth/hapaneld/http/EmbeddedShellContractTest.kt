@@ -20,7 +20,8 @@ class EmbeddedShellContractTest {
 
     @Test fun `the shell omits the header and switcher only when embedded`() {
         val shell = functionBody("pageShell")
-        assertTrue(shell.contains("val header = if (embed != null) \"\" else"))
+        assertTrue(shell.contains("val header = if (embed != null) \"\"\"<span id=\"pswitch\" hidden data-self-id=\"\$panelId\" data-self-name=\"\$friendlyName\"></span>\"\"\" else"))
+        assertTrue("identity attributes are escaped", shell.contains("val friendlyName = esc(rawFriendlyName)") && shell.contains("val panelId = esc(rawPanelId)"))
         assertTrue(shell.contains("val switcher = if (embed != null) \"\" else"))
         assertEquals("the switcher script is emitted only through the LAN branch", 1, Regex("assets/switcher.js").findAll(shell).count())
         assertTrue(shell.contains("<div class=\"topbar\">\$header\${navBar(active, strings, preserveExplicitEnglish, embed?.hiddenTabs.orEmpty())}</div>"))
