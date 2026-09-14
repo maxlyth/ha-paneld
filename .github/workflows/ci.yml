@@ -41,18 +41,15 @@ jobs:
             # rest of the split is release-only.
             tasks: ":app:processDebugManifest :app:testReleaseUnitTest"
             apks: "no"
-          - name: lint
-            tasks: ":app:lintDebug"
-            apks: "no"
           # The debug and release APKs share almost no tasks, so building them on separate runners
           # halves the longest Android split.
           - name: assemble debug
             tasks: ":app:assembleDebug :app:assembleDebugAndroidTest"
             apks: "debug"
           - name: assemble release
-            # The lint split analyses the same sources in full, and release.yml still runs the release
-            # lint pass before publishing, so CI skips it here.
-            tasks: ":app:assembleRelease -x :app:lintVitalRelease"
+            # Full lint runs out of band in lint.yml (nightly, on demand and beside every release tag). The
+            # release build's fatal lint pass stays here, so a fatal issue still fails CI.
+            tasks: ":app:assembleRelease"
             apks: "release"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
