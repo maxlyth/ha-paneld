@@ -105,6 +105,13 @@ jobs:
               :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease
             apks: both
     steps: &android-steps
+      # The Gradle step runs as root and hands the tree back in an EXIT trap, but a cancelled run (a newer
+      # push supersedes it) is killed before the trap runs. On a reused workspace the root-owned build
+      # outputs then stop checkout from cleaning it, so repair ownership before checking out.
+      - name: Reclaim the workspace from a cancelled run
+        if: runner.environment != 'github-hosted'
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" 2>/dev/null || true
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
