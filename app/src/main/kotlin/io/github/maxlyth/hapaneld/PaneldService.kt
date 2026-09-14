@@ -1655,6 +1655,8 @@ class PaneldService : Service() {
             // One-line EFR32 radio status for the Install-tab Radio card; null when this panel has no radio.
             radioStatus = { if (profile.zigbeeGatewayDir != null) zigbeeHealth.snapshot() else null },
             camera = camera,
+            panelAssistantTransportFacts = { panelAssistantTransport.facts() },
+            releasePanelAssistantTransport = { panelAssistantTransport.releaseToMqtt() },
             // Captures the FIELD, not a snapshot, so it follows reconfigure()'s bridge reassignment.
             // A bridge generation built from credentials that no longer match the persisted config is
             // mid-swap: whatever state it reports was earned by the OLD credentials (on a fresh panel,

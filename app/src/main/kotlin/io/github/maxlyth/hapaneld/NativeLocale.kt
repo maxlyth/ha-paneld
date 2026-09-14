@@ -88,6 +88,7 @@ internal fun Context.localizedLabel(operation: SensitiveOperation): String = get
         SensitiveOperation.POWER_SAFETY_ACKNOWLEDGEMENT -> R.string.approval_op_power_safety_ack
         SensitiveOperation.GUARD_DB_MAINTENANCE -> R.string.approval_op_guard_db
         SensitiveOperation.CAMERA_ENABLE -> R.string.approval_op_camera_enable
+        SensitiveOperation.TRANSPORT_RELEASE -> R.string.approval_op_transport_release
     },
 )
 

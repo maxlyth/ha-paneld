@@ -62,6 +62,7 @@
     <string name="approval_op_power_safety_ack">Genau einen Sicherheitshinweis zur Stromversorgung ausblenden</string>
     <string name="approval_op_guard_db">Datenbankwiederherstellung fortsetzen</string>
     <string name="approval_op_camera_enable">Panel-Kamera aktivieren</string>
+    <string name="approval_op_transport_release">Panel-Steuerung an MQTT zurückgeben</string>
 
     <string name="set_up">Einrichten</string>
     <string name="open_configuration">Konfiguration öffnen</string>

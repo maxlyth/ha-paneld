@@ -72,6 +72,7 @@ class HardenedApprovalAssetContractTest {
             "POST /api/v1/tame",
             "POST /api/v1/display/density",
             "POST /api/v1/power-safety/repair",
+            "POST /api/v1/panel-assistant/transport/release",
         )
         protected.forEach { route ->
             val (method, path) = route.split(" ", limit = 2)

@@ -60,6 +60,7 @@
     <string name="approval_op_power_safety_ack">Приховати одне конкретне попередження щодо безпеки при використанні джерела живлення</string>
     <string name="approval_op_guard_db">Розширене відновлення бази даних</string>
     <string name="approval_op_camera_enable">Увімкнути камеру панелі</string>
+    <string name="approval_op_transport_release">Повернути керування панеллю до MQTT</string>
     <string name="set_up">Налаштування</string>
     <string name="open_configuration">Відкрити конфігурацію</string>
     <string name="panel_not_set_up">Ця панель ще не налаштована.</string>

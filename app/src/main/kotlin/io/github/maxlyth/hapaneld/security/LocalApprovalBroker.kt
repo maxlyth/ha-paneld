@@ -25,6 +25,8 @@ internal enum class SensitiveOperation(val label: String) {
     POWER_SAFETY_ACKNOWLEDGEMENT("Hide one exact power safety caution"),
     GUARD_DB_MAINTENANCE("Advance database recovery"),
     CAMERA_ENABLE("Enable the panel camera"),
+    // Migration scaffolding for moving entities off MQTT; it is deleted with MQTT.
+    TRANSPORT_RELEASE("Hand panel control back to MQTT"),
 }
 
 internal data class PendingApproval(

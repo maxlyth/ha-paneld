@@ -52,6 +52,10 @@ class ApiRouteSpecContractTest {
         }
         active += "GET /health"
 
+        val panelAssistantTransport =
+            File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/PanelAssistantTransportRoutes.kt").readText()
+        literalRoutes(panelAssistantTransport).mapTo(active) { (method, path) -> "$method /api/v1$path" }
+
         val guardDb = File(root, "src/main/kotlin/io/github/maxlyth/hapaneld/http/GuardDbBootstrapRoutes.kt").readText()
         literalRoutes(guardDb).mapTo(active) { (method, path) ->
             "$method /api/v1/guard-db$path"

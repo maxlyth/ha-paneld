@@ -60,6 +60,7 @@
     <string name="approval_op_power_safety_ack">Ukryj jedno konkretne ostrzeżenie dotyczące bezpieczeństwa zasilania</string>
     <string name="approval_op_guard_db">Zaawansowane odzyskiwanie bazy danych</string>
     <string name="approval_op_camera_enable">Włącz kamerę w panelu</string>
+    <string name="approval_op_transport_release">Przywróć sterowanie panelem przez MQTT</string>
     <string name="set_up">Konfiguracja</string>
     <string name="open_configuration">Otwórz konfigurację</string>
     <string name="panel_not_set_up">Ten panel nie został jeszcze skonfigurowany.</string>

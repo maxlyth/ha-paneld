@@ -1586,6 +1586,10 @@ class PaneldServer internal constructor(
     // unavailable; the voice-coordinator lane injects the real pipeline-runtime trigger.
     private val voiceTest: io.github.maxlyth.hapaneld.assist.VoiceTestTrigger =
         io.github.maxlyth.hapaneld.assist.VoiceTestTrigger.NOT_WIRED,
+    // The native transport's persisted authority, discovery value and phase, and the panel-local release
+    // that hands entities and commands back to MQTT. Migration scaffolding; deleted with MQTT.
+    private val panelAssistantTransportFacts: () -> io.github.maxlyth.hapaneld.panelassistant.PanelAssistantTransportFacts,
+    private val releasePanelAssistantTransport: () -> Unit,
 ) {
     private suspend fun authorizeSensitive(
         call: ApplicationCall,
@@ -1974,6 +1978,13 @@ class PaneldServer internal constructor(
                                 InstallProgress.finishOnFailure(progress, job)
                             },
                         ),
+                    ),
+                )
+                panelAssistantTransportRoutes(
+                    PanelAssistantTransportRouteDependencies(
+                        facts = panelAssistantTransportFacts,
+                        release = releasePanelAssistantTransport,
+                        authorize = ::authorizeSensitive,
                     ),
                 )
                 guardDbBootstrapRoutes(

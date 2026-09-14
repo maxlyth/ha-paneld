@@ -60,6 +60,7 @@
     <string name="approval_op_power_safety_ack">Verberg één specifieke veiligheidswaarschuwing over de stroomvoorziening</string>
     <string name="approval_op_guard_db">Geavanceerd databaseherstel</string>
     <string name="approval_op_camera_enable">Schakel de camera van het paneel in</string>
+    <string name="approval_op_transport_release">Geef de bediening van het paneel terug aan MQTT</string>
     <string name="set_up">Instellen</string>
     <string name="open_configuration">Open configuratie</string>
     <string name="panel_not_set_up">Dit paneel is nog niet ingesteld.</string>

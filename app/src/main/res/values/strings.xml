@@ -64,6 +64,7 @@
     <string name="approval_op_power_safety_ack">Hide one exact power safety caution</string>
     <string name="approval_op_guard_db">Advance database recovery</string>
     <string name="approval_op_camera_enable">Enable the panel camera</string>
+    <string name="approval_op_transport_release">Hand panel control back to MQTT</string>
 
     <string name="set_up">Set up</string>
     <string name="open_configuration">Open configuration</string>

@@ -62,6 +62,7 @@
     <string name="approval_op_power_safety_ack">Ocultar un aviso concreto de seguridad eléctrica</string>
     <string name="approval_op_guard_db">Avanzar la recuperación de la base de datos</string>
     <string name="approval_op_camera_enable">Activar la cámara del panel</string>
+    <string name="approval_op_transport_release">Devolver el control del panel a MQTT</string>
 
     <string name="set_up">Configurar</string>
     <string name="open_configuration">Abrir configuración</string>

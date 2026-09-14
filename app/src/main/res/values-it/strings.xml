@@ -62,6 +62,7 @@
     <string name="approval_op_power_safety_ack">Nascondi questa specifica avvertenza sulla sicurezza dell’alimentazione</string>
     <string name="approval_op_guard_db">Prosegui con il ripristino del database</string>
     <string name="approval_op_camera_enable">Attiva fotocamera del pannello</string>
+    <string name="approval_op_transport_release">Restituisci il controllo del pannello a MQTT</string>
 
     <string name="set_up">Configura</string>
     <string name="open_configuration">Apri configurazione</string>

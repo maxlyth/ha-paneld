@@ -62,6 +62,7 @@
     <string name="approval_op_power_safety_ack">隐藏一条特定的电源安全警告</string>
     <string name="approval_op_guard_db">推进数据库恢复</string>
     <string name="approval_op_camera_enable">启用面板摄像头</string>
+    <string name="approval_op_transport_release">将面板控制权交还给 MQTT</string>
 
     <string name="set_up">初始设置</string>
     <string name="open_configuration">打开设置</string>
