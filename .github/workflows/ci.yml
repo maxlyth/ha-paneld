@@ -311,8 +311,9 @@ jobs:
             --target-dir app/src/main/assets/i18n
 
 
-  # The documentation-localization tooling tests take about as long as the shell contracts they used
-  # to precede, so they run beside them instead. Only this job needs the complete Git history.
+  # The documentation-localization tooling tests run beside the shell contracts, and only this job needs
+  # the complete Git history. Documentation translation never gates a release, so this job is not part of
+  # the Host contracts check that release.yml requires.
   docs-localization:
     name: Documentation localization
     runs-on: ubuntu-24.04
@@ -353,43 +354,44 @@ jobs:
   # them in process barely parallelised on a two-core image, so each shard
   # gets a runner and the wall time is the longest shard, not their sum.
   provisioning:
-    name: Provisioning ${{ matrix.shard }}
+    # Fourteen single-shard jobs plus the other CI and CodeQL jobs exceeded GitHub's twenty concurrent
+    # jobs, so shards queued for up to two minutes behind each other. Grouping keeps every group within
+    # the longest shard's time on a four-core runner while leaving the workflows under that ceiling.
+    name: Provisioning ${{ matrix.group }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard:
-          - database-host
-          - database-runtime
-          - install-export
-          - install-runtime
-          - helper-transaction
-          - release-integrity
-          - renderer-seeding
-          - install-finish
-          - backup
-          - publication
-          - database-authority
-          - fleet-installer
-          - host-reclamation
-          - git-bash
+        include:
+          - group: database-authority
+            shards: database-authority publication git-bash
+          - group: install-runtime
+            shards: install-runtime database-runtime
+          - group: fleet-installer
+            shards: fleet-installer host-reclamation
+          - group: database-host
+            shards: database-host backup
+          - group: helper-transaction
+            shards: helper-transaction install-finish
+          - group: install-export
+            shards: install-export renderer-seeding release-integrity
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Run provisioning shard
+      - name: Run provisioning shards
         run: |
           results="$RUNNER_TEMP/provisioning-results"
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" "$results" || true' EXIT
-          sudo -E bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$results" "${{ matrix.shard }}"
+          sudo -E bash scripts/tests/provision_gate_parallel.sh --jobs 3 --output "$results" ${{ matrix.shards }}
 
       - name: Retain provisioning shard evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: provisioning-${{ matrix.shard }}
+          name: provisioning-${{ matrix.group }}
           path: ${{ runner.temp }}/provisioning-results
           if-no-files-found: error
 
@@ -397,7 +399,7 @@ jobs:
     # Keep the stable check name consumed by release.yml. It turns green only when
     # the shell contracts and the complete provisioning aggregate both pass.
     name: Host contracts
-    needs: [provisioning, host-contracts, docs-localization]
+    needs: [provisioning, host-contracts]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -419,11 +421,9 @@ jobs:
       - name: Require host and provisioning jobs
         env:
           HOST_RESULT: ${{ needs.host-contracts.result }}
-          DOCS_RESULT: ${{ needs.docs-localization.result }}
           PROVISIONING_RESULT: ${{ needs.provisioning.result }}
         run: |
           test "$HOST_RESULT" = success
-          test "$DOCS_RESULT" = success
           test "$PROVISIONING_RESULT" = success
 
   dependency-integrity:
