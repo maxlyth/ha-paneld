@@ -1248,6 +1248,11 @@ class PaneldService : Service() {
             shadow = panelAssistantShadow,
             commands = panelAssistantCommands,
             onAuthority = config::setPanelAssistantAuthority,
+            mqttDiscovery = config::panelAssistantMqttDiscovery,
+            onMqttDiscovery = { value ->
+                config.setPanelAssistantMqttDiscovery(value)
+                runtime.observe()?.value?.mqtt?.refreshPanelAssistantDiscovery()
+            },
         )
         haLifecycle = HaLifecycleCoordinator(
             // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to

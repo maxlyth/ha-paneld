@@ -3884,6 +3884,10 @@ internal class MqttBridge(
 
     private fun publishDiscovery(capabilitySnapshot: Capabilities?) {
         val channelShape = ensureCapabilityChannels(capabilitySnapshot).possible
+        if (config.panelAssistantMqttDiscovery == PanelAssistantTransportProtocol.MQTT_DISCOVERY_WITHDRAW) {
+            withdrawDiscovery()
+            return
+        }
         fun exposable(
             key: String,
             component: String,
@@ -4208,6 +4212,30 @@ internal class MqttBridge(
     // on exactly what we announced (no hardcoded drift). Thread-safe: publishConfig runs on the MQTT
     // thread; prune/clear may run from reconfigure on another thread.
     private val publishedConfigTopics = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /**
+     * The Panel Assistant integration holds this panel's entities natively, so every discovery topic this
+     * panel has ever announced receives a retained empty payload instead of a config: Home Assistant removes
+     * the MQTT entities and keeps them removed across reconnects and its own restarts, because this runs
+     * wherever discovery would. State, availability and the command subscription are untouched; commands
+     * are already refused under the native authority. The value is persisted, so an outage or an
+     * uninstalled integration never brings the entities back; only a hello reply that releases them does.
+     */
+    private fun withdrawDiscovery() {
+        lastPublishedConfigUrl = configUrl()?.takeIf(String::isNotBlank)
+        // The update entities converge on the heartbeat only while an announcement described them.
+        softwareUpdateDiscovery = null
+        // The historical superset plus whatever this generation announced outside it.
+        val topics = knownConfigTopics() + synchronized(publishedConfigTopics) { publishedConfigTopics.toSet() }
+        topics.forEach { topic ->
+            publishedConfigTopics.add(topic)
+            publish(topic, "", retain = true)
+        }
+        Log.i(TAG, "MQTT discovery withdrawn: ${topics.size} tombstones for $panel")
+    }
+
+    /** The persisted discovery value changed under a live connection; the next connect reads it anyway. */
+    internal fun refreshPanelAssistantDiscovery() = requestReAnnounce()
 
     private fun publishConfig(component: String, objectId: String, payload: String) {
         val topic = "homeassistant/$component/$objectId/config"

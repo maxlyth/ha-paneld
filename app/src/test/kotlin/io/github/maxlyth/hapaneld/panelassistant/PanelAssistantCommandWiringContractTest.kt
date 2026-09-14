@@ -18,10 +18,15 @@ class PanelAssistantCommandWiringContractTest {
     private val service by lazy { TestSources.kotlin("PaneldService.kt").readText() }
     private val bridge by lazy { TestSources.kotlin("MqttBridge.kt").readText() }
 
-    @Test fun theOwnerRunsCommandsOnTheBridgeAndPersistsEveryAuthority() {
+    @Test fun theOwnerRunsCommandsOnTheBridgeAndPersistsEveryAuthorityAndDiscoveryClaim() {
         val owner = service.substringAfter("panelAssistantTransport = PanelAssistantTransportOwner(").substringBefore("\n        )\n")
         assertTrue(owner, owner.contains("commands = panelAssistantCommands,"))
         assertTrue(owner, owner.contains("onAuthority = config::setPanelAssistantAuthority,"))
+        assertTrue(owner, owner.contains("mqttDiscovery = config::panelAssistantMqttDiscovery,"))
+        val onDiscovery = owner.substringAfter("onMqttDiscovery = { value ->").substringBefore("\n            },")
+        assertTrue(onDiscovery, onDiscovery.contains("config.setPanelAssistantMqttDiscovery(value)"))
+        assertTrue(onDiscovery, onDiscovery.contains("runtime.observe()?.value?.mqtt?.refreshPanelAssistantDiscovery()"))
+        assertTrue(bridge.contains("internal fun refreshPanelAssistantDiscovery() = requestReAnnounce()"))
         val sink = service.substringAfter("private val panelAssistantCommands = object : PanelAssistantCommandSink {")
             .substringBefore("\n    }\n")
         assertTrue(sink, sink.contains("bridge.submitPanelAssistantCommand(command, done)"))

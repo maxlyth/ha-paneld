@@ -10,6 +10,7 @@ import io.github.maxlyth.hapaneld.BuildConfig
 import io.github.maxlyth.hapaneld.Config
 import io.github.maxlyth.hapaneld.MqttAddressFamily
 import io.github.maxlyth.hapaneld.MqttBridge
+import io.github.maxlyth.hapaneld.mqttKnownConfigTopics
 import io.github.maxlyth.hapaneld.config.Capabilities
 import io.github.maxlyth.hapaneld.control.AdbController
 import io.github.maxlyth.hapaneld.control.AutoBrightnessController
@@ -145,144 +146,19 @@ class MqttWireGoldenTest {
         fun check(condition: Boolean, message: String) {
             if (!condition) problems += message
         }
-        val tmp = Files.createTempDirectory("mqtt-wire-golden").toFile()
-        val prefs = MemoryPreferences()
-        val context = FakeContext(tmp, prefs)
-        val config = newConfig(prefs, context.contentResolver)
-        config.setHardware("Golden Manufacturing", "Golden Panel")
-        config.setAutoSleep(true)
-        // Most config entities are opt-in. Expose a representative set so their discovery payloads, not
-        // only their tombstones, are on the wire. Host-metric diagnostics stay hidden: they read /proc.
-        listOf(
-            "diag_wifi_outages_24h", "voice_state", "voice_enabled", "wake_on_wave", "auto_sleep",
-            "auto_sleep_activity", "touch_sound", "kiosk_lock", "auto_brightness", "navbar_mode",
-            "companion_auto_update", "companion_update_channel", "webview_auto_update",
-        ).forEach { config.setHaExposed(it, true) }
-
-        val transport = RecordingTransport()
-        val sysfs = SysfsRootShell()
-        val relay = RelayController(
-            fakeProfile(relayBase = RELAY_BASE, buttonLedGpioBase = LED_GPIO_BASE),
-            sysfs,
-        )
-        val brightness = BrightnessController(context, FakeRootShell(), FakeDaemon())
-        val screen = ScreenController(
-            FakeBacklight(160), FakeScreenPower(), FakeRootShell(), FakeDaemon(), FakeWakeTap(),
-            ScreenOff.BRIGHTNESS_ZERO, nap = {},
-        )
-        val system = SystemController(FakeSystemEnv(), FakeRootShell(), FakeDaemon(), builtinForeground = { false })
-        val led = object : LedController {
-            override fun available() = true
-            override fun colorCapable() = true
-            override fun setRgb(r: Int, g: Int, b: Int) = true
-            override fun off() = true
-        }
-        val bootChime = BootChimeController(
-            configured = { false },
-            setConfigured = {},
-            stateStore = object : BootChimeStateStore {
-                override fun load(): BootChimeState? = null
-                override fun save(state: BootChimeState) = true
-                override fun clear() = true
-            },
-            hardware = object : BootChimeHardware {
-                override fun capture(): BootChimeState? = null
-                override fun silence() = ControlApplyOutcome.APPLIED
-                override fun restore(state: BootChimeState) = ControlApplyOutcome.APPLIED
-            },
-        )
-        val capabilities = Capabilities(
-            hasProximity = true,
-            hasLearnedProximity = true,
-            hasLight = true,
-            hasTemperature = true,
-            hasHumidity = true,
-            hasButtonBacklight = true,
-            hasMicrophone = true,
-            buttonsEnabled = true,
-            relays = 2,
-            buttonLeds = 1,
-            canInstallVerifiedApps = true,
-            hasWifi = true,
-            companionInstalled = true,
-            webViewManaged = true,
-        )
-        val storage = java.util.concurrent.atomic.AtomicReference(storageSnapshot(StorageHealthSeverity.HEALTHY, walBytes = 4_096))
-        val autoSleepConfigChanges = AtomicInteger()
-        val companionUpdateRequests = AtomicInteger()
-
-        val bridge = MqttBridge(
-            config = config,
-            brightness = brightness,
-            screen = screen,
-            led = led,
-            ledEffect = LedEffectController(led),
-            navigate = NavigateController(context),
-            volume = VolumeController(context),
-            system = system,
-            // Never reached by the scenario: the navbar command below takes the capability refusal path.
-            navbar = allocate(NavbarController::class.java),
-            watchdog = WatchdogController(system, config),
-            // Never reached: touch_sound needs an Android audio stack, so no touch_sound command is sent.
-            touchSound = allocate(TouchSoundController::class.java),
-            bootChime = bootChime,
-            zigbee = ZigbeeController(fakeProfile(), FakeRootShell()),
-            relay = relay,
-            // Not reached: the capability snapshot reports no CPU governors.
-            cpu = allocate(CpuController::class.java),
-            // Only its best-effort reconnect reassertion runs, on a worker that logs and discards failure.
-            adb = allocate(AdbController::class.java),
-            buttonsEnabled = true,
-            hasEvdevButtons = false,
-            capabilities = { capabilities },
-            hasLight = true,
-            hasProximity = true,
-            hasTemperature = true,
-            hasHumidity = true,
-            hasCht8305 = false,
-            hasButtonBacklight = true,
-            hasMicrophone = true,
-            // Never reached: no screen brightness or auto-brightness command is sent.
-            autoBright = allocate(AutoBrightnessController::class.java),
-            configUrl = { "http://192.0.2.10:8888/" },
-            onUpdateCompanion = { companionUpdateRequests.incrementAndGet() },
-            onSelfUpdateChannelChange = { _, _ -> false },
-            softwareUpdateSources = {
-                SoftwareUpdateSources(
-                    paneldVersion = "1.2.3",
-                    paneldChannel = "stable",
-                    paneldTarget = SoftwareTarget("1.2.4", "v1.2.4", "https://example.invalid/releases/v1.2.4"),
-                    companionMinimalVersion = "2026.1.1-minimal",
-                    companionFullVersion = null,
-                    companionChannel = "stable",
-                    companionCap = null,
-                    companionTarget = null,
-                    runningOperation = null,
-                    panelAssistantOwnsPaneldUpdate = false,
-                )
-            },
-            onDirectKioskSetting = { true },
-            storageHealth = { storage.get() },
-            wifiOutages = { WifiOutageCounts(last24h = 3) },
-            learnedProximityEligibility = { true },
-            onAutoSleepConfigChanged = { autoSleepConfigChanges.incrementAndGet() },
-            runtimePanelId = PANEL,
-            runtimeFriendlyName = "Golden panel",
-            runtimeBroker = "tcp://127.0.0.1:1883",
-            runtimeMqttUser = "panel-user",
-            runtimeMqttPassword = "panel-password",
-            runtimeMqttAddressFamily = "Automatic",
-            transport = transport,
-        )
+        val rig = rig()
+        val transport = rig.transport
+        val sysfs = rig.sysfs
+        val bridge = rig.bridge
+        val storage = rig.storage
+        val autoSleepConfigChanges = rig.autoSleepConfigChanges
+        val companionUpdateRequests = rig.companionUpdateRequests
 
         try {
             // ---- connect announcement ----
             transport.mark("# announce")
-            bridge.start()
-            transport.awaitPublication(0, "availability online", timeoutSeconds = 60) { it.topic() == "ha-paneld/$PANEL/availability" && it.decodedPayload() == "online" }
-            transport.drain()
-            check(awaitCondition { bridge.isConnected() }, "announcement was never acknowledged")
-            transport.drain()
+            rig.announce()
+            check(bridge.isConnected(), "announcement was never acknowledged")
 
             // ---- command and local-update burst ----
             transport.mark("# burst")
@@ -340,10 +216,234 @@ class MqttWireGoldenTest {
             check(companionUpdateRequests.get() == 1, "update_companion action ran ${companionUpdateRequests.get()} times, not once")
             println("commands delivered: ${transport.delivered.get()}")
         } finally {
+            rig.close()
+        }
+        return transport.snapshot()
+    }
+
+    // ---- withdrawn discovery ----
+
+    @Test(timeout = 180_000)
+    fun `a withdrawn panel tombstones every discovery topic it ever announced and publishes no config`() {
+        val rig = rig { it.setPanelAssistantMqttDiscovery("withdraw") }
+        try {
+            rig.transport.mark("# announce")
+            rig.announce()
+            // The address the announcement evaluated is recorded even though no config carried it, so
+            // the network callback's address check does not re-announce.
+            rig.bridge.refreshDiscoveryAddress()
+            rig.transport.drain()
+            val lines = rig.transport.snapshot()
+            val configs = lines.filter { it.isPublication() && it.topic().startsWith("homeassistant/") }
+            assertEquals(
+                "one retained tombstone per historical config topic, and nothing else on the discovery prefix",
+                mqttKnownConfigTopics(PANEL).map { "true\t$it\t$EMPTY_PAYLOAD" }.sorted(),
+                configs.sorted(),
+            )
+            assertTrue("state topics still publish while withdrawn", lines.any { it.isPublication() && it.topic() == "ha-paneld/$PANEL/screen/state" })
+            assertTrue("availability still publishes while withdrawn", lines.any { it.isPublication() && it.topic() == "ha-paneld/$PANEL/availability" && it.decodedPayload() == "online" })
+            assertTrue("the command subscription is unchanged", lines.contains("subscribe\tha-paneld/$PANEL/+/set"))
+            assertEquals("dropped publications", 0, lines.count { it.startsWith("# dropped") })
+        } finally {
+            rig.close()
+        }
+    }
+
+    @Test(timeout = 180_000)
+    fun `withdrawing a live panel tombstones each topic once and releasing it announces the same configs again`() {
+        val rig = rig()
+        try {
+            rig.transport.mark("# announce")
+            rig.announce()
+            val announced = rig.transport.snapshot().filter { it.isConfig() }.toSortedSet()
+            assertTrue("the announcement published configs", announced.isNotEmpty())
+
+            rig.transport.mark("# withdraw")
+            val withdrawFrom = rig.transport.size()
+            rig.config.setPanelAssistantMqttDiscovery("withdraw")
+            rig.bridge.refreshPanelAssistantDiscovery()
+            rig.transport.awaitPublication(withdrawFrom, "discovery tombstones") { it.topic().startsWith("homeassistant/") && it.decodedPayload().isEmpty() }
+            rig.transport.drain()
+            val withdrawn = rig.transport.snapshot().drop(withdrawFrom).filter { it.isPublication() && it.topic().startsWith("homeassistant/") }
+            assertEquals(
+                "one re-announce: every known topic tombstoned exactly once, no config",
+                mqttKnownConfigTopics(PANEL).map { "true\t$it\t$EMPTY_PAYLOAD" }.sorted(),
+                withdrawn.sorted(),
+            )
+            // An update entity's shape changing while withdrawn converges nothing: its config stays removed.
+            val shapeFrom = rig.transport.size()
+            rig.updateSources.set(updateSources(paneldTarget = null))
+            rig.bridge.publishSoftwareUpdates()
+            rig.transport.drain()
+            assertEquals(
+                "no discovery publication for a reshaped update entity while withdrawn",
+                emptyList<String>(),
+                rig.transport.snapshot().drop(shapeFrom).filter { it.isPublication() && it.topic().startsWith("homeassistant/") },
+            )
+
+            rig.transport.mark("# release")
+            rig.updateSources.set(updateSources())
+            val releaseFrom = rig.transport.size()
+            rig.config.setPanelAssistantMqttDiscovery("announce")
+            rig.bridge.refreshPanelAssistantDiscovery()
+            rig.transport.awaitPublication(releaseFrom, "discovery configs") { it.isConfig() }
+            rig.transport.drain()
+            val released = rig.transport.snapshot().drop(releaseFrom)
+            assertEquals("the release announces exactly the configs the connect announcement did", announced, released.filter { it.isConfig() }.toSortedSet())
+            assertEquals("dropped publications", 0, rig.transport.snapshot().count { it.startsWith("# dropped") })
+        } finally {
+            rig.close()
+        }
+    }
+
+    // ---- rig ----
+
+    /** The real bridge on fake hardware and a recording transport; [announce] runs one connect to quiescence. */
+    private class Rig(
+        val tmp: File,
+        val config: Config,
+        val transport: RecordingTransport,
+        val sysfs: SysfsRootShell,
+        val bridge: MqttBridge,
+        val storage: java.util.concurrent.atomic.AtomicReference<StorageHealthSnapshot>,
+        val updateSources: java.util.concurrent.atomic.AtomicReference<SoftwareUpdateSources>,
+        val autoSleepConfigChanges: AtomicInteger,
+        val companionUpdateRequests: AtomicInteger,
+    ) {
+        fun announce() {
+            bridge.start()
+            transport.awaitPublication(0, "availability online", timeoutSeconds = 60) { it.topic() == "ha-paneld/$PANEL/availability" && it.decodedPayload() == "online" }
+            transport.drain()
+            awaitCondition { bridge.isConnected() }
+            transport.drain()
+        }
+
+        fun close() {
             runCatching { bridge.stop(MonotonicDeadline(1_000)) }
             tmp.deleteRecursively()
         }
-        return transport.snapshot()
+    }
+
+    private fun rig(configure: (Config) -> Unit = {}): Rig {
+        val tmp = Files.createTempDirectory("mqtt-wire-golden").toFile()
+        val prefs = MemoryPreferences()
+        val context = FakeContext(tmp, prefs)
+        val config = newConfig(prefs, context.contentResolver)
+        config.setHardware("Golden Manufacturing", "Golden Panel")
+        config.setAutoSleep(true)
+        // Most config entities are opt-in. Expose a representative set so their discovery payloads, not
+        // only their tombstones, are on the wire. Host-metric diagnostics stay hidden: they read /proc.
+        listOf(
+            "diag_wifi_outages_24h", "voice_state", "voice_enabled", "wake_on_wave", "auto_sleep",
+            "auto_sleep_activity", "touch_sound", "kiosk_lock", "auto_brightness", "navbar_mode",
+            "companion_auto_update", "companion_update_channel", "webview_auto_update",
+        ).forEach { config.setHaExposed(it, true) }
+        configure(config)
+
+        val transport = RecordingTransport()
+        val sysfs = SysfsRootShell()
+        val relay = RelayController(
+            fakeProfile(relayBase = RELAY_BASE, buttonLedGpioBase = LED_GPIO_BASE),
+            sysfs,
+        )
+        val brightness = BrightnessController(context, FakeRootShell(), FakeDaemon())
+        val screen = ScreenController(
+            FakeBacklight(160), FakeScreenPower(), FakeRootShell(), FakeDaemon(), FakeWakeTap(),
+            ScreenOff.BRIGHTNESS_ZERO, nap = {},
+        )
+        val system = SystemController(FakeSystemEnv(), FakeRootShell(), FakeDaemon(), builtinForeground = { false })
+        val led = object : LedController {
+            override fun available() = true
+            override fun colorCapable() = true
+            override fun setRgb(r: Int, g: Int, b: Int) = true
+            override fun off() = true
+        }
+        val bootChime = BootChimeController(
+            configured = { false },
+            setConfigured = {},
+            stateStore = object : BootChimeStateStore {
+                override fun load(): BootChimeState? = null
+                override fun save(state: BootChimeState) = true
+                override fun clear() = true
+            },
+            hardware = object : BootChimeHardware {
+                override fun capture(): BootChimeState? = null
+                override fun silence() = ControlApplyOutcome.APPLIED
+                override fun restore(state: BootChimeState) = ControlApplyOutcome.APPLIED
+            },
+        )
+        val capabilities = Capabilities(
+            hasProximity = true,
+            hasLearnedProximity = true,
+            hasLight = true,
+            hasTemperature = true,
+            hasHumidity = true,
+            hasButtonBacklight = true,
+            hasMicrophone = true,
+            buttonsEnabled = true,
+            relays = 2,
+            buttonLeds = 1,
+            canInstallVerifiedApps = true,
+            hasWifi = true,
+            companionInstalled = true,
+            webViewManaged = true,
+        )
+        val storage = java.util.concurrent.atomic.AtomicReference(storageSnapshot(StorageHealthSeverity.HEALTHY, walBytes = 4_096))
+        val updateSources = java.util.concurrent.atomic.AtomicReference(updateSources())
+        val autoSleepConfigChanges = AtomicInteger()
+        val companionUpdateRequests = AtomicInteger()
+
+        val bridge = MqttBridge(
+            config = config,
+            brightness = brightness,
+            screen = screen,
+            led = led,
+            ledEffect = LedEffectController(led),
+            navigate = NavigateController(context),
+            volume = VolumeController(context),
+            system = system,
+            // Never reached by the scenario: the navbar command below takes the capability refusal path.
+            navbar = allocate(NavbarController::class.java),
+            watchdog = WatchdogController(system, config),
+            // Never reached: touch_sound needs an Android audio stack, so no touch_sound command is sent.
+            touchSound = allocate(TouchSoundController::class.java),
+            bootChime = bootChime,
+            zigbee = ZigbeeController(fakeProfile(), FakeRootShell()),
+            relay = relay,
+            // Not reached: the capability snapshot reports no CPU governors.
+            cpu = allocate(CpuController::class.java),
+            // Only its best-effort reconnect reassertion runs, on a worker that logs and discards failure.
+            adb = allocate(AdbController::class.java),
+            buttonsEnabled = true,
+            hasEvdevButtons = false,
+            capabilities = { capabilities },
+            hasLight = true,
+            hasProximity = true,
+            hasTemperature = true,
+            hasHumidity = true,
+            hasCht8305 = false,
+            hasButtonBacklight = true,
+            hasMicrophone = true,
+            // Never reached: no screen brightness or auto-brightness command is sent.
+            autoBright = allocate(AutoBrightnessController::class.java),
+            configUrl = { "http://192.0.2.10:8888/" },
+            onUpdateCompanion = { companionUpdateRequests.incrementAndGet() },
+            onSelfUpdateChannelChange = { _, _ -> false },
+            softwareUpdateSources = { updateSources.get() },
+            onDirectKioskSetting = { true },
+            storageHealth = { storage.get() },
+            wifiOutages = { WifiOutageCounts(last24h = 3) },
+            learnedProximityEligibility = { true },
+            onAutoSleepConfigChanged = { autoSleepConfigChanges.incrementAndGet() },
+            runtimePanelId = PANEL,
+            runtimeFriendlyName = "Golden panel",
+            runtimeBroker = "tcp://127.0.0.1:1883",
+            runtimeMqttUser = "panel-user",
+            runtimeMqttPassword = "panel-password",
+            runtimeMqttAddressFamily = "Automatic",
+            transport = transport,
+        )
+        return Rig(tmp, config, transport, sysfs, bridge, storage, updateSources, autoSleepConfigChanges, companionUpdateRequests)
     }
 
     private fun command(
@@ -660,6 +760,7 @@ class MqttWireGoldenTest {
 
         fun String.isPublication(): Boolean = startsWith("true\t") || startsWith("false\t")
         fun String.topic(): String = split('\t')[1]
+        fun String.isConfig(): Boolean = isPublication() && topic().startsWith("homeassistant/") && decodedPayload().isNotEmpty()
         fun String.decodedPayload(): String = split('\t')[2].let { encoded ->
             if (encoded == EMPTY_PAYLOAD) "" else String(Base64.getDecoder().decode(encoded), Charsets.UTF_8)
         }
@@ -674,6 +775,20 @@ class MqttWireGoldenTest {
             }
             return true
         }
+
+        fun updateSources(paneldTarget: SoftwareTarget? = SoftwareTarget("1.2.4", "v1.2.4", "https://example.invalid/releases/v1.2.4")) =
+            SoftwareUpdateSources(
+                paneldVersion = "1.2.3",
+                paneldChannel = "stable",
+                paneldTarget = paneldTarget,
+                companionMinimalVersion = "2026.1.1-minimal",
+                companionFullVersion = null,
+                companionChannel = "stable",
+                companionCap = null,
+                companionTarget = null,
+                runningOperation = null,
+                panelAssistantOwnsPaneldUpdate = false,
+            )
 
         fun storageSnapshot(severity: StorageHealthSeverity, walBytes: Long) = StorageHealthSnapshot(
             severity = severity,
