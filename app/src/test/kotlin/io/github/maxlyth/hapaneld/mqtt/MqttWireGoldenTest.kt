@@ -232,6 +232,8 @@ class MqttWireGoldenTest {
             // The address the announcement evaluated is recorded even though no config carried it, so
             // the network callback's address check does not re-announce.
             rig.bridge.refreshDiscoveryAddress()
+            // A re-announce is debounced, so give one time to fire before asserting that none did.
+            Thread.sleep(1_000L)
             rig.transport.drain()
             val lines = rig.transport.snapshot()
             val configs = lines.filter { it.isPublication() && it.topic().startsWith("homeassistant/") }
