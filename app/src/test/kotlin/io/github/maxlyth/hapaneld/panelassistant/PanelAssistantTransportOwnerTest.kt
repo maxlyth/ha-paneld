@@ -473,6 +473,22 @@ class PanelAssistantTransportOwnerTest {
         harness.owner.close()
     }
 
+    @Test fun sessionUnknownAnsweringACommandResultEndsASessionWithoutStateReporting() = runTest {
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("commands"), commandResultError = "session_unknown"))
+        val sink = ImmediateSink()
+        val harness = harness(connection, shadow = Shadow(listOf("relay1")).reporter, commands = sink)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        connection.inbound.trySend(Ha.command("c1", "relay1", true))
+        runCurrent()
+
+        assertEquals(1, sink.ran.size)
+        assertTrue(connection.sent.none { JSONObject(it).getString("type") == "panel_assistant/report_state" })
+        assertTrue(connection.closed)
+        assertEquals("session_closed", harness.owner.status.refusal)
+        harness.owner.close()
+    }
+
     @Test fun aHeldApprovalIsWithdrawnWhenTheSessionEnds() = runTest {
         val sink = ImmediateSink(result = PanelAssistantCommandResult.ApprovalPending("approval-1"))
         val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state", "commands", "approval")))
