@@ -175,9 +175,10 @@ class EmbedProofTest {
 
     @Test fun `a reinstalled key starts a fresh window`() {
         val ring = keyring()
-        assertTrue(ring.accept(7))
+        assertTrue(ring.accept(300))
         ring.install(key)
-        assertTrue(ring.accept(7))
+        // A new session's counters start again at 1, far below the old highest.
+        assertTrue(ring.accept(1))
     }
 
     @Test fun `the key never appears in its string form`() {
