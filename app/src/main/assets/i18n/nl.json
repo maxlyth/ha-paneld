@@ -10813,46 +10813,6 @@
    "sourceHash": "5dd303715b690c9ae7eee858506460c7b6aad6f57cb148b71d916186b435f51e",
    "state": "machine-draft"
   },
-  "shell.pa_sign_in_action": {
-   "text": "Inloggen",
-   "sourceHash": "bfd402b2f6f3812529b55596136d3a11c51616317e3b1cd999928e2d4eae7d3f",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_explanation": {
-   "text": "Home Assistant maakt een apart account voor dit paneel aan en logt het in. Je blijft op deze pagina.",
-   "sourceHash": "5620c25d136f177e05b1c20a1527d280060be971cbbdb907ae409cebb0ff219d",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_failed": {
-   "text": "Inloggen via Home Assistant is niet voltooid. Laad de pagina opnieuw en probeer het nog eens.",
-   "sourceHash": "23c7c69b7eea75e901a89ecee770f4121421a99d6e5c0d4fd73f98b90a7fa770",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_internal_url_missing": {
-   "text": "Home Assistant heeft geen adres op het lokale netwerk. Stel er een in bij de netwerkinstellingen van Home Assistant en probeer het daarna opnieuw.",
-   "sourceHash": "081a71ebf9556c066dd54ee8b6231187d390ee01b4b7ca89d0901b1f383b65cf",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_ok": {
-   "text": "Ingelogd bij Home Assistant. Dit paneel heeft nu een eigen Home Assistant-account.",
-   "sourceHash": "92044a9eacbcf2da717f83eccba4d47025650d7fde3dab26b495b7010f451043",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_panel_refused": {
-   "text": "Dit paneel heeft het inloggen via Home Assistant geweigerd. Probeer het opnieuw.",
-   "sourceHash": "591e7de210e0e4d8d09a72f240ceecff4893caa22fefb39cac6bc0201686d74a",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_panel_unreachable": {
-   "text": "Home Assistant kon dit paneel niet bereiken. Controleer of het paneel op het netwerk is en probeer het daarna opnieuw.",
-   "sourceHash": "a99675e13570c21fd324b387c2b0a1f686e90317342cda3dd1955a9fcc211882",
-   "state": "machine-draft"
-  },
-  "shell.pa_sign_in_title": {
-   "text": "Inloggen met Home Assistant",
-   "sourceHash": "4470afd85598af1553fc81e1d21d0ee0f708d54fe108e81e2a70f7fa36aab2cb",
-   "state": "machine-draft"
-  },
   "shell.panel_switcher.title": {
    "text": "Ga naar een andere ha-paneld paneel (behoudt de huidige weergave)",
    "sourceHash": "18099935ffa7e381e72b5614358626beac066ee14193dbccb31826af8f30abef",

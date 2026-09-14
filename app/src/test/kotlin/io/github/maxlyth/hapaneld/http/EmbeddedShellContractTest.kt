@@ -26,7 +26,6 @@ class EmbeddedShellContractTest {
         assertEquals("the switcher script is emitted only through the LAN branch", 1, Regex("assets/switcher.js").findAll(shell).count())
         assertTrue(shell.contains("<div class=\"topbar\">\$header\${navBar(active, strings, preserveExplicitEnglish, embed?.hiddenTabs.orEmpty())}</div>"))
         assertTrue(shell.contains("\$switcher<div id=\"halifebar\""))
-        assertTrue(shell.contains("if (embed != null) \"\"\"<script src=\"assets/panel-assistant-sign-in.js\"></script>\"\"\" else \"\""))
     }
 
     @Test fun `hidden tabs leave the tab bar but keep their routes`() {
@@ -70,12 +69,15 @@ class EmbeddedShellContractTest {
         assertEquals(1, Regex("""localStorage\.setItem\("selectedLanguage"""").findAll(configure).count())
     }
 
-    @Test fun `embedded sign-in posts to the sidebar endpoint and shows catalogue results`() {
-        val helper = File(assets, "panel-assistant-sign-in.js").readText()
-        assertTrue(helper.contains("fetch(\"_panel_assistant/sign-in\", { method: \"POST\""))
-        assertTrue(helper.contains("var key = \"shell.pa_sign_in_\" + code;"))
-        listOf("internal_url_missing", "panel_unreachable", "panel_refused").forEach { assertTrue(it, helper.contains("\"$it\"")) }
-        assertTrue(File(assets, "configure.js").readText().contains("window.panelAssistantSignIn().then("))
-        assertTrue(File(assets, "setup.js").readText().contains("window.panelAssistantSignIn().then("))
+    @Test fun `embedded pages offer no Home Assistant sign-in the sidebar cannot complete`() {
+        val configure = File(assets, "configure.js").readText()
+        val row = configure.substringAfter("function haOAuthRow() {").substringBefore("haOauthButton = el(\"button\"")
+        assertTrue(row.contains("if (EMBEDDED) {") && row.contains("haOauthButton = null;"))
+        assertFalse(row.contains("startHaOAuth"))
+        val setup = File(assets, "setup.js").readText()
+        assertTrue(setup.contains("var browserRoute = embedded ? null : el(\"div\", { class: \"wiz-route recommended\" }, ["))
+        val sources = (assets.listFiles { f -> f.extension == "js" }!!.map { it.readText() } + server).joinToString("\n")
+        listOf("_panel_assistant/sign-in", "panelAssistantSignIn", "pa_sign_in_").forEach { assertFalse(it, sources.contains(it)) }
+        assertFalse(File(assets, "panel-assistant-sign-in.js").exists())
     }
 }

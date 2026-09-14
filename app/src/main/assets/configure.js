@@ -424,8 +424,7 @@
 
   function syncHaOAuthAvailability() {
     if (!haOauthButton) return;
-    // From the sidebar, Home Assistant signs the panel in to its own internal URL; the typed URL is not used.
-    haOauthButton.disabled = !EMBEDDED && !validHaUrlForOAuth();
+    haOauthButton.disabled = !validHaUrlForOAuth();
     haOauthButton.title = haOauthButton.disabled ? i18nText("configure.oauth.valid_url_first", "Enter a valid Home Assistant URL first.") : "";
   }
 
@@ -443,34 +442,7 @@
     return copied ? Promise.resolve() : Promise.reject(new Error("copy unavailable"));
   }
 
-  function startPanelAssistantSignIn() {
-    haOauthButton.disabled = true;
-    haOauthLinks.hidden = true;
-    setHaOauthStatus(i18nText("configure.oauth.starting", "Starting sign-in…"), false);
-    window.panelAssistantSignIn().then(function (result) {
-      if (!result.ok) {
-        setHaOauthStatus(result.message, false);
-        syncHaOAuthAvailability();
-        return;
-      }
-      // As a completed LAN sign-in does, adopt the URL the credential was issued for: here Home Assistant
-      // chose its own internal URL, so read it back from the panel rather than from the form.
-      fetch("api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" })
-        .then(function (r) { return r.json(); })
-        .then(function (config) { var url = config && config.settings && config.settings.ha_url; if (typeof url === "string") haOauthTargetUrl = url; })
-        .catch(function () {})
-        .then(function () {
-          handleHaOAuthResult("success");
-          document.getElementById("cfg-msg").textContent = result.message;
-        });
-    });
-  }
-
   function startHaOAuth() {
-    if (EMBEDDED && haOauthButton && typeof window.panelAssistantSignIn === "function") {
-      startPanelAssistantSignIn();
-      return;
-    }
     if (!haOauthButton || !validHaUrlForOAuth()) return;
     var target = String(values.ha_url || "").trim().replace(/\/+$/, "");
     // Choosing browser sign-in supersedes a manually typed token immediately. This also prevents a
@@ -576,6 +548,17 @@
   }
 
   function haOAuthRow() {
+    // Browser sign-in returns to the panel's own address, which the Panel Assistant sidebar cannot reach, and
+    // the integration never signs a panel in itself. Embedded, show the connection state only; sign-in stays
+    // on the panel or its own web page.
+    if (EMBEDDED) {
+      haOauthButton = null;
+      haOauthStatus = el("div", { class: "ha-oauth-status", text: haConnectionStatusText() });
+      renderHaConnectionStatus();
+      return el("div", { class: "frow ha-oauth-row", id: "cfg-ha-oauth" }, [
+        el("div", { class: "flabel" }, [el("span", { text: i18nText("configure.oauth.browser_sign_in", "Browser sign-in") }), haOauthStatus])
+      ]);
+    }
     haOauthButton = el("button", {
       class: "pbtn", type: "button", text: haAuth.configured ? i18nText("configure.oauth.reconnect", "Reconnect") : i18nText("configure.oauth.connect", "Connect")
     });

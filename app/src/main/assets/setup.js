@@ -625,21 +625,10 @@
     // as whichever account you want (confirmed in Safari), so it is both the easiest to type on and gives
     // you control over the panel's account. The "connects as you" case is softened to "may", because it
     // only happens when this browser is already logged in to Home Assistant — not the common case.
-    // In Panel Assistant's sidebar, Home Assistant signs the panel in itself with a dedicated account.
-    var embedded = document.body.hasAttribute("data-embedded") && typeof window.panelAssistantSignIn === "function";
-    var browserRoute = embedded ? el("div", { class: "wiz-route recommended" }, [
-      el("b", { text: i18nText("shell.pa_sign_in_title", "Sign in with Home Assistant") }),
-      el("span", { class: "wiz-badge", text: i18nText("setup.sign_in.recommended", "recommended") }),
-      el("p", { text: i18nText("shell.pa_sign_in_explanation", "Home Assistant creates a separate account for this panel and signs it in. You stay on this page.") }),
-      el("button", { class: "wiz-primary", type: "button", text: i18nText("shell.pa_sign_in_action", "Sign in"), onclick: function (e) {
-        e.target.disabled = true;
-        window.panelAssistantSignIn().then(function (result) {
-          if (!result.ok) { e.target.disabled = false; stepErr(result.message); return; }
-          setLive(result.message);
-          refresh();
-        });
-      } }),
-    ]) : el("div", { class: "wiz-route recommended" }, [
+    // Browser sign-in returns to the panel's own address, which Panel Assistant's sidebar cannot reach, and the
+    // integration never signs a panel in; embedded, only the on-panel route is offered.
+    var embedded = document.body.hasAttribute("data-embedded");
+    var browserRoute = embedded ? null : el("div", { class: "wiz-route recommended" }, [
       el("b", { text: i18nText("setup.sign_in.browser.title", "Sign in from this browser") }),
       el("span", { class: "wiz-badge", text: i18nText("setup.sign_in.recommended", "recommended") }),
       el("p", { text: i18nText("setup.sign_in.browser.explanation", "You’ll get the Home Assistant login here — sign in as whichever account you want the panel to use. You’ll leave this page and come back automatically.") }),

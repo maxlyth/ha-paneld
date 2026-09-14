@@ -4252,7 +4252,7 @@ class PaneldServer internal constructor(
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="info.css">
 <script id="ha-i18n" type="application/json">${browserI18nPayload(strings, translationPrefixes)}</script>
-<script src="assets/i18n.js"></script>${if (embed != null) """<script src="assets/panel-assistant-sign-in.js"></script>""" else ""}</head><body $bodyAttrs$embedAttr><div class="wrap">
+<script src="assets/i18n.js"></script></head><body $bodyAttrs$embedAttr><div class="wrap">
 <div class="topbar">$header${navBar(active, strings, preserveExplicitEnglish, embed?.hiddenTabs.orEmpty())}</div>
 $switcher<div id="halifebar" class="setup" style="display:none"></div>
 <div id="hanetbar" class="setup" style="display:none"></div>
