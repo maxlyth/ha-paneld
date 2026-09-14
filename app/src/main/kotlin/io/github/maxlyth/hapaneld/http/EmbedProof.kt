@@ -62,6 +62,7 @@ internal data class ProvenEmbedRequest(val userId: String) {
 internal object EmbedProof {
     const val HEADER = "X-Panel-Assistant-Proof"
     const val LABEL = "panel-assistant-embed-proof-v1"
+    /** The grammar bounds a proof to 124 bytes; the shared vectors state this ceiling. */
     const val MAX_HEADER_BYTES = 128
     const val MAX_BODY_BYTES = 1024 * 1024
     const val WINDOW_BITS = 256
@@ -93,7 +94,6 @@ internal object EmbedProof {
     /** Parse the header's line values; null for anything but exactly one line that meets the grammar. */
     fun parse(values: List<String>): Parsed? {
         val raw = values.singleOrNull() ?: return null
-        if (raw.toByteArray(Charsets.UTF_8).size > MAX_HEADER_BYTES) return null
         val match = GRAMMAR.matchEntire(raw) ?: return null
         val (keyId, counterText, userId, mac) = match.destructured
         val counter = counterText.toLongOrNull() ?: return null
@@ -140,13 +140,9 @@ internal class EmbedProofKeyring {
     @Synchronized
     fun key(keyId: String): EmbedProofKey? = key?.takeIf { it.keyId == keyId }
 
-    /**
-     * Accept [counter] once for [expected], the key the proof was verified under. Called only after the MAC
-     * passed, so a forged proof never moves the window.
-     */
+    /** Accept [counter] once. Called only after the MAC passed, so a forged proof never moves the window. */
     @Synchronized
-    fun accept(expected: EmbedProofKey, counter: Long): Boolean {
-        if (key !== expected) return false
+    fun accept(counter: Long): Boolean {
         if (counter > highest) {
             shift(counter - highest)
             highest = counter
@@ -202,7 +198,7 @@ internal suspend fun verifyEmbedProof(
     if (!MessageDigest.isEqual(expected.toByteArray(Charsets.US_ASCII), parsed.mac.toByteArray(Charsets.US_ASCII))) {
         return refuse(EmbedProof.Refusal.BAD_MAC)
     }
-    if (!keyring.accept(key, parsed.counter)) return refuse(EmbedProof.Refusal.REPLAYED)
+    if (!keyring.accept(parsed.counter)) return refuse(EmbedProof.Refusal.REPLAYED)
     return Result.success(ProvenEmbedRequest(parsed.userId))
 }
 

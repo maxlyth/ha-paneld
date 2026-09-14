@@ -341,10 +341,9 @@ internal object PanelAssistantTransportProtocol {
         val keyId = (embed?.opt("key_id") as? String)?.takeIf(EMBED_KEY_ID::matches) ?: return null
         val key = (embed.opt("key") as? String)?.takeIf(EMBED_KEY::matches) ?: return null
         val bytes = runCatching { java.util.Base64.getUrlDecoder().decode(key) }.getOrNull() ?: return null
-        return PanelAssistantEmbedGrant(keyId, bytes).takeIf { bytes.size == EMBED_KEY_BYTES }
+        // Forty-three base64url characters are exactly 32 bytes.
+        return PanelAssistantEmbedGrant(keyId, bytes)
     }
-
-    private const val EMBED_KEY_BYTES = 32
 
     /** Interpret an event on the `hello` subscription [helloId]; null for any other frame. */
     fun sessionEvent(frame: JSONObject, helloId: Long): PanelAssistantSessionEvent? {

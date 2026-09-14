@@ -102,7 +102,7 @@ class EmbedProofTest {
             val vector = refused.getJSONObject(i)
             val ring = keyring(installed = vector.optString("key_state") != "none")
             vector.optJSONArray("accepted_before")?.let { counters ->
-                for (c in 0 until counters.length()) assertTrue(ring.accept(key, counters.getLong(c)))
+                for (c in 0 until counters.length()) assertTrue(ring.accept(counters.getLong(c)))
             }
             val result = verify(headerValues(vector), vector.getJSONObject("request"), ring)
             assertEquals(vector.getString("note"), vector.getString("reason"), reason(result))
@@ -114,8 +114,16 @@ class EmbedProofTest {
         val window = proof.getJSONArray("window")
         for (i in 0 until window.length()) {
             val step = window.getJSONArray(i)
-            assertEquals("step $i counter ${step.getLong(0)}", step.getString(1) == "accepted", ring.accept(key, step.getLong(0)))
+            assertEquals("step $i counter ${step.getLong(0)}", step.getString(1) == "accepted", ring.accept(step.getLong(0)))
         }
+    }
+
+    @Test fun `a jump in the highest counter leaves every skipped counter acceptable once`() {
+        val ring = keyring()
+        for (counter in listOf(3L, 4L, 5L, 8L)) assertTrue(ring.accept(counter))
+        for (counter in listOf(6L, 7L)) assertTrue("$counter", ring.accept(counter))
+        for (counter in listOf(3L, 4L, 5L, 6L, 7L, 8L)) assertFalse("$counter", ring.accept(counter))
+        assertTrue(ring.accept(2L))
     }
 
     @Test fun `a forged proof does not move the window`() {
@@ -167,9 +175,9 @@ class EmbedProofTest {
 
     @Test fun `a reinstalled key starts a fresh window`() {
         val ring = keyring()
-        assertTrue(ring.accept(key, 7))
+        assertTrue(ring.accept(7))
         ring.install(key)
-        assertTrue(ring.accept(key, 7))
+        assertTrue(ring.accept(7))
     }
 
     @Test fun `the key never appears in its string form`() {
