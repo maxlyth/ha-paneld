@@ -31,7 +31,7 @@ TEST_BUILD_ID := aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 REPLACEMENT_OLD_BUILD_ID := eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 REPLACEMENT_NEW_BUILD_ID := dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
 
-.PHONY: all daemon test peer-auth-test request-timeout-test replacement-identity-test install-security-test standalone-identity-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
+.PHONY: all daemon test test-native test-installer-transaction test-direct-root-transport peer-auth-test request-timeout-test replacement-identity-test install-security-test standalone-identity-test cdprelay-resource-test socket-test-server fuzz contract clean print-core
 all: daemon
 
 # Host build of the real daemon — a compile sanity check (-Werror); the shipped binary is build.sh.
@@ -40,7 +40,13 @@ $(BUILD)/hapaneld-helper: $(DAEMON_SRCS) | $(BUILD)
 	$(CC) $(CFLAGS) -I$(SRC_DIR) $(DAEMON_SRCS) $(LDLIBS) -o $@
 
 # Unit tests: CORE modules + the sysexec stub (no real exec) + the test driver.
-test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/guard-maintenance-boundary $(BUILD)/replacement-lease-old $(BUILD)/replacement-lease-new $(BUILD)/sysexec-fd-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/bounded-exec $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+# The long shell contracts drive mocked panels in their own temporary directories and share no fixture
+# with the native tests, so `make -j` runs them beside each other. Plain `make test` stays sequential.
+test: test-native test-installer-transaction test-direct-root-transport
+
+HELPER_TEST_PREREQS := $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD)/guard-maintenance-boundary $(BUILD)/replacement-lease-old $(BUILD)/replacement-lease-new $(BUILD)/sysexec-fd-boundary $(BUILD)/peer-auth $(BUILD)/request-timeout $(BUILD)/bounded-exec $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new $(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
+
+test-native: $(HELPER_TEST_PREREQS)
 	$(BUILD)/unit
 	test "$$($(BUILD)/hapaneld-helper --version)" = "HELPER version=1.3.0 proto=1.3"
 	$(BUILD)/companion-boundary
@@ -53,10 +59,15 @@ test: $(BUILD)/unit $(BUILD)/hapaneld-helper $(BUILD)/companion-boundary $(BUILD
 	bash ./test/replacement_identity_test.sh $(BUILD)/hapaneld-helper-old $(BUILD)/hapaneld-helper-new
 	$(BUILD)/cdprelay-resource-test $(BUILD)/cdprelay-test
 	bash ./test/root_command_quote_test.sh
-	bash ./test/standalone_installer_transaction_test.sh
 	bash ./test/standalone_installer_identity_test.sh
 	bash ./test/install_daemon_security_test.sh
+
+test-installer-transaction: $(HELPER_TEST_PREREQS)
+	bash ./test/standalone_installer_transaction_test.sh
+
+test-direct-root-transport: $(HELPER_TEST_PREREQS)
 	bash ./test/direct_root_transport_test.sh
+
 # --wrap=open/ioctl lets tests provide a fake evdev node and capture requested exclusive grabs while
 # preserving the existing ledjni ioctl assertions; --wrap=write forces deterministic stream edge cases.
 $(BUILD)/unit: $(CORE_SRCS) $(STUB) test/unit.c | $(BUILD)

@@ -434,21 +434,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # At most two CPU-heavy shards share a four-core runner. Three at once slowed every shard by about
-          # 60% and broke release-integrity's timing-bounded Shizuku cases; publication and git-bash take
-          # seconds and ride along.
-          - group: database-authority
-            shards: database-authority renderer-seeding publication
+          # The six longest shards run alone; the rest pair a medium shard with a short one. Three
+          # CPU-heavy shards on one four-core runner slowed each by about 60% and broke
+          # release-integrity's timing-bounded Shizuku cases. Ten groups keep CI and CodeQL under
+          # GitHub's twenty concurrent jobs when the Android build runs as one job.
           - group: install-runtime
-            shards: install-runtime install-export git-bash
+            shards: install-runtime
+          - group: database-authority
+            shards: database-authority
           - group: fleet-installer
-            shards: fleet-installer database-runtime
-          - group: release-integrity
-            shards: release-integrity backup
+            shards: fleet-installer
           - group: database-host
-            shards: database-host host-reclamation
+            shards: database-host
+          - group: install-export
+            shards: install-export
           - group: helper-transaction
-            shards: helper-transaction install-finish
+            shards: helper-transaction
+          - group: release-integrity
+            shards: release-integrity publication
+          - group: install-finish
+            shards: install-finish git-bash
+          - group: backup
+            shards: backup database-runtime
+          - group: renderer-seeding
+            shards: renderer-seeding host-reclamation
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -552,6 +561,13 @@ jobs:
               }
           }
           GRADLE
+          # Only the Gradle distribution download is retried: services.gradle.org has returned 504s. The
+          # dependency verification below runs once, so a verification failure is never retried away.
+          for attempt in 1 2 3; do
+            GRADLE_USER_HOME="$fresh_gradle_home" ./gradlew --no-daemon --version >/dev/null && break
+            [ "$attempt" -lt 3 ] || exit 1
+            sleep 20
+          done
           GRADLE_USER_HOME="$fresh_gradle_home" ./gradlew --no-daemon --init-script "$init_script" :app:verifyReleaseDependencyArtifacts --stacktrace --console=plain
 
   # The root helper (helper/src/) is C, never touched by the Gradle build. This job is the only place
@@ -579,7 +595,9 @@ jobs:
           # is harmless; on a reused workspace the next checkout cannot clean them. Always
           # hand the tree back, whichever result the suite produced.
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
-          sudo make -C helper test && exit 0
+          # Every helper contract works in its own temporary directory; make -j runs the long ones beside
+          # the native tests.
+          sudo make -C helper -j3 test && exit 0
           # The suite stops at its first failing script, so one run only ever reveals one
           # problem. Re-run the shell contracts individually to report all of them at once.
           echo "::group::remaining helper shell contracts"
