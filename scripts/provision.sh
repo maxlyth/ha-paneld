@@ -1331,7 +1331,7 @@ adb_preflight() {
       "A session held by another machine can also cause this — run 'adb disconnect' there first." ;;
     *) fail "cannot reach $TARGET over adb" \
       "Check: the IP is right, network ADB is enabled (Developer options → 'ADB debugging' / 'Network ADB'), the port ($TARGET), and that this machine is on the same network/VLAN as the panel." \
-      "Some panels only expose adb on USB until 'adb tcpip 5555' is run once — see docs/provisioning.md ('Bootstrapping adb')." ;;
+      "Some panels only expose adb on USB until 'adb tcpip 5555' is run once — see https://panel-assistant.io/go/docs?page=provisioning ('Bootstrapping adb')." ;;
   esac
 }
 
@@ -1588,7 +1588,7 @@ offer_strip_vendor() {
 
 # Warn when the system WebView is too old for a current HA frontend (the dashboard renders blank/broken).
 # Informational only — points at the update instructions; does not change anything.
-WEBVIEW_DOC="https://github.com/$REPO/blob/main/docs/hardware/tpa10.md#webview--update-this-first"
+WEBVIEW_DOC="https://panel-assistant.io/go/docs?page=hardware/tpa10"
 check_webview() {
   local wv major
   wv="$(adb -s "$TARGET" shell dumpsys webviewupdate 2>/dev/null | grep -m1 'Current WebView package' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"

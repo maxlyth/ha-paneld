@@ -5,7 +5,7 @@ display_name: Shelly Wall Display (modern)
 soc_class: "Model-dependent (known: RK3326-S / RK3566)"
 metadata:
   author: ha-paneld maintainers
-  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/shelly-wall-display.md
+  source: https://panel-assistant.io/go/docs?page=hardware/shelly-wall-display
   license: Apache-2.0
   maturity: experimental
   limitations:

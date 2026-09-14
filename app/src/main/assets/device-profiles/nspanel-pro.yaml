@@ -11,7 +11,7 @@ soc:
       count: 4
 metadata:
   author: ha-paneld maintainers
-  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/nspanel-pro.md
+  source: https://panel-assistant.io/go/docs?page=hardware/nspanel-pro
   links:
     - label: SoC details
       url: https://www.rock-chips.com/a/en/News/Press_Releases/2018/0413/898.html

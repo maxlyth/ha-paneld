@@ -7,10 +7,6 @@
 [![Release](https://img.shields.io/github/v/release/maxlyth/ha-paneld?include_prereleases&sort=semver&style=flat-square&color=blue)](https://github.com/maxlyth/ha-paneld/releases)
 [![License](https://assets.ha-paneld.com/docs/badge/license-apache-2-0-8aa187e4.svg)](LICENSE)
 
-<!-- docs-i18n-language-picker:start -->
-**English** · [Deutsch](docs/de/README.md) · [Français](docs/fr/README.md) · [Italiano](docs/it/README.md) · [Español](docs/es/README.md) · [简体中文](docs/zh-Hans/README.md)
-<!-- docs-i18n-language-picker:end -->
-
 **The universal Home Assistant dashboard app for Android wall panels.**
 
 ha-paneld makes Home Assistant dashboards practical on panels that otherwise feel too slow or awkward to use. Low-powered panels can become sluggish or take seconds to respond when connected to a large Home Assistant installation. One important cause is that the panel receives and processes updates for far more entities than its dashboard displays. **ha-paneld's built-in renderer can learn which entities the dashboard uses and ask Home Assistant to send only those states**. In the real world, this can reduce entity load by 10–100×, making that dashboard finally usable.
@@ -51,7 +47,7 @@ The web interface gives you one place to configure a panel, install software and
 
 If you are unsure whether ha-paneld can run on your panel, check [Panels and support status](#panels-and-support-status) before installing.
 
-First make ADB available over the network. On some panels this is a Developer options setting; others need a one-time USB connection to run `adb tcpip 5555`. The [provisioning guide](docs/provisioning.md) and model-specific [hardware guides](docs/hardware/) explain the available methods. Then run this from a computer with `adb` on the same network:
+First make ADB available over the network. On some panels this is a Developer options setting; others need a one-time USB connection to run `adb tcpip 5555`. The [provisioning guide](https://panel-assistant.io/go/docs?page=provisioning) and model-specific [hardware guides](https://panel-assistant.io/go/docs?page=hardware/readme) explain the available methods. Then run this from a computer with `adb` on the same network:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash
@@ -65,7 +61,7 @@ You do not need to clone the repository or supply any options. The installer che
 If a required step fails, the installer names the problem and exits without claiming that the installation succeeded. Correct the problem and run the same command again.
 
 > [!IMPORTANT]
-> **Check Home Assistant and the panel's system WebView before the first dashboard load.** The built-in renderer requires Home Assistant 2026.4.2 or newer and a modern WebView. Even a new panel can contain a WebView too old to display a current dashboard. See [Built-in renderer requirements](docs/built-in-renderer.md#requirements-and-compatibility) and [Updating the system WebView](docs/hardware/README.md#updating-the-system-webview).
+> **Check Home Assistant and the panel's system WebView before the first dashboard load.** The built-in renderer requires Home Assistant 2026.4.2 or newer and a modern WebView. Even a new panel can contain a WebView too old to display a current dashboard. See [Built-in renderer requirements](https://panel-assistant.io/go/docs?page=built-in-renderer) and [Updating the system WebView](https://panel-assistant.io/go/docs?page=hardware/readme).
 
 To follow the newest published release, including release candidates, add `--prerelease`. A newer stable release still wins:
 
@@ -73,14 +69,14 @@ To follow the newest published release, including release candidates, add `--pre
 curl -fsSL https://raw.githubusercontent.com/maxlyth/ha-paneld/main/scripts/install.sh | bash -s -- --prerelease
 ```
 
-The same installer supports unattended single-panel provisioning. See [Provisioning and fleet updates](docs/provisioning.md) for scripted installs, USB bootstrap, panels without network ADB and whole-fleet updates.
+The same installer supports unattended single-panel provisioning. See [Provisioning and fleet updates](https://panel-assistant.io/go/docs?page=provisioning) for scripted installs, USB bootstrap, panels without network ADB and whole-fleet updates.
 
 ha-paneld is not distributed through Google Play, so installation always involves sideloading. This also applies to newer panels that otherwise have access to the Play Store.
 
 ### Other ways to install
 
-- **F-Droid on the panel:** add [ha-paneld's F-Droid repository](docs/fdroid.md) to install and update stable releases without a computer. F-Droid notifies you when an update is available and lets you install it on the panel; release candidates are not included. Sonoff NSPanel Pro firmware 4.0.0 and newer includes F-Droid. This installs the app, but features requiring root still need the normal provisioning steps.
-- **Manual sideloading or USB bootstrap:** use the APK from the [latest release](https://github.com/maxlyth/ha-paneld/releases) and follow [Provisioning and fleet updates](docs/provisioning.md) for the remaining permissions and setup.
+- **F-Droid on the panel:** add [ha-paneld's F-Droid repository](https://panel-assistant.io/go/docs?page=fdroid) to install and update stable releases without a computer. F-Droid notifies you when an update is available and lets you install it on the panel; release candidates are not included. Sonoff NSPanel Pro firmware 4.0.0 and newer includes F-Droid. This installs the app, but features requiring root still need the normal provisioning steps.
+- **Manual sideloading or USB bootstrap:** use the APK from the [latest release](https://github.com/maxlyth/ha-paneld/releases) and follow [Provisioning and fleet updates](https://panel-assistant.io/go/docs?page=provisioning) for the remaining permissions and setup.
 
 ## Choose how the dashboard runs
 
@@ -92,7 +88,7 @@ The official [Home Assistant Companion app](https://github.com/home-assistant/an
 
 ## Panels and support status
 
-ha-paneld does not need to be installed as a system app. Basic Android controls such as brightness, navigation and TTS work on compatible panels. LEDs, relays, true screen-off and some sensors need support for that model in its [panel profile](docs/profiles/README.md). Hardware-button events need Android Accessibility capture or a verified profile method.
+ha-paneld does not need to be installed as a system app. Basic Android controls such as brightness, navigation and TTS work on compatible panels. LEDs, relays, true screen-off and some sensors need support for that model in its [panel profile](https://panel-assistant.io/go/docs?page=profiles/readme). Hardware-button events need Android Accessibility capture or a verified profile method.
 
 | Panel | Status | Android / ABI | Notes |
 |---|---|---|---|
@@ -106,7 +102,7 @@ ha-paneld does not need to be installed as a system app. Basic Android controls 
 | Shelly Wall Display X2 | Research only | Android 8.1, armeabi-v7a | No confirmed ha-paneld installation path. |
 | Shelly Wall Display X1i / X2i / XL | Research only | Android 11, arm64-v8a | Profile metadata still needs to be split by model. No confirmed ha-paneld installation path. |
 
-See the [hardware documentation](docs/hardware/) for model-specific setup, known limitations and reverse-engineered hardware details.
+See the [hardware documentation](https://panel-assistant.io/go/docs?page=hardware/readme) for model-specific setup, known limitations and reverse-engineered hardware details.
 
 ## Hardware Control Capabilities
 
@@ -122,17 +118,17 @@ Each panel publishes only the controls supported by its profile and detected har
 | Adaptive brightness | Optional seven-day learning from the panel's light sensor or a Home Assistant illuminance entity |
 | Open a URL | `text.<panel>_navigate` |
 | Dashboard controls and reboot | Home Assistant buttons plus Dashboard, Reload and navigation actions in the remote Controls panel |
-| TTS and announcement audio | `POST /play` and `number.<panel>_volume`; see the [TTS guide](docs/tts.md) |
+| TTS and announcement audio | `POST /play` and `number.<panel>_volume`; see the [TTS guide](https://panel-assistant.io/go/docs?page=tts) |
 | Dashboard screenshot and remote tap | Panels with a supported screenshot method can show and refresh the screen from the Dashboard tab; Relaxed mode also allows a click to be sent back to the panel |
 | Panel information and configuration | Open `http://<panel>:8888/`, also linked as **Visit** on the Home Assistant device page |
 
-Home Assistant discovers these controls through MQTT without YAML. The main entity families, HTTP API and pairing details are in [docs/api.md](docs/api.md). You can also browse and try the HTTP API on a panel at `http://<panel>:8888/api`.
+Home Assistant discovers these controls through MQTT without YAML. The main entity families, HTTP API and pairing details are in [docs/api.md](https://panel-assistant.io/go/docs?page=api). You can also browse and try the HTTP API on a panel at `http://<panel>:8888/api`.
 
 ## Security and root access
 
 ### Hardened security mode
 
-Relaxed mode is the default and is intended for a trusted home network. Use [Hardened security mode](docs/security-mode.md) when less-trusted devices share the network. Hardened security mode requires physical access to the panel. Someone must approve high-impact remote actions on the panel's screen; they cannot be approved remotely. Screenshots remain viewable, but remote taps are disabled. The setting must be enabled separately on each panel and is not copied by backup, restore or fleet provisioning.
+Relaxed mode is the default and is intended for a trusted home network. Use [Hardened security mode](https://panel-assistant.io/go/docs?page=security-mode) when less-trusted devices share the network. Hardened security mode requires physical access to the panel. Someone must approve high-impact remote actions on the panel's screen; they cannot be approved remotely. Screenshots remain viewable, but remote taps are disabled. The setting must be enabled separately on each panel and is not copied by backup, restore or fleet provisioning.
 
 ### Features that need root
 
@@ -146,27 +142,27 @@ The web interface marks unavailable controls with a lock and explains what the p
 
 **Direct `su` inside ha-paneld is still needed:** Lock Android to dashboard, complete system logs, relay control where the profile requires it, and the legacy Companion-session import path. A full backup can include an existing Companion login, which always goes through the authenticated helper: the descriptor-confined protocol is the only path, on direct-root panels too.
 
-A limited [advanced fallback](docs/provisioning.md#shizuku-fallback-for-unrooted-panels) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
+A limited [advanced fallback](https://panel-assistant.io/go/docs?page=provisioning) exists for genuinely unrooted panels, but it is not part of the normal supported-hardware path and does not provide root-only hardware features.
 
 ## Guides and reference
 
 ### Using ha-paneld
 
-- [Provisioning and fleet updates](docs/provisioning.md): unattended installation, USB and network ADB setup, backups and whole-fleet updates.
-- [Built-in renderer](docs/built-in-renderer.md): requirements, remote sign-in, dashboard selection, recovery and deliberate limitations.
-- [Performance](docs/performance.md): find out why a dashboard is slow and measure the effect of entity filtering.
-- [Adaptive brightness](docs/adaptive-brightness.md): select a light source, understand learning and reset the history after moving a panel.
-- [Adaptive proximity and wake on wave](docs/adaptive-proximity.md): configure proximity detection and teach the wake gesture.
-- [Security modes](docs/security-mode.md): understand Relaxed mode and Hardened security mode, including which actions require someone at the panel.
-- [TTS](docs/tts.md): render speech with a Home Assistant TTS engine and send it to a panel.
+- [Provisioning and fleet updates](https://panel-assistant.io/go/docs?page=provisioning): unattended installation, USB and network ADB setup, backups and whole-fleet updates.
+- [Built-in renderer](https://panel-assistant.io/go/docs?page=built-in-renderer): requirements, remote sign-in, dashboard selection, recovery and deliberate limitations.
+- [Performance](https://panel-assistant.io/go/docs?page=performance): find out why a dashboard is slow and measure the effect of entity filtering.
+- [Adaptive brightness](https://panel-assistant.io/go/docs?page=adaptive-brightness): select a light source, understand learning and reset the history after moving a panel.
+- [Adaptive proximity and wake on wave](https://panel-assistant.io/go/docs?page=adaptive-proximity): configure proximity detection and teach the wake gesture.
+- [Security modes](https://panel-assistant.io/go/docs?page=security-mode): understand Relaxed mode and Hardened security mode, including which actions require someone at the panel.
+- [TTS](https://panel-assistant.io/go/docs?page=tts): render speech with a Home Assistant TTS engine and send it to a panel.
 
 ### Developing and extending ha-paneld
 
-- [HTTP, MQTT and Home Assistant API](docs/api.md): the HTTP endpoints, main MQTT entity families, pairing and discovery. The machine-readable specification is available from a panel at `/api/v1/openapi.json`.
-- [Panel profiles](docs/profiles/): create, test and share support for another panel without rebuilding the app.
-- [Hardware references](docs/hardware/): model-specific setup, sensors, controls, firmware and reverse-engineering notes.
-- [Building from source](docs/building.md) and [local development](docs/local-builds.md): build with Docker, the development container or a local Android toolchain.
-- [Roadmap](docs/roadmap.md): planned work. Completed work is recorded in the [changelog](docs/CHANGELOG.md).
+- [HTTP, MQTT and Home Assistant API](https://panel-assistant.io/go/docs?page=api): the HTTP endpoints, main MQTT entity families, pairing and discovery. The machine-readable specification is available from a panel at `/api/v1/openapi.json`.
+- [Panel profiles](https://panel-assistant.io/go/docs?page=profiles/readme): create, test and share support for another panel without rebuilding the app.
+- [Hardware references](https://panel-assistant.io/go/docs?page=hardware/readme): model-specific setup, sensors, controls, firmware and reverse-engineering notes.
+- [Building from source](https://panel-assistant.io/go/docs?page=building) and [local development](https://panel-assistant.io/go/docs?page=local-builds): build with Docker, the development container or a local Android toolchain.
+- [Roadmap](https://panel-assistant.io/go/docs?page=roadmap): planned work. Completed work is recorded in the [changelog](docs/CHANGELOG.md).
 
 The panel's `GET /diag` page produces a hardware, firmware and capability report for bug reports. Check and redact it before posting it publicly.
 
@@ -201,11 +197,11 @@ Do not post configurations or file links in GitHub issues or discussions unless 
 
 ha-paneld has no donate button. It is free, and the "payment" that actually moves it forward is more panels supported. That takes hardware to study.
 
-Start with the [runtime profile guide](docs/profiles/README.md). The Generic profile can produce a passive draft that you can validate, test and share without building the app. Before a profile can be bundled with ha-paneld, I still need evidence from the real device, especially for its buttons, LEDs, relays and sensors.
+Start with the [runtime profile guide](https://panel-assistant.io/go/docs?page=profiles/readme). The Generic profile can produce a passive draft that you can validate, test and share without building the app. Before a profile can be bundled with ha-paneld, I still need evidence from the real device, especially for its buttons, LEDs, relays and sensors.
 
 So if you'd like to help:
 
-- **Create and share a profile.** Open `http://<panel-ip>:8888/profiles`, download the Generic device draft, and follow the [testing](docs/profiles/testing.md) and [sharing](docs/profiles/sharing.md) guides. A community profile can be useful before it is ready to ship with ha-paneld.
+- **Create and share a profile.** Open `http://<panel-ip>:8888/profiles`, download the Generic device draft, and follow the [testing](https://panel-assistant.io/go/docs?page=profiles/testing) and [sharing](https://panel-assistant.io/go/docs?page=profiles/sharing) guides. A community profile can be useful before it is ready to ship with ha-paneld.
 - **Open an issue with the panel's diagnostics.** Visit `http://<panel-ip>:8888/diag`, check and redact the report, then paste it into a new issue. That is enough to start. I will work with you through a short set of tests for any buttons, LEDs, relays or sensors that need someone at the panel.
 - **Send me the panel.** I'm UK-based and happy to do the reverse-engineering directly. This is the fastest route to fully supported hardware. You'll get it back (I have way too many already); open an issue first so we can arrange the details.
 
@@ -213,7 +209,7 @@ The result is always open: your panel becomes a profile everyone can use. That's
 
 ## Development
 
-If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](.github/CONTRIBUTING.md). The developer documentation covers [building from source](docs/building.md), [local and development-container builds](docs/local-builds.md), the [HTTP and MQTT API](docs/api.md), [panel-profile development](docs/profiles/README.md), the [browser test harness](tools/test/README.md), and the [release process](docs/RELEASING.md).
+If you want to work on ha-paneld itself, start with [CONTRIBUTING.md](.github/CONTRIBUTING.md). The developer documentation covers [building from source](https://panel-assistant.io/go/docs?page=building), [local and development-container builds](https://panel-assistant.io/go/docs?page=local-builds), the [HTTP and MQTT API](https://panel-assistant.io/go/docs?page=api), [panel-profile development](https://panel-assistant.io/go/docs?page=profiles/readme), the [browser test harness](tools/test/README.md), and the [release process](docs/RELEASING.md).
 
 I have deliberately provided enough information to use the supplied development container and build a local test version. Do not submit computer-generated pull requests or issues unchanged: read and understand every part of the proposed text and code, then rewrite it in your own words. This is a one-man project, and I do not have time to review unfiltered computer-generated output. Be succinct and write for humans; if you are unsure about something, ask first.
 

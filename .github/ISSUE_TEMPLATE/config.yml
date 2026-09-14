@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Hardware references & documentation
-    url: https://github.com/maxlyth/ha-paneld/tree/main/docs
+    url: https://panel-assistant.io
     about: Per-panel hardware (SoC, sensors, LED, radios), install methods, performance tuning, the TTS recipe.
   - name: Updating the system WebView
-    url: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/README.md#updating-the-system-webview
+    url: https://panel-assistant.io/go/docs?page=hardware/readme
     about: A blank/broken dashboard is almost always an outdated WebView — fix it here first.

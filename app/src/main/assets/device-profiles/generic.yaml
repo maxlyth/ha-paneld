@@ -5,7 +5,7 @@ display_name: Unknown panel
 soc_class: "?"
 metadata:
   author: ha-paneld maintainers
-  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/architecture/device-profiles.md
+  source: https://panel-assistant.io/go/docs?page=architecture/device-profiles
   license: Apache-2.0
   maturity: verified
   tested_firmware: []

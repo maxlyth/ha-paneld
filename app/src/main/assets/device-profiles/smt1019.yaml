@@ -13,7 +13,7 @@ soc:
       count: 4
 metadata:
   author: ha-paneld maintainers
-  source: https://github.com/maxlyth/ha-paneld/blob/main/docs/hardware/smt1019.md
+  source: https://panel-assistant.io/go/docs?page=hardware/smt1019
   links:
     - label: SoC details
       url: https://www.rock-chips.com/a/en/products/RK35_Series/2024/1212/2033.html
