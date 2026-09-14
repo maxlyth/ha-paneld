@@ -81,7 +81,11 @@ jobs:
 
       - name: Build Android sources for analysis
         if: matrix.language == 'java-kotlin'
-        run: ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac --no-build-cache --stacktrace
+        # The bundled root helper and CDP relay are C, analysed by the c-cpp job; building them here only adds
+        # traced compiler time to the Kotlin extraction.
+        run: >-
+          ./gradlew :app:compileDebugKotlin :app:compileDebugJavaWithJavac --no-build-cache --stacktrace
+          -x :app:verifyBundledRootHelperBuildIdentity -x :app:compileCdpRelay
 
       - name: Build helper sources for analysis
         if: matrix.language == 'c-cpp'
