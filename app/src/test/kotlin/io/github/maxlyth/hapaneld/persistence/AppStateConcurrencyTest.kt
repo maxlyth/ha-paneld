@@ -724,6 +724,147 @@ class AppStateConcurrencyTest {
         }
     }
 
+    @Test fun credentialsNeverReachLegacyJournalThroughPersistOrReplace() {
+        val original = mapOf<String, Any>("ha_url" to "https://ha.example")
+        val primary = ImportingPersistence(original)
+        val legacy = RecordingLegacyMirror(original)
+        val metadata = RecordingBridgeMetadata().also { it.writeHash(stateSnapshotHash(original)) }
+        val persistence = DowngradeCompatibleStatePersistence(
+            primary, legacy, metadata, legacyMirrorExclusions("config"),
+        )
+        assertEquals(original, persistence.initialize())
+
+        assertTrue(
+            persistence.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf(
+                        "ha_token" to "persisted-access",
+                        "ha_refresh_token" to "persisted-refresh",
+                        "ha_token_expiry" to 1234L,
+                    ),
+                ),
+            ),
+        )
+        assertEquals("persisted-access", primary.snapshot()["ha_token"])
+        assertEquals("persisted-refresh", primary.snapshot()["ha_refresh_token"])
+        assertEquals(
+            mapOf("ha_url" to "https://ha.example", "ha_token_expiry" to 1234L),
+            legacy.snapshot(),
+        )
+        assertEquals(stateSnapshotHash(legacy.snapshot()), metadata.readHash())
+
+        val replaced = mapOf<String, Any>(
+            "ha_url" to "https://other.example",
+            "ha_token" to "replaced-access",
+            "ha_refresh_token" to "replaced-refresh",
+        )
+        assertTrue(persistence.replace(replaced))
+        assertEquals(replaced, primary.snapshot())
+        assertEquals(mapOf("ha_url" to "https://other.example"), legacy.snapshot())
+        assertEquals(stateSnapshotHash(legacy.snapshot()), metadata.readHash())
+    }
+
+    @Test fun journalHoldingCredentialsIsScrubbedOnceAndNextStartIsQuiet() {
+        val raw = mapOf<String, Any>(
+            "panel_id" to "panel-a",
+            "ha_url" to "https://ha.example",
+            "ha_token" to "live-access",
+            "ha_refresh_token" to "live-refresh",
+        )
+        val primary = ImportingPersistence(raw)
+        val legacy = RecordingLegacyMirror(raw)
+        // The marker an earlier build recorded hashed the journal with its credentials included.
+        val metadata = RecordingBridgeMetadata().also { it.writeHash(stateSnapshotHash(raw)) }
+        val excluded = legacyMirrorExclusions("config")
+
+        val first = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded).initialize()
+        assertEquals(raw, first)
+        assertEquals(raw, primary.snapshot())
+        assertEquals(
+            mapOf("panel_id" to "panel-a", "ha_url" to "https://ha.example"),
+            legacy.snapshot(),
+        )
+        val settledMarker = metadata.readHash()
+        assertEquals(stateSnapshotHash(legacy.snapshot()), settledMarker)
+
+        primary.replaceCalls = 0
+        primary.persistCalls = 0
+        legacy.replaceCalls = 0
+        legacy.persistCalls = 0
+        val second = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded).initialize()
+        assertEquals(raw, second)
+        assertEquals(0, primary.replaceCalls + primary.persistCalls)
+        assertEquals(0, legacy.replaceCalls + legacy.persistCalls)
+        assertEquals(settledMarker, metadata.readHash())
+    }
+
+    @Test fun downgradeEditOfOrdinaryKeyIsMergedWhileSqliteKeepsCredentials() {
+        val primary = ImportingPersistence(emptyMap())
+        val legacy = RecordingLegacyMirror(emptyMap())
+        val metadata = RecordingBridgeMetadata()
+        val excluded = legacyMirrorExclusions("config")
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded)
+        persistence.initialize()
+        assertTrue(
+            persistence.persist(
+                StateMutation(
+                    clear = false,
+                    changes = mapOf(
+                        "ha_url" to "https://ha.example",
+                        "ha_token" to "live-access",
+                        "ha_refresh_token" to "live-refresh",
+                    ),
+                ),
+            ),
+        )
+
+        // An older build edits an ordinary key in the journal it reads.
+        legacy.persist(StateMutation(clear = false, changes = mapOf("ha_url" to "https://edited.example")))
+
+        val returned = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded).initialize()
+        val expected = mapOf(
+            "ha_url" to "https://edited.example",
+            "ha_token" to "live-access",
+            "ha_refresh_token" to "live-refresh",
+        )
+        assertEquals(expected, returned)
+        assertEquals(expected, primary.snapshot())
+        assertEquals(mapOf("ha_url" to "https://edited.example"), legacy.snapshot())
+    }
+
+    @Test fun credentialsWrittenIntoJournalByOlderBuildNeverReplaceSqliteCredentials() {
+        val primary = ImportingPersistence(emptyMap())
+        val legacy = RecordingLegacyMirror(emptyMap())
+        val metadata = RecordingBridgeMetadata()
+        val excluded = legacyMirrorExclusions("config")
+        val persistence = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded)
+        persistence.initialize()
+        val live = mapOf(
+            "ha_url" to "https://ha.example",
+            "ha_token" to "live-access",
+            "ha_refresh_token" to "live-refresh",
+        )
+        assertTrue(persistence.replace(live))
+
+        legacy.persist(
+            StateMutation(
+                clear = false,
+                changes = mapOf(
+                    "ha_token" to "older-build-access",
+                    "ha_refresh_token" to "older-build-refresh",
+                ),
+            ),
+        )
+        primary.replaceCalls = 0
+
+        val returned = DowngradeCompatibleStatePersistence(primary, legacy, metadata, excluded).initialize()
+        assertEquals(live, returned)
+        assertEquals(live, primary.snapshot())
+        assertEquals(0, primary.replaceCalls)
+        assertEquals(mapOf("ha_url" to "https://ha.example"), legacy.snapshot())
+    }
+
     @Test fun shutdownDrainWaitsForBlockedApplyToBecomeDurable() {
         val persistenceStarted = CountDownLatch(1)
         val releasePersistence = CountDownLatch(1)
@@ -979,10 +1120,13 @@ class AppStateConcurrencyTest {
         private val values = imported.toMutableMap()
         var failNextPersist = false
         var failNextReplace = false
+        var persistCalls = 0
+        var replaceCalls = 0
 
         override fun initialize(): Map<String, Any> = values.toMap()
 
         override fun persist(mutation: StateMutation): Boolean {
+            persistCalls++
             if (failNextPersist) {
                 failNextPersist = false
                 return false
@@ -995,6 +1139,7 @@ class AppStateConcurrencyTest {
         }
 
         override fun replace(snapshot: Map<String, Any>): Boolean {
+            replaceCalls++
             if (failNextReplace) {
                 failNextReplace = false
                 return false
@@ -1013,10 +1158,13 @@ class AppStateConcurrencyTest {
         private val values = initial.toMutableMap()
         var failNextPersist = false
         var failNextReplace = false
+        var persistCalls = 0
+        var replaceCalls = 0
 
         override fun snapshot(): Map<String, Any> = values.toMap()
 
         override fun persist(mutation: StateMutation): Boolean {
+            persistCalls++
             if (failNextPersist) {
                 failNextPersist = false
                 return false
@@ -1029,6 +1177,7 @@ class AppStateConcurrencyTest {
         }
 
         override fun replace(snapshot: Map<String, Any>): Boolean {
+            replaceCalls++
             if (failNextReplace) {
                 failNextReplace = false
                 return false

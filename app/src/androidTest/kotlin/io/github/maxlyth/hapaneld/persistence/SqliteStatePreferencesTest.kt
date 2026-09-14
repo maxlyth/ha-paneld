@@ -70,6 +70,38 @@ class SqliteStatePreferencesTest {
         }
     }
 
+    @Test fun firstImportKeepsCredentialsInSqliteButRemovesThemFromTheJournal() {
+        val legacy = context.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
+        assertTrue(
+            legacy.edit()
+                .putString("ha_url", "https://ha.example")
+                .putString("ha_token", "imported-access")
+                .putString("ha_refresh_token", "imported-refresh")
+                .commit(),
+        )
+        val bridge = context.getSharedPreferences(bridgeName, Context.MODE_PRIVATE)
+        val excluded = legacyMirrorExclusions("config")
+
+        EntityCatalogStore(context).use { helper ->
+            val state = SqliteStatePreferences(
+                helper, namespace, legacyName, legacy, bridge, mirrorExcludedKeys = excluded,
+            )
+            assertEquals("imported-access", state.getString("ha_token", null))
+            assertEquals("imported-refresh", state.getString("ha_refresh_token", null))
+            assertTrue(sqliteContains(helper.readableDatabase, "ha_token"))
+            assertFalse(legacy.contains("ha_token"))
+            assertFalse(legacy.contains("ha_refresh_token"))
+            assertEquals("https://ha.example", legacy.getString("ha_url", null))
+        }
+        EntityCatalogStore(context).use { helper ->
+            val reopened = SqliteStatePreferences(
+                helper, namespace, legacyName, legacy, bridge, mirrorExcludedKeys = excluded,
+            )
+            assertEquals("imported-access", reopened.getString("ha_token", null))
+            assertEquals("imported-refresh", reopened.getString("ha_refresh_token", null))
+        }
+    }
+
     @Test fun failedSqliteMarkerCreateAndRemoveRetainStrictInProcessVisibilityUntilRetry() {
         val legacy = context.getSharedPreferences(legacyName, Context.MODE_PRIVATE)
         val bridge = context.getSharedPreferences(bridgeName, Context.MODE_PRIVATE)

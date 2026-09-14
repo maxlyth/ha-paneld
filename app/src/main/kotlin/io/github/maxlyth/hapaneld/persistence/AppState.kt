@@ -53,6 +53,7 @@ object AppState {
                             appContext.getSharedPreferences(BRIDGE_PREFS, Context.MODE_PRIVATE),
                             namespace,
                         ),
+                        legacyMirrorExclusions(namespace),
                     ),
                     process.executor,
                     process.admission,
@@ -243,6 +244,7 @@ internal class SqliteStatePreferences(
         legacy: SharedPreferences,
         bridge: SharedPreferences,
         clock: () -> Long = System::currentTimeMillis,
+        mirrorExcludedKeys: Set<String> = legacyMirrorExclusions(namespace),
     ) : this(
         DowngradeCompatibleStatePersistence(
             SqliteNamespacePersistence(helper, namespace, legacyName, legacy, clock),
@@ -251,6 +253,7 @@ internal class SqliteStatePreferences(
                 bridge,
                 namespace,
             ),
+            mirrorExcludedKeys,
         ),
         Executors.newSingleThreadExecutor { runnable ->
             Thread(runnable, "ha-paneld-state-test-writer").apply { isDaemon = true }
@@ -754,6 +757,13 @@ private data class PendingStateWrite(
     val deferredPublication: Boolean,
 )
 
+/**
+ * Keys that SQLite keeps but the plaintext downgrade journal never holds. Home Assistant credentials
+ * stay out of the XML: an older build that reads only that journal starts signed out instead.
+ */
+internal fun legacyMirrorExclusions(namespace: String): Set<String> =
+    if (namespace == "config") setOf("ha_token", "ha_refresh_token") else emptySet()
+
 internal interface StateNamespacePersistence {
     fun initialize(): Map<String, Any>
     fun persist(mutation: StateMutation): Boolean
@@ -769,19 +779,26 @@ internal interface StateNamespacePersistence {
  * Markerless divergence is possible only after unpublished SQLite-only builds: neither side has
  * reliable ordering evidence, so SQLite stays active, XML is left untouched, and metadata records
  * the conflict for diagnostics rather than destroying either state.
+ *
+ * [mirrorExcludedKeys] are never written to, read from or hashed over the XML journal; SQLite keeps
+ * them through every reconciliation, and a journal that still holds one is scrubbed at startup.
  */
 internal class DowngradeCompatibleStatePersistence(
     private val primary: StateNamespacePersistence,
     private val legacy: LegacyStateMirror,
     private val metadata: BridgeMetadata,
+    private val mirrorExcludedKeys: Set<String> = emptySet(),
 ) : StateNamespacePersistence {
     private var snapshot: Map<String, Any> = emptyMap()
     private var markerlessConflict = false
 
     override fun initialize(): Map<String, Any> {
         val current = primary.initialize()
-        val journal = legacy.snapshot()
-        val journalHash = stateSnapshotHash(journal)
+        val rawJournal = legacy.snapshot()
+        if (rawJournal.keys.any(mirrorExcludedKeys::contains)) scrubExcludedKeys()
+        val journal = project(rawJournal)
+        val mirrored = project(current)
+        val journalHash = mirrorHash(journal)
         val marker = metadata.readHash()
         if (metadata.readWriteIntent() != null) {
             // A composite write was admitted but did not durably reach its completion marker. The
@@ -790,10 +807,10 @@ internal class DowngradeCompatibleStatePersistence(
             // mismatch as a deliberate downgrade edit while this marker is present.
             snapshot = current
             markerlessConflict = false
-            if (!runCatching { legacy.replace(current) }.getOrDefault(false)) {
+            if (!runCatching { legacy.replace(mirrored) }.getOrDefault(false)) {
                 Log.w(TAG, "could not repair interrupted legacy compatibility journal")
             } else if (
-                !runCatching { metadata.writeHash(stateSnapshotHash(current)) }.getOrDefault(false)
+                !runCatching { metadata.writeHash(mirrorHash(current)) }.getOrDefault(false)
             ) {
                 // Both stores now agree. Keeping the intent marker merely causes the same safe repair
                 // on the next start, so metadata pressure must not make the durable state unavailable.
@@ -803,11 +820,11 @@ internal class DowngradeCompatibleStatePersistence(
         }
         snapshot = when {
             marker == null -> {
-                if (journal == current) {
-                    check(legacy.replace(current)) { "could not seed legacy compatibility journal" }
-                    check(metadata.writeHash(stateSnapshotHash(current))) { "could not mark legacy compatibility journal" }
+                if (journal == mirrored) {
+                    check(legacy.replace(mirrored)) { "could not seed legacy compatibility journal" }
+                    check(metadata.writeHash(mirrorHash(current))) { "could not mark legacy compatibility journal" }
                 } else {
-                    check(metadata.writeConflict(stateSnapshotHash(current), journalHash)) {
+                    check(metadata.writeConflict(mirrorHash(current), journalHash)) {
                         "could not record markerless compatibility conflict"
                     }
                     Log.w(TAG, "markerless SQLite/XML state conflict preserved; SQLite remains active")
@@ -816,23 +833,24 @@ internal class DowngradeCompatibleStatePersistence(
                 current
             }
             marker == journalHash -> {
-                if (journal != current) {
-                    val currentPayload = current.filterKeys(::isPayloadKey)
+                if (journal != mirrored) {
+                    val currentPayload = mirrored.filterKeys(::isPayloadKey)
                     val journalPayload = journal.filterKeys(::isPayloadKey)
                     val journalContainsCurrent = currentPayload.all { (key, value) -> journalPayload[key] == value }
                     if (journalContainsCurrent && journalPayload.size > currentPayload.size) {
                         val recovered = journal.toMutableMap().apply {
-                            current.filterKeys { !isPayloadKey(it) }.forEach { (key, value) -> put(key, value) }
+                            current.filterKeys { !isPayloadKey(it) || it in mirrorExcludedKeys }
+                                .forEach { (key, value) -> put(key, value) }
                         }
                         check(primary.replace(recovered)) { "could not recover truncated SQLite state" }
-                        check(legacy.replace(recovered)) { "could not refresh recovered compatibility journal" }
-                        check(metadata.writeHash(stateSnapshotHash(recovered))) {
+                        check(legacy.replace(project(recovered))) { "could not refresh recovered compatibility journal" }
+                        check(metadata.writeHash(mirrorHash(recovered))) {
                             "could not mark recovered compatibility journal"
                         }
                         recovered
                     } else {
-                        check(legacy.replace(current)) { "could not refresh legacy compatibility journal" }
-                        check(metadata.writeHash(stateSnapshotHash(current))) { "could not refresh compatibility marker" }
+                        check(legacy.replace(mirrored)) { "could not refresh legacy compatibility journal" }
+                        check(metadata.writeHash(mirrorHash(current))) { "could not refresh compatibility marker" }
                         current
                     }
                 }
@@ -841,10 +859,11 @@ internal class DowngradeCompatibleStatePersistence(
             else -> {
                 // Reconcile by merging the mirror onto the SQLite primary, never replacing it outright:
                 // an old build's downgrade edit still wins for shared keys, but a drifted or degraded
-                // mirror can never drop live keys and wipe a panel's configuration.
+                // mirror can never drop live keys and wipe a panel's configuration. Excluded keys are
+                // absent from the projected journal, so SQLite's values always survive the merge.
                 val reconciled = current + journal
                 check(primary.replace(reconciled)) { "could not import legacy compatibility journal" }
-                check(metadata.writeHash(stateSnapshotHash(reconciled))) {
+                check(metadata.writeHash(mirrorHash(reconciled))) {
                     "could not mark imported compatibility journal"
                 }
                 reconciled
@@ -855,9 +874,23 @@ internal class DowngradeCompatibleStatePersistence(
 
     private fun isPayloadKey(key: String): Boolean = key != "panel_id" && key != "config_schema"
 
+    private fun project(state: Map<String, Any>): Map<String, Any> =
+        state.filterKeys { it !in mirrorExcludedKeys }
+
+    private fun mirrorHash(state: Map<String, Any>): String = stateSnapshotHash(project(state))
+
+    private fun scrubExcludedKeys() {
+        // A journal written before the exclusion, or by an older build, can still hold these keys;
+        // persisting never deletes a key it does not mention. A failed scrub retries next startup.
+        val removal = StateMutation(clear = false, changes = mirrorExcludedKeys.associateWith { null })
+        if (!runCatching { legacy.persist(removal) }.getOrDefault(false)) {
+            Log.w(TAG, "could not remove excluded keys from legacy compatibility journal")
+        }
+    }
+
     override fun persist(mutation: StateMutation): Boolean {
         val candidate = snapshot.toMutableMap().applyMutation(mutation)
-        val candidateHash = stateSnapshotHash(candidate)
+        val candidateHash = mirrorHash(candidate)
         val fullReconcile = markerlessConflict || metadata.readWriteIntent() != null
         if (!runCatching { metadata.writeIntent(candidateHash) }.getOrDefault(false)) return false
 
@@ -869,7 +902,11 @@ internal class DowngradeCompatibleStatePersistence(
         snapshot = candidate
         markerlessConflict = false
         val legacySucceeded = runCatching {
-            if (fullReconcile) legacy.replace(candidate) else legacy.persist(mutation)
+            if (fullReconcile) {
+                legacy.replace(project(candidate))
+            } else {
+                legacy.persist(mutation.copy(changes = mutation.changes.filterKeys { it !in mirrorExcludedKeys }))
+            }
         }.getOrDefault(false)
         if (!legacySucceeded) {
             // SQLite is already durable, so this save is committed. The intent must remain: a restart
@@ -890,13 +927,13 @@ internal class DowngradeCompatibleStatePersistence(
 
     override fun replace(snapshot: Map<String, Any>): Boolean {
         val durableSnapshot = snapshot.toMap()
-        val snapshotHash = stateSnapshotHash(durableSnapshot)
+        val snapshotHash = mirrorHash(durableSnapshot)
         if (!runCatching { metadata.writeIntent(snapshotHash) }.getOrDefault(false)) return false
         if (!runCatching { primary.replace(durableSnapshot) }.getOrDefault(false)) return false
 
         this.snapshot = durableSnapshot
         markerlessConflict = false
-        if (!runCatching { legacy.replace(durableSnapshot) }.getOrDefault(false)) {
+        if (!runCatching { legacy.replace(project(durableSnapshot)) }.getOrDefault(false)) {
             Log.w(TAG, "SQLite state durable but legacy compatibility journal replacement failed")
             return true
         }
