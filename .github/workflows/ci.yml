@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      android_runner:
+        description: Where the Android build runs
+        type: choice
+        options: [auto, self-hosted, hosted]
+        default: auto
 
 permissions:
   contents: read
@@ -20,37 +26,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The Android build runs on the project's self-hosted runner when one is online: a single ten-core
+  # job with a persistent Gradle home and a preinstalled toolchain finishes the whole Android surface
+  # sooner than four hosted splits. Everything else stays hosted. Pull requests, including Dependabot
+  # and forks, always use hosted runners so outside code never runs on the project machine.
+  #
+  # CI_ANDROID_RUNNER (repository variable) or the dispatch input selects `hosted`, `self-hosted` or
+  # `auto` (the default). `auto` asks the API for an online project runner using RUNNER_STATUS_TOKEN, a
+  # fine-grained token with read-only Administration access to this repository, and falls back to
+  # hosted runners when the token is missing, the check fails or no runner is online.
+  android-runner:
+    name: Choose Android runner
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ github.event.inputs.android_runner || vars.CI_ANDROID_RUNNER || 'auto' }}
+          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          choice=hosted
+          if [ "$EVENT" = pull_request ]; then
+            reason="pull requests always build on hosted runners"
+          else
+            case "$MODE" in
+              hosted) reason="CI_ANDROID_RUNNER is hosted" ;;
+              self-hosted) choice=self-hosted; reason="CI_ANDROID_RUNNER is self-hosted" ;;
+              auto)
+                if [ -z "$RUNNER_STATUS_TOKEN" ]; then
+                  reason="no RUNNER_STATUS_TOKEN secret, so runner availability cannot be checked"
+                elif online="$(curl -fsS --max-time 15 \
+                      -H "Authorization: Bearer $RUNNER_STATUS_TOKEN" -H 'Accept: application/vnd.github+json' \
+                      "https://api.github.com/repos/$REPOSITORY/actions/runners?per_page=100" \
+                      | jq '[.runners[] | select(.status == "online" and ([.labels[].name] | index("ms01-i9")))] | length')"; then
+                  if [ "$online" -gt 0 ]; then
+                    choice=self-hosted; reason="$online project runner(s) online"
+                  else
+                    reason="no project runner is online"
+                  fi
+                else
+                  reason="the runner availability check failed"
+                fi
+                ;;
+              *) echo "::error::CI_ANDROID_RUNNER must be hosted, self-hosted or auto, not '$MODE'"; exit 1 ;;
+            esac
+          fi
+          if [ "$choice" = self-hosted ]; then
+            runs_on='["self-hosted","Linux","X64","ms01-i9"]'
+            matrix='[{"name":"build and tests","tasks":":app:testDebugUnitTest :app:processDebugManifest :app:testReleaseUnitTest :app:assembleDebug :app:assembleDebugAndroidTest :app:assembleRelease","apks":"both"}]'
+          else
+            runs_on='"ubuntu-24.04"'
+            # DatabaseCompatibilityApkContractTest asserts against the merged DEBUG manifest, so the
+            # release suite needs it built. The debug and release APKs share almost no tasks, so they
+            # build on separate hosted runners. Full lint runs out of band in lint.yml; the release
+            # build's fatal lint pass stays in CI.
+            matrix='[{"name":"debug unit tests","tasks":":app:testDebugUnitTest","apks":"no"},{"name":"release unit tests","tasks":":app:processDebugManifest :app:testReleaseUnitTest","apks":"no"},{"name":"assemble debug","tasks":":app:assembleDebug :app:assembleDebugAndroidTest","apks":"debug"},{"name":"assemble release","tasks":":app:assembleRelease","apks":"release"}]'
+          fi
+          echo "Android runner: $choice ($reason)" | tee -a "$GITHUB_STEP_SUMMARY"
+          {
+            echo "runs-on=$runs_on"
+            echo "matrix=$matrix"
+          } >> "$GITHUB_OUTPUT"
+
   build:
     name: Android ${{ matrix.name }}
-    # Hosted. The project runner is a ten-core container on a shared host: running this
-    # workflow's jobs there at once oversubscribed it, and the timing-bounded provisioning
-    # contracts then failed. HiveMqTransportBrokerTest also expects the hosted image's lack of
-    # an IPv6 default route, which that container has.
-    runs-on: ubuntu-24.04
+    needs: android-runner
+    runs-on: ${{ fromJSON(needs.android-runner.outputs.runs-on) }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: debug unit tests
-            tasks: ":app:testDebugUnitTest"
-            apks: "no"
-          - name: release unit tests
-            # DatabaseCompatibilityApkContractTest asserts against the merged
-            # DEBUG manifest, so the release suite needs it built even though the
-            # rest of the split is release-only.
-            tasks: ":app:processDebugManifest :app:testReleaseUnitTest"
-            apks: "no"
-          # The debug and release APKs share almost no tasks, so building them on separate runners
-          # halves the longest Android split.
-          - name: assemble debug
-            tasks: ":app:assembleDebug :app:assembleDebugAndroidTest"
-            apks: "debug"
-          - name: assemble release
-            # Full lint runs out of band in lint.yml (nightly, on demand and beside every release tag). The
-            # release build's fatal lint pass stays here, so a fatal issue still fails CI.
-            tasks: ":app:assembleRelease"
-            apks: "release"
+        include: ${{ fromJSON(needs.android-runner.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,12 +168,27 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
+        if: runner.environment == 'github-hosted'
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
 
       - name: Install Android build toolchain
+        if: runner.environment == 'github-hosted'
         run: sdkmanager "platforms;android-37.0" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
 
+      # The project runner carries the pinned SDK packages (installed by its provisioning script
+      # in the runner setup) and keeps its Gradle home between jobs, so it needs no download or cache.
+      - name: Use the project runner's Android toolchain
+        if: runner.environment == 'self-hosted'
+        run: |
+          sdk=/opt/android-sdk
+          for package in platforms/android-37.0 build-tools/36.0.0 ndk/27.0.12077973 cmake/3.22.1; do
+            test -d "$sdk/$package" || { echo "::error::project runner is missing $package"; exit 1; }
+          done
+          echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+
       - name: Set up Gradle
+        if: runner.environment == 'github-hosted'
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
         with:
           cache-provider: enhanced
@@ -150,7 +217,7 @@ jobs:
       # The wake-word library is committed prebuilt. Every build proves the committed libraries still
       # correspond to the sources they record; the wakeword-prebuilt workflow rebuilds them from source.
       - name: Verify the prebuilt wake-word libraries
-        if: matrix.apks == 'release'
+        if: matrix.apks == 'release' || matrix.apks == 'both'
         run: tools/wakeword/build-prebuilt.sh verify
 
       - name: Run ${{ matrix.name }}
@@ -184,16 +251,22 @@ jobs:
         run: |
           build_tools="$ANDROID_HOME/build-tools/36.0.0"
           case "$APK_VARIANT" in
-            debug) apk=app/build/outputs/apk/debug/app-debug.apk ;;
-            release) apk=app/build/outputs/apk/release/app-release-unsigned.apk ;;
+            debug | release) variants="$APK_VARIANT" ;;
+            both) variants="debug release" ;;
             *) echo "unknown APK variant: $APK_VARIANT" >&2; exit 1 ;;
           esac
-          badging="$("$build_tools/aapt" dump badging "$apk")"
-          grep -Fq "compileSdkVersion='37'" <<<"$badging"
-          grep -Fq "sdkVersion:'26'" <<<"$badging"
-          grep -Fq "targetSdkVersion:'35'" <<<"$badging"
-          [ "$APK_VARIANT" = release ] || exit 0
-          release_apk="$apk"
+          for variant in $variants; do
+            case "$variant" in
+              debug) apk=app/build/outputs/apk/debug/app-debug.apk ;;
+              release) apk=app/build/outputs/apk/release/app-release-unsigned.apk ;;
+            esac
+            badging="$("$build_tools/aapt" dump badging "$apk")"
+            grep -Fq "compileSdkVersion='37'" <<<"$badging"
+            grep -Fq "sdkVersion:'26'" <<<"$badging"
+            grep -Fq "targetSdkVersion:'35'" <<<"$badging"
+          done
+          [ "$APK_VARIANT" != debug ] || exit 0
+          release_apk=app/build/outputs/apk/release/app-release-unsigned.apk
           release_files="$(unzip -Z1 "$release_apk")"
           grep -Fxq 'lib/arm64-v8a/libhapaneld_led.so' <<<"$release_files"
           grep -Fxq 'lib/armeabi-v7a/libhapaneld_led.so' <<<"$release_files"
@@ -223,11 +296,11 @@ jobs:
           done
 
       - name: Verify V4 release signature sidecar contract
-        if: matrix.apks == 'release'
+        if: matrix.apks == 'release' || matrix.apks == 'both'
         run: scripts/tests/release_idsig_test.sh
 
       - name: Upload debug APK
-        if: matrix.apks == 'debug'
+        if: matrix.apks == 'debug' || matrix.apks == 'both'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ha-paneld-debug
