@@ -32,9 +32,10 @@ jobs:
   # and forks, always use hosted runners so outside code never runs on the project machine.
   #
   # CI_ANDROID_RUNNER (repository variable) or the dispatch input selects `hosted`, `self-hosted` or
-  # `auto` (the default). `auto` asks the API for an online project runner using RUNNER_STATUS_TOKEN, a
-  # fine-grained token with read-only Administration access to this repository, and falls back to
-  # hosted runners when the token is missing, the check fails or no runner is online.
+  # `auto` (the default). `auto` asks the API for an online project runner using RUNNER_ADMIN_TOKEN, a
+  # fine-grained token with Administration access to this repository, and falls back to hosted runners
+  # when the token is missing, the check fails or no runner is online. A failed check is annotated as a
+  # warning so an expired token does not silently slow CI. Pull requests never receive the token.
   android-runner:
     name: Choose Android runner
     runs-on: ubuntu-24.04
@@ -47,7 +48,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           MODE: ${{ github.event.inputs.android_runner != '' && github.event.inputs.android_runner != 'repository setting' && github.event.inputs.android_runner || vars.CI_ANDROID_RUNNER || 'auto' }}
-          RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
+          RUNNER_STATUS_TOKEN: ${{ github.event_name != 'pull_request' && secrets.RUNNER_ADMIN_TOKEN || '' }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -60,18 +61,24 @@ jobs:
               self-hosted) choice=self-hosted; reason="CI_ANDROID_RUNNER is self-hosted" ;;
               auto)
                 if [ -z "$RUNNER_STATUS_TOKEN" ]; then
-                  reason="no RUNNER_STATUS_TOKEN secret, so runner availability cannot be checked"
-                elif online="$(curl -fsS --max-time 15 \
-                      -H "Authorization: Bearer $RUNNER_STATUS_TOKEN" -H 'Accept: application/vnd.github+json' \
-                      "https://api.github.com/repos/$REPOSITORY/actions/runners?per_page=100" \
-                      | jq '[.runners[] | select(.status == "online" and ([.labels[].name] | index("ms01-i9")))] | length')"; then
-                  if [ "$online" -gt 0 ]; then
-                    choice=self-hosted; reason="$online project runner(s) online"
-                  else
-                    reason="no project runner is online"
-                  fi
+                  reason="no RUNNER_ADMIN_TOKEN secret, so runner availability cannot be checked"
+                  echo "::warning::$reason"
                 else
-                  reason="the runner availability check failed"
+                  status="$(curl -sS --max-time 15 -o runners.json -w '%{http_code}' \
+                      -H "Authorization: Bearer $RUNNER_STATUS_TOKEN" -H 'Accept: application/vnd.github+json' \
+                      "https://api.github.com/repos/$REPOSITORY/actions/runners?per_page=100" || true)"
+                  status="${status:-000}"
+                  if [ "$status" = 200 ] && online="$(jq '[.runners[] | select(.status == "online" and ([.labels[].name] | index("ms01-i9")))] | length' runners.json)"; then
+                    if [ "$online" -gt 0 ]; then
+                      choice=self-hosted; reason="$online project runner(s) online"
+                    else
+                      reason="no project runner is online"
+                    fi
+                  else
+                    reason="the runner availability check failed with HTTP $status"
+                    echo "::warning::$reason; check RUNNER_ADMIN_TOKEN"
+                  fi
+                  rm -f runners.json
                 fi
                 ;;
               *) echo "::error::CI_ANDROID_RUNNER must be hosted, self-hosted or auto, not '$MODE'"; exit 1 ;;
