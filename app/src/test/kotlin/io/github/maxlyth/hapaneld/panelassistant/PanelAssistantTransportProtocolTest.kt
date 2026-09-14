@@ -94,6 +94,31 @@ class PanelAssistantTransportProtocolTest {
         )
     }
 
+    @Test fun `an accepted result carries a known discovery claim and reads any other as absent`() {
+        assertNull(session(accepted()).mqttDiscovery)
+        assertEquals("withdraw", session(accepted().claiming("withdraw")).mqttDiscovery)
+        assertEquals("announce", session(accepted().claiming("announce")).mqttDiscovery)
+        assertNull(session(accepted().claiming("hold")).mqttDiscovery)
+        assertNull(session(accepted().claiming(1)).mqttDiscovery)
+    }
+
+    @Test fun `mqtt discovery is released by any authority but native and withdrawn only on its word`() {
+        val rule = PanelAssistantTransportProtocol::mqttDiscovery
+        for (authority in listOf("mqtt", "shadow", "future_mode")) {
+            for (persisted in listOf("", "withdraw", "announce")) {
+                assertEquals("$authority persisted=$persisted", "announce", rule(authority, "withdraw", persisted))
+                assertEquals("$authority persisted=$persisted", "announce", rule(authority, null, persisted))
+            }
+        }
+        assertEquals("withdraw", rule("native", "withdraw", ""))
+        assertEquals("withdraw", rule("native", "withdraw", "announce"))
+        assertEquals("announce", rule("native", "announce", "withdraw"))
+        assertEquals("withdraw", rule("native", null, "withdraw"))
+        assertEquals("announce", rule("native", null, "announce"))
+        assertEquals("announce", rule("native", null, ""))
+        assertEquals("announce", rule("native", null, "hold"))
+    }
+
     @Test fun `a refusal yields its code and an unusable code reads as invalid_format`() {
         assertEquals(
             PanelAssistantHelloOutcome.Refused("unknown_panel"),
@@ -175,6 +200,11 @@ class PanelAssistantTransportProtocolTest {
                 .put("capabilities", JSONArray())
                 .put("integration", JSONObject().put("version", "0.3.0")),
         )
+
+    private fun JSONObject.claiming(value: Any): JSONObject = apply { getJSONObject("result").put("mqtt_discovery", value) }
+
+    private fun session(frame: JSONObject): PanelAssistantSession =
+        (PanelAssistantTransportProtocol.helloOutcome(frame, 1L) as PanelAssistantHelloOutcome.Accepted).session
 
     private fun refused(code: String): JSONObject = JSONObject()
         .put("id", 1)

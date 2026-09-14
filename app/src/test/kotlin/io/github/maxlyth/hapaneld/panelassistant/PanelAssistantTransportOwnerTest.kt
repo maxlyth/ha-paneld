@@ -509,6 +509,106 @@ class PanelAssistantTransportOwnerTest {
         harness.owner.close()
     }
 
+    @Test fun aFreshWithdrawalReachesTheBridgeOnlyAfterTheFullSyncIsAcknowledged() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "ON")
+        val discoveries = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state"), mqttDiscovery = "withdraw", holdFullEnd = true))
+        val harness = harness(connection, shadow = shadow.reporter, onMqttDiscovery = { discoveries += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), connection.sent.map(::kind))
+        assertEquals(emptyList<String>(), discoveries)
+
+        connection.inbound.trySend(Ha.reportAcknowledged(3L))
+        runCurrent()
+        assertEquals(listOf("withdraw"), discoveries)
+
+        // Later acknowledged reports do not hand the withdrawal over again.
+        shadow.sink("relay1", "OFF")
+        runCurrent()
+        assertEquals("delta", kind(connection.sent.last()))
+        assertEquals(listOf("withdraw"), discoveries)
+        harness.owner.close()
+    }
+
+    @Test fun aSessionEndingBeforeItsFullSyncHandsNothingOverAndTheNextResolvesTheClaimAgain() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "ON")
+        val discoveries = mutableListOf<String>()
+        val first = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state"), mqttDiscovery = "withdraw", holdFullEnd = true))
+        val second = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state"), mqttDiscovery = "withdraw"))
+        val harness = harness(first, second, shadow = shadow.reporter, onMqttDiscovery = { discoveries += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        first.inbound.trySend(Ha.sessionClosed("entry_unloaded"))
+        runCurrent()
+        assertTrue(first.closed)
+        assertEquals(emptyList<String>(), discoveries)
+
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), second.sent.map(::kind))
+        assertEquals(listOf("withdraw"), discoveries)
+        harness.owner.close()
+    }
+
+    @Test fun aWithdrawalOnASessionWithoutStateReportingReachesTheBridgeAtOnce() = runTest {
+        val discoveries = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("commands"), mqttDiscovery = "withdraw"))
+        val harness = harness(connection, shadow = Shadow(listOf("relay1")).reporter, commands = ImmediateSink(), onMqttDiscovery = { discoveries += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals(listOf("panel_assistant/hello"), connection.sent.map(::kind))
+        assertEquals(listOf("withdraw"), discoveries)
+        harness.owner.close()
+    }
+
+    @Test fun aReleaseReachesTheBridgeAtOnceWhateverTheReplyClaims() = runTest {
+        for ((authority, claim) in listOf("shadow" to "withdraw", "mqtt" to null, "future_mode" to "withdraw")) {
+            val shadow = Shadow(listOf("relay1"))
+            shadow.sink("relay1", "ON")
+            val discoveries = mutableListOf<String>()
+            val connection = FakeConnection(Ha.accepting(authority = authority, capabilities = listOf("state"), mqttDiscovery = claim, holdFullEnd = true))
+            val harness = harness(connection, shadow = shadow.reporter, mqttDiscovery = { "withdraw" }, onMqttDiscovery = { discoveries += it })
+            harness.owner.replaceDemand(DEMAND)
+            runCurrent()
+            assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+            assertEquals("$authority $claim", listOf("announce"), discoveries)
+            harness.owner.close()
+        }
+    }
+
+    @Test fun anOlderIntegrationWithoutAClaimKeepsAWithdrawnPanelWithdrawnAndAnnouncesOtherwise() = runTest {
+        for ((persisted, expected) in listOf("withdraw" to emptyList(), "announce" to emptyList(), "" to listOf("announce"))) {
+            val shadow = Shadow(listOf("relay1"))
+            shadow.sink("relay1", "ON")
+            val discoveries = mutableListOf<String>()
+            val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state")))
+            val harness = harness(connection, shadow = shadow.reporter, mqttDiscovery = { persisted }, onMqttDiscovery = { discoveries += it })
+            harness.owner.replaceDemand(DEMAND)
+            advanceTimeBy(31_000L)
+            runCurrent()
+            assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end", "ping"), connection.sent.map(::kind))
+            assertEquals("persisted=$persisted", expected, discoveries)
+            harness.owner.close()
+        }
+    }
+
+    @Test fun aClaimEqualToThePersistedValueIsNotHandedOverAgain() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "ON")
+        val discoveries = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state"), mqttDiscovery = "withdraw"))
+        val harness = harness(connection, shadow = shadow.reporter, mqttDiscovery = { "withdraw" }, onMqttDiscovery = { discoveries += it })
+        harness.owner.replaceDemand(DEMAND)
+        advanceTimeBy(31_000L)
+        runCurrent()
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end", "ping"), connection.sent.map(::kind))
+        assertEquals(emptyList<String>(), discoveries)
+        harness.owner.close()
+    }
+
     // ---- harness ---------------------------------------------------------------------------------
 
     /** Runs every command at once with [result]; approvals stay pending. */
@@ -549,6 +649,8 @@ class PanelAssistantTransportOwnerTest {
         shadow: PanelAssistantShadowReporter? = null,
         commands: PanelAssistantCommandSink? = null,
         onAuthority: (String) -> Unit = {},
+        mqttDiscovery: () -> String = { "" },
+        onMqttDiscovery: (String) -> Unit = {},
     ): Harness {
         val connector = FakeConnector(this, script.toMutableList(), repeating, repeatingFailure)
         val forces = mutableListOf<Boolean>()
@@ -567,6 +669,8 @@ class PanelAssistantTransportOwnerTest {
             shadow = shadow,
             commands = commands,
             onAuthority = onAuthority,
+            mqttDiscovery = mqttDiscovery,
+            onMqttDiscovery = onMqttDiscovery,
         )
         harness = Harness(owner, connector, forces)
         return harness
@@ -632,6 +736,9 @@ class PanelAssistantTransportOwnerTest {
             capabilities: List<String> = emptyList(),
             reportError: String? = null,
             commandResultError: String? = null,
+            mqttDiscovery: String? = null,
+            /** Leave the `full_end` request unanswered; the test injects [reportAcknowledged] itself. */
+            holdFullEnd: Boolean = false,
         ): (JSONObject, FakeConnection) -> Unit = { frame, connection ->
             when (frame.getString("type")) {
                 "panel_assistant/hello" -> connection.inbound.trySend(
@@ -647,11 +754,12 @@ class PanelAssistantTransportOwnerTest {
                                 .put("authority", authority)
                                 .put("capabilities", JSONArray(capabilities))
                                 .put("integration", JSONObject().put("version", "0.3.0"))
-                                .put("channels", JSONObject().put("accepted", 0).put("unknown", JSONArray())),
+                                .put("channels", JSONObject().put("accepted", 0).put("unknown", JSONArray()))
+                                .apply { if (mqttDiscovery != null) put("mqtt_discovery", mqttDiscovery) },
                         )
                         .toString(),
                 )
-                "panel_assistant/report_state" -> connection.inbound.trySend(
+                "panel_assistant/report_state" -> if (!holdFullEnd || frame.getString("sync") != "full_end") connection.inbound.trySend(
                     if (reportError != null) {
                         JSONObject().put("id", frame.getLong("id")).put("type", "result").put("success", false)
                             .put("error", JSONObject().put("code", reportError).put("message", "x")).toString()
@@ -685,6 +793,10 @@ class PanelAssistantTransportOwnerTest {
                     .toString(),
             )
         }
+
+        /** The acknowledgement of the `report_state` sent as message [id]. */
+        fun reportAcknowledged(id: Long): String = JSONObject().put("id", id).put("type", "result").put("success", true)
+            .put("result", JSONObject().put("rejected", JSONArray())).toString()
 
         fun command(commandId: String, channel: String, value: Any?): String = JSONObject()
             .put("id", 1)

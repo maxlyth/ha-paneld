@@ -137,6 +137,9 @@ internal class PanelAssistantShadowReporter(
         entries.values.forEach { it.inFlight = false }
     }
 
+    /** True once the integration has acknowledged this session's `full_end`, so every native entity is available. */
+    fun fullSyncComplete(): Boolean = synchronized(lock) { phase == Phase.DELTA }
+
     /** True when the bridge now serves a different channel set than the session described. */
     fun descriptorsChanged(): Boolean {
         val current = describable().keys

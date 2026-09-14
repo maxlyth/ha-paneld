@@ -19,11 +19,16 @@ internal data class PanelAssistantSession(
     val authority: String,
     val capabilities: List<String>,
     val integrationVersion: String,
+    /**
+     * The integration's claim on this panel's MQTT discovery entities (`withdraw`) or its release of
+     * them (`announce`); null when the reply carried no recognisable value, as an older integration's does.
+     */
+    val mqttDiscovery: String? = null,
 ) {
     /** The session token is a bearer for this session's requests; keep it out of logs. */
     override fun toString(): String =
         "PanelAssistantSession(protocol=$protocol, authority=$authority, capabilities=$capabilities, " +
-            "integrationVersion=$integrationVersion)"
+            "integrationVersion=$integrationVersion, mqttDiscovery=$mqttDiscovery)"
 }
 
 internal sealed interface PanelAssistantHelloOutcome {
@@ -83,6 +88,12 @@ internal object PanelAssistantTransportProtocol {
     const val AUTHORITY_SHADOW = "shadow"
     const val AUTHORITY_NATIVE = "native"
     val AUTHORITIES: Set<String> = setOf(AUTHORITY_MQTT, AUTHORITY_SHADOW, AUTHORITY_NATIVE)
+
+    /** The panel's MQTT discovery entities are removed from Home Assistant and stay removed. */
+    const val MQTT_DISCOVERY_WITHDRAW = "withdraw"
+    /** The panel announces its MQTT discovery entities as it always has. */
+    const val MQTT_DISCOVERY_ANNOUNCE = "announce"
+    val MQTT_DISCOVERY_VALUES: Set<String> = setOf(MQTT_DISCOVERY_WITHDRAW, MQTT_DISCOVERY_ANNOUNCE)
 
     const val CAPABILITY_STATE = "state"
     const val CAPABILITY_COMMANDS = "commands"
@@ -252,9 +263,27 @@ internal object PanelAssistantTransportProtocol {
         val integrationVersion = (result.optJSONObject("integration")?.opt("version") as? String)
             ?.takeIf(VERSION::matches)
             ?: throw PanelAssistantProtocolException("hello result has no integration version")
+        // Optional on the wire: an older integration omits it, and a value this build does not know
+        // reads as absent rather than as a claim it cannot honour.
+        val mqttDiscovery = (result.opt("mqtt_discovery") as? String)?.takeIf { it in MQTT_DISCOVERY_VALUES }
         return PanelAssistantHelloOutcome.Accepted(
-            PanelAssistantSession(protocol, token, authority, capabilities, integrationVersion),
+            PanelAssistantSession(protocol, token, authority, capabilities, integrationVersion, mqttDiscovery),
         )
+    }
+
+    /**
+     * What the panel's MQTT discovery does after an accepted hello, given the [persisted] value from the
+     * last session (empty before any). The release is unconditional: any authority but `native` announces,
+     * whatever the reply says. Under `native` a [granted] value is taken as sent; a reply without one keeps
+     * the persisted value, because the registry entries of a panel that has withdrawn belong to the
+     * integration, and announcing them again on the word of an older integration would duplicate every
+     * entity. A panel that never persisted anything announces.
+     */
+    fun mqttDiscovery(authority: String, granted: String?, persisted: String): String = when {
+        authority != AUTHORITY_NATIVE -> MQTT_DISCOVERY_ANNOUNCE
+        granted != null -> granted
+        persisted in MQTT_DISCOVERY_VALUES -> persisted
+        else -> MQTT_DISCOVERY_ANNOUNCE
     }
 
     /** Interpret an event on the `hello` subscription [helloId]; null for any other frame. */

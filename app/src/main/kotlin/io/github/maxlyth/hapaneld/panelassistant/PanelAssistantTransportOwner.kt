@@ -93,6 +93,7 @@ internal data class PanelAssistantTransportStatus(
             append(" authority=").append(it.authority)
             append(" integration=").append(it.integrationVersion)
             append(" capabilities=").append(it.capabilities)
+            it.mqttDiscovery?.let { claim -> append(" mqtt_discovery=").append(claim) }
         }
     }
 }
@@ -120,6 +121,13 @@ internal data class PanelAssistantTransportStatus(
  * on the panel's own command authority through [commands]. Every accepted authority is handed to
  * [onAuthority] before the session is used, so the panel keeps enforcing it while no session is open.
  * No events.
+ *
+ * The reply's claim on the panel's MQTT discovery entities is resolved against the [mqttDiscovery] the
+ * panel persisted ([PanelAssistantTransportProtocol.mqttDiscovery]) and handed to [onMqttDiscovery] only
+ * when it changes. A release, or a withdrawal on a session that reports no state, is handed over at once.
+ * A withdrawal on a reporting session waits for the integration to acknowledge the session's full sync,
+ * so the native entities are available before the MQTT ones are removed; a session that ends first hands
+ * nothing over, and the next accepted hello resolves the claim again.
  */
 internal class PanelAssistantTransportOwner(
     private val scope: CoroutineScope,
@@ -144,6 +152,10 @@ internal class PanelAssistantTransportOwner(
     private val commands: PanelAssistantCommandSink? = null,
     private val approvalTtlMs: Long = io.github.maxlyth.hapaneld.security.ApprovalBroker.DEFAULT_TTL_MS,
     private val onAuthority: (String) -> Unit = {},
+    /** The persisted MQTT discovery value, empty before any session. */
+    private val mqttDiscovery: () -> String = { "" },
+    /** Persists the resolved MQTT discovery value and applies it to the bridge. */
+    private val onMqttDiscovery: (String) -> Unit = {},
 ) : AutoCloseable {
     private val lock = Any()
     private val generation = AtomicLong()
@@ -246,6 +258,10 @@ internal class PanelAssistantTransportOwner(
                                 hadSession = true
                                 val authority = outcome.session.authority
                                 if (authority in PanelAssistantTransportProtocol.AUTHORITIES) onAuthority(authority)
+                                val discovery = PanelAssistantTransportProtocol.mqttDiscovery(
+                                    authority, outcome.session.mqttDiscovery, mqttDiscovery(),
+                                )
+                                val discoveryChanged = discovery != mqttDiscovery()
                                 // A native entity is available only while its channel is reported, so the
                                 // native authority reports exactly as shadow mode does.
                                 val reporting = shadow?.takeIf {
@@ -263,9 +279,12 @@ internal class PanelAssistantTransportOwner(
                                         log = log,
                                     )
                                 }
+                                val withdrawAfterSync = discoveryChanged && reporting != null &&
+                                    discovery == PanelAssistantTransportProtocol.MQTT_DISCOVERY_WITHDRAW
+                                if (discoveryChanged && !withdrawAfterSync) onMqttDiscovery(discovery)
                                 val reason = try {
                                     reporting?.open(described)
-                                    holdSession(opened, outcome.session, reporting, commanding)
+                                    holdSession(opened, outcome.session, reporting, commanding, withdrawAfterSync)
                                 } finally {
                                     commanding?.close()
                                     reporting?.close()
@@ -376,6 +395,7 @@ internal class PanelAssistantTransportOwner(
         session: PanelAssistantSession,
         reporting: PanelAssistantShadowReporter?,
         commanding: PanelAssistantCommandProcessor?,
+        withdrawAfterSync: Boolean,
     ): String = coroutineScope {
         val frames = Channel<String>(Channel.UNLIMITED)
         val reader = launch {
@@ -389,7 +409,7 @@ internal class PanelAssistantTransportOwner(
             }
         }
         try {
-            sessionLoop(connection, session, reporting, commanding, frames)
+            sessionLoop(connection, session, reporting, commanding, frames, withdrawAfterSync)
         } finally {
             reader.cancel()
         }
@@ -401,8 +421,11 @@ internal class PanelAssistantTransportOwner(
         reporting: PanelAssistantShadowReporter?,
         commanding: PanelAssistantCommandProcessor?,
         frames: Channel<String>,
+        withdrawAfterSync: Boolean,
     ): String {
         var nextMessageId = HELLO_ID + 1
+        // A withdrawal still owed to the bridge once this session's full sync is acknowledged.
+        var withdrawPending = withdrawAfterSync
         // Ids of command_result requests awaiting their result, kept apart from report_state results.
         val answering = HashSet<Long>()
         var nextPingAt = monotonicMillis() + pingIntervalMs
@@ -477,6 +500,10 @@ internal class PanelAssistantTransportOwner(
                     return PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN
                 }
                 result?.let { reporting.onResult(it, monotonicMillis()) }
+                if (withdrawPending && reporting.fullSyncComplete()) {
+                    withdrawPending = false
+                    onMqttDiscovery(PanelAssistantTransportProtocol.MQTT_DISCOVERY_WITHDRAW)
+                }
             }
         }
     }

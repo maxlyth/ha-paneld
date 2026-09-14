@@ -1361,6 +1361,15 @@ class Config private constructor(
         if (authority == panelAssistantAuthority) return
         prefs.edit().putString("panel_assistant_authority", authority).apply()
     }
+    // Whether the integration holds this panel's MQTT discovery entities (withdraw) or has released
+    // them (announce), empty before any session. Kept beside the authority for the same reason: while
+    // it reads withdraw the bridge publishes tombstones instead of discovery on every connect, so an
+    // outage or an uninstalled integration never brings back entities the integration replaced.
+    val panelAssistantMqttDiscovery: String get() = prefs.getString("panel_assistant_mqtt_discovery", "") ?: ""
+    fun setPanelAssistantMqttDiscovery(value: String) {
+        if (value == panelAssistantMqttDiscovery) return
+        prefs.edit().putString("panel_assistant_mqtt_discovery", value).apply()
+    }
     val panelAssistantUpdateOwnerSeenMs: Long get() = prefs.getLong("panel_assistant_update_owner_seen_ms", 0L)
     fun setPanelAssistantUpdateOwnerSeenMs(wallMs: Long) {
         prefs.edit().putLong("panel_assistant_update_owner_seen_ms", wallMs).apply()
