@@ -271,7 +271,8 @@ internal fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SH
 
 /** Shared sensitive-request decision. Hardened policy is intentionally remote-only: trusted loopback
  * callers retain the established exemption while every non-loopback request remains peer-, operation-
- * and payload-bound through the one-shot approval broker. */
+ * and payload-bound through the one-shot approval broker. A request Panel Assistant proved was made by a
+ * Home Assistant administrator skips approval for the operations [EmbedProof.EXEMPT] names, and only those. */
 internal suspend fun authorizeSensitiveRequest(
     call: ApplicationCall,
     hardened: Boolean,
@@ -280,8 +281,14 @@ internal suspend fun authorizeSensitiveRequest(
     payload: String,
     summary: String,
     broker: ApprovalBroker,
+    audit: (String) -> Unit = { line -> Log.i("ha-paneld/http", line) },
 ): Boolean {
     if (!hardened || isLoopbackPeer(peer)) return true
+    val proven = call.provenEmbedRequest()
+    if (proven != null && proven.exempts(operation)) {
+        audit("approved by Home Assistant administrator ${proven.userId} via Panel Assistant: ${operation.name}")
+        return true
+    }
     val (decision, id) = broker.request(operation, peer, payload, summary)
     if (decision == ApprovalBroker.Decision.APPROVED) return true
     call.respondText(
@@ -1928,6 +1935,10 @@ class PaneldServer internal constructor(
                     call.respondText("host not allowed\n", status = HttpStatusCode.Forbidden)
                     return@intercept finish()
                 }
+                // Panel Assistant's proof that a Home Assistant administrator made this request through the
+                // sidebar. Verified after every other guard and before any handler; a present proof that fails
+                // is refused here and never falls through to the request's unproven handling.
+                if (!call.admitEmbedProof(PanelAssistantEmbedKeys.instance)) return@intercept finish()
             }
             routing {
                 controlPlaneRoutes(

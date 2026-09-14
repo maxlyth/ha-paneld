@@ -173,6 +173,8 @@ internal class PanelAssistantTransportOwner(
     private val mqttDiscovery: () -> String = { "" },
     /** Persists the resolved MQTT discovery value and applies it to the bridge. */
     private val onMqttDiscovery: (String) -> Unit = {},
+    /** Holds the sidebar proof key for the live session; null offers no `embed_proof`. */
+    private val embedKeys: io.github.maxlyth.hapaneld.http.EmbedProofKeyring? = null,
 ) : AutoCloseable {
     private val lock = Any()
     private val releaseLock = Any()
@@ -286,6 +288,8 @@ internal class PanelAssistantTransportOwner(
                                 PanelAssistantTransportProtocol.CAPABILITY_STATE -> shadow != null
                                 // Offered whatever else is wired: withdrawing discovery needs neither.
                                 PanelAssistantTransportProtocol.CAPABILITY_MQTT_WITHDRAW -> true
+                                // Proofs are verified by the web server, whatever else the session carries.
+                                PanelAssistantTransportProtocol.CAPABILITY_EMBED_PROOF -> embedKeys != null
                                 else -> commands != null
                             }
                         }
@@ -325,10 +329,17 @@ internal class PanelAssistantTransportOwner(
                                 val withdrawAfterSync = discoveryChanged && reporting != null &&
                                     discovery == PanelAssistantTransportProtocol.MQTT_DISCOVERY_WITHDRAW
                                 if (discoveryChanged && !withdrawAfterSync) onMqttDiscovery(discovery)
+                                val embed = outcome.session.embed
+                                val did = demand.identity.did
+                                if (embed != null && did != null) {
+                                    embedKeys?.install(io.github.maxlyth.hapaneld.http.EmbedProofKey(embed.keyId, embed.key(), did))
+                                }
                                 val reason = try {
                                     reporting?.open(described)
                                     holdSession(opened, outcome.session, reporting, commanding, withdrawAfterSync)
                                 } finally {
+                                    // The key belongs to this session: once it ends no proof verifies.
+                                    if (embed != null) embedKeys?.clear(embed.keyId)
                                     commanding?.close()
                                     reporting?.close()
                                     // Every way an accepted session ends reopens the window: a Core

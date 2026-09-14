@@ -181,5 +181,507 @@
         "note": "257 bytes"
       }
     ]
+  },
+  "proof": {
+    "label": "panel-assistant-embed-proof-v1",
+    "max_header_bytes": 128,
+    "max_body_bytes": 1048576,
+    "window_bits": 256,
+    "refusal": {
+      "status": 403,
+      "error": "embed-proof-rejected",
+      "reasons": [
+        "malformed",
+        "unknown_key",
+        "bad_mac",
+        "replayed"
+      ]
+    },
+    "operations": {
+      "exempt": [
+        "DISPLAY_CONFIGURATION",
+        "POWER_CONFIGURATION",
+        "POWER_SAFETY_ACKNOWLEDGEMENT",
+        "PROFILE_ACTIVATE",
+        "CAMERA_ENABLE",
+        "REMOTE_MEDIA",
+        "PACKAGE_TAME",
+        "DASHBOARD_RELOAD"
+      ],
+      "approval_required": [
+        "APK_INSTALL",
+        "APK_FETCH",
+        "PACKAGE_UNINSTALL",
+        "BACKUP_EXPORT",
+        "BACKUP_RESTORE",
+        "CONFIG_IMPORT",
+        "CONFIG_SECRET_EXPORT",
+        "DEVICE_REBOOT",
+        "GUARD_DB_MAINTENANCE",
+        "COMPANION_REPAIR",
+        "DASHBOARD_STORAGE_CLEAR",
+        "DEVTOOLS_ENABLE",
+        "TRANSPORT_RELEASE"
+      ]
+    },
+    "key": {
+      "key_id": "0123456789abcdef",
+      "key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+      "did": "4b442128f04f42f6689118ceaa83f246c2ce5dc5231512c97d3682af7e8a0392",
+      "user_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    },
+    "valid": [
+      {
+        "note": "a form post",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        },
+        "counter": 1,
+        "canonical": "panel-assistant-embed-proof-v1\n4b442128f04f42f6689118ceaa83f246c2ce5dc5231512c97d3682af7e8a0392\n0123456789abcdef\n1\na1b2c3d4e5f60718293a4b5c6d7e8f90\nPOST\n/api/v1/config\nc7e0efe769e94287792cd00af75e69f51e74908d920d304786024b4635251f1e",
+        "header": "v1;k=0123456789abcdef;n=1;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=Pmsna48TsqLtgUu6bznWerzla1ATDD9xbA0n7EwcqH0"
+      },
+      {
+        "note": "no body: the digest is a dash",
+        "request": {
+          "method": "GET",
+          "target": "/api/v1/status",
+          "body": ""
+        },
+        "counter": 2,
+        "canonical": "panel-assistant-embed-proof-v1\n4b442128f04f42f6689118ceaa83f246c2ce5dc5231512c97d3682af7e8a0392\n0123456789abcdef\n2\na1b2c3d4e5f60718293a4b5c6d7e8f90\nGET\n/api/v1/status\n-",
+        "header": "v1;k=0123456789abcdef;n=2;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=fBA4OvCNE7bhSHDBCee_bZUb-HgC_EFBOBxHDg79QRs"
+      },
+      {
+        "note": "the target is signed exactly as on the request line, percent-encoding and plus included",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config?x=a%2Fb+c&y=%E2%9C%93",
+          "body": "screen_brightness=40"
+        },
+        "counter": 3,
+        "canonical": "panel-assistant-embed-proof-v1\n4b442128f04f42f6689118ceaa83f246c2ce5dc5231512c97d3682af7e8a0392\n0123456789abcdef\n3\na1b2c3d4e5f60718293a4b5c6d7e8f90\nPOST\n/api/v1/config?x=a%2Fb+c&y=%E2%9C%93\ncfb82eccf2c35bfc2b83bd1930267be2342d26a4c9bf8a8b5b97478193d93f26",
+        "header": "v1;k=0123456789abcdef;n=3;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=CHDd_NYJLVW7uKo-sHHpp2VsBWVpIz7E8voknecaNr8"
+      },
+      {
+        "note": "a JSON body",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/profile/activate",
+          "body": "{\"profile\":\"generic\"}"
+        },
+        "counter": 9223372036854775807,
+        "canonical": "panel-assistant-embed-proof-v1\n4b442128f04f42f6689118ceaa83f246c2ce5dc5231512c97d3682af7e8a0392\n0123456789abcdef\n9223372036854775807\na1b2c3d4e5f60718293a4b5c6d7e8f90\nPOST\n/api/v1/profile/activate\n06276a559f8d86f98ddd104908cdd4c6184c590213dfdf3b6648ef7db23a90ea",
+        "header": "v1;k=0123456789abcdef;n=9223372036854775807;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=7FZijluciY-L9vzr-yLFY1q5xmwsJYaeW74e2fRAAvU"
+      }
+    ],
+    "refused": [
+      {
+        "note": "empty",
+        "header": "",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "another version",
+        "header": "v2;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "fields out of order",
+        "header": "v1;n=7;k=0123456789abcdef;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "a field missing",
+        "header": "v1;k=0123456789abcdef;n=7;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "an extra field",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc;x=1",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "a trailing separator",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc;",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "whitespace",
+        "header": "v1;k=0123456789abcdef; n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "key id in upper case",
+        "header": "v1;k=0123456789ABCDEF;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "key id too short",
+        "header": "v1;k=0123456789abcde;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "counter zero",
+        "header": "v1;k=0123456789abcdef;n=0;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "counter with a leading zero",
+        "header": "v1;k=0123456789abcdef;n=07;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "counter above 2^63-1",
+        "header": "v1;k=0123456789abcdef;n=9223372036854775808;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "counter not decimal",
+        "header": "v1;k=0123456789abcdef;n=0x7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "user id too long",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f900;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "user id in upper case",
+        "header": "v1;k=0123456789abcdef;n=7;u=A1B2C3D4E5F60718293A4B5C6D7E8F90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "mac with padding",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc=",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "mac too short",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBO",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "mac in standard base64",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUB+/",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "a body over 1 MiB, even correctly signed",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=xGmQ0WeRHfSwsfILQRTm2BcDrKHBDZQ-2DdmUCg4G0M",
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body_repeat": {
+            "byte": "a",
+            "count": 1048577
+          }
+        }
+      },
+      {
+        "note": "a two-line header",
+        "header": [
+          "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+          "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc"
+        ],
+        "reason": "malformed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "a key id the panel does not hold",
+        "header": "v1;k=fedcba9876543210;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "unknown_key",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "no live session holds a key",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "unknown_key",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        },
+        "key_state": "none"
+      },
+      {
+        "note": "forged: signed under another key",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=rO5OmNEDLYitUZWHQOcZ4KC05Xcibc1I9FT63JrUZF8",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "signed for another panel",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=grNCPq9kJr0DD7GTLSsonvoISTBiYYMUmckqX2gpuA4",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "signed for another method",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=LZY5K131OsAmPGLZqToOH3yjMD3wuIdOrRCRLcuuosc",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "signed for another target",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=8Go8h_AEyMreiPKeUVX-vN84iNbkMiWEblClea7QJCE",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "signed for another body",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=OdD3GwfK6dSUUoSzdsenusqWdj4-afRc0MyBkeKAauU",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "signed for no body, sent with one",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=SVK7JfQNkhLo6RUSrzuuZUotbGVG2ErgQXPlZeMKBiQ",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "user id changed after signing",
+        "header": "v1;k=0123456789abcdef;n=7;u=00000000000000000000000000000000;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "counter changed after signing",
+        "header": "v1;k=0123456789abcdef;n=8;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "one mac character changed",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=B6aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "bad_mac",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        }
+      },
+      {
+        "note": "the same proof twice",
+        "header": "v1;k=0123456789abcdef;n=7;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=06aAU56Y_eJyN5igvFBop3mXQJR0fgPSvYKtzglUBOc",
+        "reason": "replayed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        },
+        "accepted_before": [
+          7
+        ]
+      },
+      {
+        "note": "older than the window",
+        "header": "v1;k=0123456789abcdef;n=44;u=a1b2c3d4e5f60718293a4b5c6d7e8f90;m=gQvgHvFErCjm0-vHvt4dQHaCtJXl1vrLcYa4DGW7x4E",
+        "reason": "replayed",
+        "request": {
+          "method": "POST",
+          "target": "/api/v1/config",
+          "body": "touch_sound=false"
+        },
+        "accepted_before": [
+          300
+        ]
+      }
+    ],
+    "window": [
+      [
+        5,
+        "accepted"
+      ],
+      [
+        3,
+        "accepted"
+      ],
+      [
+        3,
+        "replayed"
+      ],
+      [
+        5,
+        "replayed"
+      ],
+      [
+        4,
+        "accepted"
+      ],
+      [
+        300,
+        "accepted"
+      ],
+      [
+        44,
+        "replayed"
+      ],
+      [
+        45,
+        "accepted"
+      ],
+      [
+        45,
+        "replayed"
+      ],
+      [
+        299,
+        "accepted"
+      ],
+      [
+        300,
+        "replayed"
+      ],
+      [
+        1000,
+        "accepted"
+      ],
+      [
+        745,
+        "accepted"
+      ],
+      [
+        744,
+        "replayed"
+      ],
+      [
+        1001,
+        "accepted"
+      ]
+    ]
   }
 }

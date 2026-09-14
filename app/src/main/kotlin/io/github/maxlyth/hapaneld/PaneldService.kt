@@ -1254,6 +1254,7 @@ class PaneldService : Service() {
                 config.setPanelAssistantMqttDiscovery(value)
                 runtime.observe()?.value?.mqtt?.refreshPanelAssistantDiscovery()
             },
+            embedKeys = io.github.maxlyth.hapaneld.http.PanelAssistantEmbedKeys.instance,
         )
         haLifecycle = HaLifecycleCoordinator(
             // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to

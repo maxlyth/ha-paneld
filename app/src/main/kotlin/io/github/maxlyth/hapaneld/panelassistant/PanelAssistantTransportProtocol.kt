@@ -25,11 +25,22 @@ internal data class PanelAssistantSession(
      * the reply carried, because only the grant makes the field binding.
      */
     val mqttDiscovery: String? = null,
+    /** The sidebar proof key, present exactly when the session granted `embed_proof`. Never logged. */
+    val embed: PanelAssistantEmbedGrant? = null,
 ) {
-    /** The session token is a bearer for this session's requests; keep it out of logs. */
+    /** The session token is a bearer for this session's requests, and the embed key a secret; keep both out of logs. */
     override fun toString(): String =
         "PanelAssistantSession(protocol=$protocol, authority=$authority, capabilities=$capabilities, " +
             "integrationVersion=$integrationVersion, mqttDiscovery=$mqttDiscovery)"
+}
+
+/** The key Panel Assistant issued for proving sidebar requests (`hello` result field `embed`). */
+internal class PanelAssistantEmbedGrant(val keyId: String, key: ByteArray) {
+    private val key = key.copyOf()
+
+    fun key(): ByteArray = key.copyOf()
+
+    override fun toString(): String = "PanelAssistantEmbedGrant(keyId=$keyId)"
 }
 
 internal sealed interface PanelAssistantHelloOutcome {
@@ -107,6 +118,12 @@ internal object PanelAssistantTransportProtocol {
      */
     const val CAPABILITY_MQTT_WITHDRAW = "mqtt_withdraw"
 
+    /**
+     * This panel verifies Panel Assistant's sidebar request proofs. Granting it makes the reply's `embed` key
+     * required; the key lives in memory for the session only.
+     */
+    const val CAPABILITY_EMBED_PROOF = "embed_proof"
+
     const val OUTCOME_APPLIED = "applied"
     const val OUTCOME_SUPERSEDED = "superseded"
     const val OUTCOME_PENDING_APPROVAL = "pending_approval"
@@ -144,7 +161,7 @@ internal object PanelAssistantTransportProtocol {
      * leave the integration waiting.
      */
     val CAPABILITIES: List<String> =
-        listOf(CAPABILITY_STATE, CAPABILITY_COMMANDS, CAPABILITY_APPROVAL, CAPABILITY_MQTT_WITHDRAW)
+        listOf(CAPABILITY_STATE, CAPABILITY_COMMANDS, CAPABILITY_APPROVAL, CAPABILITY_MQTT_WITHDRAW, CAPABILITY_EMBED_PROOF)
 
     /**
      * The handshake contract this build implements, in canonical form. The specification's shared
@@ -152,7 +169,7 @@ internal object PanelAssistantTransportProtocol {
      * text, so a change to the handshake vocabulary changes the digest the integration records.
      */
     internal const val CANONICAL_CONTRACT: String =
-        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello","panel_assistant/report_state","panel_assistant/command_result"],"capabilities":["state","commands","approval","mqtt_withdraw"]}"""
+        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello","panel_assistant/report_state","panel_assistant/command_result"],"capabilities":["state","commands","approval","mqtt_withdraw","embed_proof"]}"""
 
     val CONTRACT_DIGEST: String = MessageDigest.getInstance("SHA-256")
         .digest(CANONICAL_CONTRACT.toByteArray(Charsets.UTF_8))
@@ -161,6 +178,8 @@ internal object PanelAssistantTransportProtocol {
     private val CODE = Regex("^[a-z][a-z0-9_]{0,63}$")
     private val COMMAND_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
     private val VERSION = Regex("^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")
+    private val EMBED_KEY_ID = Regex("^[0-9a-f]{16}$")
+    private val EMBED_KEY = Regex("^[A-Za-z0-9_-]{43}$")
     private const val MAX_SESSION_TOKEN_CHARS = 64
     private const val MAX_CAPABILITIES = 16
 
@@ -288,8 +307,14 @@ internal object PanelAssistantTransportProtocol {
         } else {
             null
         }
+        val embed = if (CAPABILITY_EMBED_PROOF in capabilities) {
+            embedGrant(result.optJSONObject("embed"))
+                ?: throw PanelAssistantProtocolException("hello result grants embed_proof without a usable key")
+        } else {
+            null
+        }
         return PanelAssistantHelloOutcome.Accepted(
-            PanelAssistantSession(protocol, token, authority, capabilities, integrationVersion, mqttDiscovery),
+            PanelAssistantSession(protocol, token, authority, capabilities, integrationVersion, mqttDiscovery, embed),
         )
     }
 
@@ -311,6 +336,15 @@ internal object PanelAssistantTransportProtocol {
             else -> MQTT_DISCOVERY_ANNOUNCE
         }
     }
+
+    private fun embedGrant(embed: JSONObject?): PanelAssistantEmbedGrant? {
+        val keyId = (embed?.opt("key_id") as? String)?.takeIf(EMBED_KEY_ID::matches) ?: return null
+        val key = (embed.opt("key") as? String)?.takeIf(EMBED_KEY::matches) ?: return null
+        val bytes = runCatching { java.util.Base64.getUrlDecoder().decode(key) }.getOrNull() ?: return null
+        return PanelAssistantEmbedGrant(keyId, bytes).takeIf { bytes.size == EMBED_KEY_BYTES }
+    }
+
+    private const val EMBED_KEY_BYTES = 32
 
     /** Interpret an event on the `hello` subscription [helloId]; null for any other frame. */
     fun sessionEvent(frame: JSONObject, helloId: Long): PanelAssistantSessionEvent? {

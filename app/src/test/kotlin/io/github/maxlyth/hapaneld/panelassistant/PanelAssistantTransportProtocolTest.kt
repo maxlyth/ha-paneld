@@ -3,6 +3,7 @@ package io.github.maxlyth.hapaneld.panelassistant
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -23,7 +24,7 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(1, hello.getJSONObject("protocol").getInt("min"))
         assertEquals(1, hello.getJSONObject("protocol").getInt("max"))
         assertTrue(Regex("^[0-9a-f]{64}$").matches(hello.getString("contract_digest")))
-        assertEquals(listOf("state", "commands", "approval", "mqtt_withdraw"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
+        assertEquals(listOf("state", "commands", "approval", "mqtt_withdraw", "embed_proof"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
         val relay = hello.getJSONArray("channels").getJSONObject(0)
         assertEquals(listOf("relay3", "switch", "relay", "relay3", "relay", "3"), listOf("channel", "platform", "translation_key", "unique_suffix", "family", "index").map { relay.get(it).toString() })
     }
@@ -32,7 +33,7 @@ class PanelAssistantTransportProtocolTest {
         // Pinned as a literal: a digest derived from JSON serialisation could differ between the
         // device's org.json and the JVM's, and the integration records whatever the panel sends.
         assertEquals(
-            "1df9963e875eff51908cdf1ddf0e75d87f3228f519c33afcdffe22cc9efdc111",
+            "ed4d5f88540dc08ba6e27ee7887ba8f8f5b9f166dc71e1e329b16357d16fe195",
             PanelAssistantTransportProtocol.CONTRACT_DIGEST,
         )
     }
@@ -92,6 +93,41 @@ class PanelAssistantTransportProtocolTest {
             ),
             outcome,
         )
+    }
+
+    @Test fun `granting embed_proof makes a well-formed 32-byte key required`() {
+        val key = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { it.toByte() })
+        fun embed(keyId: Any?, value: Any?) = JSONObject().put("key_id", keyId).put("key", value)
+        val granted = session(accepted().granting("embed_proof").apply { getJSONObject("result").put("embed", embed("0123456789abcdef", key)) })
+        assertEquals("0123456789abcdef", granted.embed?.keyId)
+        assertTrue(granted.embed!!.key().contentEquals(ByteArray(32) { it.toByte() }))
+        assertFalse(granted.toString().contains(key))
+        assertFalse(granted.embed.toString().contains(key))
+
+        val short = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(31))
+        listOf<JSONObject?>(
+            null,
+            embed("0123456789ABCDEF", key),
+            embed("0123456789abcde", key),
+            embed(7, key),
+            embed("0123456789abcdef", short),
+            embed("0123456789abcdef", "$key="),
+            embed("0123456789abcdef", key.replace('A', '+')),
+            embed("0123456789abcdef", null),
+        ).forEachIndexed { index, value ->
+            val frame = accepted().granting("embed_proof").apply { if (value != null) getJSONObject("result").put("embed", value) }
+            try {
+                PanelAssistantTransportProtocol.helloOutcome(frame, 1L)
+                fail("granted case $index was accepted without a usable key")
+            } catch (expected: PanelAssistantProtocolException) {
+            }
+        }
+    }
+
+    @Test fun `without the embed_proof grant the key is ignored`() {
+        val key = java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32))
+        val frame = accepted().apply { getJSONObject("result").put("embed", JSONObject().put("key_id", "0123456789abcdef").put("key", key)) }
+        assertNull(session(frame).embed)
     }
 
     @Test fun `every build offers mqtt_withdraw`() {

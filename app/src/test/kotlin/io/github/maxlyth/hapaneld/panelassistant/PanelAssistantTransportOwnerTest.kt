@@ -626,6 +626,62 @@ class PanelAssistantTransportOwnerTest {
         }
     }
 
+    @Test fun embedProofIsOfferedExactlyWhenAKeyringIsWired() = runTest {
+        for ((keys, expected) in listOf(
+            null to listOf("mqtt_withdraw"),
+            io.github.maxlyth.hapaneld.http.EmbedProofKeyring() to listOf("mqtt_withdraw", "embed_proof"),
+        )) {
+            val connection = FakeConnection(Ha.accepting())
+            val harness = harness(connection, embedKeys = keys)
+            harness.owner.replaceDemand(DEMAND)
+            runCurrent()
+            val offered = JSONObject(connection.sent.first()).getJSONArray("capabilities")
+            assertEquals(expected, (0 until offered.length()).map(offered::getString))
+            harness.owner.close()
+        }
+    }
+
+    @Test fun aGrantedEmbedKeyIsHeldForItsSessionOnlyAndNeverLogged() = runTest {
+        val keys = io.github.maxlyth.hapaneld.http.EmbedProofKeyring()
+        val logs = mutableListOf<String>()
+        val first = FakeConnection(Ha.accepting(capabilities = listOf("embed_proof"), embed = EMBED))
+        val second = FakeConnection(Ha.accepting(capabilities = listOf("embed_proof"), embed = JSONObject(EMBED.toString()).put("key_id", "fedcba9876543210")))
+        val harness = harness(first, second, embedKeys = keys, log = { logs += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals("0123456789abcdef", keys.liveKeyId())
+        assertEquals(IDENTITY.did, keys.key("0123456789abcdef")?.did)
+        assertFalse(harness.owner.status.describe().contains(EMBED.getString("key")))
+        assertFalse(harness.owner.status.session.toString().contains(EMBED.getString("key")))
+
+        first.inbound.trySend(Ha.sessionClosed("entry_unloaded"))
+        runCurrent()
+        assertNull(keys.liveKeyId())
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals("fedcba9876543210", keys.liveKeyId())
+        harness.owner.close()
+        runCurrent()
+        assertNull(keys.liveKeyId())
+        assertTrue(logs.isNotEmpty())
+        assertTrue(logs.none { it.contains(EMBED.getString("key")) })
+    }
+
+    @Test fun anEmbedGrantWithoutAUsableKeyIsAProtocolFailureAndHoldsNoKey() = runTest {
+        val keys = io.github.maxlyth.hapaneld.http.EmbedProofKeyring()
+        val broken = FakeConnection(Ha.accepting(capabilities = listOf("embed_proof")))
+        val good = FakeConnection(Ha.accepting(capabilities = listOf("embed_proof"), embed = EMBED))
+        val harness = harness(broken, good, embedKeys = keys)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertNull(keys.liveKeyId())
+        assertTrue(broken.closed)
+        advanceTimeBy(1_000L)
+        runCurrent()
+        assertEquals("0123456789abcdef", keys.liveKeyId())
+        harness.owner.close()
+    }
+
     @Test fun aGrantWithoutAClaimIsAProtocolFailureThatRetriesOnBackoff() = runTest {
         val authorities = mutableListOf<String>()
         val discoveries = mutableListOf<String>()
@@ -785,6 +841,7 @@ class PanelAssistantTransportOwnerTest {
         onMqttDiscovery: (String) -> Unit = {},
         persisted: Persisted? = null,
         log: (String) -> Unit = {},
+        embedKeys: io.github.maxlyth.hapaneld.http.EmbedProofKeyring? = null,
     ): Harness {
         val connector = FakeConnector(this, script.toMutableList(), repeating, repeatingFailure)
         val forces = mutableListOf<Boolean>()
@@ -802,6 +859,7 @@ class PanelAssistantTransportOwnerTest {
             log = log,
             shadow = shadow,
             commands = commands,
+            embedKeys = embedKeys,
             onAuthority = persisted?.let { store -> { value: String -> store.events += "authority:$value"; store.authority = value } } ?: onAuthority,
             authority = persisted?.let { store -> { store.authority } } ?: { "" },
             mqttDiscovery = persisted?.let { store -> { store.discovery } } ?: mqttDiscovery,
@@ -872,6 +930,7 @@ class PanelAssistantTransportOwnerTest {
             reportError: String? = null,
             commandResultError: String? = null,
             mqttDiscovery: String? = null,
+            embed: JSONObject? = null,
             /** Leave the `full_end` request unanswered; the test injects [reportAcknowledged] itself. */
             holdFullEnd: Boolean = false,
         ): (JSONObject, FakeConnection) -> Unit = { frame, connection ->
@@ -890,7 +949,8 @@ class PanelAssistantTransportOwnerTest {
                                 .put("capabilities", JSONArray(capabilities))
                                 .put("integration", JSONObject().put("version", "0.3.0"))
                                 .put("channels", JSONObject().put("accepted", 0).put("unknown", JSONArray()))
-                                .apply { if (mqttDiscovery != null) put("mqtt_discovery", mqttDiscovery) },
+                                .apply { if (mqttDiscovery != null) put("mqtt_discovery", mqttDiscovery) }
+                                .apply { if (embed != null) put("embed", embed) },
                         )
                         .toString(),
                 )
@@ -951,6 +1011,10 @@ class PanelAssistantTransportOwnerTest {
     }
 
     private companion object {
+        val EMBED: JSONObject = JSONObject()
+            .put("key_id", "0123456789abcdef")
+            .put("key", java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(ByteArray(32) { (it * 7).toByte() }))
+
         /** A sent frame's command type, or its `sync` for a `report_state`. */
         fun kind(text: String): String = JSONObject(text).let { it.optString("sync").ifEmpty { it.getString("type") } }
 
