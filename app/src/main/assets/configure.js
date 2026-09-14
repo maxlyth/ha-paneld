@@ -2108,6 +2108,17 @@
     }, 150);
   }
 
+  // Under <base href="/"> a bare fragment link would resolve against the base and leave this page, so the
+  // link sets the fragment itself and cancels the navigation.
+  function proximitySetupLink() {
+    var link = el("a", { href: "#cfg-proximity-learning", class: "pbtn", text: i18nText("configure.auto_sleep.setup_proximity", "Set up proximity on panel") });
+    link.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      location.hash = "cfg-proximity-learning";
+    });
+    return link;
+  }
+
   function autoSleepPanel() {
     if (autoSleepUsesPanel()) {
       var localSummary = autoSleepSummaryNode();
@@ -2116,7 +2127,7 @@
       return el("div", { class: "autobright-panel", id: "auto-sleep-status" }, [
         el("strong", { text: i18nText("configure.auto_sleep.source_panel", "This panel’s proximity sensor") }),
         localSummary, localAnnouncement,
-        el("a", { href: "#cfg-proximity-learning", class: "pbtn", text: i18nText("configure.auto_sleep.setup_proximity", "Set up proximity on panel") })
+        proximitySetupLink()
       ]);
     }
     if (!autoSleepStatus && !autoSleepLoading) {

@@ -83,6 +83,27 @@ class BaseRelativeUrlContractTest {
         assertTrue(shell.contains("""<html lang="${'$'}{esc(strings.requestedLocale)}"${'$'}themeAttr><head><base href="/"><meta charset="utf-8">"""))
     }
 
+    /** Under the base element a bare `#fragment` resolves against the base, so a fragment link must cancel its own navigation. */
+    @Test fun `every fragment link cancels its navigation`() {
+        val fragmentScript = Regex("""href\s*[:=]\s*["']#""")
+        val handled = Regex("""onclick|addEventListener\(\s*["']click["']|preventDefault""")
+        val scriptOffenders = pageSources().filter { it.extension == "js" }.flatMap { file ->
+            val lines = file.readLines()
+            lines.indices.filter { fragmentScript.containsMatchIn(lines[it]) }
+                .filterNot { i -> (i until minOf(lines.size, i + 7)).any { handled.containsMatchIn(lines[it]) } }
+                .map { "${file.name}:${it + 1}" }
+        }
+        val fragmentMarkup = Regex("""href=\\?["']#""")
+        val markupOffenders = http.listFiles { f -> f.extension == "kt" }!!.flatMap { file ->
+            file.readLines().withIndex()
+                .filter { (_, line) -> fragmentMarkup.containsMatchIn(line) && !line.contains("onclick=") }
+                .map { (index, _) -> "${file.name}:${index + 1}" }
+        }
+        assertEquals("fragment links leave the page under <base href=\"/\">", emptyList<String>(), scriptOffenders + markupOffenders)
+        assertTrue(fragmentScript.containsMatchIn("""el("a", { href: "#" + HASH_OF_DOT[i], text: label })"""))
+        assertTrue(!handled.containsMatchIn("""el("a", { href: "#cfg-proximity-learning", class: "pbtn" })"""))
+    }
+
     @Test fun `resolved URLs replace pathname comparisons`() {
         val install = File(assets, "install.js").readText()
         assertTrue(install.contains("new URL('api/v1/tame', document.baseURI).href"))

@@ -189,11 +189,18 @@
       // the journey authority owns what comes next. The hash also makes every visitable page
       // URL-addressable (/setup#broker), so the browser back button and manual deep-links work too.
       if (done && HASH_OF_DOT[i]) {
-        dotsHost.appendChild(el("li", { class: cls }, [el("a", { href: "#" + HASH_OF_DOT[i], text: label })]));
+        dotsHost.appendChild(el("li", { class: cls }, [el("a", { href: "#" + HASH_OF_DOT[i], text: label, onclick: hashLink })]));
       } else {
         dotsHost.appendChild(el("li", { class: cls, text: label }));
       }
     });
+  }
+
+  /* Under <base href="/"> a bare "#step" link would resolve against the base and leave this page, so hash
+   * links set the fragment themselves and cancel the navigation. */
+  function hashLink(ev) {
+    ev.preventDefault();
+    location.hash = ev.currentTarget.getAttribute("href");
   }
 
   /* Back-navigation: a hash naming a COMPLETED step forces that card; anything else — future steps,
