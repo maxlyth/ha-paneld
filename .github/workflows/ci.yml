@@ -364,18 +364,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # At most two CPU-heavy shards share a four-core runner. Three at once slowed every shard by about
+          # 60% and broke release-integrity's timing-bounded Shizuku cases; publication and git-bash take
+          # seconds and ride along.
           - group: database-authority
-            shards: database-authority publication git-bash
+            shards: database-authority renderer-seeding publication
           - group: install-runtime
-            shards: install-runtime database-runtime
+            shards: install-runtime install-export git-bash
           - group: fleet-installer
-            shards: fleet-installer host-reclamation
+            shards: fleet-installer database-runtime
+          - group: release-integrity
+            shards: release-integrity backup
           - group: database-host
-            shards: database-host backup
+            shards: database-host host-reclamation
           - group: helper-transaction
             shards: helper-transaction install-finish
-          - group: install-export
-            shards: install-export renderer-seeding release-integrity
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
