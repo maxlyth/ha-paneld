@@ -165,7 +165,7 @@ test('API Explorer localizes all controlled chrome while preserving frozen techn
   assert.equal(await page.locator('#api-intro-network').textContent(), translations['api.intro.network']);
   assert.equal(await page.locator('#api-intro-import').textContent(), translations['api.intro.import']);
   assert.equal(await page.locator('#api-intro-import a').textContent(), 'openapi.json');
-  assert.equal(await page.locator('#api-intro-import a').getAttribute('href'), '/api/v1/openapi.json');
+  assert.equal(await page.locator('#api-intro-import a').getAttribute('href'), 'api/v1/openapi.json');
   assert.equal(await page.locator('#hardened-approval-description').textContent(), translations['configure.hardened.action_approval']);
   assert.equal(await page.locator('#api-approval-key').textContent(), translations['shell.hardened.key']);
   assert.match(await page.locator('button').first().textContent(), /^发送 GET$/);
@@ -276,14 +276,14 @@ test('API Explorer spec-load failure localizes its frame and isolates hostile br
     failSpec: true,
     initScript: () => {
       const nativeFetch = window.fetch.bind(window);
-      window.fetch = (input, options) => String(input).endsWith('/api/v1/openapi.json')
+      window.fetch = (input, options) => String(input).endsWith('api/v1/openapi.json')
         ? Promise.reject('<img src=x onerror="window.__errorOwned=1">')
         : nativeFetch(input, options);
     },
   });
   const message = page.locator('#root p.desc');
   await message.waitFor();
-  assert.match(await message.textContent(), /^无法加载 \/api\/v1\/openapi\.json：<img/);
+  assert.match(await message.textContent(), /^无法加载 api\/v1\/openapi\.json：<img/);
   assert.equal(await message.locator('[lang="und"]').textContent(), '<img src=x onerror="window.__errorOwned=1">');
   assert.equal(await message.locator('img').count(), 0);
   assert.equal(await page.evaluate(() => window.__errorOwned), undefined);

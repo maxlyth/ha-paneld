@@ -236,7 +236,7 @@
     row.textContent = i18nText(rowKey, rowFallback, { evidence: evidence });
   }
   function vc() {
-    fetch("/health").then(function (r) { return r.text(); }).then(function (t) {
+    fetch("health").then(function (r) { return r.text(); }).then(function (t) {
       var mh = t.match(/ha=(\S+)/);
       var ms = t.match(/ha_src=(\S+)/);
       var mr = t.match(/ha_refused=1/);
@@ -256,7 +256,7 @@
       }
       var mc = t.match(/cfg=(\S+)/);
       var LC = document.body.getAttribute("data-cfg") || "";
-      if (mc && LC && mc[1] !== LC && location.pathname.indexOf("/configure") === 0) {
+      if (mc && LC && mc[1] !== LC && (location.origin + location.pathname).indexOf(new URL("configure", document.baseURI).href) === 0) {
         if (dirty()) banner("shell.settings_changed.externally", "Settings were changed outside this page"); else location.reload();
       }
     }).catch(function () {});

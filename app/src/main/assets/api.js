@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var SPEC_PATH = "/api/v1/openapi.json";
+  var SPEC_PATH = "api/v1/openapi.json";
   var CONDITIONAL_APPROVAL_PATHS = Object.freeze({
     "/api/v1/config": true,
     "/api/v1/config/export": true,

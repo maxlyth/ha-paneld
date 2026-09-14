@@ -55,15 +55,15 @@ internal object PowerSafetyPresentation {
         val assessment = advisory.assessment
         val warning = statusWarningHtml(advisory) ?: return ""
         val action = when {
-            !inlineRepair -> " <a href=\"/configure#cfg-keep_awake\">Review on Configure →</a>"
+            !inlineRepair -> " <a href=\"configure#cfg-keep_awake\">Review on Configure →</a>"
             advisory.action == PowerSafetyAdvisoryAction.REPAIR ->
-                """ <form method="post" action="/api/v1/power-safety/repair" data-power-safety-repair style="display:inline">""" +
+                """ <form method="post" action="api/v1/power-safety/repair" data-power-safety-repair style="display:inline">""" +
                     """<button class="pbtn" type="submit" data-hardened-approval """ +
                     """title="Repair is explicit, read-back verified, and never reboots the panel">Repair power safety</button>""" +
                     """ <span class="power-safety-repair-result" role="status" aria-live="polite"></span></form>"""
             advisory.action == PowerSafetyAdvisoryAction.ACKNOWLEDGE -> {
                 val fingerprint = requireNotNull(advisory.acknowledgementFingerprint)
-                """ <form method="post" action="/api/v1/power-safety/acknowledge" data-power-safety-acknowledge style="display:inline">""" +
+                """ <form method="post" action="api/v1/power-safety/acknowledge" data-power-safety-acknowledge style="display:inline">""" +
                     """<input type="hidden" name="fingerprint" value="$fingerprint">""" +
                     """<button class="pbtn" type="submit" data-hardened-approval title="Hide this unchanged caution in panel web pages; Hardened mode requires physical approval">Hide this caution</button>""" +
                     """ <span class="power-safety-acknowledge-result" role="status" aria-live="polite"></span></form>"""

@@ -135,8 +135,8 @@
   function installCardHref(fragment) {
     var params = new URLSearchParams(location.search), supported = ['en', 'de', 'fr', 'it', 'es', 'zh-Hans', 'nl', 'pl', 'uk', 'en-XA'];
     var explicit = params.get('lang');
-    if (supported.indexOf(explicit) < 0) return '/install' + fragment;
-    return '/install?lang=' + encodeURIComponent(explicit) + fragment;
+    if (supported.indexOf(explicit) < 0) return 'install' + fragment;
+    return 'install?lang=' + encodeURIComponent(explicit) + fragment;
   }
   function renderPowerWarning(node, envelope, compatibility, advisory) {
     var expected = envelope && POWER_PRESENTATION_STATE[envelope.code];
@@ -243,7 +243,7 @@
     var installed = (r.querySelector('.cver') || {}).textContent || '';
     vsel.textContent = '';
     var loading = document.createElement('option'); loading.textContent = t('install.shared.loading', 'loading…'); vsel.appendChild(loading);
-    return fetch('/api/v1/install/versions?name=' + encodeURIComponent(name) + '&channel=' + encodeURIComponent(chan))
+    return fetch('api/v1/install/versions?name=' + encodeURIComponent(name) + '&channel=' + encodeURIComponent(chan))
       .then(function (res) { return res.json(); }).then(function (d) {
         var vs = (d && d.versions) || [];
         if (!vs.length) { vsel.textContent = ''; var none = document.createElement('option'); none.value = ''; none.textContent = t('install.progress.no_versions', 'no versions found'); vsel.appendChild(none); verChanged(name); markVersionGeometryValid(); return true; }
@@ -305,7 +305,7 @@
     var body = 'name=' + encodeURIComponent(name);
     if (extra.action) body += '&action=' + encodeURIComponent(extra.action);
     if (extra.version) body += '&version=' + encodeURIComponent(extra.version);
-    fetch('/api/v1/install/component', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })
+    fetch('api/v1/install/component', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })
       .then(approvalAwareJson).then(function (d) {
         if (d.status === 'busy') { msg(t('install.progress.busy', 'Another install is already running — try again shortly.')); if (btn) btn.disabled = false; return; }
         if (d.status !== 'started') { var status = d.status || 'error'; msg(t('install.progress.could_not_start', 'Could not start: {status}', { status: closedToken(COMPONENT_STATUS, status) })); if (btn) btn.disabled = false; return; }
@@ -314,7 +314,7 @@
   }
 
   function pollInstall(n) {
-    fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
       if (d.running) { var workingFallback = t('install.progress.working', '{component}: working…', { component: d.component || t('install.components.install', 'Install') }); msgPresented(d.presentation, workingFallback); setTimeout(function () { pollInstall(n + 1); }, 2500); return; }
       var result = presentation(d.presentation, d.message || 'done');
       var done = t('install.progress.done_reload', '{component}: {result} — reloading…', { component: d.component || t('install.components.install', 'Install'), result: result.text });
@@ -330,7 +330,7 @@
   window.healWebView = function (btn) {
     btn.disabled = true; var s = document.getElementById('wv-heal');
     if (s) s.textContent = t('install.progress.webview_installing', 'Downloading + installing… this takes a minute.');
-    fetch('/api/v1/webview/heal', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
+    fetch('api/v1/webview/heal', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
       if (d.status === 'busy') { if (s) s.textContent = t('install.progress.operation_busy', 'Another operation is running — try again shortly.'); btn.disabled = false; return; }
       if (s) setPresented(s, d.presentation, t('install.progress.webview_started', 'Installing WebView — reload the dashboard, then refresh this page to confirm the new version.'));
     }).catch(function (error) { if (s) s.textContent = requestFailure(error, t('install.progress.start_failed', 'Failed to start — check root/daemon.')); btn.disabled = false; });
@@ -341,7 +341,7 @@
   window.repairCompUrl = function (btn) {
     btn.disabled = true; var s = document.getElementById('cu-fix');
     if (s) s.textContent = t('install.progress.companion_repairing', 'Repairing + relaunching the Companion…');
-    fetch('/api/v1/companion/repair-url', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
+    fetch('api/v1/companion/repair-url', { method: 'POST' }).then(approvalAwareJson).then(function (d) {
       if (d.status === 'busy') { if (s) s.textContent = t('install.progress.operation_busy', 'Another operation is running — try again shortly.'); btn.disabled = false; return; }
       if (s) setPresented(s, d.presentation, t('install.progress.companion_repair_started', 'Repair started — the Companion will relaunch; refresh this page in a few seconds to confirm.'));
     }).catch(function (error) { if (s) s.textContent = requestFailure(error, t('install.progress.companion_repair_failed', 'Failed to start — check root.')); btn.disabled = false; });
@@ -351,7 +351,7 @@
   window.healthAudit = function (btn) {
     btn.disabled = true; var out = document.getElementById('audit-out');
     if (out) { out.textContent = ''; var checking = document.createElement('p'); checking.className = 'note'; checking.textContent = t('install.progress.audit_checking', 'Checking…'); out.appendChild(checking); scheduleInstallColumnAlignment(); }
-    fetch('/api/v1/status?refresh=1').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/status?refresh=1').then(function (r) { return r.json(); }).then(function (d) {
       var w = (d && d.warnings) || [];
       if (!out) return;
       if (!w.length) { out.textContent = ''; var clean = document.createElement('p'); clean.className = 'note'; clean.textContent = '✓ ' + t('install.progress.audit_clean', 'No problems detected — this panel looks ready.'); out.appendChild(clean); }
@@ -372,7 +372,7 @@
   window.apkAllow = function (cb) {
     var ui = document.getElementById('apk-ui'); if (ui) ui.style.display = cb.checked ? '' : 'none';
     scheduleInstallColumnAlignment();
-    fetch('/api/v1/install/apk/allow', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'on=' + (cb.checked ? '1' : '0') }).catch(function () {});
+    fetch('api/v1/install/apk/allow', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'on=' + (cb.checked ? '1' : '0') }).catch(function () {});
   };
 
   // One counter across BOTH APK sources. Whichever the operator acted on last owns the preview, so a
@@ -439,7 +439,7 @@
     var mine = apkPreviewGeneration;
     // A failed probe deliberately changes nothing: the busy text is already painted, and inventing a
     // discard offer without knowing something is staged is the dishonesty this probe exists to avoid.
-    fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
       if (mine !== apkPreviewGeneration || !d.pending) return;
       renderApkPendingRecovery(prev, d);
     }).catch(function () {});
@@ -467,7 +467,7 @@
     // Fail-quiet on purpose: this is a page-load enhancement, and a probe error must not paint a
     // recovery card the panel never confirmed. A real pending entry resurfaces on the next action
     // as upload-busy, which re-probes.
-    fetch('/api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/install/apk/pending').then(function (r) { return r.json(); }).then(function (d) {
       if (mine !== apkPreviewGeneration || !d.pending) return;
       renderApkPendingRecovery(prev, d);
     }).catch(function () {});
@@ -481,7 +481,7 @@
     var mine = ++apkPreviewGeneration;
     apkFetchRequest = null;
     if (prev) { prev.innerHTML = '<p class="note">' + esc(t('install.apk.dynamic.uploading', 'Uploading + inspecting {filename}…', { filename: f.name })) + '</p>'; scheduleInstallColumnAlignment(); }
-    fetch('/api/v1/install/apk', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f })
+    fetch('api/v1/install/apk', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f })
       .then(function (r) { return r.json(); }).then(function (d) {
         if (mine !== apkPreviewGeneration) return;
         renderApkPreview(prev, d, t('install.apk.dynamic.upload_failed', 'Upload failed'));
@@ -517,7 +517,7 @@
         '<button class="pbtn" style="margin-top:8px" onclick="apkCancelFetch()">' + esc(t('install.apk.dynamic.cancel', 'Cancel')) + '</button>';
       scheduleInstallColumnAlignment();
     }
-    fetch('/api/v1/install/apk/from-url', {
+    fetch('api/v1/install/apk/from-url', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'url=' + encodeURIComponent(url) + '&request=' + encodeURIComponent(request)
@@ -545,7 +545,7 @@
     var request = apkFetchRequest;
     if (!request) return;
     apkMsg(t('install.apk.dynamic.cancelling', 'Cancelling…'));
-    fetch('/api/v1/install/apk/fetch/cancel', {
+    fetch('api/v1/install/apk/fetch/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'request=' + encodeURIComponent(request)
@@ -563,7 +563,7 @@
     var mine = ++apkPreviewGeneration;
     btn.disabled = true;
     apkMsg('');
-    fetch('/api/v1/install/apk/discard', {
+    fetch('api/v1/install/apk/discard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'token=' + encodeURIComponent(token)
@@ -593,7 +593,7 @@
   window.apkInstall = function (btn) {
     btn.disabled = true; apkMsg(t('install.apk.dynamic.installing', 'Installing…'));
     var body = 'token=' + encodeURIComponent(btn.getAttribute('data-token') || '');
-    fetch('/api/v1/install/apk/commit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body }).then(approvalAwareJson).then(function (d) {
+    fetch('api/v1/install/apk/commit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body }).then(approvalAwareJson).then(function (d) {
       if (d.status === 'busy') { apkMsg(t('install.apk.dynamic.install_busy', 'Another install is running — try again shortly.')); btn.disabled = false; return; }
       if (d.status === 'stale-or-missing') { apkMsg(t('install.apk.dynamic.stale', 'This APK was replaced or expired — choose or fetch it again.')); btn.disabled = false; return; }
       if (d.status !== 'started') { var status = d.status || 'error'; apkMsg(t('install.progress.could_not_start', 'Could not start: {status}', { status: apkErrorText(status) })); btn.disabled = false; return; }
@@ -604,7 +604,7 @@
   };
 
   function pollApk(n) {
-    fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
       if (d.running) { apkMsg(t('install.apk.dynamic.installing', 'Installing…')); setTimeout(function () { pollApk(n + 1); }, 2000); return; }
       var node = document.getElementById('apk-msg');
       if (node) { renderPresentedEvidence(node, d.presentation, d.message || 'done', 'install.apk.dynamic.result_label', 'Result:'); scheduleInstallColumnAlignment(); }
@@ -616,7 +616,7 @@
   // --- Uninstall an app ---
   function loadPackages() {
     var sel = document.getElementById('uninst-pkg'); if (!sel) return Promise.resolve();
-    return fetch('/api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
+    return fetch('api/v1/packages').then(function (r) { return r.json(); }).then(function (d) {
       var ps = (d && d.packages) || [];
       if (!ps.length) { sel.textContent = ''; var none = document.createElement('option'); none.value = ''; none.textContent = t('install.uninstall.dynamic.none', 'no removable apps'); sel.appendChild(none); return true; }
       sel.innerHTML = ps.map(function (p) { return '<option value="' + esc(p.pkg) + '">' + esc(p.label) + ' (' + esc(p.pkg) + ')</option>'; }).join('');
@@ -628,7 +628,7 @@
     var pkg = sel && sel.value; if (!pkg) return;
     if (!confirm(t('install.uninstall.dynamic.confirm', 'Uninstall {package}? This removes the app and its data.', { package: pkg }))) return;
     btn.disabled = true; if (msg) msg.textContent = t('install.uninstall.dynamic.working', 'Uninstalling {package}…', { package: pkg });
-    fetch('/api/v1/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'pkg=' + encodeURIComponent(pkg) })
+    fetch('api/v1/uninstall', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'pkg=' + encodeURIComponent(pkg) })
       .then(approvalAwareJson).then(function (d) {
         if (msg) {
           var compatibility = d.ok ? ('Uninstalled ' + pkg) : ('Failed: ' + (d.result || d.error || 'error'));
@@ -682,7 +682,7 @@
       return;
     }
     btn.disabled = true; bkMsg(pw ? t('install.backup.dynamic.building_encrypted', 'Building encrypted backup…') : t('install.backup.dynamic.building_plain', 'Building unencrypted ZIP…'));
-    fetch('/api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    fetch('api/v1/backup', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'passphrase=' + encodeURIComponent(pw) + '&allow_plaintext=' + (plain ? '1' : '0') +
         '&include_companion=' + (comp && comp.checked ? '1' : '0') })
       .then(function (r) {
@@ -712,7 +712,7 @@
     var out = document.getElementById('cfg-export-result');
     if (btn) btn.disabled = true;
     if (out) out.textContent = includeSecrets ? t('install.backup.dynamic.export_requesting_secrets', 'Requesting credential-inclusive export…') : t('install.backup.dynamic.export_building', 'Building configuration export…');
-    var path = '/api/v1/config/export' + (includeSecrets ? '?include_secrets=1' : '');
+    var path = 'api/v1/config/export' + (includeSecrets ? '?include_secrets=1' : '');
     fetch(path, { headers: { 'Accept': 'application/json' } }).then(function (r) {
       if (r.status === 202) return approvalAwareJson(r).then(function (d) {
         throw new Error(d.message || d.error || t('install.backup.dynamic.export_accepted_without_download', 'Export was accepted without a download.'));
@@ -743,7 +743,7 @@
     var pw = (document.getElementById('rs-pw') || {}).value || '';
     var prev = document.getElementById('rs-preview');
     if (prev) { prev.innerHTML = '<p class="note">' + esc(t('install.backup.dynamic.restore_reading', 'Reading preview…')) + '</p>'; scheduleInstallColumnAlignment(); }
-    fetch('/api/v1/restore?dry_run=1', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
+    fetch('api/v1/restore?dry_run=1', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
       .then(function (r) { return r.json(); }).then(function (d) {
         if (!prev) return;
         if (!d.ok) { var refusedFallback = d.error || t('install.backup.dynamic.restore_unreadable', 'could not read bundle'); prev.textContent = ''; var refusedNode = document.createElement('p'); refusedNode.className = 'note'; setPresented(refusedNode, d.presentation, refusedFallback); prev.appendChild(refusedNode); scheduleInstallColumnAlignment(); return; }
@@ -767,7 +767,7 @@
     if (!confirm(t('install.backup.dynamic.restore_confirm', 'Restore overwrites this panel\'s config and Companion login. Continue?'))) return;
     var pw = (document.getElementById('rs-pw') || {}).value || '';
     btn.disabled = true; bkMsg(t('install.backup.dynamic.restoring', 'Restoring…'));
-    fetch('/api/v1/restore', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
+    fetch('api/v1/restore', { method: 'POST', headers: { 'X-Backup-Passphrase': pw }, body: rsFile })
       .then(approvalAwareJson).then(function (d) {
         if (d.status === 'busy') { bkMsg(t('install.progress.operation_busy', 'Another operation is running — try again shortly.')); btn.disabled = false; return; }
         if (d.status !== 'started') { bkMsg(t('install.progress.could_not_start', 'Could not start: {status}', { status: closedToken(COMPONENT_STATUS, d.status || 'error') })); btn.disabled = false; return; }
@@ -776,7 +776,7 @@
   };
 
   function pollRestore(n) {
-    fetch('/api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
+    fetch('api/v1/install/status').then(function (r) { return r.json(); }).then(function (d) {
       if (d.running) { bkMsg(t('install.backup.dynamic.restoring', 'Restoring…')); setTimeout(function () { pollRestore(n + 1); }, 2500); return; }
       renderRestoreResult(d);
     }).catch(function () { if (n < 20) setTimeout(function () { pollRestore(n + 1); }, 3000); else bkMsg(t('install.progress.lost_contact_reload', 'Lost contact — reload to check.')); });
@@ -788,7 +788,7 @@
     var file = input.files && input.files[0]; if (!file) return;
     var out = document.getElementById('cfg-import-result');
     file.text().then(function (bodyText) {
-      return fetch('/api/v1/config/import?dry_run=1', { method: 'POST', body: bodyText })
+      return fetch('api/v1/config/import?dry_run=1', { method: 'POST', body: bodyText })
         .then(function (r) { return r.json().then(function (body) { if (!r.ok) throw (body.status || r.status); return body; }); })
         .then(function (dry) {
           var changes = dry.changes || [];
@@ -800,7 +800,7 @@
             if (out) out.textContent = t('install.backup.dynamic.import_cancelled', 'Import cancelled.');
             return;
           }
-          return fetch('/api/v1/config/import?expected_cfg=' + encodeURIComponent(dry.expected_cfg || ''), { method: 'POST', body: bodyText })
+          return fetch('api/v1/config/import?expected_cfg=' + encodeURIComponent(dry.expected_cfg || ''), { method: 'POST', body: bodyText })
             .then(function (r) { return approvalAwareJson(r).then(function (body) { return { ok: r.ok, status: r.status, body: body }; }); })
             .then(function (response) {
               if (response.status === 409) {
@@ -835,9 +835,15 @@
   if (document.addEventListener) document.addEventListener('submit', function (event) {
     var form = event.target;
     if (!form || form.tagName !== 'FORM') return;
-    var path;
-    try { path = new URL(form.action, location.href).pathname; } catch (_) { return; }
-    if (path !== '/api/v1/tame' && path !== '/api/v1/display/density') return;
+    // Compare resolved URLs, not pathnames: behind Panel Assistant's proxy the base is not the origin root.
+    var path, tame, density;
+    try {
+      path = new URL(form.action, document.baseURI);
+      path = path.origin + path.pathname;
+      tame = new URL('api/v1/tame', document.baseURI).href;
+      density = new URL('api/v1/display/density', document.baseURI).href;
+    } catch (_) { return; }
+    if (path !== tame && path !== density) return;
     event.preventDefault();
     var submitter = event.submitter;
     var body = new URLSearchParams(new FormData(form));
@@ -862,8 +868,8 @@
     }).then(function (result) {
       var applied = presentation(result.presentation, result.message || t('install.backup.dynamic.form_applied', 'Applied.'));
       note.textContent = applied.text + ' ' + t('install.backup.dynamic.form_returning', 'Returning to this card…');
-      var target = installCardHref(path === '/api/v1/tame' ? '#cfg-tame' : '#cfg-display');
-      setTimeout(function () { location.href = target; }, path === '/api/v1/tame' ? 1800 : 900);
+      var target = installCardHref(path === tame ? '#cfg-tame' : '#cfg-display');
+      setTimeout(function () { location.href = target; }, path === tame ? 1800 : 900);
     }).catch(function (error) {
       note.textContent = error && error.message ? error.message : t('install.backup.dynamic.form_failed', 'Could not apply this change.');
       if (submitter && submitter.id === 'tame-package-submit' && typeof updateTamePackageSubmit === 'function') {
@@ -896,7 +902,7 @@
   apkProbePending();
 
   // Radio card: show it only when this panel actually has an EFR32 radio gateway.
-  var initialRadioLoad = fetch('/api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
+  var initialRadioLoad = fetch('api/v1/radio').then(function (r) { return r.json(); }).then(function (d) {
     if (!d || !d.present) return true;
     var card = document.getElementById('radiocard'), st = document.getElementById('radio-status'),
         health = document.getElementById('radio-health');

@@ -65,10 +65,14 @@
     if (!params.has("lang") && !params.has("ha_lang")) return path;
     var lang = requestedLocale();
     if (supported.indexOf(lang) === -1) return path;
-    var url = new URL(path, location.origin);
+    var url = new URL(path, document.baseURI);
     if (url.origin !== location.origin) return path;
     url.searchParams.set("lang", lang);
-    return url.pathname + url.search + url.hash;
+    // Keep authored links base-relative, as the server renders them.
+    var base = new URL(".", document.baseURI).href;
+    if (url.href.indexOf(base) !== 0) return url.href;
+    var relative = url.href.slice(base.length);
+    return /^[?#]/.test(relative) || relative === "" ? "./" + relative : relative;
   }
 
   function el(tag, attrs, kids) {
@@ -100,7 +104,7 @@
   /* ---------- server I/O (POST bodies come from `typed`, never from a GET) ---------- */
 
   function getJourney() {
-    return fetch("/api/v1/setup", {
+    return fetch("api/v1/setup", {
       cache: "no-store",
       headers: { "X-ha-paneld-setup-presence": "active" },
     }).then(function (r) { return r.json(); });
@@ -333,8 +337,8 @@
     if (typed.friendly_name !== undefined) fields.friendly_name = typed.friendly_name;
     var startKey = renderedKey;
     lockStep(true);
-    (Object.keys(fields).length ? postForm("/api/v1/config", fields) : Promise.resolve({}))
-      .then(function () { return postForm("/api/v1/setup/identity", {}); })
+    (Object.keys(fields).length ? postForm("api/v1/config", fields) : Promise.resolve({}))
+      .then(function () { return postForm("api/v1/setup/identity", {}); })
       .then(function () { typed = {}; refresh(); })
       // A save can resolve after the poll has already advanced the step (server committed, response lost);
       // don't paint this step's stale error onto the next one.
@@ -368,7 +372,7 @@
     // A page reload at this step loses the module-state catalog fetched on the dashboard page; refetch
     // quietly so the username prefill still lands (into an untouched, still-empty field only).
     if (!hdArea) {
-      fetch("/api/v1/config/ha-area", { cache: "no-store" })
+      fetch("api/v1/config/ha-area", { cache: "no-store" })
         .then(function (r) { return r.json(); })
         .then(function (a) {
           hdArea = a;
@@ -436,7 +440,7 @@
     // infrastructure failure never blocks the save.
     var probe = (mqttPreflightWaived === broker)
       ? Promise.resolve({ ok: true })
-      : fetch("/api/v1/config/probe-broker?url=" + encodeURIComponent(broker), { cache: "no-store" })
+      : fetch("api/v1/config/probe-broker?url=" + encodeURIComponent(broker), { cache: "no-store" })
           .then(function (r) { return r.json(); })
           .catch(function () { return { ok: true }; });
     probe.then(function (p) {
@@ -454,7 +458,7 @@
       }
       if (saveBtn) saveBtn.textContent = i18nText("setup.state.saving", "Saving…");
       setLive(i18nText("setup.mqtt.state.saving_details", "Saving these details to the panel…"));
-      postForm("/api/v1/config", fields)
+      postForm("api/v1/config", fields)
         .then(function () {
           if (saveBtn) saveBtn.textContent = i18nText("setup.mqtt.action.checking_connection", "Checking the connection…");
           verify = { t0: Date.now(), host: brokerHost(broker) };
@@ -575,7 +579,7 @@
           i18nText("setup.renderer.failure.unresolved", "No dashboard app could be resolved for this panel."),
         i18nText("setup.renderer.failure.explanation", "Pick ha-paneld’s built-in renderer (or another installed app) in the Dashboard card of All settings, then return here."),
       ]),
-      el("p", {}, [el("a", { class: "pbtn", href: internalHref("/configure#cfg-dashboard_package"), text: i18nText("setup.renderer.action.open_dashboard_setting", "Open the Dashboard setting") })]),
+      el("p", {}, [el("a", { class: "pbtn", href: internalHref("configure#cfg-dashboard_package"), text: i18nText("setup.renderer.action.open_dashboard_setting", "Open the Dashboard setting") })]),
     ])], "renderer");
   }
 
@@ -601,7 +605,7 @@
     var startKey = renderedKey;
     lockStep(true);
     setLive(i18nText("setup.state.saving", "Saving…"));
-    postForm("/api/v1/config", { ha_url: url })
+    postForm("api/v1/config", { ha_url: url })
       .then(function () { typed = {}; refresh(); })
       .catch(function (e) { lockStep(false); if (renderedKey === startKey) { setLive(""); stepErr(e.message); } });
   }
@@ -614,14 +618,28 @@
     // as whichever account you want (confirmed in Safari), so it is both the easiest to type on and gives
     // you control over the panel's account. The "connects as you" case is softened to "may", because it
     // only happens when this browser is already logged in to Home Assistant — not the common case.
-    var browserRoute = el("div", { class: "wiz-route recommended" }, [
+    // In Panel Assistant's sidebar, Home Assistant signs the panel in itself with a dedicated account.
+    var embedded = document.body.hasAttribute("data-embedded") && typeof window.panelAssistantSignIn === "function";
+    var browserRoute = embedded ? el("div", { class: "wiz-route recommended" }, [
+      el("b", { text: i18nText("shell.pa_sign_in_title", "Sign in with Home Assistant") }),
+      el("span", { class: "wiz-badge", text: i18nText("setup.sign_in.recommended", "recommended") }),
+      el("p", { text: i18nText("shell.pa_sign_in_explanation", "Home Assistant creates a separate account for this panel and signs it in. You stay on this page.") }),
+      el("button", { class: "wiz-primary", type: "button", text: i18nText("shell.pa_sign_in_action", "Sign in"), onclick: function (e) {
+        e.target.disabled = true;
+        window.panelAssistantSignIn().then(function (result) {
+          if (!result.ok) { e.target.disabled = false; stepErr(result.message); return; }
+          setLive(result.message);
+          refresh();
+        });
+      } }),
+    ]) : el("div", { class: "wiz-route recommended" }, [
       el("b", { text: i18nText("setup.sign_in.browser.title", "Sign in from this browser") }),
       el("span", { class: "wiz-badge", text: i18nText("setup.sign_in.recommended", "recommended") }),
       el("p", { text: i18nText("setup.sign_in.browser.explanation", "You’ll get the Home Assistant login here — sign in as whichever account you want the panel to use. You’ll leave this page and come back automatically.") }),
       el("p", { class: "muted", text: i18nText("setup.sign_in.browser.account_note", "If this browser is already signed in to Home Assistant, the panel may connect as you. To keep the panel on its own account, sign in as that account when the login appears.") }),
       el("button", { class: "wiz-primary", type: "button", text: i18nText("setup.sign_in.browser.action", "Sign in from this browser"), onclick: function (e) {
         e.target.disabled = true;
-        postForm("/api/v1/ha/oauth/start", {
+        postForm("api/v1/ha/oauth/start", {
           ha_url: haUrl,
           ui_locale: requestedLocale(),
           return_surface: "setup",
@@ -679,7 +697,7 @@
       learningMilestones(),
       el("p", { class: "muted" }, [
         document.createTextNode(i18nText("setup.proof.slow_prompt", "Taking too long?") + " "),
-        el("a", { href: internalHref("/"), text: i18nText("setup.proof.dashboard_help", "The Dashboard tab lists anything that’s wrong.") }),
+        el("a", { href: internalHref("./"), text: i18nText("setup.proof.dashboard_help", "The Dashboard tab lists anything that’s wrong.") }),
       ]),
     ])], "proof");
   }
@@ -688,9 +706,9 @@
     show([card(i18nText("setup.attest.title", "Is your dashboard on the panel now?"),
       i18nText("setup.attest.lead", "The dashboard app manages its own connection, so only you can confirm this."), [
       primary(i18nText("setup.attest.yes", "Yes, it’s there"), function () {
-        postForm("/api/v1/setup/attest", {}).then(refresh).catch(function (e) { stepErr(e.message); });
+        postForm("api/v1/setup/attest", {}).then(refresh).catch(function (e) { stepErr(e.message); });
       }),
-      el("a", { class: "wiz-secondary", style: "display:block;text-align:center;padding:10px", href: internalHref("/"),
+      el("a", { class: "wiz-secondary", style: "display:block;text-align:center;padding:10px", href: internalHref("./"),
         text: i18nText("setup.attest.no", "No — it’s blank or wrong") }),
       el("p", { class: "muted", id: "wiz-err", role: "alert" }),
     ])], "attest");
@@ -713,7 +731,7 @@
       body.push(primary(i18nText("setup.webview.action.update", "Update the panel’s browser engine"), function (e) {
         e.target.disabled = true;
         e.target.textContent = i18nText("setup.webview.state.installing_short", "Installing…");
-        postForm("/api/v1/webview/heal", {})
+        postForm("api/v1/webview/heal", {})
           .then(function (body) {
             if (body.status !== "started") {
               e.target.disabled = false;
@@ -734,7 +752,7 @@
       // No pinned build for this panel: say so rather than offering a button that cannot work.
       body.push(el("p", { class: "wiz-consequence", text: i18nText("setup.webview.manual_note", "There is no known-good engine bundled for this panel model, so this one needs updating by hand — usually through the panel’s own system update, or by installing a current Android System WebView.") }));
       body.push(el("p", { class: "wiz-cta" }, [
-        el("a", { class: "pbtn", href: internalHref("/"), text: i18nText("setup.action.panel_dashboard", "Panel dashboard") }),
+        el("a", { class: "pbtn", href: internalHref("./"), text: i18nText("setup.action.panel_dashboard", "Panel dashboard") }),
       ]));
     }
     body.push(el("p", { class: "muted", id: "wiz-err", role: "alert" }));
@@ -785,11 +803,11 @@
   function loadHomeDashboardCatalog() {
     // Read-only list endpoints — allowed. Neither is the redacted config endpoint, and nothing from them
     // is ever posted back except the values the user explicitly selects.
-    fetch("/api/v1/config/home-dashboards", { cache: "no-store" })
+    fetch("api/v1/config/home-dashboards", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (c) { hdCatalog = c; paintHomeDashboards(); })
       .catch(function () { hdCatalog = { queried: false, items: [], default: { explicit: false, path: "" } }; paintHomeDashboards(); });
-    fetch("/api/v1/config/ha-area", { cache: "no-store" })
+    fetch("api/v1/config/ha-area", { cache: "no-store" })
       .then(function (r) { return r.json(); })
       .then(function (a) { hdArea = a; paintHomeDashboardArea(); })
       .catch(function () { hdArea = null; paintHomeDashboardArea(); });
@@ -980,8 +998,8 @@
     var fields = { home_dashboard: chosen };
     // The area rides in the same save when the user touched it; HA remains canonical afterwards.
     if (typed.ha_area !== undefined) fields.ha_area = typed.ha_area;
-    postForm("/api/v1/config", fields)
-      .then(function () { return postForm("/api/v1/setup/home-dashboard", {}); })
+    postForm("api/v1/config", fields)
+      .then(function () { return postForm("api/v1/setup/home-dashboard", {}); })
       .then(function () { typed = {}; refresh(); })
       .catch(function (e) {
         lockStep(false);
@@ -1172,10 +1190,10 @@
     if (other) other.disabled = true;
     button.textContent = enable ? i18nText("setup.filter.action.enabling", "Turning on filtering…") : i18nText("setup.filter.action.loading", "Loading the dashboard…");
     var chain = enable
-      ? postForm("/api/v1/config", { dashboard_entity_learning: "true" })
+      ? postForm("api/v1/config", { dashboard_entity_learning: "true" })
       : Promise.resolve();
     chain
-      .then(function () { return postForm("/api/v1/setup/entity-filter", {}); })
+      .then(function () { return postForm("api/v1/setup/entity-filter", {}); })
       .then(function () { typed = {}; refresh(); })
       .catch(function (e) {
         lockStep(false);
@@ -1206,8 +1224,8 @@
     // The two things a new owner actually wants next, as prominent buttons rather than quiet links: keep
     // configuring, or look at the panel overview. Labels match the nav tabs so they’re recognisable.
     top.push(el("p", { class: "wiz-cta" }, [
-      el("a", { class: "pbtn primary", href: internalHref("/configure"), text: i18nText("setup.done.action.configure", "Configure the panel") }),
-      el("a", { class: "pbtn", href: internalHref("/"), text: i18nText("setup.done.action.dashboard", "Panel dashboard") }),
+      el("a", { class: "pbtn primary", href: internalHref("configure"), text: i18nText("setup.done.action.configure", "Configure the panel") }),
+      el("a", { class: "pbtn", href: internalHref("./"), text: i18nText("setup.done.action.dashboard", "Panel dashboard") }),
     ]));
     // The entity filter is NOT offered here any more. It is its own step, asked before the first render,
     // because on a weak panel an unfiltered first load is slow and laggy and that is the first thing a new
@@ -1216,7 +1234,7 @@
     // A tip, not a step, and explicitly optional.
     cards.push(el("p", { class: "wiz-lead" }, [
       document.createTextNode(i18nText("setup.done.taming_intro", "Optional: panels often ship with vendor apps that pop up over the dashboard. ha-paneld can quieten them.") + " "),
-      el("a", { href: internalHref("/install"), text: i18nText("setup.done.taming_link", "Package taming is on the Install tab.") }),
+      el("a", { href: internalHref("install"), text: i18nText("setup.done.taming_link", "Package taming is on the Install tab.") }),
     ]));
     show(cards, "done");
     var escape = document.querySelector(".wiz-escape");
@@ -1399,7 +1417,7 @@
   }
 
   /* One-shot discovery suggestions for blank fields — read-only, never persisted by the server. */
-  fetch("/api/v1/config/discovery", { cache: "no-store" })
+  fetch("api/v1/config/discovery", { cache: "no-store" })
     .then(function (r) { return r.json(); })
     .then(function (d) {
       discovery = d;

@@ -163,7 +163,7 @@ test('API Explorer layout gate remains bound to the production frame, runtime an
     readFile(resolve(ASSETS, 'i18n.js'), 'utf8'),
     readFile(API_SPEC, 'utf8'),
   ]);
-  for (const marker of ['__API_LANG__', '__API_BACK_HREF__', '__API_I18N_PAYLOAD__', 'id="root"', 'src="/assets/i18n.js"', 'src="/assets/api.js"']) {
+  for (const marker of ['__API_LANG__', '__API_BACK_HREF__', '__API_I18N_PAYLOAD__', 'id="root"', 'src="assets/i18n.js"', 'src="assets/api.js"']) {
     assert.ok(html.includes(marker), `production API frame lost ${marker}`);
   }
   for (const marker of ['api.approval.conditional', 'data-hardened-approval', 'function render(spec)', 'function endpoint(']) {

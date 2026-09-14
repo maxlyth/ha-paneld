@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  var API = "/api/v1/profiles";
+  var API = "api/v1/profiles";
   var model = {
     catalogRevision: 0,
     profiles: [],
@@ -1038,7 +1038,7 @@
   function pollAfterRestart(ref, attempt) {
     if (attempt > 60) { setStatus(t("profiles.error.restart_slow", "The restart is taking longer than expected. Reload to check the active profile."), "error"); return; }
     setTimeout(function () {
-      fetch("/health", { cache: "no-store" }).then(function (response) {
+      fetch("health", { cache: "no-store" }).then(function (response) {
         if (!response.ok) throw new Error("not ready");
         return jsonFetch(API + "?t=" + Date.now());
       }).then(function (data) {

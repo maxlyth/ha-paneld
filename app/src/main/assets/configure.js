@@ -175,7 +175,13 @@
       lower === "zh-sg" || lower.indexOf("zh-sg-") === 0;
   }
 
+  // Embedded in Panel Assistant's sidebar the page shares Home Assistant's origin, where selectedLanguage
+  // is Home Assistant's own language setting: never read or write it there. The sidebar sends the
+  // Home Assistant user's language with every request instead.
+  var EMBEDDED = !!(document.body && document.body.hasAttribute("data-embedded"));
+
   function storeBrowserLanguage(value) {
+    if (EMBEDDED) return;
     try {
       if (value) window.localStorage.setItem("selectedLanguage", JSON.stringify(value));
       else window.localStorage.removeItem("selectedLanguage");
@@ -213,6 +219,7 @@
       storeBrowserLanguage(query);
       return query;
     }
+    if (EMBEDDED) return "";
     try {
       var stored = JSON.parse(window.localStorage.getItem("selectedLanguage") || "null");
       return validLanguageTag(stored) ? stored : "";
@@ -225,7 +232,7 @@
     if (explicit) params.set("lang", explicit);
     if (validLanguageTag(haLanguage)) params.set("ha_lang", haLanguage);
     var query = params.toString();
-    return "/api/v1/config/schema" + (query ? "?" + query : "");
+    return "api/v1/config/schema" + (query ? "?" + query : "");
   }
 
   // The Configure selector is the explicit panel setting. Once its save is confirmed, an older
@@ -417,7 +424,8 @@
 
   function syncHaOAuthAvailability() {
     if (!haOauthButton) return;
-    haOauthButton.disabled = !validHaUrlForOAuth();
+    // From the sidebar, Home Assistant signs the panel in to its own internal URL; the typed URL is not used.
+    haOauthButton.disabled = !EMBEDDED && !validHaUrlForOAuth();
     haOauthButton.title = haOauthButton.disabled ? i18nText("configure.oauth.valid_url_first", "Enter a valid Home Assistant URL first.") : "";
   }
 
@@ -435,7 +443,34 @@
     return copied ? Promise.resolve() : Promise.reject(new Error("copy unavailable"));
   }
 
+  function startPanelAssistantSignIn() {
+    haOauthButton.disabled = true;
+    haOauthLinks.hidden = true;
+    setHaOauthStatus(i18nText("configure.oauth.starting", "Starting sign-in…"), false);
+    window.panelAssistantSignIn().then(function (result) {
+      if (!result.ok) {
+        setHaOauthStatus(result.message, false);
+        syncHaOAuthAvailability();
+        return;
+      }
+      // As a completed LAN sign-in does, adopt the URL the credential was issued for: here Home Assistant
+      // chose its own internal URL, so read it back from the panel rather than from the form.
+      fetch("api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" })
+        .then(function (r) { return r.json(); })
+        .then(function (config) { var url = config && config.settings && config.settings.ha_url; if (typeof url === "string") haOauthTargetUrl = url; })
+        .catch(function () {})
+        .then(function () {
+          handleHaOAuthResult("success");
+          document.getElementById("cfg-msg").textContent = result.message;
+        });
+    });
+  }
+
   function startHaOAuth() {
+    if (EMBEDDED && haOauthButton && typeof window.panelAssistantSignIn === "function") {
+      startPanelAssistantSignIn();
+      return;
+    }
     if (!haOauthButton || !validHaUrlForOAuth()) return;
     var target = String(values.ha_url || "").trim().replace(/\/+$/, "");
     // Choosing browser sign-in supersedes a manually typed token immediately. This also prevents a
@@ -453,7 +488,7 @@
     haOauthLinks.hidden = true;
     var oauthLocale = window.HaI18n && typeof window.HaI18n.locale === "string"
       ? window.HaI18n.locale : (document.documentElement.lang || "en");
-    fetch("/api/v1/ha/oauth/start", {
+    fetch("api/v1/ha/oauth/start", {
       method: "POST",
       headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -522,7 +557,7 @@
       return;
     }
     var succeeded = false;
-    fetch("/api/v1/ha/oauth/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
+    fetch("api/v1/ha/oauth/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
       .then(function (response) { if (!response.ok) throw response.status; return response.json(); })
       .then(function (body) {
         if (request !== haUserStatusRequest) return;
@@ -995,7 +1030,7 @@
       if (haAreaSeed) fillAreaOptions(haAreaSeed);
       // The panel endpoint owns a short, owner-keyed cache. Always ask it so failed queries and config,
       // credential or identity changes can recover without a full browser reload.
-      fetch("/api/v1/config/ha-area", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (a) {
+      fetch("api/v1/config/ha-area", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (a) {
         if (areaSeedGeneration !== haAreaSeedGeneration || areaRequest !== haAreaCatalogRequest) return;
         if (a && a.queried) haAreaSeed = a;
         fillAreaOptions(a);
@@ -1147,7 +1182,7 @@
       function loadSources(query) {
         var request = ++haSourceRequest;
         note.textContent = i18nText("configure.brightness.sources_loading", "Loading Home Assistant illuminance sensors…");
-        fetch("/api/v1/auto-brightness/sources?q=" + encodeURIComponent(query || "") + "&limit=200")
+        fetch("api/v1/auto-brightness/sources?q=" + encodeURIComponent(query || "") + "&limit=200")
           .then(function (r) { if (!r.ok) throw r.status; return r.json(); })
           .then(function (body) {
             if (request !== haSourceRequest) return;
@@ -1675,8 +1710,8 @@
     var minimumSuffix = autoBrightnessPreviewSuffix("&minimum_percent=", "auto_brightness_minimum_percent");
     var succeeded = false;
     Promise.all([
-      fetch("/api/v1/auto-brightness", { cache: "no-store" }).then(function (r) { if (!r.ok) throw r.status; return r.json(); }),
-      fetch("/api/v1/auto-brightness/history?hours=168" + sensitivitySuffix + minimumSuffix, { cache: "no-store" }).then(function (r) { if (!r.ok) throw r.status; return r.json(); })
+      fetch("api/v1/auto-brightness", { cache: "no-store" }).then(function (r) { if (!r.ok) throw r.status; return r.json(); }),
+      fetch("api/v1/auto-brightness/history?hours=168" + sensitivitySuffix + minimumSuffix, { cache: "no-store" }).then(function (r) { if (!r.ok) throw r.status; return r.json(); })
     ]).then(function (result) {
       if (request !== autoBrightRequest) return;
       var statusRevision = autoBrightnessSourceRevision(result[0]);
@@ -1787,9 +1822,9 @@
     reset.disabled = !available || autoBrightLoading;
     resume.disabled = !available || !paused || autoBrightLoading;
     reset.onclick = function () {
-      if (confirm(i18nText("configure.brightness.reset_confirm", "Delete the seven-day ambient-light history and restart learning?"))) runAutoBrightnessAction("/api/v1/auto-brightness/reset", reset);
+      if (confirm(i18nText("configure.brightness.reset_confirm", "Delete the seven-day ambient-light history and restart learning?"))) runAutoBrightnessAction("api/v1/auto-brightness/reset", reset);
     };
-    resume.onclick = function () { runAutoBrightnessAction("/api/v1/auto-brightness/resume", resume); };
+    resume.onclick = function () { runAutoBrightnessAction("api/v1/auto-brightness/resume", resume); };
     var bucket = autoBrightHistory && (autoBrightHistory.bucket_minutes || autoBrightHistory.bucketMinutes);
     var dayCount = autoBrightnessChartDays(normalizedChartPoints()).length;
     var lineDayCount = Math.min(dayCount, autoBrightnessLineDays());
@@ -1936,7 +1971,7 @@
   function loadCameraCapability() {
     if (cameraCapabilityLoading || cameraCapability) return;
     cameraCapabilityLoading = true;
-    fetch("/api/v1/camera/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
+    fetch("api/v1/camera/status", { headers: { "Accept": "application/json" }, cache: "no-store" })
       .then(function (r) { if (!r.ok) throw r.status; return r.json(); })
       .then(function (d) { cameraCapability = d; render(); })
       .catch(function () { /* the block stays on its generic wording */ })
@@ -2016,7 +2051,7 @@
       updateAutoSleepPrerequisiteUi();
     }
     var request = ++autoSleepPrerequisiteRequest;
-    fetch("/api/v1/auto-sleep/prerequisite", { cache: "no-store" })
+    fetch("api/v1/auto-sleep/prerequisite", { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) throw new Error("HTTP " + response.status);
         return response.json();
@@ -2242,7 +2277,7 @@
     autoSleepHistoryWaitingMessage = i18nText("configure.auto_sleep.history_preparing", "Preparing activity history…");
     autoSleepHistoryError = "";
     updateAutoSleepHistory(false);
-    fetch("/api/v1/auto-sleep/source", {
+    fetch("api/v1/auto-sleep/source", {
       method: "POST",
       headers: { "Accept": "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ area_key: areaKey, source_key: sourceKey, included: !included })
@@ -2464,7 +2499,7 @@
     autoSleepHistoryError = ""; updateAutoSleepHistory();
     var request = ++autoSleepHistoryRequest, retryAutomatically = false, receivedHistory = false, succeeded = false;
     if (autoSleepHistoryReadyTimer) { clearTimeout(autoSleepHistoryReadyTimer); autoSleepHistoryReadyTimer = null; }
-    fetch("/api/v1/auto-sleep/history?hours=" + autoSleepHistoryHours, { cache: "no-store" })
+    fetch("api/v1/auto-sleep/history?hours=" + autoSleepHistoryHours, { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) { var httpError = new Error("http"); httpError.status = response.status; throw httpError; }
         return response.json();
@@ -2555,7 +2590,7 @@
     updateAutoSleepSummary();
     updateAutoSleepHistory();
     var request = ++autoSleepRequest;
-    fetch("/api/v1/auto-sleep", { cache: "no-store" })
+    fetch("api/v1/auto-sleep", { cache: "no-store" })
       .then(function (response) {
         if (!response.ok) { var statusError = new Error("status"); statusError.status = response.status; throw statusError; }
         return response.json();
@@ -2670,7 +2705,7 @@
       var helpKids = [el("span", { lang: f.helpLanguage, text: f.help })];
       if (f.displaySizingAvailable === true) {
         helpKids.push(document.createTextNode(i18nText("configure.display.recommend_prefix", " Recommend use ")));
-        helpKids.push(el("a", { href: localizedPageHref("/install#cfg-display"), text: i18nText("configure.display.sizing", "Display Sizing") }));
+        helpKids.push(el("a", { href: localizedPageHref("install#cfg-display"), text: i18nText("configure.display.sizing", "Display Sizing") }));
         helpKids.push(document.createTextNode(i18nText("configure.display.recommend_suffix", " for better results")));
       }
       help = el("small", {}, helpKids);
@@ -2680,7 +2715,7 @@
       // address that will also work from Home Assistant.
       help = el("small", { lang: f.helpLanguage }, linkifyWords(f.help, [
         ["RTSP", "rtsp://" + location.hostname + ":" + CAMERA_RTSP_PORT + "/live"],
-        ["JPEG", "/api/v1/camera/snapshot.jpg"],
+        ["JPEG", "api/v1/camera/snapshot.jpg"],
       ]));
     } else if (f.key === "auto_sleep") {
       help = el("small", { lang: f.helpLanguage, text: f.help });
@@ -2738,7 +2773,7 @@
     if (!radio || !radio.router_enabled || radioJoined()) return;
     if (!confirm(i18nText("configure.zigbee.join_confirm", "Enable Permit join in Zigbee2MQTT or ZHA first.\n\nThis will request Repeater mode and begin a new 15-minute joining period. It will not reboot or restart the panel.\n\nPermit join is enabled — request join?"))) return;
     btn.disabled = true;
-    fetch("/api/v1/radio/join", { method: "POST" })
+    fetch("api/v1/radio/join", { method: "POST" })
       .then(function (r) {
         return r.json().catch(function () { return {}; }).then(function (body) {
           if (!r.ok) throw (body.status || ("HTTP " + r.status));
@@ -3094,7 +3129,7 @@
         });
         btn.onclick = function () {
           setClearStatus(i18nText("configure.renderer.clearing", "Clearing…"), false);
-          fetch("/api/v1/dashboard/clear-storage", { method: "POST" })
+          fetch("api/v1/dashboard/clear-storage", { method: "POST" })
             .then(function (r) { return approvalAwareJson(r).then(function () { return r; }); })
             .then(function (r) { setClearStatus(r.ok ? i18nText("configure.renderer.clear_requested", "Clear requested.") : i18nText("configure.error.http", "Failed (HTTP {status})", { status: r.status }), r.ok); })
             .catch(function (error) { setClearStatus(error && error.approvalRequired ? approvalMessage(error.body) : i18nText("configure.error.network", "Failed (network)"), false); });
@@ -3175,7 +3210,7 @@
     // OUR save changes the cfg fingerprint too. Re-stamp even when newer local edits prevent a form
     // reload, otherwise buildwatch.js falsely reports those acknowledged changes as external.
     setTimeout(function () {
-      fetch("/health").then(function (r) { return r.text(); }).then(function (t) {
+      fetch("health").then(function (r) { return r.text(); }).then(function (t) {
         var m = t.match(/cfg=(\S+)/); if (m) document.body.setAttribute("data-cfg", m[1]);
       }).catch(function () {});
     }, 500);
@@ -3235,7 +3270,7 @@
       }
     });
     msg.textContent = i18nText("configure.save.saving", "Saving…");
-    fetch("/api/v1/config", {
+    fetch("api/v1/config", {
       method: "POST", headers: { "Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     }).then(function (r) {
@@ -3365,9 +3400,9 @@
     var schemaUrl = configSchemaUrl(haUserStatus.phase === "connected" ? haUserStatus.language : "");
     Promise.all([
       fetch(schemaUrl, { headers: { "Accept": "application/json" }, cache: "no-store" }).then(readLocalizedSchema),
-      fetch("/api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" }).then(function (r) { return r.json(); }),
+      fetch("api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" }).then(function (r) { return r.json(); }),
       // Installed launchable apps for the package pickers; tolerate failure (picker falls back to text).
-      fetch("/api/v1/apps").then(function (r) { return r.json(); }).catch(function () { return { apps: [] }; }),
+      fetch("api/v1/apps").then(function (r) { return r.json(); }).catch(function () { return { apps: [] }; }),
     ]).then(function (res) {
       var previousHaUrl = values.ha_url;
       var previousHaConfigured = haAuth.configured === true;
@@ -3435,7 +3470,7 @@
 
   function loadDiscoverySuggestions() {
     var request = ++configDiscoveryRequest;
-    fetch("/api/v1/config/discovery", { cache: "no-store" }).then(function (r) {
+    fetch("api/v1/config/discovery", { cache: "no-store" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (suggestions) {
@@ -3459,7 +3494,7 @@
   function loadHomeDashboards() {
     if (dirty || haAuth.configured !== true) return;
     var request = ++homeDashboardRequest;
-    fetch("/api/v1/config/home-dashboards", { cache: "no-store" }).then(function (r) {
+    fetch("api/v1/config/home-dashboards", { cache: "no-store" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (body) {
@@ -3498,7 +3533,7 @@
   function loadVoicePipelines() {
     if (voicePipelinesCatalog !== null) return;
     var request = ++voicePipelinesRequest;
-    fetch("/api/v1/voice/pipelines", { cache: "no-store" }).then(function (r) {
+    fetch("api/v1/voice/pipelines", { cache: "no-store" }).then(function (r) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       return r.json();
     }).then(function (body) {
@@ -3551,7 +3586,7 @@
     applyPendingTimer = null;
     if (!Object.keys(applyPending).length) return;
     applyPendingTimer = setTimeout(function () {
-      fetch("/api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" })
+      fetch("api/v1/config", { headers: { "Accept": "application/json" }, cache: "no-store" })
         .then(function (response) { if (!response.ok) throw response.status; return response.json(); })
         .then(function (body) {
           var next = body.apply_pending || {};
@@ -3599,7 +3634,7 @@
   }
 
   function loadRadio() {
-    return fetch("/api/v1/radio").then(function (r) { return r.json(); }).then(function (body) {
+    return fetch("api/v1/radio").then(function (r) { return r.json(); }).then(function (body) {
       radio = body && body.present ? body : null;
       render();
       configCardSourceReady("radio");

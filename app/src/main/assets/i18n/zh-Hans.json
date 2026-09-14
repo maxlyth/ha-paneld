@@ -12048,6 +12048,46 @@
       "state": "machine-cross-checked",
       "text": "在 HA 中打开"
     },
+    "shell.pa_sign_in_action": {
+      "text": "登录",
+      "sourceHash": "bfd402b2f6f3812529b55596136d3a11c51616317e3b1cd999928e2d4eae7d3f",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_explanation": {
+      "text": "Home Assistant 会为此面板创建独立账号并完成登录。您将停留在此页面。",
+      "sourceHash": "5620c25d136f177e05b1c20a1527d280060be971cbbdb907ae409cebb0ff219d",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_failed": {
+      "text": "通过 Home Assistant 登录未完成。请重新加载页面后重试。",
+      "sourceHash": "23c7c69b7eea75e901a89ecee770f4121421a99d6e5c0d4fd73f98b90a7fa770",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_internal_url_missing": {
+      "text": "Home Assistant 没有本地网络地址。请在 Home Assistant 的网络设置中设置一个，然后重试。",
+      "sourceHash": "081a71ebf9556c066dd54ee8b6231187d390ee01b4b7ca89d0901b1f383b65cf",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_ok": {
+      "text": "已登录 Home Assistant。此面板现在拥有自己的 Home Assistant 账号。",
+      "sourceHash": "92044a9eacbcf2da717f83eccba4d47025650d7fde3dab26b495b7010f451043",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_panel_refused": {
+      "text": "此面板拒绝了来自 Home Assistant 的登录。请重试。",
+      "sourceHash": "591e7de210e0e4d8d09a72f240ceecff4893caa22fefb39cac6bc0201686d74a",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_panel_unreachable": {
+      "text": "Home Assistant 无法连接此面板。请检查面板是否在网络中，然后重试。",
+      "sourceHash": "a99675e13570c21fd324b387c2b0a1f686e90317342cda3dd1955a9fcc211882",
+      "state": "machine-cross-checked"
+    },
+    "shell.pa_sign_in_title": {
+      "text": "使用 Home Assistant 登录",
+      "sourceHash": "4470afd85598af1553fc81e1d21d0ee0f708d54fe108e81e2a70f7fa36aab2cb",
+      "state": "machine-cross-checked"
+    },
     "shell.panel_switcher.title": {
       "text": "切换到另一个 ha-paneld 面板（保留当前视图）",
       "sourceHash": "18099935ffa7e381e72b5614358626beac066ee14193dbccb31826af8f30abef",

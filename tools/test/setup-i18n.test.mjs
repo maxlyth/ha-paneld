@@ -251,7 +251,7 @@ browserTest('Setup renders translated markup as text and keeps package, dashboar
   assert.equal(await rig.page.locator('#wiz-step img').count(), 0);
   assert.equal(await rig.page.evaluate(() => window.__injected), undefined);
   assert.equal(await rig.page.locator('.setup p').first().textContent(), `缺少软件包：${packageId}`);
-  assert.equal(await rig.page.locator('a.pbtn').getAttribute('href'), '/configure?lang=zh-Hans#cfg-dashboard_package');
+  assert.equal(await rig.page.locator('a.pbtn').getAttribute('href'), 'configure?lang=zh-Hans#cfg-dashboard_package');
 
   await reloadJourney(rig, journey('home_dashboard', {
     home_dashboard: { value: dashboardPath },
@@ -277,24 +277,24 @@ browserTest('Setup preserves the active locale on every JavaScript-authored cros
     }),
   }, '/?lang=zh-Hans');
 
-  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), '/?lang=zh-Hans');
+  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), './?lang=zh-Hans');
 
   await reloadJourney(rig, journey('render_proof', {
     statuses: { render_proof: { status: 'blocked' } },
   }));
-  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), '/?lang=zh-Hans');
+  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), './?lang=zh-Hans');
 
   await reloadJourney(rig, journey('renderer', {
     statuses: { renderer: { status: 'blocked', detail: 'webview_too_old_unfixable' } },
   }));
-  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), '/?lang=zh-Hans');
+  assert.equal(await rig.page.locator('#wiz-step a').getAttribute('href'), './?lang=zh-Hans');
 
   await reloadJourney(rig, completeJourney);
   const hrefs = await rig.page.locator('#wiz-step a').evaluateAll((links) => links.map((link) => link.getAttribute('href')));
   assert.deepEqual(hrefs, [
-    '/configure?lang=zh-Hans',
-    '/?lang=zh-Hans',
-    '/install?lang=zh-Hans',
+    'configure?lang=zh-Hans',
+    './?lang=zh-Hans',
+    'install?lang=zh-Hans',
   ]);
 
   const haLanguage = await openRig(t, {
@@ -303,7 +303,7 @@ browserTest('Setup preserves the active locale on every JavaScript-authored cros
   }, '/?ha_lang=de-DE');
   assert.deepEqual(
     await haLanguage.page.locator('#wiz-step a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))),
-    ['/configure?lang=de', '/?lang=de', '/install?lang=de'],
+    ['configure?lang=de', './?lang=de', 'install?lang=de'],
   );
 
   const explicitEnglish = await openRig(t, {
@@ -313,7 +313,7 @@ browserTest('Setup preserves the active locale on every JavaScript-authored cros
   }, '/?lang=en&ha_lang=de');
   assert.deepEqual(
     await explicitEnglish.page.locator('#wiz-step a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))),
-    ['/configure?lang=en', '/?lang=en', '/install?lang=en'],
+    ['configure?lang=en', './?lang=en', 'install?lang=en'],
   );
 
   const unsupportedOverride = await openRig(t, {
@@ -322,7 +322,7 @@ browserTest('Setup preserves the active locale on every JavaScript-authored cros
   }, '/?lang=nl-NL&ha_lang=de');
   assert.deepEqual(
     await unsupportedOverride.page.locator('#wiz-step a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))),
-    ['/configure?lang=de', '/?lang=de', '/install?lang=de'],
+    ['configure?lang=de', './?lang=de', 'install?lang=de'],
   );
 
   const pseudoLocale = await openRig(t, {
@@ -331,7 +331,7 @@ browserTest('Setup preserves the active locale on every JavaScript-authored cros
   }, '/?lang=en-XA');
   assert.deepEqual(
     await pseudoLocale.page.locator('#wiz-step a').evaluateAll((links) => links.map((link) => link.getAttribute('href'))),
-    ['/configure?lang=en-XA', '/?lang=en-XA', '/install?lang=en-XA'],
+    ['configure?lang=en-XA', './?lang=en-XA', 'install?lang=en-XA'],
   );
 });
 

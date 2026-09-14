@@ -952,7 +952,7 @@ browserTest('Power safety partial repair offers and submits the exact acknowledg
 
   const acknowledgeForm = page.locator('form[data-power-safety-acknowledge]');
   await acknowledgeForm.waitFor();
-  assert.equal(await acknowledgeForm.getAttribute('action'), '/api/v1/power-safety/acknowledge');
+  assert.equal(await acknowledgeForm.getAttribute('action'), 'api/v1/power-safety/acknowledge');
   assert.equal(await acknowledgeForm.locator('input[name="fingerprint"]').inputValue(), fingerprint);
   const hideButton = page.getByRole('button', { name: 'Hide this caution' });
   assert.equal(await hideButton.getAttribute('data-hardened-approval'), '');
@@ -1562,7 +1562,7 @@ browserTest('Configure preserves the selected locale in its Display Sizing deep 
   t.after(async () => { await browser.close(); await new Promise((resolve) => harness.server.close(resolve)); });
 
   await page.goto(harness.url, { waitUntil: 'domcontentloaded', timeout: 5_000 });
-  assert.equal(await page.getByRole('link', { name: '显示尺寸' }).getAttribute('href'), '/install?lang=zh-Hans#cfg-display');
+  assert.equal(await page.getByRole('link', { name: '显示尺寸' }).getAttribute('href'), 'install?lang=zh-Hans#cfg-display');
 });
 
 browserTest('Configure localizes unavailable adaptive brightness without displaying backend prose', async (t) => {
@@ -2014,7 +2014,7 @@ browserTest('Ambiguous network failure performs one safe screenshot GET without 
     const realFetch = window.fetch;
     window.inputAttempts = 0;
     window.fetch = (url, options) => {
-      if (url === '/api/v1/input') { window.inputAttempts++; return Promise.reject(new TypeError('network unavailable')); }
+      if (url === 'api/v1/input') { window.inputAttempts++; return Promise.reject(new TypeError('network unavailable')); }
       return realFetch(url, options);
     };
   });

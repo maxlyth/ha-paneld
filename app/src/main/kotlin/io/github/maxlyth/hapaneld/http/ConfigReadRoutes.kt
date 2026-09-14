@@ -24,8 +24,15 @@ internal fun resolvedRequestStrings(
     allowPseudo: Boolean,
     catalogueLoader: CatalogueLoader,
 ): Strings {
+    // Embedded in Panel Assistant's sidebar, the Home Assistant user's language ranks below an explicit
+    // `?lang` and above everything the panel would otherwise choose; a language with no catalogue is English.
+    val explicit = call.request.queryParameters["lang"]
+    val embedLanguage = call.embedMode()?.lang
+    if (embedLanguage != null && AppLocale.canonical(explicit, allowPseudo = allowPseudo) == null) {
+        return catalogueLoader.strings(AppLocale.canonical(embedLanguage) ?: AppLocale.ENGLISH)
+    }
     val locale = AppLocale.resolve(
-        explicit = call.request.queryParameters["lang"],
+        explicit = explicit,
         persisted = persistedLanguage,
         haUser = call.request.queryParameters["ha_lang"],
         acceptLanguage = call.request.headers[HttpHeaders.AcceptLanguage],

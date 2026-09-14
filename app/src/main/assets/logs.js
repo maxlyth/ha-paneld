@@ -70,7 +70,7 @@
     buf = [];
     out.textContent = "";
     state(i18nText("logs.state.connecting", "connecting…"));
-    es = new EventSource("/api/v1/logs/stream?source=" + source);
+    es = new EventSource("api/v1/logs/stream?source=" + source);
     es.onopen = function () {
       state(source === "app"
         ? i18nText("logs.state.app_live", "app · live")

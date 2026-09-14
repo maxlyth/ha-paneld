@@ -109,7 +109,7 @@
   async function refresh() {
     clearTimeout(timer);
     try {
-      var response = await fetch("/api/v1/proximity", { cache: "no-store", mode: "same-origin" });
+      var response = await fetch("api/v1/proximity", { cache: "no-store", mode: "same-origin" });
       if (!response.ok) throw new Error("status " + response.status);
       render(await response.json()); changed();
     } catch (_) {
@@ -123,7 +123,7 @@
   async function request(action, sessionId) {
     var body = { action: action };
     if (sessionId) body.sessionId = sessionId;
-    var response = await fetch("/api/v1/proximity/calibration", {
+    var response = await fetch("api/v1/proximity/calibration", {
       method: "POST", mode: "same-origin", cache: "no-store",
       headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "X-Proximity-UI": "1" },
       body: new URLSearchParams(body).toString()

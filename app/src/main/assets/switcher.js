@@ -89,7 +89,7 @@
     return 0;
   }
 
-  fetch('/api/v1/peers').then(function (r) { return r.json(); }).then(function (list) {
+  fetch('api/v1/peers').then(function (r) { return r.json(); }).then(function (list) {
     if (!Array.isArray(list)) return;
     if (list.filter(function (p) { return !isSelf(p); }).length === 0) return; // only this panel — plain text
     // Show ALL panels (self in its alphabetical place). Synthesize self if the roster somehow omitted it,
@@ -181,8 +181,8 @@
   var forced = document.documentElement.getAttribute("data-theme");
   if (!forced) return;
   document.querySelectorAll(".nav a[href]").forEach(function (a) {
-    var u = new URL(a.getAttribute("href"), location.origin);
+    var u = new URL(a.getAttribute("href"), document.baseURI);
     u.searchParams.set("theme", forced);
-    a.setAttribute("href", u.pathname + u.search);
+    a.setAttribute("href", u.href);
   });
 })();

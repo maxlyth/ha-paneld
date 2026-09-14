@@ -37,7 +37,7 @@
     if (!powerSafety || !powerSafety.acknowledge_available || !fingerprint) return false;
     form.removeAttribute('data-power-safety-repair');
     form.setAttribute('data-power-safety-acknowledge', '');
-    form.action = '/api/v1/power-safety/acknowledge';
+    form.action = 'api/v1/power-safety/acknowledge';
     var hidden = document.createElement('input');
     hidden.type = 'hidden';
     hidden.name = 'fingerprint';

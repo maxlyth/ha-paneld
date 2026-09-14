@@ -45,8 +45,9 @@ async function loadBuildwatch({ translations = {}, locale = 'en', helper = true,
   const created = [];
   const ticks = [];
   const health = { line: '' };
-  const location = { pathname, reloads: 0, reload() { this.reloads += 1; } };
+  const location = { origin: 'http://panel.test', pathname, reloads: 0, reload() { this.reloads += 1; } };
   const document = {
+    baseURI: 'http://panel.test/',
     documentElement: { lang: locale },
     body: { getAttribute: (name) => bodyAttributes[name] || '' },
     getElementById: (id) => ids[id] || null,
@@ -79,6 +80,7 @@ async function loadBuildwatch({ translations = {}, locale = 'en', helper = true,
     fetch: async () => ({ text: async () => health.line }),
     setInterval(callback) { ticks.push(callback); return 1; },
     Intl,
+    URL,
   };
   vm.runInNewContext(source, context, { filename: 'buildwatch.js' });
 

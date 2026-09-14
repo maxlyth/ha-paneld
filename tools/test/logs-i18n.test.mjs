@@ -79,7 +79,7 @@ test('logs status and pause controls consume translations while preserving UI sy
   const rig = await loadLogs(translations);
 
   assert.equal(rig.nodes['lg-state'].textContent, '· CONNECTING-T');
-  assert.equal(rig.streams[0].url, '/api/v1/logs/stream?source=app');
+  assert.equal(rig.streams[0].url, 'api/v1/logs/stream?source=app');
   rig.streams[0].onopen();
   assert.equal(rig.nodes['lg-state'].textContent, '· APP-LIVE-T');
 
@@ -91,7 +91,7 @@ test('logs status and pause controls consume translations while preserving UI sy
   assert.equal(rig.nodes['lg-state'].textContent, '· APP-LIVE-T');
 
   rig.window.lgSource('system');
-  assert.equal(rig.streams[1].url, '/api/v1/logs/stream?source=system');
+  assert.equal(rig.streams[1].url, 'api/v1/logs/stream?source=system');
   rig.streams[1].onopen();
   assert.equal(rig.nodes['lg-state'].textContent, '· SYSTEM-LIVE-T');
   rig.window.lgPause();

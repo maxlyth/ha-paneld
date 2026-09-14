@@ -301,7 +301,7 @@ internal fun dashboardRecoveryWarning(state: PanelStatus.DashboardRecoveryState)
             "Update or repair System WebView, then use Reload dashboard from the panel navbar or Dashboard tab."
     PanelStatus.DashboardRecoveryState.EXTERNAL_RENDERER ->
         "⛔ <b>Dashboard app is crash-looping</b> — the watchdog stopped relaunching it to avoid a restart storm. " +
-            "Reinstall or downgrade the dashboard/Companion app (see <a href=\"/install\">updates</a>), or reboot the panel."
+            "Reinstall or downgrade the dashboard/Companion app (see <a href=\"install\">updates</a>), or reboot the panel."
 }
 
 /** Same-order nullable overlay for `/status`; invalid cardinality omits the whole additive field. */
@@ -1370,8 +1370,8 @@ internal fun configMutationWantsJson(accept: String?, contentType: String?): Boo
 
 internal fun configMutationHtml(message: String): String {
     val escaped = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return "<!doctype html><meta charset=utf-8>" +
-        "<meta http-equiv=refresh content='2;url=/configure'>" +
+    return "<!doctype html><base href=\"/\"><meta charset=utf-8>" +
+        "<meta http-equiv=refresh content='2;url=configure'>" +
         "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
         escaped + "</body>"
 }
@@ -1882,6 +1882,9 @@ class PaneldServer internal constructor(
                     call.respondText("forbidden\n", status = HttpStatusCode.Forbidden)
                     return@intercept finish()
                 }
+                // Presentation only: parsed once for the page builders, never logged, and never consulted by a
+                // guard. Only a valid switch varies the response.
+                val embed = call.admitEmbedMode()
                 if (GuardDbProcessAdmission.maintenanceRequired()) {
                     // The request which durably created INTENT has already crossed this interceptor.
                     // Every later request belongs to a writer-owning server which is being retired;
@@ -1896,7 +1899,9 @@ class PaneldServer internal constructor(
                 // Scope: exact page paths only (API, assets, OAuth untouched); a `wiz_escape` cookie —
                 // set by the wizard's own "Skip and exit" link — is honoured so the escape hatch cannot
                 // become a trap.
-                if (call.request.uri.substringBefore('?') in WIZARD_REDIRECT_PAGES &&
+                // Panel Assistant's embedded view (EmbedMode) is never redirected: its setup tab stays in
+                // the tab bar, and no escape cookie is written on Home Assistant's origin.
+                if (embed == null && call.request.uri.substringBefore('?') in WIZARD_REDIRECT_PAGES &&
                     call.request.cookies["wiz_escape"] == null && setupNeedsUser()
                 ) {
                     call.respondRedirect(setupRedirectLocation(call))
@@ -2113,7 +2118,7 @@ class PaneldServer internal constructor(
                         HttpHeaders.ContentLanguage,
                         strings.languages(setOf("shell.", "dashboard.")).joinToString(", "),
                     )
-                    call.respondText(infoHtml(strings), ContentType.Text.Html)
+                    call.respondText(infoHtml(strings, call.embedMode()), ContentType.Text.Html)
                 }
                 // Static front-end assets (externalised from the Kotlin string so CI can lint them).
                 get("/info.js") {
@@ -2163,6 +2168,7 @@ class PaneldServer internal constructor(
                             title = strings.get("shell.nav.configure"),
                             body = configureBody(strings),
                             strings = strings,
+                            embed = call.embedMode(),
                         ),
                         ContentType.Text.Html,
                     )
@@ -2188,10 +2194,11 @@ class PaneldServer internal constructor(
                             sectionTitle = strings.get("shell.nav.setup"),
                             bodyAttrs = """data-build="${buildToken()}"""",
                             rightControls = ghLink(strings),
-                            body = setupBody(strings, preserveExplicitEnglish),
+                            body = setupBody(strings, preserveExplicitEnglish, embedded = call.embedMode() != null),
                             strings = strings,
                             translationPrefixes = setOf("shell.", "setup.", "runtime."),
                             preserveExplicitEnglish = preserveExplicitEnglish,
+                            embed = call.embedMode(),
                         ),
                         ContentType.Text.Html,
                     )
@@ -2204,7 +2211,7 @@ class PaneldServer internal constructor(
                         strings.languages(setOf("shell.", "configure.hardened.", "profiles.")).joinToString(", "),
                     )
                     call.respondText(
-                        page("profiles", strings.get("shell.nav.profile"), profilesBody(strings), strings),
+                        page("profiles", strings.get("shell.nav.profile"), profilesBody(strings), strings, call.embedMode()),
                         ContentType.Text.Html,
                     )
                 }
@@ -2229,7 +2236,7 @@ class PaneldServer internal constructor(
                     )
                     call.respondText(
                         withContext(Dispatchers.IO) {
-                            page("install", strings.get("shell.nav.install"), installBody(strings), strings)
+                            page("install", strings.get("shell.nav.install"), installBody(strings), strings, call.embedMode())
                         },
                         ContentType.Text.Html,
                     )
@@ -2242,7 +2249,7 @@ class PaneldServer internal constructor(
                         strings.languages(setOf("shell.", "configure.hardened.", "fleet.")).joinToString(", "),
                     )
                     call.respondText(
-                        page("fleet", strings.get("shell.nav.fleet"), fleetBody(strings), strings),
+                        page("fleet", strings.get("shell.nav.fleet"), fleetBody(strings), strings, call.embedMode()),
                         ContentType.Text.Html,
                     )
                 }
@@ -2254,7 +2261,7 @@ class PaneldServer internal constructor(
                         strings.languages(setOf("shell.", "configure.hardened.", "logs.")).joinToString(", "),
                     )
                     call.respondText(
-                        page("logs", strings.get("shell.nav.logs"), logsBody(strings), strings),
+                        page("logs", strings.get("shell.nav.logs"), logsBody(strings), strings, call.embedMode()),
                         ContentType.Text.Html,
                     )
                 }
@@ -2272,7 +2279,7 @@ class PaneldServer internal constructor(
                             .distinct().sorted().joinToString(", "),
                     )
                     call.respondText(
-                        page("entities", strings.get("shell.nav.entities"), entitiesBody(strings), strings),
+                        page("entities", strings.get("shell.nav.entities"), entitiesBody(strings), strings, call.embedMode()),
                         ContentType.Text.Html,
                     )
                 }
@@ -2293,7 +2300,7 @@ class PaneldServer internal constructor(
                             "<title>${esc(panelBrowserTitle(config.friendlyName, "REST API"))}</title>",
                         )
                         .replace("__API_LANG__", esc(strings.requestedLocale))
-                        .replace("__API_BACK_HREF__", esc(localizedHref("/", strings)))
+                        .replace("__API_BACK_HREF__", esc(localizedHref("./", strings)))
                         .replace("__API_I18N_PAYLOAD__", browserI18nPayload(strings, projectionPrefixes))
                     call.respondText(html, ContentType.Text.Html)
                 }
@@ -2990,8 +2997,8 @@ class PaneldServer internal constructor(
                             val message = PowerSafetyPresentation.repairMessage(result)
                             call.respondText(
                                 configMutationHtml(message).replace(
-                                    "url=/configure",
-                                    "url=/configure#cfg-keep_awake",
+                                    "url=configure",
+                                    "url=configure#cfg-keep_awake",
                                 ),
                                 ContentType.Text.Html,
                                 if (failed) HttpStatusCode.ServiceUnavailable else HttpStatusCode.OK,
@@ -3075,7 +3082,7 @@ class PaneldServer internal constructor(
                             )
                         } else {
                             call.respondText(
-                                configMutationHtml(message).replace("url=/configure", "url=/configure#cfg-keep_awake"),
+                                configMutationHtml(message).replace("url=configure", "url=configure#cfg-keep_awake"),
                                 ContentType.Text.Html,
                                 status,
                             )
@@ -3512,7 +3519,7 @@ class PaneldServer internal constructor(
                     // runs off-thread and the browser gets a short auto-reload back to the Install card.
                     post("/tame") {
                         val strings = requestStrings(call)
-                        val returnTo = localizedHref("/install#cfg-tame", strings)
+                        val returnTo = localizedHref("install#cfg-tame", strings)
                         val p = receiveBoundedFormParameters(call) ?: return@post
                         // One-click "Tame all recommended" (the profile's defaultTame set) — no pkg needed.
                         // Persist the safe installed selection first. The one desired-state owner then converges
@@ -3551,7 +3558,7 @@ class PaneldServer internal constructor(
                                 )
                             } else {
                                 call.respondText(
-                                    "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
+                                    "<!doctype html><base href=\"/\"><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
                                         "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                                         esc(strings.get("install.tame.result.applying_recommended_progress")) + "</body>",
                                     ContentType.Text.Html,
@@ -3626,7 +3633,7 @@ class PaneldServer internal constructor(
                             )
                         } else {
                             call.respondText(
-                                "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
+                                "<!doctype html><base href=\"/\"><meta charset=utf-8><meta http-equiv=refresh content='2;url=${esc(returnTo)}'>" +
                                     "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                                     esc(result) + "</body>",
                                 ContentType.Text.Html,
@@ -3655,7 +3662,7 @@ class PaneldServer internal constructor(
                         // One-click "Tame all recommended", shown only when there's an active recommended pick.
                         val hasRec = groups.any { g -> g.items.any { it.recommended && !it.blocked && !it.disabled && it.installed } }
                         val recBtn = if (hasRec)
-                            """<form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="background:#2e6b3f;border-color:#2e6b3f">✓ ${esc(strings.get("install.tame.suggest.all_recommended"))}</button> <span class="note" style="font-size:.8em">${esc(strings.get("install.tame.suggest.recommended_hint"))}</span></form>"""
+                            """<form method="post" action="${localizedHref("api/v1/tame", strings)}" style="margin:0 0 12px"><input type="hidden" name="action" value="recommended"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="background:#2e6b3f;border-color:#2e6b3f">✓ ${esc(strings.get("install.tame.suggest.all_recommended"))}</button> <span class="note" style="font-size:.8em">${esc(strings.get("install.tame.suggest.recommended_hint"))}</span></form>"""
                             else ""
                         call.respondText(recBtn + frag, ContentType.Text.Html)
                     }
@@ -3710,7 +3717,7 @@ class PaneldServer internal constructor(
                         } else {
                             strings.get("install.display.result.failed")
                         }
-                        val returnTo = localizedHref("/install#cfg-display", strings)
+                        val returnTo = localizedHref("install#cfg-display", strings)
                         val responseStatus = if (ok) HttpStatusCode.OK else HttpStatusCode.InternalServerError
                         if (call.request.headers["Accept"]?.contains("application/json") == true) {
                             call.respondText(
@@ -3722,7 +3729,7 @@ class PaneldServer internal constructor(
                             )
                         } else {
                             call.respondText(
-                                "<!doctype html><meta charset=utf-8>" +
+                                "<!doctype html><base href=\"/\"><meta charset=utf-8>" +
                                     (if (ok) "<meta http-equiv=refresh content='1;url=${esc(returnTo)}'>" else "") +
                                     "<body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                                     esc(message) + (if (ok) "…" else " <a href='${esc(returnTo)}' style='color:#9cf'>${esc(strings.get("install.display.return"))}</a>") + "</body>",
@@ -4063,26 +4070,29 @@ class PaneldServer internal constructor(
         active: String,
         strings: AppStrings,
         preserveExplicitEnglish: Boolean = false,
+        hiddenTabs: Set<String> = emptySet(),
     ): String {
-        fun tab(id: String, href: String, label: String): String =
+        // Hiding is presentation for Panel Assistant's sidebar, never access control: the route still answers.
+        fun tab(id: String, href: String, label: String): String = if (id in hiddenTabs) "" else
             """<a href="${setupHref(href, strings, preserveExplicitEnglish)}"${if (id == active) " class=\"active\"" else ""}>${esc(label)}</a>"""
         // The guided setup tab exists only while the journey is unfinished, then disappears — a healthy
         // panel's navigation is exactly what it was before the wizard existed. Placed first because on an
         // unfinished panel it IS the primary destination (the QR points at it).
         val setup = if (setupNeedsUser()) {
-            tab("setup", "/setup", strings.get("shell.nav.setup"))
+            tab("setup", "setup", strings.get("shell.nav.setup"))
         } else ""
         return "<div class=\"nav\">" +
             setup +
-            tab("dashboard", "/", strings.get("shell.nav.dashboard")) +
-            tab("configure", "/configure", strings.get("shell.nav.configure")) +
-            tab("profiles", "/profiles", strings.get("shell.nav.profile")) +
-            tab("entities", "/entities", strings.get("shell.nav.entities")) +
-            tab("install", "/install", strings.get("shell.nav.install")) +
+            tab("dashboard", "./", strings.get("shell.nav.dashboard")) +
+            tab("configure", "configure", strings.get("shell.nav.configure")) +
+            tab("profiles", "profiles", strings.get("shell.nav.profile")) +
+            tab("entities", "entities", strings.get("shell.nav.entities")) +
+            tab("install", "install", strings.get("shell.nav.install")) +
             // Keep the dormant /fleet route available to old bookmarks without presenting the
             // placeholder as a near-term product commitment.
-            tab("logs", "/logs", strings.get("shell.nav.logs")) +
-            """<a href="${setupHref("/api", strings, preserveExplicitEnglish)}">API</a></div>"""
+            tab("logs", "logs", strings.get("shell.nav.logs")) +
+            (if ("api" in hiddenTabs) "" else """<a href="${setupHref("api", strings, preserveExplicitEnglish)}">API</a>""") +
+            "</div>"
     }
 
     private fun entitiesBody(strings: AppStrings): String = if (!config.dashboardEntityLearningEnabled || !effectiveDashboardIsBuiltin()) {
@@ -4104,7 +4114,7 @@ class PaneldServer internal constructor(
               <button class="pbtn" id="entity-sync">${esc(strings.get("entities.filter.scan"))}</button>
               <button class="pbtn" id="entity-activate" disabled>${esc(strings.get("entities.filter.checking"))}</button>
               <button class="pbtn" id="entity-reset" type="button">${esc(strings.get("entities.filter.reset"))}</button>
-              <a class="pbtn" href="/api/v1/dashboard/entities/export">${esc(strings.get("entities.filter.export"))}</a>
+              <a class="pbtn" href="api/v1/dashboard/entities/export">${esc(strings.get("entities.filter.export"))}</a>
             </div>
             <div id="entity-action-result" class="entity-action-result muted" role="status" aria-live="polite"></div>
             <fieldset class="entity-policy"><legend>${esc(strings.get("entities.policy.legend"))}</legend>
@@ -4132,7 +4142,7 @@ class PaneldServer internal constructor(
           ${entityTableHtml("suggested", "entities.table.suggested", "candidate", strings)}
           ${entityTableHtml("review", "entities.table.review", "review", strings)}
         </div>
-        <script src="/assets/entities.js"></script>
+        <script src="assets/entities.js"></script>
     """.trimIndent()
 
     private fun entityTableHtml(
@@ -4212,6 +4222,7 @@ class PaneldServer internal constructor(
         strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
         translationPrefixes: Set<String> = setOf("shell."),
         preserveExplicitEnglish: Boolean = false,
+        embed: EmbedMode? = null,
     ): String {
         // Capture panel identity once so title, switcher metadata and visible name cannot disagree if a
         // concurrent config save replaces the live identity while this response is being rendered.
@@ -4220,27 +4231,34 @@ class PaneldServer internal constructor(
         val panelId = esc(rawPanelId)
         val friendlyName = esc(rawFriendlyName)
         val title = esc(panelBrowserTitle(rawFriendlyName, sectionTitle))
-        return """<!doctype html><html lang="${esc(strings.requestedLocale)}"><head><meta charset="utf-8">
+        // Embedded in Panel Assistant's sidebar, Home Assistant owns the top menu: the header and the mDNS
+        // switcher (whose links leave the proxy) are omitted, and the tab bar and everything below it stay.
+        // Only validated enum values reach the markup.
+        val themeAttr = embed?.theme?.let { """ data-theme="$it"""" }.orEmpty()
+        val embedAttr = if (embed != null) " data-embedded" else ""
+        val header = if (embed != null) "" else """<div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="${esc(strings.get("shell.menu.label"))}">☰</button><h1><img src="icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
+ <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
+"""
+        val switcher = if (embed != null) "" else """<!-- Load switcher.js immediately after the header it measures so responsive collapse finishes before page
+     content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
+<script src="assets/switcher.js"></script>
+"""
+        return """<!doctype html><html lang="${esc(strings.requestedLocale)}"$themeAttr><head><base href="/"><meta charset="utf-8">
 <script>/* ?theme=light|dark pins the UI theme for testing (else the browser preference rules) */
 (function(){var m=location.search.match(/[?&]theme=(dark|light)\b/);if(m)document.documentElement.setAttribute("data-theme",m[1])})();</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>$title</title>
-<link rel="icon" type="image/svg+xml" href="/favicon.svg">
-<link rel="stylesheet" href="/info.css">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="stylesheet" href="info.css">
 <script id="ha-i18n" type="application/json">${browserI18nPayload(strings, translationPrefixes)}</script>
-<script src="/assets/i18n.js"></script></head><body $bodyAttrs><div class="wrap">
-<div class="topbar"><div class="hdr"><button id="navburger" class="navburger pbtn" aria-label="${esc(strings.get("shell.menu.label"))}">☰</button><h1><img src="/icon.svg" class="logo" alt=""><span class="brand">ha-paneld</span> <small id="pswitch" data-self-id="$panelId" data-self-name="$friendlyName"><span class="sep">·</span>$friendlyName</small></h1>
- <span style="display:flex;gap:10px;align-items:center">$rightControls</span></div>
-${navBar(active, strings, preserveExplicitEnglish)}</div>
-<!-- Load switcher.js immediately after the header it measures so responsive collapse finishes before page
-     content is parsed and publishes the final header height without causing a post-paint card-wall shift. -->
-<script src="/assets/switcher.js"></script>
-<div id="halifebar" class="setup" style="display:none"></div>
+<script src="assets/i18n.js"></script>${if (embed != null) """<script src="assets/panel-assistant-sign-in.js"></script>""" else ""}</head><body $bodyAttrs$embedAttr><div class="wrap">
+<div class="topbar">$header${navBar(active, strings, preserveExplicitEnglish, embed?.hiddenTabs.orEmpty())}</div>
+$switcher<div id="halifebar" class="setup" style="display:none"></div>
 <div id="hanetbar" class="setup" style="display:none"></div>
 <div id="verbar" class="setup" style="display:none">⟳ ${esc(strings.get("shell.new_version.installed"))} — <a href="#" onclick="location.reload();return false">${esc(strings.get("shell.action.reload"))}</a> ${esc(strings.get("shell.new_version.refresh_suffix"))}</div>
 $body
-$extraScripts<script src="/assets/power-safety.js"></script>
-<script src="/assets/buildwatch.js"></script>
+$extraScripts<script src="assets/power-safety.js"></script>
+<script src="assets/buildwatch.js"></script>
 </div></body></html>"""
     }
 
@@ -4250,6 +4268,7 @@ $extraScripts<script src="/assets/power-safety.js"></script>
         title: String,
         body: String,
         strings: AppStrings = catalogueLoader.strings(AppLocale.ENGLISH),
+        embed: EmbedMode? = null,
     ): String {
         val haLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener">${esc(strings.get("shell.open_in_ha"))}</a>""" else ""
@@ -4279,6 +4298,7 @@ $body
 $approvalKeyAfter""",
             strings = strings,
             translationPrefixes = setOf("shell.", "$active.", "runtime."),
+            embed = embed,
         )
     }
 
@@ -4296,21 +4316,21 @@ $approvalKeyAfter""",
      * The markup here is only a frame. Steps are rendered by setup.js from GET /api/v1/setup, so the panel
      * and the browser read the same authority and cannot disagree about what comes next.
      */
-    private fun setupBody(strings: AppStrings, preserveExplicitEnglish: Boolean): String = """
+    private fun setupBody(strings: AppStrings, preserveExplicitEnglish: Boolean, embedded: Boolean = false): String = """
 <div class="wiz" id="wiz">
   <ol class="wiz-dots" id="wiz-dots" aria-label="${esc(strings.get("setup.frame.progress_label"))}"></ol>
   <div id="wiz-step" class="wiz-step" role="region" aria-live="polite" aria-atomic="false">
     <p class="muted">${esc(strings.get("setup.frame.loading"))}</p>
   </div>
-  <p class="wiz-escape"><a href="${setupHref("/configure", strings, preserveExplicitEnglish)}" onclick="document.cookie='wiz_escape=1;path=/;max-age=3600'">${esc(strings.get("setup.frame.skip_exit"))}</a></p>
+  <p class="wiz-escape"><a href="${setupHref("configure", strings, preserveExplicitEnglish)}"${if (embedded) "" else """ onclick="document.cookie='wiz_escape=1;path=/;max-age=3600'""""}>${esc(strings.get("setup.frame.skip_exit"))}</a></p>
 </div>
-<script src="/assets/setup.js"></script>"""
+<script src="assets/setup.js"></script>"""
 
     /** Configure tab — schema-driven, save-together settings only. */
     private fun configureBody(strings: AppStrings): String {
         val proximityLearningEnabled = sensors.hasProximity()
         val proximityMount = if (proximityLearningEnabled) """<div id="proximity-learning-mount" hidden></div>""" else ""
-        val proximityScript = if (proximityLearningEnabled) """<script src="/assets/proximity-learning.js"></script>""" else ""
+        val proximityScript = if (proximityLearningEnabled) """<script src="assets/proximity-learning.js"></script>""" else ""
         val setup = configureSetupBanners(strings)
         return """
 <!-- Basic/Advanced tab bar hidden until every setting is assigned a Basic/Advanced tier; with it hidden
@@ -4323,9 +4343,9 @@ $setup
 <div id="cfg-groups" class="cards" data-card-size-page="configure" data-card-size-epoch="1" data-card-size-restore="1" data-card-size-proximity="${if (proximityLearningEnabled) "1" else "0"}"></div>
 $proximityMount</div>
 <div id="savebar" class="savebar" role="region" aria-label="${esc(strings.get("configure.unsaved.label"))}" hidden><button id="savebtn" type="button" disabled onclick="cfgSave()">${esc(strings.get("configure.action.save"))}</button><span id="cfg-msg" class="muted" role="status" aria-live="polite" aria-atomic="true"></span></div>
-<script src="/assets/card-size-memory.js"></script>
-<script src="/assets/card-column-alignment.js"></script>
-<script src="/assets/configure.js"></script>
+<script src="assets/card-size-memory.js"></script>
+<script src="assets/card-column-alignment.js"></script>
+<script src="assets/configure.js"></script>
 $proximityScript"""
     }
 
@@ -4340,7 +4360,7 @@ $proximityScript"""
         // build that pointed here) should learn the guided path exists — once setup completes this line
         // vanishes with the rest of the wizard surface.
         val resume = if (setupNeedsUser()) {
-            """<div class="setup info">${esc(strings.get("configure.setup.question"))} <a href="${localizedHref("/setup", strings)}"><b>${esc(strings.get("configure.setup.link"))}</b></a> ${esc(strings.get("configure.setup.explanation"))}</div>"""
+            """<div class="setup info">${esc(strings.get("configure.setup.question"))} <a href="${localizedHref("setup", strings)}"><b>${esc(strings.get("configure.setup.link"))}</b></a> ${esc(strings.get("configure.setup.explanation"))}</div>"""
         } else ""
         // MQTT verification runs asynchronously after the save returns, and the Configure tab is where the
         // user actually is while it happens — but it showed nothing, so a save that was still being checked
@@ -4360,7 +4380,7 @@ $proximityScript"""
 
     /** Runtime profile authoring. All content is hydrated through the guarded /api/v1/profile routes. */
     private fun profilesBody(strings: AppStrings): String = """
-<link rel="stylesheet" href="/assets/profiles.css">
+<link rel="stylesheet" href="assets/profiles.css">
 <main class="profile-page">
   <div class="profile-toolbar" aria-label="${esc(strings.get("profiles.toolbar.actions_label"))}">
     <div class="profile-pickers">
@@ -4422,8 +4442,8 @@ $proximityScript"""
     <div class="profile-modal-actions"><button class="pbtn" id="profile-modal-cancel" type="button">${esc(strings.get("profiles.action.cancel"))}</button><button class="pbtn primary" id="profile-modal-confirm" type="button">${esc(strings.get("profiles.action.confirm"))}</button></div>
   </div>
 </div>
-<script src="/assets/vendor/profile-editor/codemirror.js"></script>
-<script src="/assets/profiles.js"></script>"""
+<script src="assets/vendor/profile-editor/codemirror.js"></script>
+<script src="assets/profiles.js"></script>"""
 
     /** Request-scoped snapshot of the two health inputs several render surfaces consult — the real WebView
      *  engine status and whether any dashboard renderer is present. Captured ONCE per render so the banner,
@@ -4534,19 +4554,19 @@ ${uninstallCardHtml(su, strings)}
 <div class="card" id="radiocard" data-layout-key="radio-firmware" style="display:none"><h2>${esc(strings.get("install.radio.title"))}</h2>
 <table><tr><th>${esc(strings.get("install.radio.efr32"))}</th><td id="radio-status">…</td></tr>
 <tr><th>${esc(strings.get("install.radio.gateway_health"))}</th><td id="radio-health">…</td></tr></table>
-<p class="note">${esc(strings.get("install.radio.note_prefix"))} <a href="${localizedHref("/configure#cfg-zigbee_join", strings)}">${esc(strings.get("install.radio.configure_join"))}</a>. <span class="muted">${esc(strings.get("install.radio.thread_planned"))}</span></p></div>
+<p class="note">${esc(strings.get("install.radio.note_prefix"))} <a href="${localizedHref("configure#cfg-zigbee_join", strings)}">${esc(strings.get("install.radio.configure_join"))}</a>. <span class="muted">${esc(strings.get("install.radio.thread_planned"))}</span></p></div>
 <div class="card" data-layout-key="health-audit"><h2>${esc(strings.get("install.audit.title"))}</h2>
 <p class="note">${esc(strings.get("install.audit.description"))}</p>
 <button class="pbtn" onclick="healthAudit(this)">${esc(strings.get("install.audit.run"))}</button>
 <div id="audit-out" style="margin-top:10px"></div>
-<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ ${esc(strings.get("install.audit.diagnostics"))}</a> — ${esc(strings.get("install.audit.diagnostics_help"))}</p></div>
+<p class="note"><a href="api/v1/diag" target="_blank" style="color:#9cf">⭳ ${esc(strings.get("install.audit.diagnostics"))}</a> — ${esc(strings.get("install.audit.diagnostics_help"))}</p></div>
 ${tameCardHtml(root, strings)}
 ${displayCardHtml(management.privilege.typedShellControlReady, displaySizing, strings)}
 ${backupCardHtml(companionHelper, CompanionInstaller.installedPkg(appContext) != null, strings)}
 $allGood</div>
-<script src="/assets/card-size-memory.js"></script>
-<script src="/assets/card-column-alignment.js"></script>
-<script src="/assets/install.js"></script>"""
+<script src="assets/card-size-memory.js"></script>
+<script src="assets/card-column-alignment.js"></script>
+<script src="assets/install.js"></script>"""
     }
 
     /** One top-of-tab warning for a render-blocking finding (WebView old / no dashboard app). WebView gets
@@ -4563,12 +4583,12 @@ $allGood</div>
                 (if (canHeal) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="healWebView(this)">⬇ ${esc(strings.get("install.warning.webview_old.update"))}</button> <span id="wv-heal" class="muted"></span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.NO_RENDERER ->
-            """<div class="setup">ℹ <b>${esc(strings.get("install.warning.no_renderer.title"))}</b> ${esc(strings.get("install.warning.no_renderer.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.no_renderer.suffix"))}""" +
+            """<div class="setup">ℹ <b>${esc(strings.get("install.warning.no_renderer.title"))}</b> ${esc(strings.get("install.warning.no_renderer.prefix"))} <a href="${localizedHref("configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.no_renderer.suffix"))}""" +
                 (if (canInstallCompanion) """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs(strings = strings)} onclick="installComp('companion','update',this)">⬇ ${esc(strings.get("install.warning.no_renderer.install_companion"))}</button> <span class="muted">${esc(strings.get("install.warning.no_renderer.progress"))}</span></div>""" else "") +
                 """</div>"""
         HealthAudit.Kind.UPDATE -> "" // shown in the Managed-components card, not as a top warning
         HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
-            """<div class="setup crit">⚠ <b>${esc(strings.get("install.warning.schema_rollback.title"))}</b> — ${esc(strings.get("install.warning.schema_rollback.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.schema_rollback.suffix"))}</div>"""
+            """<div class="setup crit">⚠ <b>${esc(strings.get("install.warning.schema_rollback.title"))}</b> — ${esc(strings.get("install.warning.schema_rollback.prefix"))} <a href="${localizedHref("configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.warning.schema_rollback.suffix"))}</div>"""
     }
 
     /** Managed-components card. ha-paneld + HA Companion get a channel + version picker (default channel
@@ -4610,7 +4630,7 @@ $paneldRow
 $compRow
 ${simpleRow("System WebView", wv.display, wvAction, strings)}
 $installNote
-<p class="note">${esc(strings.get("install.components.channel_prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.components.channel_suffix"))}</p>
+<p class="note">${esc(strings.get("install.components.channel_prefix"))} <a href="${localizedHref("configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a>${esc(strings.get("install.components.channel_suffix"))}</p>
 <p class="note" id="comp-msg"></p></div>"""
     }
 
@@ -4649,7 +4669,7 @@ $compRow
 <hr style="border:0;border-top:1px solid #2a2a2a;margin:14px 0">
 <p class="note"><b>${esc(strings.get("install.backup.config_bundle.title"))}</b> ${esc(strings.get("install.backup.config_bundle.description"))}</p>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
- <a class="pbtn" href="/api/v1/config/export">⭳ ${esc(strings.get("install.backup.config_bundle.export"))}</a>
+ <a class="pbtn" href="api/v1/config/export">⭳ ${esc(strings.get("install.backup.config_bundle.export"))}</a>
  <button class="pbtn" type="button"${hardenedApprovalA11yAttrs(strings = strings)} onclick="configExport(true,this)">⭳ ${esc(strings.get("install.backup.config_bundle.export_secrets"))}</button>
  <label class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} style="cursor:pointer">⭱ ${esc(strings.get("install.backup.config_bundle.import"))}<input type="file" id="cfg-import-file" accept="application/json" style="display:none" onchange="configImport(this)"></label>
 </div>
@@ -4694,7 +4714,7 @@ $body
      *  panel; the endpoint additionally refuses ha-paneld itself. Root-gated. */
     private fun uninstallCardHtml(root: Boolean, strings: AppStrings): String {
         val body = if (!root) """<p class="note">⚠ ${esc(strings.get("install.uninstall.root_unavailable"))}</p>"""
-        else """<p class="note">${esc(strings.get("install.uninstall.description_prefix"))} <a href="${localizedHref("/install#cfg-tame", strings)}">${esc(strings.get("install.uninstall.tame_link"))}</a>${esc(strings.get("install.uninstall.description_suffix"))}</p>
+        else """<p class="note">${esc(strings.get("install.uninstall.description_prefix"))} <a href="${localizedHref("install#cfg-tame", strings)}">${esc(strings.get("install.uninstall.tame_link"))}</a>${esc(strings.get("install.uninstall.description_suffix"))}</p>
 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
 <select id="uninst-pkg" style="min-width:220px;background:#1c1c1c;color:#eee;border:1px solid #444;border-radius:7px;padding:5px 8px"><option>${esc(strings.get("install.shared.loading"))}</option></select>
 <button class="pbtn"${hardenedApprovalA11yAttrs(strings = strings)} onclick="doUninstall(this)">${esc(strings.get("install.uninstall.action"))}</button>
@@ -4820,7 +4840,7 @@ ${if (installer) """<button class="pbtn cinstall"${hardenedApprovalA11yAttrs(str
 <p class="note">${esc(strings.get("logs.note.sources"))}
 ${esc(strings.get("logs.note.privacy"))}
 ${esc(strings.get("logs.note.raw_stream"))} <code>curl -N http://&lt;panel&gt;:${esc(config.httpPort.toString())}/api/v1/logs/stream</code></p></div>
-<script src="/assets/logs.js"></script>"""
+<script src="assets/logs.js"></script>"""
     }
 
     /** Fleet tab — placeholder (discovery hooks exist; the roster lands later). */
@@ -4977,10 +4997,10 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
     /** The pencil that marks a value as CONFIGURABLE (vs a static fact) and deep-links to the exact
      *  setting/card on the Configure tab (`/configure#<anchor>` scrolls + flashes it). */
     private fun cfgIcon(anchor: String, strings: AppStrings): String =
-        """&nbsp;<a class="cfglink" href="${localizedHref("/configure#$anchor", strings)}" title="${esc(strings.get("dashboard.link.edit_configure"))}" aria-label="${esc(strings.get("dashboard.link.edit"))}">✎</a>"""
+        """&nbsp;<a class="cfglink" href="${localizedHref("configure#$anchor", strings)}" title="${esc(strings.get("dashboard.link.edit_configure"))}" aria-label="${esc(strings.get("dashboard.link.edit"))}">✎</a>"""
 
     private fun installIcon(anchor: String, strings: AppStrings): String =
-        """&nbsp;<a class="cfglink" href="${localizedHref("/install#$anchor", strings)}" title="${esc(strings.get("dashboard.link.open_install"))}" aria-label="${esc(strings.get("dashboard.link.open"))}">✎</a>"""
+        """&nbsp;<a class="cfglink" href="${localizedHref("install#$anchor", strings)}" title="${esc(strings.get("dashboard.link.open_install"))}" aria-label="${esc(strings.get("dashboard.link.open"))}">✎</a>"""
 
     /** What the "auto" (blank) package settings actually resolved to — shown as `auto (label)` in the
      *  dashboard rows and as the Configure-field placeholder, so "auto" is never a mystery. When no
@@ -5099,7 +5119,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
     }
 
     private fun screenshotPlaceholderUrl(): String? =
-        screenshotCacheId()?.let { "/api/v1/screenshot.png?cached=$it" }
+        screenshotCacheId()?.let { "api/v1/screenshot.png?cached=$it" }
 
     private fun readCachedScreenshot(id: String): ByteArray? = runCatching {
         if (!id.matches(Regex("[0-9a-f]{64}"))) return@runCatching null
@@ -5715,7 +5735,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             return
         }
         call.respondText(
-            "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
+            "<!doctype html><base href=\"/\"><meta charset=utf-8><body style='font-family:system-ui;background:#111;color:#eee;padding:20px'>" +
                 esc(strings.get(key)) + "</body>",
             ContentType.Text.Html,
             status,
@@ -5818,7 +5838,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         // mid-(re)connect must not be reported as missing.
         val needs = SetupBanner.needs(mqtt, config.mqttBroker.isNotBlank(), config.mqttUser.isNotBlank())
         val setup = if (needs.isNotEmpty())
-            """<div class="setup">⚠ ${esc(strings.get("dashboard.banner.setup_needs.prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(localizedSetupNeeds(needs, strings))}</a> ${esc(strings.get("dashboard.banner.setup_needs.suffix"))}</div>"""
+            """<div class="setup">⚠ ${esc(strings.get("dashboard.banner.setup_needs.prefix"))} <a href="${localizedHref("configure", strings)}">${esc(localizedSetupNeeds(needs, strings))}</a> ${esc(strings.get("dashboard.banner.setup_needs.suffix"))}</div>"""
         else ""
         // Commissioning progress only while somebody is actually commissioning. `announcing` is transient but
         // recurs on every bridge reconnect — an HA restart, a broker blip, a panel waking — so on a finished
@@ -5841,7 +5861,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             wakeReady = proximityState.optBoolean("wakeReady", false),
         )?.let { title ->
             """<div class="setup">👋 <b>${esc(strings.get(title))}</b>. """ +
-                """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("/configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
+                """${esc(strings.get("dashboard.banner.proximity_learning.touch_available"))} <a href="${localizedHref("configure#cfg-proximity-learning", strings)}">${esc(strings.get("dashboard.banner.proximity_learning.action"))}</a>.</div>"""
         }.orEmpty()
         // Panel-health + update findings: states that stop the panel rendering the dashboard as expected but
         // that the info map otherwise reports neutrally. Soft + best-effort — ha-paneld runs fine regardless.
@@ -5875,7 +5895,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
     private fun haSignInBanner(strings: AppStrings): String =
         """<div class="setup">🏠 <b>${esc(strings.get("dashboard.banner.ha_sign_in.title"))}</b> """ +
             """${esc(strings.get("dashboard.banner.ha_sign_in.explanation"))} """ +
-            """<a href="${localizedHref("/configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.ha_sign_in.action"))}</a>.</div>"""
+            """<a href="${localizedHref("configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.ha_sign_in.action"))}</a>.</div>"""
 
     /** Render-blocking warnings not modelled by HealthAudit: a crash-looping dashboard app, and Companion
      *  server inspection/blank-internal-URL findings — the latter only when Companion is the active renderer
@@ -5900,7 +5920,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         if (io.github.maxlyth.hapaneld.control.BuiltinDashboard.authLatched) append(
             """<div class="setup crit">⛔ <b>${esc(strings.get("dashboard.banner.auth_rejected.title"))}</b> — """ +
                 """${esc(strings.get("dashboard.banner.auth_rejected.explanation"))} """ +
-                """<a href="${localizedHref("/configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.auth_rejected.action"))}</a>; """ +
+                """<a href="${localizedHref("configure#cfg-ha-oauth", strings)}">${esc(strings.get("dashboard.banner.auth_rejected.action"))}</a>; """ +
                 """${esc(strings.get("dashboard.banner.auth_rejected.reload_suffix"))}</div>""",
         )
         val recoveryState = dashboardRecoveryState()
@@ -5913,7 +5933,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             is CompanionDb.Warning.NeedsRepair -> {
                 val action = if (inlineRepair)
                     """<div style="margin-top:10px"><button class="pbtn"${hardenedApprovalAttrs()} onclick="repairCompUrl(this)">⚙ ${esc(strings.get("dashboard.banner.companion_url.repair"))}</button> <span id="cu-fix" class="muted"></span></div>"""
-                else """ <a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.companion_url.install_action"))}</a>"""
+                else """ <a href="${localizedHref("install", strings)}">${esc(strings.get("dashboard.banner.companion_url.install_action"))}</a>"""
                 val summaryKey = if (w.affected == 1) {
                     "dashboard.banner.companion_url.summary_one"
                 } else {
@@ -5942,9 +5962,9 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             append(
                 """<div class="setup">⚠ <b>${esc(formattedString(strings, "dashboard.banner.zoom.title", "zoom" to zoom.toString()))}</b> """ +
                     """${esc(strings.get("dashboard.banner.zoom.explanation"))} """ +
-                    """<a href="${localizedHref("/install#cfg-display", strings)}">${esc(strings.get("dashboard.banner.zoom.display_density"))}</a>, """ +
+                    """<a href="${localizedHref("install#cfg-display", strings)}">${esc(strings.get("dashboard.banner.zoom.display_density"))}</a>, """ +
                     """${esc(strings.get("dashboard.banner.zoom.action_suffix"))}""" +
-                    """ <form method="post" action="/api/v1/config" style="display:inline">""" +
+                    """ <form method="post" action="api/v1/config" style="display:inline">""" +
                     """<input type="hidden" name="dashboard_zoom" value="100">""" +
                     """<button class="pbtn" type="submit">${esc(strings.get("dashboard.banner.zoom.reset"))}</button></form></div>""",
             )
@@ -5997,7 +6017,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         val action = if (presentation.code == "status-zigbee-not-joined") {
             val label = translatedText(strings, "runtime.zigbee.warning.resolve")
                 ?: strings.get("shell.nav.configure")
-            " <a href=\"${localizedHref("/configure#cfg-zigbee_join", strings)}\">${esc(label)}</a>"
+            " <a href=\"${localizedHref("configure#cfg-zigbee_join", strings)}\">${esc(label)}</a>"
         } else ""
         return "${if (presentation.code in setOf("status-zigbee-contained", "status-zigbee-containment-incomplete", "status-zigbee-runaway")) "⛔" else "⚠"} ${esc(translated)}$action"
     }
@@ -6060,19 +6080,19 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         }
         val actionText = translatedText(strings, actionKey) ?: return fallback
         val control = when {
-            !inlineRepair -> " <a href=\"${localizedHref("/configure#cfg-keep_awake", strings)}\">${esc(strings.get("shell.nav.configure"))} →</a>"
+            !inlineRepair -> " <a href=\"${localizedHref("configure#cfg-keep_awake", strings)}\">${esc(strings.get("shell.nav.configure"))} →</a>"
             advisory.action == PowerSafetyAdvisoryAction.REPAIR -> {
                 val label = translatedText(strings, "runtime.power_safety.button.repair") ?: "Repair power safety"
                 val title = translatedText(strings, "runtime.power_safety.button.repair_title")
                     ?: "Repair is explicit, read-back verified, and never reboots the panel"
-                """ <form method="post" action="/api/v1/power-safety/repair" data-power-safety-repair style="display:inline"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-repair-result" role="status" aria-live="polite"></span></form>"""
+                """ <form method="post" action="api/v1/power-safety/repair" data-power-safety-repair style="display:inline"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-repair-result" role="status" aria-live="polite"></span></form>"""
             }
             advisory.action == PowerSafetyAdvisoryAction.ACKNOWLEDGE -> {
                 val fingerprint = requireNotNull(advisory.acknowledgementFingerprint)
                 val label = translatedText(strings, "runtime.power_safety.button.hide") ?: "Hide this caution"
                 val title = translatedText(strings, "runtime.power_safety.button.hide_title")
                     ?: "Hide this unchanged caution in panel web pages; Hardened mode requires physical approval"
-                """ <form method="post" action="/api/v1/power-safety/acknowledge" data-power-safety-acknowledge style="display:inline"><input type="hidden" name="fingerprint" value="${esc(fingerprint)}"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-acknowledge-result" role="status" aria-live="polite"></span></form>"""
+                """ <form method="post" action="api/v1/power-safety/acknowledge" data-power-safety-acknowledge style="display:inline"><input type="hidden" name="fingerprint" value="${esc(fingerprint)}"><button class="pbtn" type="submit" data-hardened-approval title="${esc(title)}">${esc(label)}</button> <span class="power-safety-acknowledge-result" role="status" aria-live="polite"></span></form>"""
             }
             else -> ""
         }
@@ -6091,23 +6111,23 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
                 """${esc(strings.get("dashboard.banner.webview_old.update_action"))}</a> """ +
                 """${esc(formattedString(strings, "dashboard.banner.webview_old.target", "version" to PanelHealth.MIN_CHROMIUM.toString()))}. """ +
                 """<small>${esc(strings.get("dashboard.banner.webview_old.engine_note"))}</small> """ +
-                """<a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a></div>"""
+                """<a href="${localizedHref("install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a></div>"""
         HealthAudit.Kind.NO_RENDERER ->
             """<div class="setup">ℹ <b>${esc(strings.get("dashboard.banner.no_renderer.title"))}</b> """ +
-                """${esc(strings.get("dashboard.banner.no_renderer.configure_prefix"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a> """ +
+                """${esc(strings.get("dashboard.banner.no_renderer.configure_prefix"))} <a href="${localizedHref("configure", strings)}">${esc(strings.get("shell.nav.configure"))}</a> """ +
                 """${esc(strings.get("dashboard.banner.no_renderer.explanation"))} <small>${esc(strings.get("dashboard.banner.no_renderer.note"))}</small></div>"""
         HealthAudit.Kind.UPDATE -> {
             val u = f.update!!
             """<div class="setup info" data-update="${esc(u.label)}" data-version="${esc(u.latestVersion)}">""" +
                 """⬆ <b>${esc(u.label)}</b> ${esc(formattedString(strings, "dashboard.banner.update.available", "latest" to u.latestVersion, "current" to u.currentVersion))} — """ +
-                """<a href="${localizedHref("/install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a> """ +
+                """<a href="${localizedHref("install", strings)}">${esc(strings.get("dashboard.banner.manage_install"))}</a> """ +
                 """<button class="pbtn" onclick="ignoreUpdate(this)">${esc(strings.get("dashboard.banner.update.ignore"))}</button></div>"""
         }
         HealthAudit.Kind.SCHEMA_ROLLED_BACK ->
             """<div class="setup crit">⚠ <b>${esc(strings.get("dashboard.banner.schema_rollback.title"))}</b> (${esc(f.detail)}) — """ +
                 """${esc(strings.get("dashboard.banner.schema_rollback.explanation"))} """ +
-                """<a href="${localizedHref("/configure", strings)}">${esc(strings.get("dashboard.banner.schema_rollback.configure_action"))}</a> """ +
-                """${esc(strings.get("dashboard.banner.schema_rollback.or_restore"))} <a href="${localizedHref("/install", strings)}">${esc(strings.get("shell.nav.install"))}</a>.</div>"""
+                """<a href="${localizedHref("configure", strings)}">${esc(strings.get("dashboard.banner.schema_rollback.configure_action"))}</a> """ +
+                """${esc(strings.get("dashboard.banner.schema_rollback.or_restore"))} <a href="${localizedHref("install", strings)}">${esc(strings.get("shell.nav.install"))}</a>.</div>"""
     }
 
     /** Table rows for one facts card (Panel information / Networking / ha-paneld profile). */
@@ -6451,7 +6471,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         return """{"banners":${jsonStr(bannersHtml(s, h, strings))},"shot":${s.privilege.typedShellControlReady},"shotCached":${jsonStr(screenshotPlaceholderUrl() ?: "")},"controls":${jsonStr(controlsHtml(s, strings))},"cards":{$cards}}"""
     }
 
-    private fun infoHtml(strings: AppStrings): String {
+    private fun infoHtml(strings: AppStrings, embed: EmbedMode? = null): String {
         // Stale-while-revalidate: render the last-known snapshot instantly (placeholders if none yet)
         // and let the page hydrate/refresh from /api/v1/info when the snapshot is missing or old.
         val s = snapCache.peek()
@@ -6475,14 +6495,14 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             """<a href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer"><bdi class="profile-reference-label" dir="auto">${esc(link.label)}</bdi>$destination</a>"""
         }.takeIf { it.isNotBlank() }?.let { """<br><span class="profile-reference-links">$it</span>""" }.orEmpty()
         val profNote = """<p class="note">${esc(strings.get("dashboard.profile_note.prefix"))} <a href="$DEVICE_PROFILES_DOC" target="_blank" rel="noopener" style="color:#9cf">${esc(strings.get("dashboard.profile_note.link"))}</a>.$profileReferences</p>"""
-        val capNote = """<p class="note"><a href="/api/v1/diag" target="_blank" style="color:#9cf">⭳ ${esc(strings.get("dashboard.diagnostics_dump.link"))}</a> — ${esc(strings.get("dashboard.diagnostics_dump.explanation"))}</p>"""
+        val capNote = """<p class="note"><a href="api/v1/diag" target="_blank" style="color:#9cf">⭳ ${esc(strings.get("dashboard.diagnostics_dump.link"))}</a> — ${esc(strings.get("dashboard.diagnostics_dump.explanation"))}</p>"""
         // A cold shell can safely show the app-private last-successful capture before the capability
         // probes finish. It must not request a new capture until hydration confirms a privileged route.
         val cachedShot = screenshotPlaceholderUrl()
         val shotTitle = """<h2>${esc(strings.get("dashboard.card.screenshot"))} <small>· ${esc(strings.get("dashboard.card.live_panel"))}</small><a class="card-title-action" href="#" onclick="refreshScreenshot(this.closest('.card'));return false" title="${esc(strings.get("dashboard.screenshot.capture_title"))}">↻ ${esc(strings.get("dashboard.action.refresh"))}</a></h2>"""
         val shotInner = { src: String? ->
             val source = src?.let { """src="${esc(it)}"""" } ?: ""
-            """<a class="shot" href="/api/v1/screenshot.png" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.screenshot.open_full_size"))}" data-error-label="${esc(strings.get("dashboard.screenshot.unavailable"))}" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="${esc(strings.get("dashboard.screenshot.alt"))}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>"""
+            """<a class="shot" href="api/v1/screenshot.png" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.screenshot.open_full_size"))}" data-error-label="${esc(strings.get("dashboard.screenshot.unavailable"))}" style="aspect-ratio:${screenAspectRatio()}"><img $source alt="${esc(strings.get("dashboard.screenshot.alt"))}" onload="this.parentElement.classList.add('loaded')" onerror="this.parentElement.classList.add('failed')"></a>"""
         }
         val shotCard = when {
             s == null && cachedShot != null ->
@@ -6501,7 +6521,7 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
         val cameraCard = if (camera.presentation().state == CameraState.ABSENT) "" else
             """<div class="card" data-layout-key="camera-stream"><h2>${esc(strings.get("dashboard.camera.title"))} <small id="camhdr"></small></h2>
 <table id="camtbl"><tr><td style="color:#888">${esc(strings.get("dashboard.status.reading"))}</td></tr></table>
-<p class="note">${esc(strings.get("dashboard.camera.note"))} ${esc(strings.get("dashboard.camera.settings_on"))} <a href="${localizedHref("/configure", strings)}">${esc(strings.get("dashboard.camera.configure_link"))}</a>.</p></div>"""
+<p class="note">${esc(strings.get("dashboard.camera.note"))} ${esc(strings.get("dashboard.camera.settings_on"))} <a href="${localizedHref("configure", strings)}">${esc(strings.get("dashboard.camera.configure_link"))}</a>.</p></div>"""
         val infoHaLink = if (config.haLinkUrl.isNotBlank())
             """<a class="pbtn" href="${esc(config.haLinkUrl)}" target="_blank" rel="noopener" title="${esc(strings.get("dashboard.open_in_ha.title"))}">${esc(strings.get("shell.open_in_ha"))}</a>""" else ""
         val revealBtn = """<button id="revbtn" class="pbtn" onclick="toggleReveal()" title="${esc(strings.get("dashboard.reveal.title"))}">${esc(strings.get("dashboard.action.reveal"))}</button>"""
@@ -6510,9 +6530,10 @@ ${esc(strings.get("fleet.note.discovery_prefix"))} (<code>${esc(Config.MDNS_SERV
             sectionTitle = null,
             bodyAttrs = """data-ver="${Config.VERSION}" data-build="${buildToken()}" data-cfg="${renderConfigConcurrencyHash()}" data-hydrate="${if (hydrate) "1" else "0"}" data-hardened="${if (config.hardenedSecurityEnabled) "1" else "0"}"""",
             rightControls = "$infoHaLink$revealBtn ${ghLink(strings)}",
-            extraScripts = """<script src="/assets/card-size-memory.js"></script>
-<script src="/assets/card-column-alignment.js"></script>
-<script src="/info.js"></script>
+            embed = embed,
+            extraScripts = """<script src="assets/card-size-memory.js"></script>
+<script src="assets/card-column-alignment.js"></script>
+<script src="info.js"></script>
 """,
             body = """<div id="bannerzone">${s?.let { bannersHtml(it, h, strings) } ?: ""}</div>
 <div class="cards" id="dashboard-cards" data-card-size-page="dashboard" data-card-size-epoch="1" data-card-size-restore="1">
@@ -6531,7 +6552,7 @@ ${tcard("captbl", strings.get("dashboard.card.capabilities"), s?.let { capRowsHt
 <div class="card" data-layout-key="ha-state-stream"><h2>${esc(strings.get("dashboard.card.ha_state_stream"))} <small>· ${esc(strings.get("dashboard.card.builtin_renderer"))}</small></h2>
 <table id="streamtbl"><tr><td style="color:#888">${esc(strings.get("dashboard.status.waiting_state_traffic"))}</td></tr></table>
 <table class="dt" id="noisyentities"><tr><td style="color:#888">${esc(strings.get("dashboard.status.waiting_entity_contributors"))}</td></tr></table>
-<p class="note">${esc(strings.get("dashboard.ha_stream.note"))} <a href="${localizedHref("/entities", strings)}">${esc(strings.get("dashboard.ha_stream.open_diagnostics"))}</a>.</p></div>
+<p class="note">${esc(strings.get("dashboard.ha_stream.note"))} <a href="${localizedHref("entities", strings)}">${esc(strings.get("dashboard.ha_stream.open_diagnostics"))}</a>.</p></div>
 <div class="card" data-layout-key="sensors"><h2>${esc(strings.get("dashboard.card.sensors"))} <small id="sensage"></small></h2>
 <table id="senstbl"><tr><td style="color:#888">${esc(strings.get("dashboard.status.reading"))}</td></tr></table>
 <p class="note">${esc(strings.get("dashboard.sensors.note"))}</p></div>
@@ -6553,8 +6574,8 @@ ${tcard("behavtbl", strings.get("dashboard.card.behaviour"), s?.let { behaviourR
 ${tcard("disptbl", strings.get("dashboard.card.display_tuning"), s?.let { displayRowsHtml(it, strings) })}
 ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtml(it, strings) })}
 </div>
-<p class="note" style="text-align:center;margin-top:18px"><a href="${localizedHref("/api", strings)}" style="color:#9cf">${esc(strings.get("dashboard.footer.api_explorer"))}</a>
- · <a href="/api/v1/diag" target="_blank" style="color:#9cf">${esc(strings.get("dashboard.footer.diagnostics"))}</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>""",
+<p class="note" style="text-align:center;margin-top:18px"><a href="${localizedHref("api", strings)}" style="color:#9cf">${esc(strings.get("dashboard.footer.api_explorer"))}</a>
+ · <a href="api/v1/diag" target="_blank" style="color:#9cf">${esc(strings.get("dashboard.footer.diagnostics"))}</a> · <a href="$REPO_URL" target="_blank" rel="noopener" style="color:#9cf">GitHub</a></p>""",
             strings = strings,
             translationPrefixes = setOf("shell.", "dashboard.", "runtime."),
         )
@@ -6630,7 +6651,7 @@ ${tcard("updtbl", strings.get("dashboard.card.updates"), s?.let { updatesRowsHtm
         val control = if (!c.removable)
             """<span style="font-size:.8em;color:#777;white-space:nowrap">${esc(strings.get("install.tame.state.protected"))}</span>"""
         else
-            """<form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>${esc(label)}</button></form>"""
+            """<form method="post" action="${localizedHref("api/v1/tame", strings)}" style="margin:0"><input type="hidden" name="pkg" value="${esc(c.pkg)}"><input type="hidden" name="action" value="$action"><button type="submit"${hardenedApprovalA11yAttrs(strings = strings)} style="$btn;white-space:nowrap"${if (disabled) " disabled" else ""}>${esc(label)}</button></form>"""
         return """  <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid #222">
    <span style="flex:1;min-width:0;overflow:hidden">${esc(c.label)}$recBadge$tags<br><small style="color:#888">${esc(c.pkg)}</small>$note</span>
    $state
@@ -6666,7 +6687,7 @@ $lock<p class="note">${esc(strings.get("install.tame.description"))}</p>
 $body
 <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px" class="${if (locked) "locked" else ""}">
  <button type="button" onclick="pkgPick()"$dis>${esc(strings.get("install.tame.find"))}</button>
- <form method="post" action="${localizedHref("/api/v1/tame", strings)}" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin:0">
+ <form method="post" action="${localizedHref("api/v1/tame", strings)}" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin:0">
   <label for="tame-pkg" style="grid-column:1/-1">${esc(strings.get("install.tame.package_name"))}</label>
   <input id="tame-pkg" name="pkg" autocapitalize="none" autocorrect="off" spellcheck="false" required pattern="[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*" maxlength="255" aria-describedby="tame-pkg-hint" placeholder="io.example.app" style="min-width:0"$dis oninput="updateTamePackageSubmit()">
   <input type="hidden" name="action" value="tame">
@@ -6682,7 +6703,7 @@ $body
 </dialog>
 <script>function pkgPick(){var d=document.getElementById('pkgdlg');d.showModal();
 document.getElementById('pkgdlgbody').textContent=${jsonStr(strings.get("install.shared.loading"))};
-fetch(${jsonStr(localizedHref("/api/v1/tame/suggest", strings))}).then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent=${jsonStr(strings.get("install.tame.dialog.list_failed"))};});}
+fetch(${jsonStr(localizedHref("api/v1/tame/suggest", strings))}).then(function(r){return r.text()}).then(function(t){document.getElementById('pkgdlgbody').innerHTML=t}).catch(function(){document.getElementById('pkgdlgbody').textContent=${jsonStr(strings.get("install.tame.dialog.list_failed"))};});}
 function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg'),button=document.getElementById('tame-package-submit');if(!input||!button)return;button.disabled=input.disabled||!input.checkValidity();}updateTamePackageSubmit();</script></div>"""
     }
 
@@ -6713,7 +6734,7 @@ function updateTamePackageSubmit(){var input=document.getElementById('tame-pkg')
         val title = if (!locked) hardenedApprovalCardTitle(esc(strings.get("install.display.title")), badge, strings = strings) else "<h2>${esc(strings.get("install.display.title"))}$badge</h2>"
         return """<div class="card" id="cfg-display" data-layout-key="display-sizing">$title
 $lock<p class="note">${esc(strings.get("install.display.description"))}</p>
-<form method="post" action="${localizedHref("/api/v1/display/density", strings)}" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
+<form method="post" action="${localizedHref("api/v1/display/density", strings)}" class="${if (locked) "locked" else ""}" style="display:flex;flex-direction:column;gap:10px">
  <label style="display:flex;flex-direction:row;justify-content:space-between;align-items:center;gap:12px">
   <span>${esc(strings.get("install.display.logical_density"))} <small style="color:#888">· ${esc(densityHint)}</small></span>
   <input name="density" type="number" min="${DensityController.MIN_DPI}" max="${DensityController.MAX_DPI}" value="$cur" style="width:96px"$dis>
@@ -10857,7 +10878,7 @@ internal fun zigbeeWarningText(snapshot: ZigbeeHealthSnapshot, configuredOn: Boo
     snapshot.state == ZigbeeHealthState.DEGRADED_UNJOINED && configuredOn ->
         "⚠ <b>Zigbee router is enabled but not joined</b> — repeated join retries can consume substantial CPU. " +
             "Join this panel to your Zigbee coordinator or turn the Zigbee router switch OFF. " +
-            "<a href=\"/configure#cfg-zigbee_join\">Resolve Zigbee setup →</a>"
+            "<a href=\"configure#cfg-zigbee_join\">Resolve Zigbee setup →</a>"
     snapshot.recursiveWatchdogAssignment ->
         "⚠ <b>Legacy Zigbee watchdog defect detected</b> — the exact recursive LD_LIBRARY_PATH assignment is present. ha-paneld will not edit the vendor script automatically."
     else -> null

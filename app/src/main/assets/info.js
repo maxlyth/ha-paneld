@@ -153,7 +153,7 @@ function rendererMeasurement(mode,r){
 async function perf(){
  if(document.hidden)return;   // a hidden/background tab must not keep the sampler (or panel) busy
  try{
-  var d=await (await fetch('/api/v1/perf')).json();
+  var d=await (await fetch('api/v1/perf')).json();
   if(d.hist){cpuH=d.hist.cpu||[];ramH=d.hist.ram||[];gpuH=d.hist.gpu||[];}  // server FIFO
   draw();
   var ramOk=d.memTotalMb!=null&&d.memTotalMb>0&&d.memUsedMb!=null;
@@ -242,7 +242,7 @@ function sensorsCard(tbl,age){
  async function s(){
   if(document.hidden)return;
   try{
-   var d=await (await fetch('/api/v1/sensors')).json(),rows=[];
+   var d=await (await fetch('api/v1/sensors')).json(),rows=[];
    if(d.light&&d.light.present)rows.push({label:i18nText('dashboard.sensors.ambient_light','Ambient light'),val:d.light.lux!=null?d.light.lux+' lx':i18nText('dashboard.sensors.no_reading','no reading yet'),suf:fA(d.light.age_s)});
    if(d.proximity&&d.proximity.present){var p=d.proximity,reading=proximityReading(p);
     rows.push({label:i18nText('dashboard.sensors.proximity','Proximity'),val:reading.val,suf:[reading.suf,fA(p.age_s)].filter(Boolean).join(' ')});}
@@ -445,7 +445,7 @@ function cameraCard(tbl,hdr){
   if(inFlight)return;
   inFlight=true;
   try{
-   var d=await (await fetch('/api/v1/camera/status',{cache:'no-store'})).json();
+   var d=await (await fetch('api/v1/camera/status',{cache:'no-store'})).json();
    var now=Date.now();
    if(lastReadingAt&&now-lastReadingAt>CAMERA_MAX_GAP_MS)forget();
    lastReadingAt=now;
@@ -510,11 +510,11 @@ function inspApply(d){
  else hint.textContent=(perfMode==='builtin_direct'?i18nText('dashboard.inspect.direct_instrumentation','The performance cards above use direct built-in instrumentation without DevTools.')+' ':'')+i18nText('dashboard.inspect.instructions','For deeper inspection, open chrome://inspect → Configure…, add {host}, then press Enable. Companion also requires Settings → Troubleshooting → WebView remote debugging and a dashboard relaunch. The relay needs root.',{host:location.hostname+':'+d.port});
  cardSizeSourceReady('inspect');
 }
-async function insp(){try{var d=await (await fetch('/api/v1/inspect')).json();inspApply(d);}catch(e){}}
+async function insp(){try{var d=await (await fetch('api/v1/inspect')).json();inspApply(d);}catch(e){}}
 function inspStart(){var hint=document.getElementById('insthint');
- fetch('/api/v1/inspect/start',{method:'POST'}).then(responseBody).then(function(result){inspApply(result.body);})
+ fetch('api/v1/inspect/start',{method:'POST'}).then(responseBody).then(function(result){inspApply(result.body);})
  .catch(function(error){if(hint)hint.textContent=error&&error.approvalRequired?i18nText('dashboard.actions.approve_on_panel','Approve this request on the panel, then retry it.'):i18nText('dashboard.inspect.start_failed','Could not start the relay.');});}
-function inspStop(){fetch('/api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
+function inspStop(){fetch('api/v1/inspect/stop',{method:'POST'}).then(function(r){return r.json();}).then(inspApply).catch(function(){});}
 insp();
 
 var scheduleDashboardColumnAlignment=window.CardColumnAlignment
@@ -533,7 +533,7 @@ function act(a){if(a==='reboot'){
  if(document.body.dataset.hardened==='1')warning+='\n\n'+i18nText('dashboard.actions.hardened_approval','Hardened mode requires physical approval on this panel; it cannot be approved remotely.');
  if(!confirm(warning))return;
  }
- fetch('/api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a})
+ fetch('api/v1/action',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'a='+a})
  .then(responseBody).then(function(result){
   if(!result.response.ok){
    if(result.body&&result.body.error==='remote-input-disabled')controlMessage(i18nText('dashboard.actions.remote_input_disabled','Remote tap input is disabled for network clients in Hardened mode.'));
@@ -573,7 +573,7 @@ function installScreenshotBlob(card,blob,generation,headers,seedCache){
    var dialogImage=document.getElementById('screenshot-dialog-image');
    if(dialogImage)dialogImage.src=objectUrl;
    var id=seedCache&&headers&&headers.get('X-ha-paneld-Screenshot-Id');
-   if(id&&/^[0-9a-f]{64}$/.test(id)){var seed=new Image();seed.src='/api/v1/screenshot.png?cached='+id;}
+   if(id&&/^[0-9a-f]{64}$/.test(id)){var seed=new Image();seed.src='api/v1/screenshot.png?cached='+id;}
    // Keep the displayed URL alive for modal reopen and slow target-image decode; release only the
    // previously displayed blob after this replacement has been predecoded successfully.
    if(previous)URL.revokeObjectURL(previous);resolve(true);
@@ -584,7 +584,7 @@ function installScreenshotBlob(card,blob,generation,headers,seedCache){
 function refreshScreenshot(card){
  var sc=card&&card.querySelector('.shot'),im=sc&&sc.querySelector('img');if(!im||im.dataset.refreshing==='1')return;
  var state=screenshotState(card);if(state.tapping)return;
- var generation=++state.generation;im.dataset.refreshing='1';var url='/api/v1/screenshot.png?t='+Date.now();
+ var generation=++state.generation;im.dataset.refreshing='1';var url='api/v1/screenshot.png?t='+Date.now();
  fetch(url,{cache:'no-store'}).then(function(r){if(!r.ok)throw new Error('capture failed');
   return r.blob().then(function(blob){return installScreenshotBlob(card,blob,generation,r.headers,true);});})
  .then(function(){if(generation===state.generation)im.dataset.refreshing='0';})
@@ -614,7 +614,7 @@ function clearScreenshotTrace(dialog){['inputId','inputRoute','screenshotRoute',
 function fallbackScreenshot(card,dialog,generation,tapConfirmed){var state=screenshotState(card);if(state.fallbackUsed)return Promise.resolve(false);
  state.fallbackUsed=true;screenshotStatus(tapConfirmed?i18nText('dashboard.screenshot.tap_completed_capturing','Tap completed; capturing a fresh screenshot…'):i18nText('dashboard.screenshot.outcome_unknown_capturing','Tap outcome unknown; capturing the current panel…'),false);
  return new Promise(function(resolve){setTimeout(resolve,250);}).then(function(){
-  return fetch('/api/v1/screenshot.png?t='+Date.now(),{cache:'no-store'});
+  return fetch('api/v1/screenshot.png?t='+Date.now(),{cache:'no-store'});
  }).then(function(r){if(!r.ok)throw new Error('capture failed');screenshotTrace(dialog,r.headers);return r.blob().then(function(blob){
    return installScreenshotBlob(card,blob,generation,r.headers);});
  }).then(function(updated){screenshotStatus(updated?(tapConfirmed?i18nText('dashboard.screenshot.updated','Screenshot updated.'):i18nText('dashboard.screenshot.outcome_unknown_refreshed','Tap outcome unknown; current screenshot refreshed.')):
@@ -634,7 +634,7 @@ function sendScreenshotTap(ev,card,dialog,image){
  // The server owns the tap/capture completion deadline and response grace. Do not abandon a slow helper or
  // accessibility route early and race its eventual tap with the safe fallback screenshot.
  var timeout=controller&&setTimeout(function(){controller.abort();},65000);
- fetch('/api/v1/input',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+ fetch('api/v1/input',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
   body:'x='+point.x+'&y='+point.y+'&capture=1',signal:controller?controller.signal:undefined})
  .then(function(r){if(timeout)clearTimeout(timeout);screenshotTrace(dialog,r.headers);
   var route=r.headers.get('X-ha-paneld-Input-Route');
@@ -692,7 +692,7 @@ setupScreenshotOverlay();
 // fetch /api/v1/info — ready-to-inject HTML fragments rendered by the same Kotlin as the warm
 // server render — and fill the facts/value/capabilities tables, banners, controls and screenshot.
 function localizedInfoUrl(){var locale=window.HaI18n&&typeof window.HaI18n.locale==='string'?window.HaI18n.locale:'';
- return /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(locale)?'/api/v1/info?lang='+encodeURIComponent(locale):'/api/v1/info';}
+ return /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/.test(locale)?'api/v1/info?lang='+encodeURIComponent(locale):'api/v1/info';}
 (function(){
  if(document.body.getAttribute('data-hydrate')!=='1')return;
  function apply(d){
@@ -722,7 +722,7 @@ function localizedInfoUrl(){var locale=window.HaI18n&&typeof window.HaI18n.local
 function ignoreUpdate(btn){var b=btn.closest('.setup');if(!b)return;
  var label=b.getAttribute('data-update')||'',version=b.getAttribute('data-version')||'';
  btn.disabled=true;
- fetch('/api/v1/updates/ignore',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
+ fetch('api/v1/updates/ignore',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},
   body:'label='+encodeURIComponent(label)+'&version='+encodeURIComponent(version)})
   .then(function(r){if(r.ok)b.remove();else btn.disabled=false;})
   .catch(function(){btn.disabled=false;});}

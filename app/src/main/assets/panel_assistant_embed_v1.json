@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "headers": {
+    "embed": "X-Panel-Assistant-Embed",
+    "proof": "X-Panel-Assistant-Proof"
+  },
+  "embed": {
+    "max_bytes": 256,
+    "tabs": [
+      "setup",
+      "dashboard",
+      "configure",
+      "profiles",
+      "entities",
+      "install",
+      "logs",
+      "api"
+    ],
+    "valid": [
+      {
+        "header": "v=1",
+        "lang": null,
+        "theme": null,
+        "hide": []
+      },
+      {
+        "header": "v=1;hide=api",
+        "lang": null,
+        "theme": null,
+        "hide": [
+          "api"
+        ]
+      },
+      {
+        "header": "v=1;lang=de;theme=dark;hide=api",
+        "lang": "de",
+        "theme": "dark",
+        "hide": [
+          "api"
+        ]
+      },
+      {
+        "header": "v=1;lang=zh-Hans;theme=light;hide=api,entities",
+        "lang": "zh-Hans",
+        "theme": "light",
+        "hide": [
+          "api",
+          "entities"
+        ]
+      },
+      {
+        "header": "v=1;lang=pt-BR",
+        "lang": "pt-BR",
+        "theme": null,
+        "hide": []
+      },
+      {
+        "header": "v=1;hide=api,future_tab,logs",
+        "lang": null,
+        "theme": null,
+        "hide": [
+          "api",
+          "logs"
+        ],
+        "note": "a well-formed name that is not a tab is ignored"
+      },
+      {
+        "header": "V=1;THEME=Dark;Hide=API",
+        "lang": null,
+        "theme": "dark",
+        "hide": [
+          "api"
+        ],
+        "note": "quoted grammar literals are case-insensitive"
+      },
+      {
+        "header": "v=1;theme=light;theme=dark",
+        "lang": null,
+        "theme": "dark",
+        "hide": [],
+        "note": "a repeated lang or theme takes its last value"
+      },
+      {
+        "header": "v=1;hide=api;hide=logs",
+        "lang": null,
+        "theme": null,
+        "hide": [
+          "api",
+          "logs"
+        ],
+        "note": "repeated hide lists are combined"
+      },
+      {
+        "header": "v=1;lang=abcdefgh-abcdefgh-abcdefgh-abcdefgh",
+        "lang": "abcdefgh-abcdefgh-abcdefgh-abcdefgh",
+        "theme": null,
+        "hide": [],
+        "note": "35 characters"
+      },
+      {
+        "header": "v=1;hide=logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,ap",
+        "lang": null,
+        "theme": null,
+        "hide": [
+          "logs"
+        ],
+        "note": "exactly 256 bytes"
+      }
+    ],
+    "invalid": [
+      {
+        "header": "",
+        "note": "empty"
+      },
+      {
+        "header": "v=2",
+        "note": "another version"
+      },
+      {
+        "header": "v=1;",
+        "note": "empty parameter"
+      },
+      {
+        "header": "lang=de;v=1",
+        "note": "version must come first"
+      },
+      {
+        "header": "v=1 ;lang=de",
+        "note": "no whitespace inside the grammar"
+      },
+      {
+        "header": "v=1;lang=",
+        "note": "empty tag"
+      },
+      {
+        "header": "v=1;lang=1de",
+        "note": "primary subtag is alphabetic"
+      },
+      {
+        "header": "v=1;lang=abcdefghi",
+        "note": "subtag over eight characters"
+      },
+      {
+        "header": "v=1;lang=de_DE",
+        "note": "underscore is not a subtag separator"
+      },
+      {
+        "header": "v=1;lang=abcdefgh-abcdefgh-abcdefgh-abcdefgh-a",
+        "note": "tag over 35 characters"
+      },
+      {
+        "header": "v=1;theme=blue",
+        "note": "theme outside the enumeration"
+      },
+      {
+        "header": "v=1;hide=",
+        "note": "empty tab"
+      },
+      {
+        "header": "v=1;hide=api,,logs",
+        "note": "empty tab inside the list"
+      },
+      {
+        "header": "v=1;hide=api logs",
+        "note": "a tab name is a token"
+      },
+      {
+        "header": "v=1;colour=red",
+        "note": "unknown parameter"
+      },
+      {
+        "header": "v=1;lang",
+        "note": "parameter without a value"
+      },
+      {
+        "header": "v=1;hide=api,<script>",
+        "note": "markup is never a tab name"
+      },
+      {
+        "header": "v=1;hide=logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,logs,api",
+        "note": "257 bytes"
+      }
+    ]
+  }
+}

@@ -262,7 +262,7 @@ test('Profiles layout fixture stays bound to the production frame and breakpoint
   for (const marker of [
     'class="profile-toolbar"', 'class="profile-workspace"', 'class="profile-editor-pane"',
     'class="profile-inspector"', 'class="profile-modal-card"',
-    'src="/assets/vendor/profile-editor/codemirror.js"', 'src="/assets/profiles.js"',
+    'src="assets/vendor/profile-editor/codemirror.js"', 'src="assets/profiles.js"',
   ]) assert.ok(serverSource.includes(marker), `production Profiles frame lost ${marker}`);
   for (const breakpoint of ['@media(max-width:1050px)', '@media(max-width:857px)', '@media(max-width:520px)']) {
     assert.ok(css.includes(breakpoint), `production Profiles CSS lost ${breakpoint}`);
