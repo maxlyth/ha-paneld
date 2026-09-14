@@ -23,7 +23,7 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(1, hello.getJSONObject("protocol").getInt("min"))
         assertEquals(1, hello.getJSONObject("protocol").getInt("max"))
         assertTrue(Regex("^[0-9a-f]{64}$").matches(hello.getString("contract_digest")))
-        assertEquals(listOf("state", "commands", "approval"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
+        assertEquals(listOf("state", "commands", "approval", "mqtt_withdraw"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
         val relay = hello.getJSONArray("channels").getJSONObject(0)
         assertEquals(listOf("relay3", "switch", "relay", "relay3", "relay", "3"), listOf("channel", "platform", "translation_key", "unique_suffix", "family", "index").map { relay.get(it).toString() })
     }
@@ -32,7 +32,7 @@ class PanelAssistantTransportProtocolTest {
         // Pinned as a literal: a digest derived from JSON serialisation could differ between the
         // device's org.json and the JVM's, and the integration records whatever the panel sends.
         assertEquals(
-            "b194f98e54fa335b14dae8d902bec245cfb4d76f5e4e45b49af5df7653de1ccd",
+            "1df9963e875eff51908cdf1ddf0e75d87f3228f519c33afcdffe22cc9efdc111",
             PanelAssistantTransportProtocol.CONTRACT_DIGEST,
         )
     }
@@ -94,29 +94,67 @@ class PanelAssistantTransportProtocolTest {
         )
     }
 
-    @Test fun `an accepted result carries a known discovery claim and reads any other as absent`() {
-        assertNull(session(accepted()).mqttDiscovery)
-        assertEquals("withdraw", session(accepted().claiming("withdraw")).mqttDiscovery)
-        assertEquals("announce", session(accepted().claiming("announce")).mqttDiscovery)
-        assertNull(session(accepted().claiming("hold")).mqttDiscovery)
-        assertNull(session(accepted().claiming(1)).mqttDiscovery)
+    @Test fun `every build offers mqtt_withdraw`() {
+        assertTrue(PanelAssistantTransportProtocol.CAPABILITIES.contains("mqtt_withdraw"))
     }
 
-    @Test fun `mqtt discovery is released by any authority but native and withdrawn only on its word`() {
-        val rule = PanelAssistantTransportProtocol::mqttDiscovery
-        for (authority in listOf("mqtt", "shadow", "future_mode")) {
-            for (persisted in listOf("", "withdraw", "announce")) {
-                assertEquals("$authority persisted=$persisted", "announce", rule(authority, "withdraw", persisted))
-                assertEquals("$authority persisted=$persisted", "announce", rule(authority, null, persisted))
+    @Test fun `granting mqtt_withdraw makes a known discovery claim required and binding`() {
+        assertEquals("withdraw", session(accepted().granting("mqtt_withdraw").claiming("withdraw")).mqttDiscovery)
+        assertEquals("announce", session(accepted().granting("mqtt_withdraw").claiming("announce")).mqttDiscovery)
+        listOf<(JSONObject) -> JSONObject>(
+            { it },
+            { it.claiming("hold") },
+            { it.claiming(1) },
+            { it.claiming(JSONObject.NULL) },
+        ).forEachIndexed { index, claim ->
+            try {
+                PanelAssistantTransportProtocol.helloOutcome(claim(accepted().granting("mqtt_withdraw")), 1L)
+                fail("granted case $index was accepted without a valid claim")
+            } catch (expected: PanelAssistantProtocolException) {
             }
         }
-        assertEquals("withdraw", rule("native", "withdraw", ""))
-        assertEquals("withdraw", rule("native", "withdraw", "announce"))
-        assertEquals("announce", rule("native", "announce", "withdraw"))
-        assertEquals("withdraw", rule("native", null, "withdraw"))
-        assertEquals("announce", rule("native", null, "announce"))
-        assertEquals("announce", rule("native", null, ""))
-        assertEquals("announce", rule("native", null, "hold"))
+    }
+
+    @Test fun `without the mqtt_withdraw grant the discovery field is ignored, present or not`() {
+        assertNull(session(accepted()).mqttDiscovery)
+        assertNull(session(accepted().claiming("withdraw")).mqttDiscovery)
+        assertNull(session(accepted().claiming("announce")).mqttDiscovery)
+        assertNull(session(accepted().granting("state").claiming("withdraw")).mqttDiscovery)
+        assertNull(session(accepted().claiming("hold")).mqttDiscovery)
+    }
+
+    @Test fun `mqtt discovery is released by any authority but native and keyed on the grant under native`() {
+        fun rule(authority: String, granted: Boolean, claim: String?, persisted: String) =
+            PanelAssistantTransportProtocol.mqttDiscovery(
+                PanelAssistantSession(1, "s", authority, if (granted) listOf("mqtt_withdraw") else emptyList(), "0.3.0", claim),
+                persisted,
+            )
+        for (authority in listOf("mqtt", "shadow", "future_mode")) {
+            for (persisted in listOf("", "withdraw", "announce")) {
+                assertEquals("$authority persisted=$persisted", "announce", rule(authority, true, "withdraw", persisted))
+                assertEquals("$authority persisted=$persisted", "announce", rule(authority, false, null, persisted))
+            }
+        }
+        // Granted: the claim, whatever was persisted.
+        assertEquals("withdraw", rule("native", true, "withdraw", ""))
+        assertEquals("withdraw", rule("native", true, "withdraw", "announce"))
+        assertEquals("announce", rule("native", true, "announce", "withdraw"))
+        // Not granted: the persisted value, and a claim that arrived without the grant changes nothing.
+        assertEquals("withdraw", rule("native", false, null, "withdraw"))
+        assertEquals("withdraw", rule("native", false, "announce", "withdraw"))
+        assertEquals("announce", rule("native", false, "withdraw", "announce"))
+        assertEquals("announce", rule("native", false, null, "announce"))
+        // Nothing valid persisted: announce.
+        assertEquals("announce", rule("native", false, "withdraw", ""))
+        assertEquals("announce", rule("native", false, null, "hold"))
+    }
+
+    @Test fun `entry_removed is a refusal code`() {
+        assertEquals(
+            PanelAssistantHelloOutcome.Refused("entry_removed"),
+            PanelAssistantTransportProtocol.helloOutcome(refused(PanelAssistantTransportProtocol.CODE_ENTRY_REMOVED), 1L),
+        )
+        assertEquals("entry_removed", PanelAssistantTransportProtocol.CODE_ENTRY_REMOVED)
     }
 
     @Test fun `a refusal yields its code and an unusable code reads as invalid_format`() {
@@ -200,6 +238,9 @@ class PanelAssistantTransportProtocolTest {
                 .put("capabilities", JSONArray())
                 .put("integration", JSONObject().put("version", "0.3.0")),
         )
+
+    private fun JSONObject.granting(vararg capabilities: String): JSONObject =
+        apply { getJSONObject("result").put("capabilities", JSONArray(capabilities.toList())) }
 
     private fun JSONObject.claiming(value: Any): JSONObject = apply { getJSONObject("result").put("mqtt_discovery", value) }
 

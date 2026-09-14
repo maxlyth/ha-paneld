@@ -73,6 +73,20 @@ internal fun panelAssistantTransportDemand(
 
 internal enum class PanelAssistantTransportPhase { STOPPED, CONNECTING, HANDSHAKING, CONNECTED, WAITING }
 
+/**
+ * What the panel's local control plane reports about the transport: codes and facts, no display text.
+ * Migration scaffolding for moving entities off MQTT; it is deleted with MQTT.
+ */
+internal data class PanelAssistantTransportFacts(
+    /** The persisted authority: `mqtt`, `shadow`, `native`, or empty before any session. */
+    val authority: String,
+    /** The persisted MQTT discovery value: `withdraw`, `announce`, or empty before any session. */
+    val mqttDiscovery: String,
+    val phase: PanelAssistantTransportPhase,
+    /** The owner's last refusal or retry code, null while none applies. */
+    val refusal: String?,
+)
+
 internal data class PanelAssistantTransportStatus(
     val phase: PanelAssistantTransportPhase = PanelAssistantTransportPhase.STOPPED,
     /** Consecutive attempts since the last accepted `hello`. */
@@ -127,7 +141,8 @@ internal data class PanelAssistantTransportStatus(
  * when it changes. A release, or a withdrawal on a session that reports no state, is handed over at once.
  * A withdrawal on a reporting session waits for the integration to acknowledge the session's full sync,
  * so the native entities are available before the MQTT ones are removed; a session that ends first hands
- * nothing over, and the next accepted hello resolves the claim again.
+ * nothing over, and the next accepted hello resolves the claim again. A hello refused `entry_removed` hands
+ * the panel back to MQTT through [releaseToMqtt], which the local control plane also calls.
  */
 internal class PanelAssistantTransportOwner(
     private val scope: CoroutineScope,
@@ -152,12 +167,15 @@ internal class PanelAssistantTransportOwner(
     private val commands: PanelAssistantCommandSink? = null,
     private val approvalTtlMs: Long = io.github.maxlyth.hapaneld.security.ApprovalBroker.DEFAULT_TTL_MS,
     private val onAuthority: (String) -> Unit = {},
+    /** The persisted authority, empty before any session. */
+    private val authority: () -> String = { "" },
     /** The persisted MQTT discovery value, empty before any session. */
     private val mqttDiscovery: () -> String = { "" },
     /** Persists the resolved MQTT discovery value and applies it to the bridge. */
     private val onMqttDiscovery: (String) -> Unit = {},
 ) : AutoCloseable {
     private val lock = Any()
+    private val releaseLock = Any()
     private val generation = AtomicLong()
     private val nudges = Channel<Unit>(Channel.CONFLATED)
 
@@ -195,6 +213,30 @@ internal class PanelAssistantTransportOwner(
     /** End any pending wait now; used when the default network becomes available. */
     fun nudge() {
         nudges.trySend(Unit)
+    }
+
+    /** The persisted authority and discovery value beside this owner's current phase and refusal. */
+    fun facts(): PanelAssistantTransportFacts {
+        val current = status
+        return PanelAssistantTransportFacts(authority(), mqttDiscovery(), current.phase, current.refusal)
+    }
+
+    /**
+     * Hand this panel's entities and commands back to MQTT: persist authority `mqtt` and discovery
+     * `announce` through the same callbacks an accepted hello uses, so the bridge re-announces its discovery
+     * and accepts MQTT `/set` again. Called when a hello is refused `entry_removed`, and by the panel's local
+     * control plane when no integration can answer. It does not end a live session: a live integration's
+     * next accepted hello still wins and may claim the panel again. Returns whether anything changed, so a
+     * refusal repeated on every slow retry neither re-announces nor logs again.
+     *
+     * Migration scaffolding for moving entities between MQTT and the integration; it is deleted with MQTT.
+     */
+    fun releaseToMqtt(): Boolean = synchronized(releaseLock) {
+        val authorityChanged = authority() != PanelAssistantTransportProtocol.AUTHORITY_MQTT
+        val discoveryChanged = mqttDiscovery() != PanelAssistantTransportProtocol.MQTT_DISCOVERY_ANNOUNCE
+        if (authorityChanged) onAuthority(PanelAssistantTransportProtocol.AUTHORITY_MQTT)
+        if (discoveryChanged) onMqttDiscovery(PanelAssistantTransportProtocol.MQTT_DISCOVERY_ANNOUNCE)
+        authorityChanged || discoveryChanged
     }
 
     override fun close() {
@@ -240,10 +282,11 @@ internal class PanelAssistantTransportOwner(
                         connection = opened
                         publish(run, PanelAssistantTransportStatus(PanelAssistantTransportPhase.HANDSHAKING, attempt))
                         val offered = PanelAssistantTransportProtocol.CAPABILITIES.filter { capability ->
-                            if (capability == PanelAssistantTransportProtocol.CAPABILITY_STATE) {
-                                shadow != null
-                            } else {
-                                commands != null
+                            when (capability) {
+                                PanelAssistantTransportProtocol.CAPABILITY_STATE -> shadow != null
+                                // Offered whatever else is wired: withdrawing discovery needs neither.
+                                PanelAssistantTransportProtocol.CAPABILITY_MQTT_WITHDRAW -> true
+                                else -> commands != null
                             }
                         }
                         val described = shadow?.descriptors().orEmpty()
@@ -259,7 +302,7 @@ internal class PanelAssistantTransportOwner(
                                 val authority = outcome.session.authority
                                 if (authority in PanelAssistantTransportProtocol.AUTHORITIES) onAuthority(authority)
                                 val discovery = PanelAssistantTransportProtocol.mqttDiscovery(
-                                    authority, outcome.session.mqttDiscovery, mqttDiscovery(),
+                                    outcome.session, mqttDiscovery(),
                                 )
                                 val discoveryChanged = discovery != mqttDiscovery()
                                 // A native entity is available only while its channel is reported, so the
@@ -301,8 +344,14 @@ internal class PanelAssistantTransportOwner(
                                     Retry.Fast(REFUSAL_SESSION_CLOSED)
                                 }
                             }
-                            is PanelAssistantHelloOutcome.Refused ->
+                            is PanelAssistantHelloOutcome.Refused -> {
+                                // The entry was removed, so nothing holds this panel's entities: hand them
+                                // back to MQTT. Migration scaffolding; it is deleted with MQTT.
+                                if (outcome.code == PanelAssistantTransportProtocol.CODE_ENTRY_REMOVED && releaseToMqtt()) {
+                                    log("native transport entry removed: authority and discovery returned to MQTT")
+                                }
                                 refusalRetry(outcome.code, monotonicMillis() < warmUntil)
+                            }
                         }
                     }
                 }
