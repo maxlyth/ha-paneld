@@ -595,9 +595,7 @@ jobs:
           # is harmless; on a reused workspace the next checkout cannot clean them. Always
           # hand the tree back, whichever result the suite produced.
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
-          # Every helper contract works in its own temporary directory; make -j runs the long ones beside
-          # the native tests.
-          sudo make -C helper -j3 test && exit 0
+          sudo make -C helper test && exit 0
           # The suite stops at its first failing script, so one run only ever reveals one
           # problem. Re-run the shell contracts individually to report all of them at once.
           echo "::group::remaining helper shell contracts"
