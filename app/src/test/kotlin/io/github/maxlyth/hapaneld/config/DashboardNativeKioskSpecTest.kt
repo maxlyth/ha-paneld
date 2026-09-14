@@ -1,6 +1,5 @@
 package io.github.maxlyth.hapaneld.config
 
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -47,19 +46,5 @@ class DashboardNativeKioskSpecTest {
 
         assertFalse(spec.help.contains("Root-only"))
         assertFalse(systemBars.help.contains("Root-only"))
-    }
-
-    @Test fun `public renderer guide explains compatibility and all three controls`() {
-        val guide = listOf(
-            File("docs/built-in-renderer.md"),
-            File("../docs/built-in-renderer.md"),
-        ).first { it.isFile }.readText()
-
-        assertTrue(guide.contains("Home Assistant 2026.4.2 or newer"))
-        assertTrue(guide.contains("Hide Home Assistant navigation (native)"))
-        assertTrue(guide.contains("Hide Android system bars"))
-        assertTrue(guide.contains("Lock Android to dashboard (experimental)"))
-        assertFalse(guide.substringBefore("## Entity filter").contains("HACS"))
-        assertTrue(guide.contains("does not fall back"))
     }
 }

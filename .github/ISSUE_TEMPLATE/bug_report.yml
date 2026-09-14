@@ -20,7 +20,7 @@ body:
     id: panel
     attributes:
       label: Panel hardware
-      description: See the [hardware references](https://github.com/maxlyth/ha-paneld/tree/main/docs/hardware) if unsure. The `/diag` output below includes the detected profile, which can help confirm the model.
+      description: See the [hardware references](https://panel-assistant.io/go/docs?page=hardware/readme) if unsure. The `/diag` output below includes the detected profile, which can help confirm the model.
       options:
         - Sonoff NSPanel Pro (86P / 120P, PX30 / rk3326)
         - Tuya TPA10 (rk3566)

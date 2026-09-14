@@ -61,7 +61,7 @@ class RuntimeReadInputsContractTest {
         // The scanner must be able to go positive on each shape it claims to see, or a broken pattern
         // would pass this contract vacuously.
         assertTrue("scanner missed the OpenAPI asset read", "app/src/main/assets/openapi.json" in scan.reads)
-        assertTrue("scanner missed the docs/api.md read", "docs/api.md" in scan.reads)
+        assertTrue("scanner missed the docs/profiles/unofficial read", "docs/profiles/unofficial" in scan.reads)
         assertTrue("scanner missed a test-side script read", "app/src/test/js/entity-template-advisory-test.mjs" in scan.reads)
         assertTrue(
             "scanner missed the constructed sibling read of the editor lock file",

@@ -869,15 +869,15 @@ class BundledProfileParityTest {
             "zx-smt156",
         )
         val EXPECTED_BUNDLED_SHA256 = mapOf(
-            "generic.yaml" to "c95dd07e605c826b092c141c111f5f1181e98f5f4833d426f9f6bebab4ab5eb9",
-            "nspanel-pro.yaml" to "950da4fbb71f04f9ca52d47d0d405b304a04c959d9cc0903c852e6c5203ea152",
-            "s9e.yaml" to "b01253348e986d91516788ee3e56f43825b058fecc02d367f5bb0ea73b83abd8",
-            "shelly-wall-display-v2.yaml" to "16415916b2cc0841fccee75709f3b10d3b6a431e3532593c53cb0d34a89fcd24",
-            "shelly-wall-display.yaml" to "11a58c3ab0535ff522d97c25870f2a640ed733062a4cee19a3367505ea6a82cb",
-            "smt1019.yaml" to "3004666dd80585a9f57f846f8db5bbde9b781bb8d669921d9406ab88a5a84289",
-            "tpa10.yaml" to "412bfc2feace3ff54f9aa2f0ea1cac2dff8cb6533f766f8d862352a7fdd29fa3",
-            "wf1589t.yaml" to "8b464dbecb5a4ee4758add457937ac663b0bb3bd92e045ff4c620059bf02897c",
-            "zx-smt156.yaml" to "80de45864b9fef6f813dcd8092c5afff34a588663f556f699c8dfb608ac47573",
+            "generic.yaml" to "16088624128aa375bc28fb747e535f93aa43c65881b5041a6fedc3ce4de056d2",
+            "nspanel-pro.yaml" to "894f3e0f03b12a7afe9364571f35b6244fc89b4296a9d623c7506976c9955279",
+            "s9e.yaml" to "23874b2a79cb674d77c8b0ad0703ad1ee2cf4db925414e3e12b38354169f7a3f",
+            "shelly-wall-display-v2.yaml" to "2d5bdd6ca045ff881d34b1659f9fd98eaf47fc4a3a6c24dbbbf43e4045e1d6e9",
+            "shelly-wall-display.yaml" to "f2f6c59a9885321a2afd8e4bf37d803b041c0e5a2de004d1c4ee99566cbea7c3",
+            "smt1019.yaml" to "5167bcf071a944c997ea5e496352791eae06a943345d38a5feb6db66ec7c5d61",
+            "tpa10.yaml" to "494342ed92e7d53ab8a339c2e393da83799246f972409cd52b87da001227c7df",
+            "wf1589t.yaml" to "39919ac8cb46e1027f2bbb7dabd7b483de0e1df87ace5e22d2957d9fc271860a",
+            "zx-smt156.yaml" to "42f01e4e61e61dbbc284b1292df6979e856c1e9d99d540e938fc9eb75aba5605",
         )
         val EXPECTED_UNOFFICIAL_IDS = setOf(
             "community.cronos-lineageos18",

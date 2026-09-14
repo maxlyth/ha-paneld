@@ -104,8 +104,6 @@ class CameraStreamContractTest {
         assertFalse(diag.contains("rtsp://"))
         assertFalse(diag.contains("summary"))
         assertTrue(owner.contains("\"stream at rtsp://\$address:\${facts.port}\$STREAM_PATH (not for this panel's own dashboard)\""))
-        val api = TestSources.repoFile("docs/api.md").readText()
-        assertTrue("the self-render warning sits beside the URL where a person copies it", api.contains("Do not put this panel's own camera card on this panel's dashboard"))
     }
 
     /**
