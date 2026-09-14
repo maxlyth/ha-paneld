@@ -50,7 +50,7 @@ jobs:
           packages: platform-tools
 
       - name: Install the pinned NDK and CMake
-        run: sdkmanager "ndk;27.0.12077973" "cmake;3.22.1"
+        run: .github/scripts/install-android-sdk.sh "ndk;27.0.12077973" "cmake;3.22.1"
 
       - name: Rebuild and compare with the committed libraries
         run: tools/wakeword/build-prebuilt.sh check
