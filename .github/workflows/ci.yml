@@ -11,8 +11,8 @@ on:
       android_runner:
         description: Where the Android build runs
         type: choice
-        options: [auto, self-hosted, hosted]
-        default: auto
+        options: [repository setting, auto, self-hosted, hosted]
+        default: repository setting
 
 permissions:
   contents: read
@@ -46,7 +46,7 @@ jobs:
       - id: pick
         env:
           EVENT: ${{ github.event_name }}
-          MODE: ${{ github.event.inputs.android_runner || vars.CI_ANDROID_RUNNER || 'auto' }}
+          MODE: ${{ github.event.inputs.android_runner != '' && github.event.inputs.android_runner != 'repository setting' && github.event.inputs.android_runner || vars.CI_ANDROID_RUNNER || 'auto' }}
           RUNNER_STATUS_TOKEN: ${{ secrets.RUNNER_STATUS_TOKEN }}
           REPOSITORY: ${{ github.repository }}
         run: |
