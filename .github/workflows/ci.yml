@@ -582,33 +582,43 @@ jobs:
   # sanitizer smoke (helper/fuzz/run.sh) is deliberately NOT run here: it is deterministic rather than
   # coverage-guided and is run locally when the parser, dispatch, or validators change.
   helper:
-    name: Privileged helper
+    name: Helper ${{ matrix.group }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    # Almost all of the suite's time is the two installer transaction scripts waiting on the installer's
+    # real retry intervals, not CPU. Each runs in its own job so the suite finishes in the time of the
+    # longest script rather than the sum of all of them.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [units, transaction, transport]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Compile check (-Werror)
+        if: matrix.group == 'units'
         run: make -C helper
 
       # The helper takes its transaction lock under a root-owned parent and checks the
       # directory is owned by the calling user, which holds on a panel because the
       # daemon is root. Hosted runners are unprivileged, so the suite runs as root.
       - name: Unit tests
+        env:
+          GROUP: ${{ matrix.group }}
         run: |
           # Running as root leaves root-owned artefacts behind. On a throwaway image that
           # is harmless; on a reused workspace the next checkout cannot clean them. Always
           # hand the tree back, whichever result the suite produced.
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
-          sudo make -C helper test && exit 0
-          # The suite stops at its first failing script, so one run only ever reveals one
-          # problem. Re-run the shell contracts individually to report all of them at once.
+          sudo make -C helper "test-$GROUP" && exit 0
+          [ "$GROUP" = units ] || exit 1
+          # The group stops at its first failing script, so one run only ever reveals one
+          # problem. Re-run its shell contracts individually to report all of them at once.
           echo "::group::remaining helper shell contracts"
-          for contract in root_command_quote_test standalone_installer_transaction_test \
-              standalone_installer_identity_test install_daemon_security_test \
-              direct_root_transport_test; do
+          for contract in root_command_quote_test standalone_installer_identity_test \
+              install_daemon_security_test; do
             if sudo bash "helper/test/$contract.sh" > "/tmp/$contract.out" 2>&1; then
               echo "ok       $contract"
             else
@@ -621,4 +631,19 @@ jobs:
           exit 1
 
       - name: App↔daemon contract cross-check
+        if: matrix.group == 'units'
         run: helper/test/contract-check.sh
+
+  helper-aggregate:
+    # Keep the stable check name consumed by release.yml. It turns green only when every helper
+    # group passes.
+    name: Privileged helper
+    needs: helper
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every helper group
+        env:
+          HELPER_RESULT: ${{ needs.helper.result }}
+        run: test "$HELPER_RESULT" = success
