@@ -96,10 +96,10 @@ class HardenedControlContractTest {
         // was absent on the transport an automation actually uses. Approval must precede the reload.
         val reloadArm = dispatch.substring(dispatch.indexOf("cmdReload ->"), dispatch.indexOf("cmdReboot ->"))
         assertTrue(reloadArm.contains("SensitiveOperation.DASHBOARD_RELOAD"))
-        assertTrue(reloadArm.indexOf("authorizeMqttSensitive(") < reloadArm.indexOf("handleReload()"))
+        assertTrue(reloadArm.indexOf("authorizeRemoteSensitive(") < reloadArm.indexOf("handleReload()"))
 
         val auto = mqtt.substring(mqtt.indexOf("override fun handleCompanionAuto"), mqtt.indexOf("override fun handleSilenceBootChime"))
-        assertTrue(auto.contains("if (on && approvalRequired) authorizeMqttSensitive("))
+        assertTrue(auto.contains("if (on && approvalRequired) authorizeRemoteSensitive("))
         assertTrue(auto.contains("approvalRequired && config.selfUpdate && requested != was"))
         assertTrue(auto.contains("approvalRequired && config.companionAutoUpdate && requested != was"))
 
@@ -111,7 +111,7 @@ class HardenedControlContractTest {
     }
 
     @Test fun networkAdbCannotBeEnabledUnderHardenedMode() {
-        val handler = mqtt.substring(mqtt.indexOf("override fun handleNetAdb"), mqtt.indexOf("private fun authorizeMqttSensitive"))
+        val handler = mqtt.substring(mqtt.indexOf("override fun handleNetAdb"), mqtt.indexOf("private fun authorizeRemoteSensitive"))
         assertTrue(handler.contains("on && config.hardenedSecurityEnabled"))
         assertFalse(handler.contains("LocalApprovalBroker"))
 
@@ -212,7 +212,7 @@ class HardenedControlContractTest {
         assertTrue(handler.contains("PowerSafetyMutationPolicy.parseGuardSwitch(payload)"))
         assertTrue(handler.contains("SensitiveOperation.POWER_CONFIGURATION"))
         assertTrue(handler.contains("\"prevent_idle_dim\\u0000${'$'}payload\""))
-        assertTrue(handler.indexOf("authorizeMqttSensitive(") < handler.indexOf("config.setPreventIdleDim(on)"))
+        assertTrue(handler.indexOf("authorizeRemoteSensitive(") < handler.indexOf("config.setPreventIdleDim(on)"))
 
         val dispatch = mqtt.substring(
             mqtt.indexOf("internal fun dispatchLiveSetting"),

@@ -187,7 +187,7 @@ class CameraMqttSurfaceTest {
         assertTrue(dispatch.contains("cmdCameraEnabled -> handleCameraEnabled(payload)"))
 
         val handler = slice(mqtt, "private fun handleCameraEnabled", "private fun publishCameraSnapshot")
-        val authorizeAt = handler.indexOf("authorizeMqttSensitive(")
+        val authorizeAt = handler.indexOf("authorizeRemoteSensitive(")
         val writeAt = handler.indexOf("config.setCameraEnabled(")
         assertTrue("the enable direction must ask for local approval", authorizeAt >= 0)
         assertTrue("the handler must write the master switch", writeAt >= 0)

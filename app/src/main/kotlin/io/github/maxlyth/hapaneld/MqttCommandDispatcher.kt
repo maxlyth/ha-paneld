@@ -68,6 +68,20 @@ internal class MqttCommandDispatcher(
         return submit(Work(key, action = { command(); true }, completion = null, submittedAtNanos = nowNanos()))
     }
 
+    /**
+     * [submitLatest] for a caller that must answer every command: [onSkipped] runs once, on the thread that
+     * decided it, when the command will never run because a newer one replaced it ([Execution.SUPERSEDED])
+     * or it was not admitted ([Execution.NOT_ADMITTED]). A command that runs reports its own result.
+     */
+    fun submitLatest(key: String, onSkipped: (Execution) -> Unit, command: () -> Unit): Admission {
+        require(key.isNotBlank())
+        val completion = CompletableFuture<Execution>()
+        completion.thenAccept { execution ->
+            if (execution == Execution.SUPERSEDED || execution == Execution.NOT_ADMITTED) onSkipped(execution)
+        }
+        return submit(Work(key, action = { command(); true }, completion, submittedAtNanos = nowNanos()))
+    }
+
     fun submitAction(command: () -> Unit): Admission =
         submit(Work(latestKey = null, action = { command(); true }, completion = null, submittedAtNanos = nowNanos()))
 

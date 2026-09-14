@@ -404,7 +404,114 @@ class PanelAssistantTransportOwnerTest {
         harness.owner.close()
     }
 
+    @Test fun aNativeSessionReportsStateAndAnswersEachCommandOnTheSameSocket() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        shadow.sink("relay1", "OFF")
+        val sink = ImmediateSink()
+        val authorities = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state", "commands", "approval")))
+        val harness = harness(connection, shadow = shadow.reporter, commands = sink, onAuthority = { authorities += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+
+        val hello = JSONObject(connection.sent.first())
+        assertEquals(listOf("state", "commands", "approval"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
+        assertEquals(listOf("native"), authorities)
+        assertEquals(listOf("panel_assistant/hello", "full_begin", "full_end"), connection.sent.map(::kind))
+
+        connection.inbound.trySend(Ha.command("c1", "relay1", true))
+        runCurrent()
+
+        assertEquals(listOf("relay1" to "ON"), sink.ran)
+        val answer = JSONObject(connection.sent.last())
+        assertEquals(listOf("panel_assistant/command_result", "opaque-session", "c1", "applied"), listOf("type", "session", "command_id", "outcome").map(answer::getString))
+        val ids = connection.sent.map { JSONObject(it).getLong("id") }
+        assertEquals((1L..ids.size.toLong()).toList(), ids)
+        assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+        harness.owner.close()
+    }
+
+    @Test fun aShadowSessionRefusesCommandsWithoutRunningThem() = runTest {
+        val shadow = Shadow(listOf("relay1"))
+        val sink = ImmediateSink()
+        val authorities = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "shadow", capabilities = listOf("state")))
+        val harness = harness(connection, shadow = shadow.reporter, commands = sink, onAuthority = { authorities += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        connection.inbound.trySend(Ha.command("c1", "relay1", true))
+        runCurrent()
+
+        assertEquals(listOf("shadow"), authorities)
+        assertTrue(sink.ran.isEmpty())
+        val answer = JSONObject(connection.sent.last())
+        assertEquals(listOf("refused", "authority_mismatch"), listOf("outcome", "code").map(answer::getString))
+        harness.owner.close()
+    }
+
+    @Test fun anUnknownAuthorityIsNeverPersisted() = runTest {
+        val authorities = mutableListOf<String>()
+        val connection = FakeConnection(Ha.accepting(authority = "future_mode"))
+        val harness = harness(connection, commands = ImmediateSink(), onAuthority = { authorities += it })
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        assertEquals(PanelAssistantTransportPhase.CONNECTED, harness.owner.status.phase)
+        assertTrue(authorities.isEmpty())
+        harness.owner.close()
+    }
+
+    @Test fun sessionUnknownAnsweringACommandResultEndsTheSession() = runTest {
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state", "commands"), commandResultError = "session_unknown"))
+        val harness = harness(connection, shadow = Shadow(listOf("relay1")).reporter, commands = ImmediateSink())
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        connection.inbound.trySend(Ha.command("c1", "relay1", true))
+        runCurrent()
+
+        assertTrue(connection.closed)
+        assertEquals("session_closed", harness.owner.status.refusal)
+        harness.owner.close()
+    }
+
+    @Test fun aHeldApprovalIsWithdrawnWhenTheSessionEnds() = runTest {
+        val sink = ImmediateSink(result = PanelAssistantCommandResult.ApprovalPending("approval-1"))
+        val connection = FakeConnection(Ha.accepting(authority = "native", capabilities = listOf("state", "commands", "approval")))
+        val harness = harness(connection, shadow = Shadow(listOf("camera_enabled")).reporter, commands = sink)
+        harness.owner.replaceDemand(DEMAND)
+        runCurrent()
+        connection.inbound.trySend(Ha.command("c1", "camera_enabled", true))
+        runCurrent()
+        assertEquals("pending_approval", JSONObject(connection.sent.last()).getString("outcome"))
+
+        advanceTimeBy(5_000L)
+        runCurrent()
+        assertEquals(1, sink.ran.size)
+        connection.inbound.trySend(Ha.sessionClosed("authority_changed"))
+        runCurrent()
+
+        assertEquals(listOf("approval-1"), sink.withdrawn)
+        harness.owner.close()
+    }
+
     // ---- harness ---------------------------------------------------------------------------------
+
+    /** Runs every command at once with [result]; approvals stay pending. */
+    private class ImmediateSink(private val result: PanelAssistantCommandResult = PanelAssistantCommandResult.Applied) :
+        PanelAssistantCommandSink {
+        val ran = mutableListOf<Pair<String, String>>()
+        val withdrawn = mutableListOf<String>()
+
+        override fun submit(command: PanelAssistantCommand, done: (PanelAssistantCommandResult) -> Unit) {
+            ran += command.channel to command.payload
+            done(command.admit() ?: result)
+        }
+
+        override fun approvalState(approvalId: String) = PanelAssistantApprovalState.PENDING
+
+        override fun withdrawApproval(approvalId: String) {
+            withdrawn += approvalId
+        }
+    }
 
     private class Shadow(initial: List<String>) {
         val keys = initial.toMutableList()
@@ -424,6 +531,8 @@ class PanelAssistantTransportOwnerTest {
         repeating: (() -> FakeConnection)? = null,
         repeatingFailure: (() -> Exception)? = null,
         shadow: PanelAssistantShadowReporter? = null,
+        commands: PanelAssistantCommandSink? = null,
+        onAuthority: (String) -> Unit = {},
     ): Harness {
         val connector = FakeConnector(this, script.toMutableList(), repeating, repeatingFailure)
         val forces = mutableListOf<Boolean>()
@@ -440,6 +549,8 @@ class PanelAssistantTransportOwnerTest {
             jitter = { bound -> bound },
             log = {},
             shadow = shadow,
+            commands = commands,
+            onAuthority = onAuthority,
         )
         harness = Harness(owner, connector, forces)
         return harness
@@ -504,6 +615,7 @@ class PanelAssistantTransportOwnerTest {
             authority: String = "mqtt",
             capabilities: List<String> = emptyList(),
             reportError: String? = null,
+            commandResultError: String? = null,
         ): (JSONObject, FakeConnection) -> Unit = { frame, connection ->
             when (frame.getString("type")) {
                 "panel_assistant/hello" -> connection.inbound.trySend(
@@ -532,6 +644,15 @@ class PanelAssistantTransportOwnerTest {
                             .put("result", JSONObject().put("rejected", JSONArray())).toString()
                     },
                 )
+                "panel_assistant/command_result" -> connection.inbound.trySend(
+                    if (commandResultError != null) {
+                        JSONObject().put("id", frame.getLong("id")).put("type", "result").put("success", false)
+                            .put("error", JSONObject().put("code", commandResultError).put("message", "x")).toString()
+                    } else {
+                        JSONObject().put("id", frame.getLong("id")).put("type", "result").put("success", true)
+                            .put("result", JSONObject()).toString()
+                    },
+                )
                 "ping" -> if (answerPings) {
                     connection.inbound.trySend(JSONObject().put("id", frame.getLong("id")).put("type", "pong").toString())
                 }
@@ -548,6 +669,16 @@ class PanelAssistantTransportOwnerTest {
                     .toString(),
             )
         }
+
+        fun command(commandId: String, channel: String, value: Any?): String = JSONObject()
+            .put("id", 1)
+            .put("type", "event")
+            .put(
+                "event",
+                JSONObject().put("kind", "command").put("command_id", commandId).put("session", "opaque-session")
+                    .put("channel", channel).put("value", value ?: JSONObject.NULL).put("deadline_ms", 10_000),
+            )
+            .toString()
 
         fun sessionClosed(reason: String): String = JSONObject()
             .put("id", 1)

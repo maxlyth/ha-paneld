@@ -37,7 +37,23 @@ internal sealed interface PanelAssistantHelloOutcome {
 internal sealed interface PanelAssistantSessionEvent {
     data class Closed(val reason: String) : PanelAssistantSessionEvent
 
-    /** Any other kind. Commands are never granted in this protocol slice, so nothing is actionable. */
+    /**
+     * A command for [channel]. [session] is the token the integration sent it for, compared with the live
+     * session before anything runs; [value] is the typed wire value, JSON null for a button press.
+     * [deadlineMs] is null when the event carried a malformed or out-of-range deadline.
+     */
+    data class Command(
+        val commandId: String,
+        val session: String?,
+        val channel: String?,
+        val value: Any?,
+        val deadlineMs: Long?,
+    ) : PanelAssistantSessionEvent
+
+    /** A command event with no usable `command_id`: there is nothing to answer it with. */
+    data object MalformedCommand : PanelAssistantSessionEvent
+
+    /** Any other kind, which this build does not act on. */
     data class Ignored(val kind: String) : PanelAssistantSessionEvent
 }
 
@@ -61,9 +77,25 @@ internal object PanelAssistantTransportProtocol {
     const val PROTOCOL_MAX = 1
     const val COMMAND_HELLO = "panel_assistant/hello"
     const val COMMAND_REPORT_STATE = "panel_assistant/report_state"
+    const val COMMAND_COMMAND_RESULT = "panel_assistant/command_result"
 
+    const val AUTHORITY_MQTT = "mqtt"
     const val AUTHORITY_SHADOW = "shadow"
+    const val AUTHORITY_NATIVE = "native"
+    val AUTHORITIES: Set<String> = setOf(AUTHORITY_MQTT, AUTHORITY_SHADOW, AUTHORITY_NATIVE)
+
     const val CAPABILITY_STATE = "state"
+    const val CAPABILITY_COMMANDS = "commands"
+    const val CAPABILITY_APPROVAL = "approval"
+
+    const val OUTCOME_APPLIED = "applied"
+    const val OUTCOME_SUPERSEDED = "superseded"
+    const val OUTCOME_PENDING_APPROVAL = "pending_approval"
+    const val OUTCOME_REFUSED = "refused"
+    const val OUTCOME_FAILED = "failed"
+
+    const val DEFAULT_DEADLINE_MS = 10_000L
+    const val MAX_DEADLINE_MS = 60_000L
 
     const val SYNC_FULL_BEGIN = "full_begin"
     const val SYNC_DELTA = "delta"
@@ -82,10 +114,10 @@ internal object PanelAssistantTransportProtocol {
     const val REASON_SUPERSEDED = "superseded"
 
     /**
-     * Capabilities this build serves: state reporting only. It reports no events and accepts no commands,
-     * and advertising a capability it cannot serve would leave the integration waiting for it.
+     * Capabilities a fully wired build serves: state reporting, and commands with panel-side approval. It
+     * reports no events, and advertising a capability it cannot serve would leave the integration waiting.
      */
-    val CAPABILITIES: List<String> = listOf(CAPABILITY_STATE)
+    val CAPABILITIES: List<String> = listOf(CAPABILITY_STATE, CAPABILITY_COMMANDS, CAPABILITY_APPROVAL)
 
     /**
      * The handshake contract this build implements, in canonical form. The specification's shared
@@ -93,13 +125,14 @@ internal object PanelAssistantTransportProtocol {
      * text, so a change to the handshake vocabulary changes the digest the integration records.
      */
     internal const val CANONICAL_CONTRACT: String =
-        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello","panel_assistant/report_state"],"capabilities":["state"]}"""
+        """{"protocol":{"min":1,"max":1},"commands":["panel_assistant/hello","panel_assistant/report_state","panel_assistant/command_result"],"capabilities":["state","commands","approval"]}"""
 
     val CONTRACT_DIGEST: String = MessageDigest.getInstance("SHA-256")
         .digest(CANONICAL_CONTRACT.toByteArray(Charsets.UTF_8))
         .joinToString("") { byte -> (byte.toInt() and 0xff).toString(16).padStart(2, '0') }
 
     private val CODE = Regex("^[a-z][a-z0-9_]{0,63}$")
+    private val COMMAND_ID = Regex("^[A-Za-z0-9_-]{1,64}$")
     private val VERSION = Regex("^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$")
     private const val MAX_SESSION_TOKEN_CHARS = 64
     private const val MAX_CAPABILITIES = 16
@@ -154,6 +187,17 @@ internal object PanelAssistantTransportProtocol {
         }
         return PanelAssistantReportResult.Acknowledged(id, rejected)
     }
+
+    /** The one final (or `pending_approval` interim) answer to a delivered command. */
+    fun commandResult(id: Long, session: String, commandId: String, outcome: String, code: String?): String =
+        JSONObject()
+            .put("id", id)
+            .put("type", COMMAND_COMMAND_RESULT)
+            .put("session", session)
+            .put("command_id", commandId)
+            .put("outcome", outcome)
+            .apply { if (code != null) put("code", code) }
+            .toString()
 
     fun ping(id: Long): String = JSONObject().put("id", id).put("type", "ping").toString()
 
@@ -218,9 +262,28 @@ internal object PanelAssistantTransportProtocol {
         if (frame.optString("type") != "event" || messageId(frame) != helloId) return null
         val event = frame.optJSONObject("event") ?: return PanelAssistantSessionEvent.Ignored("")
         val kind = (event.opt("kind") as? String)?.takeIf(CODE::matches).orEmpty()
+        if (kind == "command") return command(event)
         if (kind != "session_closed") return PanelAssistantSessionEvent.Ignored(kind)
         val reason = (event.opt("reason") as? String)?.takeIf(CODE::matches).orEmpty()
         return PanelAssistantSessionEvent.Closed(reason)
+    }
+
+    private fun command(event: JSONObject): PanelAssistantSessionEvent {
+        val commandId = (event.opt("command_id") as? String)?.takeIf(COMMAND_ID::matches)
+            ?: return PanelAssistantSessionEvent.MalformedCommand
+        val deadline = when (val raw = event.opt("deadline_ms")) {
+            null -> DEFAULT_DEADLINE_MS
+            is Int -> raw.toLong().takeIf { it in 1..MAX_DEADLINE_MS }
+            is Long -> raw.takeIf { it in 1..MAX_DEADLINE_MS }
+            else -> null
+        }
+        return PanelAssistantSessionEvent.Command(
+            commandId = commandId,
+            session = event.opt("session") as? String,
+            channel = (event.opt("channel") as? String)?.takeIf(CODE::matches),
+            value = if (event.has("value")) event.opt("value") else null,
+            deadlineMs = deadline,
+        )
     }
 }
 

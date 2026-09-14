@@ -47,6 +47,7 @@ internal class ApprovalBroker(
     private val maxPending: Int = MAX_PENDING,
 ) {
     enum class Decision { PENDING, APPROVED }
+    enum class State { PENDING, APPROVED, ABSENT }
 
     private data class Record(
         val visible: PendingApproval,
@@ -92,6 +93,14 @@ internal class ApprovalBroker(
         return true
     }
 
+    /** Where one record stands, without consuming it. Denied, expired and evicted records are all absent. */
+    @Synchronized
+    fun state(id: String): State {
+        prune()
+        val record = records[id] ?: return State.ABSENT
+        return if (record.approved) State.APPROVED else State.PENDING
+    }
+
     @Synchronized
     fun deny(id: String): Boolean = records.remove(id) != null
 
@@ -115,10 +124,10 @@ internal class ApprovalBroker(
         return MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     }
 
-    private companion object {
+    companion object {
         const val DEFAULT_TTL_MS = 10 * 60 * 1000L
-        const val MAX_PENDING = 12
-        const val MAX_SUMMARY_CHARS = 180
+        private const val MAX_PENDING = 12
+        private const val MAX_SUMMARY_CHARS = 180
     }
 }
 

@@ -1353,6 +1353,14 @@ class Config private constructor(
             .putString("update_target_companion", targets.second)
             .apply()
     }
+    // The authority the Panel Assistant integration last granted this panel (mqtt, shadow or native),
+    // empty before any session. Kept while no session is open, so a Home Assistant outage never lets
+    // MQTT command a panel that was cut over to the native transport.
+    val panelAssistantAuthority: String get() = prefs.getString("panel_assistant_authority", "") ?: ""
+    fun setPanelAssistantAuthority(authority: String) {
+        if (authority == panelAssistantAuthority) return
+        prefs.edit().putString("panel_assistant_authority", authority).apply()
+    }
     val panelAssistantUpdateOwnerSeenMs: Long get() = prefs.getLong("panel_assistant_update_owner_seen_ms", 0L)
     fun setPanelAssistantUpdateOwnerSeenMs(wallMs: Long) {
         prefs.edit().putLong("panel_assistant_update_owner_seen_ms", wallMs).apply()

@@ -23,7 +23,7 @@ class PanelAssistantTransportProtocolTest {
         assertEquals(1, hello.getJSONObject("protocol").getInt("min"))
         assertEquals(1, hello.getJSONObject("protocol").getInt("max"))
         assertTrue(Regex("^[0-9a-f]{64}$").matches(hello.getString("contract_digest")))
-        assertEquals(listOf("state"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
+        assertEquals(listOf("state", "commands", "approval"), hello.getJSONArray("capabilities").let { (0 until it.length()).map(it::getString) })
         val relay = hello.getJSONArray("channels").getJSONObject(0)
         assertEquals(listOf("relay3", "switch", "relay", "relay3", "relay", "3"), listOf("channel", "platform", "translation_key", "unique_suffix", "family", "index").map { relay.get(it).toString() })
     }
@@ -32,9 +32,50 @@ class PanelAssistantTransportProtocolTest {
         // Pinned as a literal: a digest derived from JSON serialisation could differ between the
         // device's org.json and the JVM's, and the integration records whatever the panel sends.
         assertEquals(
-            "93d4e8501c53d53a9933bda5785f3ac811cf143f2cf2bc5f3979a9b2a5fe99a3",
+            "b194f98e54fa335b14dae8d902bec245cfb4d76f5e4e45b49af5df7653de1ccd",
             PanelAssistantTransportProtocol.CONTRACT_DIGEST,
         )
+    }
+
+    @Test fun `a command event carries its id, session, channel, typed value and deadline`() {
+        fun event(body: JSONObject) = JSONObject().put("id", 1).put("type", "event").put("event", body.put("kind", "command"))
+        val full = JSONObject().put("command_id", "Ab_-9").put("session", "s").put("channel", "screen")
+            .put("value", JSONObject().put("on", true)).put("deadline_ms", 2_500)
+        val parsed = PanelAssistantTransportProtocol.sessionEvent(event(full), 1L) as PanelAssistantSessionEvent.Command
+        assertEquals(listOf("Ab_-9", "s", "screen", 2_500L), listOf(parsed.commandId, parsed.session, parsed.channel, parsed.deadlineMs))
+        assertEquals(true, (parsed.value as JSONObject).getBoolean("on"))
+
+        val bare = PanelAssistantTransportProtocol.sessionEvent(
+            event(JSONObject().put("command_id", "c").put("value", JSONObject.NULL)), 1L,
+        ) as PanelAssistantSessionEvent.Command
+        assertEquals(10_000L, bare.deadlineMs)
+        assertEquals(JSONObject.NULL, bare.value)
+        assertNull(bare.session)
+        assertNull(bare.channel)
+
+        for (deadline in listOf<Any>(0, 60_001, "10", 1.5)) {
+            val odd = PanelAssistantTransportProtocol.sessionEvent(
+                event(JSONObject().put("command_id", "c").put("deadline_ms", deadline)), 1L,
+            ) as PanelAssistantSessionEvent.Command
+            assertNull("$deadline", odd.deadlineMs)
+        }
+        assertEquals(60_000L, (PanelAssistantTransportProtocol.sessionEvent(event(JSONObject().put("command_id", "c").put("deadline_ms", 60_000)), 1L) as PanelAssistantSessionEvent.Command).deadlineMs)
+        for (id in listOf<Any>("", "a b", "x".repeat(65), 7)) {
+            assertEquals(
+                "$id",
+                PanelAssistantSessionEvent.MalformedCommand,
+                PanelAssistantTransportProtocol.sessionEvent(event(JSONObject().put("command_id", id)), 1L),
+            )
+        }
+    }
+
+    @Test fun `a command result names its session, command and outcome, with a code only when given`() {
+        val refused = JSONObject(PanelAssistantTransportProtocol.commandResult(21L, "s", "c", "refused", "expired"))
+        assertEquals(
+            listOf(21, "panel_assistant/command_result", "s", "c", "refused", "expired"),
+            listOf("id", "type", "session", "command_id", "outcome", "code").map(refused::get),
+        )
+        assertTrue(!JSONObject(PanelAssistantTransportProtocol.commandResult(22L, "s", "c", "applied", null)).has("code"))
     }
 
     @Test fun `a panel without identity sends a null did rather than omitting it`() {
@@ -114,7 +155,7 @@ class PanelAssistantTransportProtocolTest {
             val frame = accepted()
             breakResult(frame.getJSONObject("result"))
             try {
-                PanelAssistantTransportProtocol.helloOutcome(frame, 1L)
+                PanelAssistantTransportProtocol.helloOutcome(frame, 1L, offered = listOf("state"))
                 fail("case $index was accepted")
             } catch (expected: PanelAssistantProtocolException) {
             }

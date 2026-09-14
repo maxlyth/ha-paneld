@@ -37,6 +37,35 @@ class LocalApprovalBrokerTest {
     }
 
     @Test
+    fun stateReportsARecordWithoutConsumingItAndAnApprovalBelongsToOneTransport() {
+        var now = 1_000L
+        val broker = ApprovalBroker({ now }, SecureRandom(), ttlMs = 1_000L)
+        val (_, id) = broker.request(SensitiveOperation.CAMERA_ENABLE, "panel_assistant", "camera_enabled\u0000enable", "camera")
+        assertEquals(ApprovalBroker.State.PENDING, broker.state(id))
+        assertTrue(broker.approve(id))
+        assertEquals(ApprovalBroker.State.APPROVED, broker.state(id))
+        assertEquals(ApprovalBroker.State.APPROVED, broker.state(id))
+
+        // The same operation and payload from MQTT is a different request and cannot use this approval.
+        assertEquals(
+            ApprovalBroker.Decision.PENDING,
+            broker.request(SensitiveOperation.CAMERA_ENABLE, "mqtt", "camera_enabled\u0000enable", "camera").first,
+        )
+        assertEquals(
+            ApprovalBroker.Decision.APPROVED to id,
+            broker.request(SensitiveOperation.CAMERA_ENABLE, "panel_assistant", "camera_enabled\u0000enable", "camera"),
+        )
+        assertEquals(ApprovalBroker.State.ABSENT, broker.state(id))
+
+        val (_, denied) = broker.request(SensitiveOperation.DEVICE_REBOOT, "panel_assistant", "", "reboot")
+        assertTrue(broker.deny(denied))
+        assertEquals(ApprovalBroker.State.ABSENT, broker.state(denied))
+        val (_, expiring) = broker.request(SensitiveOperation.DEVICE_REBOOT, "panel_assistant", "x", "reboot")
+        now += 1_000L
+        assertEquals(ApprovalBroker.State.ABSENT, broker.state(expiring))
+    }
+
+    @Test
     fun pendingAndApprovedRequestsExpire() {
         var now = 1_000L
         val broker = ApprovalBroker({ now }, SecureRandom(), ttlMs = 100L)

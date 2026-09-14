@@ -38,6 +38,10 @@ import io.github.maxlyth.hapaneld.input.ButtonBus
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOperation
 import io.github.maxlyth.hapaneld.metrics.FeatureCostOutcome
 import io.github.maxlyth.hapaneld.metrics.FeatureCosts
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommand
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommandProcessor
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommandResult
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantTransportProtocol
 import io.github.maxlyth.hapaneld.security.ApprovalBroker
 import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
 import io.github.maxlyth.hapaneld.security.SensitiveOperation
@@ -2633,7 +2637,14 @@ internal class MqttBridge(
 
     private fun onCommand(topic: String, payloadBytes: ByteArray, retained: Boolean) {
         val retired = !lifecycle.isOpen()
-        if (!mqttAcceptsCommand(retired, retained)) {
+        if (!mqttAcceptsCommand(retired, retained, config.panelAssistantAuthority)) {
+            if (!retired && !retained) {
+                // A panel cut over to the native transport takes no command from MQTT, session or not.
+                FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_COMMAND_DISPATCH)
+                if (nativeAuthorityDropLogged.compareAndSet(false, true)) {
+                    Log.w(TAG, "ignoring MQTT commands: Panel Assistant holds command authority for this panel")
+                }
+            }
             if (retained && !retired) {
                 FeatureCosts.registry.recordDropped(FeatureCostOperation.MQTT_COMMAND_DISPATCH)
                 Log.w(TAG, "ignoring RETAINED command on $topic (${payloadBytes.size} bytes)")
@@ -2651,7 +2662,7 @@ internal class MqttBridge(
         // HiveMQ reuses callback-owned values. Copy only after the cheap retained/topic/size gates, then
         // return immediately so a root call or slow controller can never pin its network callback.
         val payload = payloadBytes.copyOf()
-        val command = { consumeCommand(topic, payload) }
+        val command = { consumeCommand(topic, payload, MQTT_PEER); Unit }
         val admission = when (kind) {
             CommandKind.LATEST -> commandDispatcher.submitLatest(requireNotNull(channel), command)
             CommandKind.ACTION -> commandDispatcher.submitAction(command)
@@ -2697,7 +2708,64 @@ internal class MqttBridge(
      */
     private val externalIntentCommitted = ThreadLocal<String?>()
 
-    private fun consumeCommand(topic: String, payloadBytes: ByteArray) {
+    /**
+     * The approval principal of the dispatch running on this thread: `mqtt` or `panel_assistant`. The broker
+     * binds an approval to its peer, so an approval primed by one transport cannot be consumed by the other.
+     */
+    private val commandPeer = ThreadLocal<String?>()
+
+    private val nativeAuthorityDropLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Run one Panel Assistant command on the same ordered authority MQTT commands use, keyed by the same
+     * channel, so a command for one channel conflates identically whichever transport delivered it. [done]
+     * receives exactly one result. Action channels (reload, reboot, updates) are not accepted here.
+     */
+    internal fun submitPanelAssistantCommand(
+        command: PanelAssistantCommand,
+        done: (PanelAssistantCommandResult) -> Unit,
+    ) {
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        val finish = { result: PanelAssistantCommandResult -> if (answered.compareAndSet(false, true)) done(result) }
+        if (!lifecycle.isOpen()) {
+            finish(PanelAssistantCommandResult.Failed(PanelAssistantCommandProcessor.CODE_FAILED))
+            return
+        }
+        val topic = "ha-paneld/$panel/${command.channel}/set"
+        when (commandKind(topic)) {
+            null -> return finish(PanelAssistantCommandResult.Refused(PanelAssistantCommandProcessor.CODE_UNKNOWN_CHANNEL))
+            CommandKind.ACTION ->
+                return finish(PanelAssistantCommandResult.Refused(PanelAssistantCommandProcessor.CODE_NOT_COMMANDABLE))
+            CommandKind.LATEST -> Unit
+        }
+        val payload = command.payload.toByteArray(Charsets.UTF_8)
+        if (payload.size > MAX_COMMAND_PAYLOAD_BYTES) {
+            return finish(PanelAssistantCommandResult.Refused(PanelAssistantCommandProcessor.CODE_INVALID_VALUE))
+        }
+        val admission = commandDispatcher.submitLatest(
+            key = command.channel,
+            onSkipped = { execution ->
+                finish(
+                    if (execution == MqttCommandDispatcher.Execution.SUPERSEDED) {
+                        PanelAssistantCommandResult.Superseded
+                    } else {
+                        PanelAssistantCommandResult.Failed(PanelAssistantCommandProcessor.CODE_FAILED)
+                    },
+                )
+            },
+        ) {
+            val refusal = command.admit()
+            if (refusal != null) {
+                finish(refusal)
+            } else {
+                finish(panelAssistantCommandResult(consumeCommand(topic, payload, PANEL_ASSISTANT_PEER)))
+            }
+        }
+        recordCommandAdmission(admission)
+    }
+
+    /** Returns the failure the command handler raised, already logged, or null when it applied. */
+    private fun consumeCommand(topic: String, payloadBytes: ByteArray, peer: String): Exception? {
         FeatureCosts.registry.setBacklog(
             FeatureCostOperation.MQTT_COMMAND_DISPATCH,
             commandDispatcher.pendingCount(),
@@ -2705,11 +2773,13 @@ internal class MqttBridge(
         val cost = FeatureCosts.registry.span(FeatureCostOperation.MQTT_COMMAND_DISPATCH)
             .work(units = 1, bytes = payloadBytes.size.toLong())
         externalIntentCommitted.remove()
+        commandPeer.set(peer)
         try {
             dispatchCommand(topic, payloadBytes)
             externalLiveSettingKey(panel, topic)?.let { key ->
                 check(onExternalSettingApplied(key)) { "failed to supersede pending HTTP setting $key" }
             }
+            return null
         } catch (e: Exception) {
             cost.outcome(FeatureCostOutcome.FAILURE)
             Log.w(TAG, "command failed on $topic (${payloadBytes.size} bytes)", e)
@@ -2723,7 +2793,9 @@ internal class MqttBridge(
                         Log.w(TAG, "failed to supersede pending HTTP setting $key after a failed command")
                     }
                 }
+            return e
         } finally {
+            commandPeer.remove()
             externalIntentCommitted.remove()
             cost.close()
         }
@@ -2754,7 +2826,7 @@ internal class MqttBridge(
             cmdNavigate -> handleNavigate(payload)
             cmdVolume -> handleVolume(payload)
             cmdReload -> {
-                authorizeMqttSensitive(
+                authorizeRemoteSensitive(
                     SensitiveOperation.DASHBOARD_RELOAD,
                     payload,
                     "Reload the dashboard renderer from Home Assistant",
@@ -2762,7 +2834,7 @@ internal class MqttBridge(
                 handleReload()
             }
             cmdReboot -> {
-                authorizeMqttSensitive(
+                authorizeRemoteSensitive(
                     SensitiveOperation.DEVICE_REBOOT,
                     payload,
                     "Reboot this panel from Home Assistant",
@@ -2771,7 +2843,7 @@ internal class MqttBridge(
             }
             cmdButtons -> if (hasButtonBacklight) handleButtons(payload)
             cmdUpdateCompanion -> handleSoftwareCommand(SoftwareComponent.COMPANION, payload) {
-                authorizeMqttSensitive(
+                authorizeRemoteSensitive(
                     SensitiveOperation.APK_INSTALL,
                     "companion\u0000$payload",
                     "Install the Home Assistant Companion update from Home Assistant",
@@ -2779,7 +2851,7 @@ internal class MqttBridge(
                 onUpdateCompanion()
             }
             cmdUpdatePaneld -> handleSoftwareCommand(SoftwareComponent.PANELD, payload) {
-                authorizeMqttSensitive(
+                authorizeRemoteSensitive(
                     SensitiveOperation.APK_INSTALL,
                     "paneld\u0000$payload",
                     "Install the ha-paneld update from Home Assistant",
@@ -2802,7 +2874,7 @@ internal class MqttBridge(
             inputs = { softwareUpdateInputs(component) },
             legacy = legacy,
             authorize = { tag ->
-                authorizeMqttSensitive(
+                authorizeRemoteSensitive(
                     SensitiveOperation.APK_INSTALL,
                     "${component.wire}\u0000install\u0000$tag",
                     "Install ${component.entityName} $tag from Home Assistant",
@@ -3004,7 +3076,7 @@ internal class MqttBridge(
                 requestedPreventIdleDim = on,
             )
         ) {
-            authorizeMqttSensitive(
+            authorizeRemoteSensitive(
                 SensitiveOperation.POWER_CONFIGURATION,
                 "prevent_idle_dim\u0000$payload",
                 "Disable the panel's native screen-timeout guard from Home Assistant",
@@ -3098,7 +3170,7 @@ internal class MqttBridge(
 
     override fun handleCompanionAuto(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        if (on && approvalRequired) authorizeMqttSensitive(
+        if (on && approvalRequired) authorizeRemoteSensitive(
             SensitiveOperation.APK_INSTALL,
             "companion_auto_update\u0000enable",
             "Allow automatic Home Assistant Companion updates",
@@ -3109,7 +3181,7 @@ internal class MqttBridge(
 
     override fun handleSelfUpdate(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        if (on && approvalRequired) authorizeMqttSensitive(
+        if (on && approvalRequired) authorizeRemoteSensitive(
             SensitiveOperation.APK_INSTALL,
             "self_update\u0000enable",
             "Allow automatic ha-paneld updates",
@@ -3120,7 +3192,7 @@ internal class MqttBridge(
 
     override fun handleWebViewAuto(payload: String, approvalRequired: Boolean) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        if (on && approvalRequired) authorizeMqttSensitive(
+        if (on && approvalRequired) authorizeRemoteSensitive(
             SensitiveOperation.APK_INSTALL,
             "webview_auto_update\u0000enable",
             "Allow automatic System WebView updates",
@@ -3136,7 +3208,7 @@ internal class MqttBridge(
     private fun handleCameraEnabled(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
         requireCameraEnableAdmission(on, hasCamera()) {
-            authorizeMqttSensitive(
+            authorizeRemoteSensitive(
                 SensitiveOperation.CAMERA_ENABLE,
                 "camera_enabled\u0000enable",
                 "Serve this panel's camera to Home Assistant",
@@ -3182,7 +3254,7 @@ internal class MqttBridge(
     ) {
         val was = previousValue ?: config.updateChannel
         val requested = normalizeSelfUpdateChannel(payload)
-        if (approvalRequired && config.selfUpdate && requested != was) authorizeMqttSensitive(
+        if (approvalRequired && config.selfUpdate && requested != was) authorizeRemoteSensitive(
             SensitiveOperation.APK_INSTALL,
             "update_channel\u0000$requested",
             "Change the ha-paneld update channel and check for an update",
@@ -3204,7 +3276,7 @@ internal class MqttBridge(
     ) {
         val was = previousValue ?: config.companionUpdateChannel
         val requested = payload.trim().trim('"')
-        if (approvalRequired && config.companionAutoUpdate && requested != was) authorizeMqttSensitive(
+        if (approvalRequired && config.companionAutoUpdate && requested != was) authorizeRemoteSensitive(
             SensitiveOperation.APK_INSTALL,
             "companion_update_channel\u0000$requested",
             "Change the Companion update channel and check for an update",
@@ -3399,25 +3471,30 @@ internal class MqttBridge(
     // Persistent network adb (switch). Restarts adbd to apply; that only affects adb, not MQTT.
     override fun handleNetAdb(payload: String) {
         val on = payload.trim().equals("ON", ignoreCase = true)
-        check(!(on && config.hardenedSecurityEnabled)) {
-            "network ADB cannot be enabled while Hardened mode is active"
+        if (on && config.hardenedSecurityEnabled) {
+            throw HardenedModeRefusalException("network ADB cannot be enabled while Hardened mode is active")
         }
         check(adb.set(on)) { "network adb transition failed" }
         stateConverger.reconcile("network_adb", force = true)
     }
 
-    /** Genuine MQTT commands have no HTTP peer to bind. Keep their one-shot panel approval under the
-     * fixed MQTT principal; service-side replays of already-approved HTTP writes bypass this helper. */
-    private fun authorizeMqttSensitive(
+    /** Commands from Home Assistant have no HTTP peer to bind. Keep their one-shot panel approval under
+     * the fixed principal of the transport that delivered them; service-side replays of already-approved
+     * HTTP writes bypass this helper. */
+    private fun authorizeRemoteSensitive(
         operation: SensitiveOperation,
         payload: String,
         summary: String,
         always: Boolean = false,
     ) {
         if (!always && !config.hardenedSecurityEnabled) return
-        val decision = LocalApprovalBroker.instance.request(operation, "mqtt", payload, summary).first
-        check(decision == ApprovalBroker.Decision.APPROVED) {
-            "approval required on the panel before ${operation.label.lowercase()}"
+        val peer = commandPeer.get() ?: MQTT_PEER
+        val (decision, approvalId) = LocalApprovalBroker.instance.request(operation, peer, payload, summary)
+        if (decision != ApprovalBroker.Decision.APPROVED) {
+            throw SensitiveApprovalPendingException(
+                approvalId,
+                "approval required on the panel before ${operation.label.lowercase()}",
+            )
         }
     }
 
@@ -4538,6 +4615,9 @@ internal class MqttBridge(
         private val ANNOUNCEMENT_BOUNDARY_CONSUMED_HERE = AtomicReference<String?>(null)
         private const val MAX_COMMAND_PAYLOAD_BYTES = 64 * 1024
         private const val MAX_DYNAMIC_COMMAND_INDEX = 64
+        /** Approval principals of the two remote command transports. */
+        private const val MQTT_PEER = "mqtt"
+        private const val PANEL_ASSISTANT_PEER = "panel_assistant"
         private const val HA_LINK_TTL_MS = 6 * 3_600_000L // re-resolve the "Open in HA" link at most every 6h
 
         /** Keys accepted by [applySetting], declared once by [SettingsRegistry]. */
@@ -4885,7 +4965,26 @@ internal fun mqttReconfigurePublishesOffline(
 private fun mqttReconfigureBrokerIdentity(raw: String): String =
     mqttFamilyBrokerIdentity(raw) ?: raw.trim()
 
-internal fun mqttAcceptsCommand(stopped: Boolean, retained: Boolean): Boolean = !stopped && !retained
+internal fun mqttAcceptsCommand(stopped: Boolean, retained: Boolean, panelAssistantAuthority: String = ""): Boolean =
+    !stopped && !retained && panelAssistantAuthority != PanelAssistantTransportProtocol.AUTHORITY_NATIVE
+
+/** A sensitive remote command is waiting for [approvalId] to be approved on the panel's own screen. */
+internal class SensitiveApprovalPendingException(val approvalId: String, message: String) : IllegalStateException(message)
+
+/** A remote command Hardened mode refuses outright, with no approval that could allow it. */
+internal class HardenedModeRefusalException(message: String) : IllegalStateException(message)
+
+/** How a command handler's outcome reads on the native transport. */
+internal fun panelAssistantCommandResult(failure: Exception?): PanelAssistantCommandResult = when (failure) {
+    null -> PanelAssistantCommandResult.Applied
+    is SensitiveApprovalPendingException -> PanelAssistantCommandResult.ApprovalPending(failure.approvalId)
+    is HardenedModeRefusalException ->
+        PanelAssistantCommandResult.Refused(PanelAssistantCommandProcessor.CODE_REFUSED_HARDENED)
+    is LiveSettingUnavailableException ->
+        PanelAssistantCommandResult.Failed(PanelAssistantCommandProcessor.CODE_HARDWARE_UNAVAILABLE)
+    is IllegalArgumentException -> PanelAssistantCommandResult.Refused(PanelAssistantCommandProcessor.CODE_INVALID_VALUE)
+    else -> PanelAssistantCommandResult.Failed(PanelAssistantCommandProcessor.CODE_FAILED)
+}
 
 /**
  * Map Home Assistant's birth/will payload to a lifecycle observation, or null for anything else.

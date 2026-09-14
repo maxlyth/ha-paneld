@@ -27,6 +27,13 @@ class MqttProtocolPolicyTest {
         assertFalse(mqttAcceptsCommand(stopped = true, retained = true))
     }
 
+    @Test fun aPanelCutOverToTheNativeTransportTakesNoMqttCommand() {
+        for (authority in listOf("", "mqtt", "shadow", "unrecognised")) {
+            assertTrue(authority, mqttAcceptsCommand(stopped = false, retained = false, panelAssistantAuthority = authority))
+        }
+        assertFalse(mqttAcceptsCommand(stopped = false, retained = false, panelAssistantAuthority = "native"))
+    }
+
     @Test fun onlyHomeAssistantOnlineBirthReannounces() {
         assertTrue(mqttIsHaOnline(" online\n".toByteArray()))
         assertTrue(mqttIsHaOnline("ONLINE".toByteArray()))

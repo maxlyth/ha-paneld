@@ -116,6 +116,8 @@ import io.github.maxlyth.hapaneld.provisioning.ProvisioningActivationSnapshot
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoordinator
 import io.github.maxlyth.hapaneld.provisioning.ProvisioningCoreIdentity
 import io.github.maxlyth.hapaneld.provisioning.toProvisioningProfile
+import io.github.maxlyth.hapaneld.security.ApprovalBroker
+import io.github.maxlyth.hapaneld.security.LocalApprovalBroker
 import io.github.maxlyth.hapaneld.sensors.SensorReporter
 import io.github.maxlyth.hapaneld.sensors.SensorLightPublisher
 import io.github.maxlyth.hapaneld.sensors.submitIlluminanceIfExposed
@@ -138,6 +140,11 @@ import io.github.maxlyth.hapaneld.sensors.HaSiteMetadataClient
 import io.github.maxlyth.hapaneld.sensors.KtorHaAmbientTransport
 import io.github.maxlyth.hapaneld.mqtt.MqttAddressFamilyPolicy
 import io.github.maxlyth.hapaneld.panelassistant.KtorPanelAssistantTransportConnector
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantApprovalState
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommand
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommandProcessor
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommandResult
+import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantCommandSink
 import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantHelloIdentity
 import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantShadowReporter
 import io.github.maxlyth.hapaneld.panelassistant.PanelAssistantTransportOwner
@@ -978,6 +985,27 @@ class PaneldService : Service() {
     // Outlives bridge generations: each new bridge binds its converger here, and the transport owner
     // reports what it records only on a session Panel Assistant accepts in shadow mode.
     private val panelAssistantShadow = PanelAssistantShadowReporter()
+
+    // Native transport commands reach the current bridge generation's ordered command authority and the
+    // same approval broker as every other remote command.
+    private val panelAssistantCommands = object : PanelAssistantCommandSink {
+        override fun submit(command: PanelAssistantCommand, done: (PanelAssistantCommandResult) -> Unit) {
+            val bridge = runCatching { runtime.current().mqtt }.getOrNull()
+                ?: return done(PanelAssistantCommandResult.Failed(PanelAssistantCommandProcessor.CODE_FAILED))
+            bridge.submitPanelAssistantCommand(command, done)
+        }
+
+        override fun approvalState(approvalId: String): PanelAssistantApprovalState =
+            when (LocalApprovalBroker.instance.state(approvalId)) {
+                ApprovalBroker.State.PENDING -> PanelAssistantApprovalState.PENDING
+                ApprovalBroker.State.APPROVED -> PanelAssistantApprovalState.APPROVED
+                ApprovalBroker.State.ABSENT -> PanelAssistantApprovalState.ABSENT
+            }
+
+        override fun withdrawApproval(approvalId: String) {
+            LocalApprovalBroker.instance.deny(approvalId)
+        }
+    }
     private lateinit var haLifecycle: HaLifecycleCoordinator
     private lateinit var haNetworkPath: HaNetworkPathMonitor
     private lateinit var haPathProbe: PathProbeMonitor
@@ -1218,6 +1246,8 @@ class PaneldService : Service() {
             ),
             monotonicMillis = haSocketClock,
             shadow = panelAssistantShadow,
+            commands = panelAssistantCommands,
+            onAuthority = config::setPanelAssistantAuthority,
         )
         haLifecycle = HaLifecycleCoordinator(
             // elapsedRealtime, not wall clock: a Home Assistant restart is exactly when NTP is likely to

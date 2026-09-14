@@ -115,8 +115,11 @@ internal data class PanelAssistantTransportStatus(
  * interval.
  *
  * Credentials come from the shared [HaApiSessionProvider]; this owner holds no token cache. It sends
- * `hello`, protocol pings and, only on a session the integration accepts with the `shadow` authority and
- * the `state` capability, the [shadow] reporter's `report_state` requests. No events, no commands.
+ * `hello`, protocol pings, the [shadow] reporter's `report_state` requests on a session granted `state`
+ * under the `shadow` or `native` authority, and the answers to the commands a session delivers, which run
+ * on the panel's own command authority through [commands]. Every accepted authority is handed to
+ * [onAuthority] before the session is used, so the panel keeps enforcing it while no session is open.
+ * No events.
  */
 internal class PanelAssistantTransportOwner(
     private val scope: CoroutineScope,
@@ -137,6 +140,10 @@ internal class PanelAssistantTransportOwner(
     private val log: (String) -> Unit = { message -> Log.i(TAG, message) },
     /** Null reports no state and offers no capability, exactly as the handshake-only slice did. */
     private val shadow: PanelAssistantShadowReporter? = null,
+    /** Null offers neither commands nor approval. */
+    private val commands: PanelAssistantCommandSink? = null,
+    private val approvalTtlMs: Long = io.github.maxlyth.hapaneld.security.ApprovalBroker.DEFAULT_TTL_MS,
+    private val onAuthority: (String) -> Unit = {},
 ) : AutoCloseable {
     private val lock = Any()
     private val generation = AtomicLong()
@@ -220,7 +227,13 @@ internal class PanelAssistantTransportOwner(
                         val opened = connector.connect(session.baseUrl, token)
                         connection = opened
                         publish(run, PanelAssistantTransportStatus(PanelAssistantTransportPhase.HANDSHAKING, attempt))
-                        val offered = if (shadow != null) PanelAssistantTransportProtocol.CAPABILITIES else emptyList()
+                        val offered = PanelAssistantTransportProtocol.CAPABILITIES.filter { capability ->
+                            if (capability == PanelAssistantTransportProtocol.CAPABILITY_STATE) {
+                                shadow != null
+                            } else {
+                                commands != null
+                            }
+                        }
                         val described = shadow?.descriptors().orEmpty()
                         when (val outcome = handshake(opened, demand.identity, offered, described)) {
                             is PanelAssistantHelloOutcome.Accepted -> {
@@ -231,14 +244,30 @@ internal class PanelAssistantTransportOwner(
                                     session = outcome.session,
                                 ))
                                 hadSession = true
+                                val authority = outcome.session.authority
+                                if (authority in PanelAssistantTransportProtocol.AUTHORITIES) onAuthority(authority)
+                                // A native entity is available only while its channel is reported, so the
+                                // native authority reports exactly as shadow mode does.
                                 val reporting = shadow?.takeIf {
-                                    outcome.session.authority == PanelAssistantTransportProtocol.AUTHORITY_SHADOW &&
+                                    (authority == PanelAssistantTransportProtocol.AUTHORITY_SHADOW ||
+                                        authority == PanelAssistantTransportProtocol.AUTHORITY_NATIVE) &&
                                         PanelAssistantTransportProtocol.CAPABILITY_STATE in outcome.session.capabilities
+                                }
+                                val commanding = commands?.let { sink ->
+                                    PanelAssistantCommandProcessor(
+                                        sink = sink,
+                                        session = outcome.session,
+                                        channels = described,
+                                        monotonicMillis = monotonicMillis,
+                                        approvalTtlMs = approvalTtlMs,
+                                        log = log,
+                                    )
                                 }
                                 val reason = try {
                                     reporting?.open(described)
-                                    holdSession(opened, outcome.session, reporting)
+                                    holdSession(opened, outcome.session, reporting, commanding)
                                 } finally {
+                                    commanding?.close()
                                     reporting?.close()
                                     // Every way an accepted session ends reopens the window: a Core
                                     // restart is a bare socket close, never a session_closed event.
@@ -346,6 +375,7 @@ internal class PanelAssistantTransportOwner(
         connection: PanelAssistantTransportConnection,
         session: PanelAssistantSession,
         reporting: PanelAssistantShadowReporter?,
+        commanding: PanelAssistantCommandProcessor?,
     ): String = coroutineScope {
         val frames = Channel<String>(Channel.UNLIMITED)
         val reader = launch {
@@ -359,7 +389,7 @@ internal class PanelAssistantTransportOwner(
             }
         }
         try {
-            sessionLoop(connection, session, reporting, frames)
+            sessionLoop(connection, session, reporting, commanding, frames)
         } finally {
             reader.cancel()
         }
@@ -369,9 +399,12 @@ internal class PanelAssistantTransportOwner(
         connection: PanelAssistantTransportConnection,
         session: PanelAssistantSession,
         reporting: PanelAssistantShadowReporter?,
+        commanding: PanelAssistantCommandProcessor?,
         frames: Channel<String>,
     ): String {
         var nextMessageId = HELLO_ID + 1
+        // Ids of command_result requests awaiting their result, kept apart from report_state results.
+        val answering = HashSet<Long>()
         var nextPingAt = monotonicMillis() + pingIntervalMs
         var pongDeadline: Long? = null
         if (reporting != null) log("native transport shadow reporting started")
@@ -387,6 +420,15 @@ internal class PanelAssistantTransportOwner(
                 nextPingAt = now + pingIntervalMs
                 continue
             }
+            if (commanding != null) {
+                commanding.pollApprovals(now)
+                val answer = commanding.next(nextMessageId)
+                if (answer != null) {
+                    connection.send(answer)
+                    answering += nextMessageId++
+                    continue
+                }
+            }
             if (reporting != null) {
                 reporting.expire(now)
                 if (reporting.descriptorsChanged()) return REASON_DESCRIPTORS_CHANGED
@@ -397,20 +439,37 @@ internal class PanelAssistantTransportOwner(
                     continue
                 }
             }
-            val due = listOfNotNull(awaiting ?: nextPingAt, reporting?.nextDeadline(now)).min()
+            val due = listOfNotNull(awaiting ?: nextPingAt, reporting?.nextDeadline(now), commanding?.nextDeadline(now)).min()
             val text = select<String?> {
                 frames.onReceive { it }
                 reporting?.wake?.onReceive { null }
+                commanding?.wake?.onReceive { null }
                 onTimeout((due - now).coerceAtLeast(0L)) { null }
             } ?: continue
             pongDeadline = null
             val frame = parse(text)
             when (val event = PanelAssistantTransportProtocol.sessionEvent(frame, HELLO_ID)) {
                 is PanelAssistantSessionEvent.Closed -> return event.reason
+                is PanelAssistantSessionEvent.Command ->
+                    commanding?.onCommand(event) ?: log("native transport ignored a command: commands not offered")
+                PanelAssistantSessionEvent.MalformedCommand -> log("native transport ignored a command without an id")
                 is PanelAssistantSessionEvent.Ignored -> log("native transport ignored event kind ${event.kind}")
                 null -> Unit
             }
-            if (reporting != null && PanelAssistantTransportProtocol.messageId(frame) != HELLO_ID) {
+            val id = PanelAssistantTransportProtocol.messageId(frame)
+            if (id != null && answering.remove(id)) {
+                when (val result = PanelAssistantTransportProtocol.reportResult(frame)) {
+                    is PanelAssistantReportResult.Failed -> {
+                        if (result.code == PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN) {
+                            return PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN
+                        }
+                        log("native transport command_result refused: ${result.code}")
+                    }
+                    else -> Unit
+                }
+                continue
+            }
+            if (reporting != null && id != HELLO_ID) {
                 val result = PanelAssistantTransportProtocol.reportResult(frame)
                 if (result is PanelAssistantReportResult.Failed &&
                     result.code == PanelAssistantTransportProtocol.CODE_SESSION_UNKNOWN

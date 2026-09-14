@@ -87,7 +87,7 @@ class TouchSoundExternalSupersessionTest {
             bridge.indexOf("override fun handleWatchdog(payload: String)"),
         )
         val consume = bridge.substring(
-            bridge.indexOf("private fun consumeCommand(topic: String, payloadBytes: ByteArray)"),
+            bridge.indexOf("private fun consumeCommand(topic: String, payloadBytes: ByteArray, peer: String)"),
             bridge.indexOf("private fun dispatchCommand(topic: String, payloadBytes: ByteArray)"),
         )
 

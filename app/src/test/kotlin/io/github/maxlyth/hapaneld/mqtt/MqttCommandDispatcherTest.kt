@@ -47,6 +47,50 @@ class MqttCommandDispatcherTest {
         assertEquals(listOf("ON", "OFF"), states)
     }
 
+    @Test fun aCommandFromEitherTransportConflatesOnTheSameChannelAndAnObservedOneLearnsItWasSuperseded() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val done = CountDownLatch(1)
+        val ran = Collections.synchronizedList(mutableListOf<String>())
+        val skipped = Collections.synchronizedList(mutableListOf<MqttCommandDispatcher.Execution>())
+        val dispatcher = MqttCommandDispatcher(threadName = "mqtt-cross-transport-test")
+
+        dispatcher.submitLatest("blocker") {
+            entered.countDown()
+            assertTrue(release.await(5, TimeUnit.SECONDS))
+        }
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        // A native command queued first, then an MQTT command for the same channel replaces it.
+        assertEquals(
+            MqttCommandDispatcher.Admission.ACCEPTED,
+            dispatcher.submitLatest("relay1", onSkipped = { skipped += it }) { ran += "native" },
+        )
+        assertEquals(MqttCommandDispatcher.Admission.COALESCED, dispatcher.submitLatest("relay1") { ran += "mqtt" })
+        assertEquals(listOf(MqttCommandDispatcher.Execution.SUPERSEDED), skipped.toList())
+        // And the other way round: an observed command that runs reports nothing through onSkipped.
+        dispatcher.submitLatest("relay2", onSkipped = { skipped += it }) {
+            ran += "native2"
+            done.countDown()
+        }
+
+        release.countDown()
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        assertTrue(dispatcher.closeAndDrain(MonotonicDeadline(5_000)).drained)
+        assertEquals(listOf("mqtt", "native2"), ran.toList())
+        assertEquals(listOf(MqttCommandDispatcher.Execution.SUPERSEDED), skipped.toList())
+    }
+
+    @Test fun anObservedCommandThatCannotBeAdmittedSaysSo() {
+        val dispatcher = MqttCommandDispatcher(threadName = "mqtt-closed-observed-test")
+        dispatcher.close()
+        val skipped = mutableListOf<MqttCommandDispatcher.Execution>()
+        assertEquals(
+            MqttCommandDispatcher.Admission.CLOSED,
+            dispatcher.submitLatest("relay1", onSkipped = { skipped += it }) { error("must not run") },
+        )
+        assertEquals(listOf(MqttCommandDispatcher.Execution.NOT_ADMITTED), skipped)
+    }
+
     @Test fun queueWaitIsMeasuredFromTheExecutedSubmissionOnly() {
         val now = java.util.concurrent.atomic.AtomicLong(0L)
         val waits = Collections.synchronizedList(mutableListOf<Long>())

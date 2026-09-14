@@ -108,6 +108,21 @@ internal object PanelAssistantChannelCatalog {
         .replace(Regex("[^a-z0-9]+"), "_")
         .trim('_')
 
+    /**
+     * The MQTT display label a command handler takes for option [code] of [wire], or null when the channel
+     * has no such option. The inverse of [optionCode] over the same labels the descriptor was built from.
+     */
+    fun optionLabel(wire: String, code: String): String? {
+        val labels = if (wire == "update_channel") {
+            UPDATE_CHANNEL_LABELS
+        } else {
+            registryByLeaf[wire]?.let { spec ->
+                registryBody(spec).optJSONArray("options")?.let { array -> (0 until array.length()).map(array::getString) }
+            }
+        }
+        return labels?.firstOrNull { optionCode(it) == code }
+    }
+
     /** Built descriptors by wire channel, [UNDESCRIBED] for a channel this build does not know. */
     private val built = ConcurrentHashMap<String, Any>()
     private val UNDESCRIBED = Any()
@@ -186,7 +201,8 @@ internal object PanelAssistantChannelCatalog {
             options = options,
         )
 
-    private val UPDATE_CHANNEL_OPTIONS = listOf("Stable", "Pre-release").map(::optionCode)
+    private val UPDATE_CHANNEL_LABELS = listOf("Stable", "Pre-release")
+    private val UPDATE_CHANNEL_OPTIONS = UPDATE_CHANNEL_LABELS.map(::optionCode)
 
     private val HAND_WRITTEN: Map<String, PanelAssistantChannelDescriptor> = listOf(
         PanelAssistantChannelDescriptor(
