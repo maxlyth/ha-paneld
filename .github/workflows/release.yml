@@ -224,10 +224,10 @@ jobs:
           fi
           echo "SOURCE_COMMIT=$source_commit" >> "$GITHUB_ENV"
 
-      - name: Set up Node.js 20.18.1
+      - name: Set up Node.js 22.23.2
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 20.18.1
+          node-version: 22.23.2
 
       - name: Verify profile-editor dependency graph and bundle
         working-directory: tools/profile-editor
