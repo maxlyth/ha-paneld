@@ -237,13 +237,19 @@ done
 
 provisioning_job="$(awk '/^  provisioning:$/ { in_job=1 } /^  provisioning-aggregate:$/ { exit } in_job' "$CI_WORKFLOW")"
 aggregate_job="$(awk '/^  provisioning-aggregate:$/ { in_job=1 } /^  dependency-integrity:$/ { exit } in_job' "$CI_WORKFLOW")"
-build_job="$(awk '/^  build:$/ { in_job=1 } /^  android-build:$/ { exit } in_job' "$CI_WORKFLOW")"
+# The self-hosted Android job holds the step list; the hosted job reuses it through a YAML anchor.
+build_job="$(awk '/^  build-self-hosted:$/ { in_job=1 } /^  build:$/ { exit } in_job' "$CI_WORKFLOW")"
+hosted_build_job="$(awk '/^  build:$/ { in_job=1 } /^  android-build:$/ { exit } in_job' "$CI_WORKFLOW")"
 android_build_job="$(awk '/^  android-build:$/ { in_job=1 } /^  host-contracts:$/ { exit } in_job' "$CI_WORKFLOW")"
 host_job="$(awk '/^  host-contracts:$/ { in_job=1 } /^  provisioning:$/ { exit } in_job' "$CI_WORKFLOW")"
-if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 1 --output "$results" "${{ matrix.shard }}"' <<<"$provisioning_job" &&
+shard_list="$(awk '/^            shards: / { sub(/^            shards: /, ""); print }' <<<"$provisioning_job" | tr ' ' '\n' | sort)"
+expected_shards="$(printf '%s\n' database-host database-runtime install-export install-runtime helper-transaction release-integrity renderer-seeding install-finish backup publication database-authority fleet-installer host-reclamation git-bash | sort)"
+if grep -Fq 'bash scripts/tests/provision_gate_parallel.sh --jobs 3 --output "$results" ${{ matrix.shards }}' <<<"$provisioning_job" &&
+   [ "$shard_list" = "$expected_shards" ] &&
    grep -Fq 'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' <<<"$provisioning_job" &&
-   grep -Fq 'name: provisioning-${{ matrix.shard }}' <<<"$provisioning_job" &&
+   grep -Fq 'name: provisioning-${{ matrix.group }}' <<<"$provisioning_job" &&
    grep -Fqx '    needs: [provisioning, host-contracts]' <<<"$aggregate_job" &&
+   ! grep -Fq 'docs-localization' <<<"$aggregate_job" &&
    grep -Fqx '    name: Host contracts' <<<"$aggregate_job" &&
    grep -Fq 'uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c' <<<"$aggregate_job" &&
    grep -Fq 'pattern: provisioning-*' <<<"$aggregate_job" &&
@@ -263,15 +269,21 @@ if awk '
      in_step && /if: matrix\.apks == '\''debug'\''/ { guarded=1 }
      in_step && /uses: actions\/upload-artifact@/ { uploaded=1; exit }
      END { exit !(guarded && uploaded) }
-   ' <<<"$build_job"; then
+   ' <<<"$build_job" &&
+   grep -Fqx '    steps: &android-steps' <<<"$build_job" &&
+   grep -Fqx '    steps: *android-steps' <<<"$hosted_build_job"; then
   pass "CI uploads the debug APK only from the assemble split"
 else
   fail "CI uploads the debug APK only from the assemble split"
 fi
 if grep -Fqx '    name: Android build' <<<"$android_build_job" &&
-   grep -Fqx '    needs: build' <<<"$android_build_job" &&
-   grep -Fq 'ANDROID_RESULT: ${{ needs.build.result }}' <<<"$android_build_job" &&
-   grep -Fq 'run: test "$ANDROID_RESULT" = success' <<<"$android_build_job"; then
+   grep -Fqx '    needs: [android-runner, build-self-hosted, build]' <<<"$android_build_job" &&
+   grep -Fq 'SELF_HOSTED_RESULT: ${{ needs.build-self-hosted.result }}' <<<"$android_build_job" &&
+   grep -Fq 'HOSTED_RESULT: ${{ needs.build.result }}' <<<"$android_build_job" &&
+   grep -Fq 'self-hosted) test "$SELF_HOSTED_RESULT" = success ;;' <<<"$android_build_job" &&
+   grep -Fq 'hosted) test "$HOSTED_RESULT" = success ;;' <<<"$android_build_job" &&
+   grep -Fq "if: needs.android-runner.outputs.choice == 'hosted'" <<<"$hosted_build_job" &&
+   grep -Fq "if: needs.android-runner.outputs.choice == 'self-hosted'" <<<"$build_job"; then
   pass "CI preserves the Android build release gate across all matrix splits"
 else
   fail "CI preserves the Android build release gate across all matrix splits"
