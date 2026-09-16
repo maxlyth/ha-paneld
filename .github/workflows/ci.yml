@@ -493,9 +493,11 @@ jobs:
         include:
           # The longest shards run alone and the rest are grouped with shorter ones. Three CPU-heavy
           # shards on one four-core runner slowed each by about 60% and broke release-integrity's
-          # timing-bounded Shizuku cases, so no group runs more than two heavy shards at once; backup and
-          # host-reclamation own their process-group signals and run one after the other. Eleven groups
-          # keep CI and CodeQL close to GitHub's twenty concurrent jobs when Android runs as one job.
+          # timing-bounded Shizuku cases, so no group runs more than two heavy shards at once. backup,
+          # publication and host-reclamation own their process-group signals and run one after another
+          # before a group's other shards start, so each signal owner shares a group only with a short
+          # shard. Twelve hosted groups stay under GitHub's twenty concurrent jobs when Android runs on the
+          # project runner.
           - group: install-runtime
             shards: install-runtime
           - group: helper-release-install
@@ -513,11 +515,13 @@ jobs:
           - group: helper-transaction
             shards: helper-transaction
           - group: release-integrity
-            shards: release-integrity publication
+            shards: release-integrity git-bash
           - group: install-finish
-            shards: install-finish git-bash
+            shards: install-finish
           - group: backup
-            shards: backup database-runtime host-reclamation
+            shards: backup publication
+          - group: host-reclamation
+            shards: host-reclamation database-runtime
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
