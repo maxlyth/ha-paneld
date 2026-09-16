@@ -416,7 +416,7 @@ jobs:
         run: helper/test/contract-check.sh
 
   host-contracts:
-    name: Host shell contracts
+    name: Host shell contracts ${{ matrix.group }}
     runs-on: ubuntu-24.04
     # The host-side shell contracts used to finish in fourteen minutes only because they
     # refused early: unprivileged, every transaction stopped at a lock-busy status before
@@ -425,12 +425,19 @@ jobs:
     # takes considerably longer on a shared builder than on a workstation. The provisioning
     # suite is split below; this ceiling now covers only the remaining host contracts.
     timeout-minutes: 60
+    # root_helper_authority_test alone takes about two and a half minutes of this job on a hosted runner,
+    # so it runs beside the other contracts instead of ahead of them.
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [authority, other]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Test firmware index tooling
+        if: matrix.group == 'other'
         run: python3 -m unittest discover -s tools/firmware-index -p 'test_*.py' -v
 
       # These contracts drive the standalone installer, which takes ownership of what it
@@ -442,11 +449,15 @@ jobs:
       - name: Test host-side shell contracts
         env:
           PROVISION_TEST_SCOPE: core
+          GROUP: ${{ matrix.group }}
         run: |
           trap 'sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" || true' EXIT
+          if [ "$GROUP" = authority ]; then
+            sudo -E env "PROVISION_TEST_SCOPE=$PROVISION_TEST_SCOPE" scripts/tests/root_helper_authority_test.sh
+            exit
+          fi
           sudo -E env "PROVISION_TEST_SCOPE=$PROVISION_TEST_SCOPE" bash -c '
             set -e
-            scripts/tests/root_helper_authority_test.sh
             scripts/tests/install_legacy_database_gate_test.sh
             scripts/tests/hardware_collector_test.sh
             scripts/tests/consumer_docs_test.sh
@@ -457,6 +468,7 @@ jobs:
           '
 
       - name: Test dashboard performance collector
+        if: matrix.group == 'other'
         run: |
           python3 -m unittest discover -s scripts/tests -p '*_test.py' -v
           python3 scripts/i18n_catalogue.py validate \
