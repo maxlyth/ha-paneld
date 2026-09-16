@@ -22,6 +22,27 @@ provision_scope_is() {
   return 1
 }
 
+# A killed process can stay visible to `kill -0` until its reaper collects it, as a zombie or for a moment
+# while an init process (a container's --init, or systemd) reaps asynchronously. Wait briefly for every
+# PID, or "-PGID" for a whole group, to be gone, and count a zombie as gone.
+processes_gone() {
+  local deadline=$((SECONDS + 5)) id state alive
+  while :; do
+    alive=0
+    for id in "$@"; do
+      kill -0 -- "$id" 2>/dev/null || continue
+      if [ "${id#-}" = "$id" ]; then
+        state=$(sed -E 's/^.*\) ([A-Za-z]).*$/\1/' "/proc/$id/stat" 2>/dev/null || true)
+        [ "$state" = Z ] && continue
+      fi
+      alive=1
+    done
+    [ "$alive" = 0 ] && return 0
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.1
+  done
+}
+
 case "$PROVISION_TEST_SCOPE" in shard-*) PROVISION_TEST_INTERNAL_SHARD=1 ;; *) PROVISION_TEST_INTERNAL_SHARD=0 ;; esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -2120,7 +2141,7 @@ while [ -n "$blocked_launcher_pid" ] && kill -0 "$blocked_launcher_pid" 2>/dev/n
   [ "$launcher_reap_attempt" -lt 300 ] || break
   sleep 0.1
 done
-if [ -n "$blocked_launcher_pid" ] && ! kill -0 "$blocked_launcher_pid" 2>/dev/null; then
+if [ -n "$blocked_launcher_pid" ] && processes_gone "$blocked_launcher_pid"; then
   pass "launcher deadline reaps the blocked host ADB process"
 else
   fail_test "launcher deadline reaps the blocked host ADB process"
@@ -2858,7 +2879,7 @@ APK_INSTALL_TIMEOUT_SECONDS=1 \
 assert_failure "stuck main APK install returns nonzero at its host deadline"
 assert_contains 'install did not finish within the 1s safety deadline' "main APK timeout names the bounded failed step"
 apk_install_pid="$(cat "$APK_INSTALL_PID_FILE" 2>/dev/null || true)"
-if [ -n "$apk_install_pid" ] && ! kill -0 "$apk_install_pid" 2>/dev/null; then
+if [ -n "$apk_install_pid" ] && processes_gone "$apk_install_pid"; then
   pass "main APK timeout reaps the blocked adb install"
 else
   fail_test "main APK timeout reaps the blocked adb install"
@@ -2877,7 +2898,7 @@ APK_INSTALL_TIMEOUT_SECONDS=1 \
 assert_failure "stuck APK install on the hybrid path returns nonzero at its host deadline"
 assert_contains 'install did not finish within the 1s safety deadline' "hybrid APK timeout retains the bounded failure reason"
 hybrid_apk_install_pid="$(cat "$HYBRID_APK_INSTALL_PID_FILE" 2>/dev/null || true)"
-if [ -n "$hybrid_apk_install_pid" ] && ! kill -0 "$hybrid_apk_install_pid" 2>/dev/null; then
+if [ -n "$hybrid_apk_install_pid" ] && processes_gone "$hybrid_apk_install_pid"; then
   pass "hybrid APK timeout reaps the blocked adb install"
 else
   fail_test "hybrid APK timeout reaps the blocked adb install"
@@ -3008,7 +3029,7 @@ else
   fail_test "TERM exits a provisioner blocked in adb install with signal status (got $blocked_status)"
 fi
 blocked_install_pid="$(cat "$blocked_install_pid_file" 2>/dev/null || true)"
-if [ -n "$blocked_install_pid" ] && ! kill -0 "$blocked_install_pid" 2>/dev/null; then
+if [ -n "$blocked_install_pid" ] && processes_gone "$blocked_install_pid"; then
   pass "TERM reaps the blocked adb install subprocess"
 else
   fail_test "TERM reaps the blocked adb install subprocess"
@@ -3016,7 +3037,7 @@ fi
 blocked_guard_pid="$(cat "$blocked_guard_pid_file" 2>/dev/null || true)"
 blocked_guard_sleep_pid="$(cat "$blocked_guard_sleep_pid_file" 2>/dev/null || true)"
 if [ -n "$blocked_guard_pid" ] && [ -n "$blocked_guard_sleep_pid" ] && \
-   ! kill -0 "$blocked_guard_pid" 2>/dev/null && ! kill -0 "$blocked_guard_sleep_pid" 2>/dev/null; then
+   processes_gone "$blocked_guard_pid" "$blocked_guard_sleep_pid"; then
   pass "TERM reaps the lease guard and its current sleep child"
 else
   fail_test "TERM reaps the lease guard and its current sleep child"
@@ -3773,7 +3794,7 @@ else
 fi
 assert_contains 'Shizuku installation timed out after 4s' "Shizuku package timeout names the bounded failed step"
 shizuku_install_pid="$(cat "$SHIZUKU_INSTALL_PID_FILE" 2>/dev/null || true)"
-if [ -n "$shizuku_install_pid" ] && ! kill -0 "$shizuku_install_pid" 2>/dev/null; then
+if [ -n "$shizuku_install_pid" ] && processes_gone "$shizuku_install_pid"; then
   pass "Shizuku package timeout reaps the blocked adb install"
 else
   fail_test "Shizuku package timeout reaps the blocked adb install"
@@ -3827,7 +3848,7 @@ assert_failure "stuck Shizuku service start returns nonzero at its host deadline
 assert_contains 'service start timed out after 1s' "Shizuku timeout reports the bounded failed step"
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku timeout still installs the core agent"
 assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "Shizuku timeout still launches the core agent"
-if [ -s "$SHIZUKU_HANG_PID_FILE" ] && ! kill -0 "$(cat "$SHIZUKU_HANG_PID_FILE")" 2>/dev/null; then
+if [ -s "$SHIZUKU_HANG_PID_FILE" ] && processes_gone "$(cat "$SHIZUKU_HANG_PID_FILE")"; then
   pass "Shizuku timeout leaves no service-start worker behind"
 else
   fail_test "Shizuku timeout leaves no service-start worker behind"
@@ -3849,7 +3870,7 @@ else
   fallback_child_pid=""
 fi
 if [ -n "$fallback_parent_pid" ] && [ -n "$fallback_child_pid" ] && \
-   ! kill -0 "$fallback_parent_pid" 2>/dev/null && ! kill -0 "$fallback_child_pid" 2>/dev/null; then
+   processes_gone "$fallback_parent_pid" "$fallback_child_pid"; then
   pass "portable fallback leaves no service-start worker or child behind"
 else
   fail_test "portable fallback leaves no service-start worker or child behind"
@@ -4400,7 +4421,7 @@ if find "$TMP/auto-backups" -maxdepth 1 -type f -name '*.break-glass.db*' | grep
   fail_test "an interrupted unaccepted direct pair is removed"
 else pass "an interrupted unaccepted direct pair is removed"; fi
 direct_copy_blocked_pid="$(cat "$direct_copy_pid_file" 2>/dev/null || true)"
-if [ -n "$direct_copy_blocked_pid" ] && ! kill -0 -- "-$direct_copy_blocked_pid" 2>/dev/null; then
+if [ -n "$direct_copy_blocked_pid" ] && processes_gone "-$direct_copy_blocked_pid"; then
   pass "direct-copy interruption reaps the entire nested adb process group"
 else fail_test "direct-copy interruption reaps the entire nested adb process group"; fi
 if [ "$direct_interrupt_elapsed" -lt 4 ]; then
@@ -4458,7 +4479,7 @@ else
   fail_test "post-handoff interruption preserves the accepted direct pair"
 fi
 direct_install_blocked_pid="$(cat "$direct_install_pid_file" 2>/dev/null || true)"
-if [ -n "$direct_install_blocked_pid" ] && ! kill -0 "$direct_install_blocked_pid" 2>/dev/null; then
+if [ -n "$direct_install_blocked_pid" ] && processes_gone "$direct_install_blocked_pid"; then
   pass "post-handoff interruption reaps the blocked package install"
 else fail_test "post-handoff interruption reaps the blocked package install"; fi
 if [ "$(grep -c 'RELEASE_UPGRADE' "$MOCK_CALL_LOG")" = 1 ]; then
@@ -4497,7 +4518,7 @@ if [ "$(grep -c 'sh /data/local/tmp/\.hapaneld-db-txn\..*-script' "$MOCK_CALL_LO
 else fail_test "a timed-out PREPARE executes exactly one legacy transaction and one SQLite .backup"; fi
 assert_not_contains 'RELEASE_UPGRADE' "$MOCK_CALL_LOG" "successful replacement retires timed-out PREPARE custody without RELEASE"
 prepare_timeout_pid="$(cat "$prepare_timeout_pid_file" 2>/dev/null || true)"
-if [ -n "$prepare_timeout_pid" ] && ! kill -0 "$prepare_timeout_pid" 2>/dev/null; then
+if [ -n "$prepare_timeout_pid" ] && processes_gone "$prepare_timeout_pid"; then
   pass "a timed-out PREPARE reaps its adb fixture process"
 else fail_test "a timed-out PREPARE reaps its adb fixture process"; fi
 
@@ -4711,7 +4732,7 @@ else
   LAST_OUTPUT="$publication_int_output"
   fail_test "the published receipt survives an interrupt during the panel staging cleanup"
 fi
-if [ -n "$publication_blocked_pid" ] && ! kill -0 "$publication_blocked_pid" 2>/dev/null; then
+if [ -n "$publication_blocked_pid" ] && processes_gone "$publication_blocked_pid"; then
   pass "the interrupt reaps the blocked cleanup fixture"
 else
   LAST_OUTPUT="$publication_int_output"
@@ -5917,13 +5938,13 @@ else
   fail_test "TERM exits the fleet wrapper with signal status (got $fleet_signal_status)"
 fi
 fleet_blocked_pid="$(cat "$FLEET_BLOCKED_PID_FILE" 2>/dev/null || true)"
-if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+if [ -n "$fleet_blocked_pid" ] && processes_gone "$fleet_blocked_pid"; then
   pass "TERM reaps blocked fleet provisioning descendants"
 else
   fail_test "TERM reaps blocked fleet provisioning descendants"
 fi
 /bin/sleep 0.2
-if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+if [ -n "$fleet_blocked_pid" ] && processes_gone "$fleet_blocked_pid"; then
   pass "fleet interruption leaves no orphan panel mutation"
 else
   fail_test "fleet interruption leaves no orphan panel mutation"
@@ -5959,7 +5980,7 @@ else
   fail_test "TERM preserves fleet signal status while foreground adb is blocked (got $fleet_signal_status)"
 fi
 fleet_blocked_pid="$(cat "$FLEET_SHIZUKU_INSPECT_PID_FILE" 2>/dev/null || true)"
-if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+if [ -n "$fleet_blocked_pid" ] && processes_gone "$fleet_blocked_pid"; then
   pass "fleet process-group shutdown reaps untracked foreground adb"
 else
   fail_test "fleet process-group shutdown reaps untracked foreground adb"
@@ -5996,7 +6017,7 @@ else
   fail_test "TERM preserves fleet signal status for a nested deadline command (got $fleet_signal_status)"
 fi
 fleet_blocked_pid="$(cat "$FLEET_SHIZUKU_INSTALL_PID_FILE" 2>/dev/null || true)"
-if [ -n "$fleet_blocked_pid" ] && ! kill -0 "$fleet_blocked_pid" 2>/dev/null; then
+if [ -n "$fleet_blocked_pid" ] && processes_gone "$fleet_blocked_pid"; then
   pass "fleet cancellation reaps the deadline wrapper's nested adb process group"
 else
   fail_test "fleet cancellation reaps the deadline wrapper's nested adb process group"
