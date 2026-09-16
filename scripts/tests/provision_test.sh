@@ -38,7 +38,15 @@ processes_gone() {
       alive=1
     done
     [ "$alive" = 0 ] && return 0
-    [ "$SECONDS" -lt "$deadline" ] || return 1
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      # Name what survived, so a rare failure on a shared builder says which process and in what state.
+      for id in "$@"; do
+        kill -0 -- "$id" 2>/dev/null || continue
+        printf '# still running after 5s: %s %s\n' "$id" \
+          "$(ps -o pid=,pgid=,stat=,etimes=,args= -p "${id#-}" 2>/dev/null | head -1 || true)"
+      done
+      return 1
+    fi
     sleep 0.1
   done
 }
@@ -3848,6 +3856,7 @@ assert_failure "stuck Shizuku service start returns nonzero at its host deadline
 assert_contains 'service start timed out after 1s' "Shizuku timeout reports the bounded failed step"
 assert_log_contains '^adb .* install -r -g .*ha-paneld\.apk$' "Shizuku timeout still installs the core agent"
 assert_log_contains '^adb .* shell monkey -p io\.github\.maxlyth\.hapaneld -c android\.intent\.category\.LAUNCHER 1$' "Shizuku timeout still launches the core agent"
+[ -s "$SHIZUKU_HANG_PID_FILE" ] || printf '# the Shizuku start fixture never recorded its PID before the deadline\n'
 if [ -s "$SHIZUKU_HANG_PID_FILE" ] && processes_gone "$(cat "$SHIZUKU_HANG_PID_FILE")"; then
   pass "Shizuku timeout leaves no service-start worker behind"
 else
@@ -4518,6 +4527,7 @@ if [ "$(grep -c 'sh /data/local/tmp/\.hapaneld-db-txn\..*-script' "$MOCK_CALL_LO
 else fail_test "a timed-out PREPARE executes exactly one legacy transaction and one SQLite .backup"; fi
 assert_not_contains 'RELEASE_UPGRADE' "$MOCK_CALL_LOG" "successful replacement retires timed-out PREPARE custody without RELEASE"
 prepare_timeout_pid="$(cat "$prepare_timeout_pid_file" 2>/dev/null || true)"
+[ -n "$prepare_timeout_pid" ] || printf '# the PREPARE fixture never recorded its PID before the deadline\n'
 if [ -n "$prepare_timeout_pid" ] && processes_gone "$prepare_timeout_pid"; then
   pass "a timed-out PREPARE reaps its adb fixture process"
 else fail_test "a timed-out PREPARE reaps its adb fixture process"; fi
