@@ -485,7 +485,11 @@ jobs:
     # jobs, so shards queued for up to two minutes behind each other. Grouping keeps every group within
     # the longest shard's time on a four-core runner while leaving the workflows under that ceiling.
     name: Provisioning ${{ matrix.group }}
-    runs-on: ubuntu-24.04
+    # Pushes and manual runs use Blacksmith's 4-vCPU Ubuntu 24.04 runners, which have no concurrency
+    # limit, so these twelve CPU-bound jobs no longer queue behind GitHub's twenty. Pull requests stay on
+    # GitHub-hosted runners, and setting the repository variable CI_PROVISIONING_RUNNER to `hosted` moves
+    # every run back without a commit.
+    runs-on: ${{ github.event_name != 'pull_request' && vars.CI_PROVISIONING_RUNNER != 'hosted' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
